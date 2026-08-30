@@ -1,0 +1,178 @@
+// Typed wrappers over Tauri's invoke(), one per #[command]. See docs/design.md §3.
+
+import { invoke, Channel } from "@tauri-apps/api/core";
+import type { Eol, RecentEntry, Settings } from "../state/types";
+import type {
+  DefaultHandler,
+  FileStat,
+  FileMeta,
+  FilePayload,
+  ImageBytes,
+  NativePrintOptions,
+  PrinterInfo,
+  SearchHit,
+  SearchOpts,
+  SearchSummary,
+  Snapshot,
+} from "./contracts";
+
+/**
+ * Read a file. `content` is returned in the canonical in-memory form — UTF-8,
+ * BOM stripped, line endings normalized to LF — i.e. directly comparable to a
+ * `DocumentState.markdown` string (relied on by AppRuntime's file-changed check).
+ */
+export function readFile(path: string): Promise<FilePayload> {
+  return invoke("read_file", { path });
+}
+
+export function writeFile(path: string, content: string, eol: Eol): Promise<FileMeta> {
+  return invoke("write_file", { path, content, eol });
+}
+
+export function pathExists(path: string): Promise<boolean> {
+  return invoke("path_exists", { path });
+}
+
+/** Watch the open file for external changes (emits `file-changed`, §5.1). */
+export function watchFile(path: string): Promise<void> {
+  return invoke("watch_file", { path });
+}
+
+export function unwatchFile(): Promise<void> {
+  return invoke("unwatch_file");
+}
+
+/** Create (if needed) and return the attachments dir next to `docPath` (§5.7). */
+export function ensureAttachmentsDir(docPath: string, folderName: string): Promise<string> {
+  return invoke("ensure_attachments_dir", { docPath, folderName });
+}
+
+/**
+ * Write attachment bytes next to the document and return the relative,
+ * forward-slash link path (e.g. `attachments/img-….png`). See §5.5/§5.7.
+ */
+export function writeAttachment(
+  docPath: string,
+  folderName: string,
+  fileName: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  // Vec<u8> on the Rust side; a plain number array deserializes unambiguously.
+  return invoke("write_attachment", { docPath, folderName, fileName, bytes: Array.from(bytes) });
+}
+
+/** Read image bytes + MIME for a path (relocate / copy-image, §5.5). */
+export function readImageBytes(path: string): Promise<ImageBytes> {
+  return invoke("read_image_bytes", { path });
+}
+
+// ── Recent files (§5.8) ──
+
+export function getRecentFiles(limit?: number): Promise<RecentEntry[]> {
+  return invoke("get_recent_files", { limit: limit ?? null });
+}
+
+/** Upsert on open; `openedAtMs` is epoch milliseconds from the caller (Date.now()). */
+export function recordFileOpened(path: string, openedAtMs: number): Promise<RecentEntry> {
+  return invoke("record_file_opened", { path, openedAtMs });
+}
+
+export function removeRecent(path: string): Promise<void> {
+  return invoke("remove_recent", { path });
+}
+
+/** Set/clear the favorite flag on an existing recent entry (§5.8 star). */
+export function setFavorite(path: string, favorite: boolean): Promise<RecentEntry> {
+  return invoke("set_favorite", { path, favorite });
+}
+
+/** Live existence + size for the visible rows (§5.8 row layout). */
+export function statFiles(paths: string[]): Promise<FileStat[]> {
+  return invoke("stat_files", { paths });
+}
+
+// ── Content search (§5.8 "Inside documents") — streams over a channel ──
+
+export { Channel };
+
+export function searchRecentContents(
+  searchId: string,
+  query: string,
+  opts: SearchOpts,
+  onResult: Channel<SearchHit>,
+): Promise<SearchSummary> {
+  return invoke("search_recent_contents", { searchId, query, opts, onResult });
+}
+
+export function cancelSearch(searchId: string): Promise<void> {
+  return invoke("cancel_search", { searchId });
+}
+
+// ── Crash recovery (§5.11) ──
+
+export function writeSnapshot(snapshot: Snapshot): Promise<void> {
+  return invoke("write_snapshot", { snapshot });
+}
+
+export function deleteSnapshot(sessionId: string): Promise<void> {
+  return invoke("delete_snapshot", { sessionId });
+}
+
+export function listRecoverySnapshots(): Promise<Snapshot[]> {
+  return invoke("list_recovery_snapshots");
+}
+
+// ── OS integration (§5.12) ──
+
+/** The markdown file md-easy was launched with, if any. */
+export function getLaunchArgs(): Promise<string | null> {
+  return invoke("get_launch_args");
+}
+
+/** Current default .md handler (§5.12). */
+export function getDefaultMdHandler(): Promise<DefaultHandler> {
+  return invoke("get_default_md_handler");
+}
+
+/** Open Windows Default-apps Settings so the user can pick md-easy (§5.12). */
+export function openDefaultAppsSettings(): Promise<void> {
+  return invoke("open_default_apps_settings");
+}
+
+/** The OS accent color as `#rrggbb`, or null if unavailable (§6.2 "Follow system"). */
+export function getSystemAccentColor(): Promise<string | null> {
+  return invoke("get_system_accent_color");
+}
+
+export function loadSettings(): Promise<Settings> {
+  return invoke("load_settings");
+}
+
+export function saveSettings(settings: Settings): Promise<void> {
+  return invoke("save_settings", { settings });
+}
+
+export function settingsPath(): Promise<string> {
+  return invoke("settings_path");
+}
+
+// ── Printing (§5.21) ──────────────────────────────────────────────────────
+// md-easy prints through WebView2 directly instead of `window.print()`, so the
+// browser's own print dialog — and the URL/date header it stamps on every sheet —
+// never appears. Both commands start the job and return; completion arrives as
+// the `print-completed` event (see ipc/events.ts).
+
+/** Installed printers, default first (§5.21). */
+export function listPrinters(): Promise<PrinterInfo[]> {
+  return invoke("list_printers");
+}
+
+/** Print the current page to a printer with md-easy's own page setup. */
+export function printWebview(options: NativePrintOptions): Promise<void> {
+  return invoke("print_webview", { options });
+}
+
+/** Write the current page to a PDF at `path` using the same page setup. */
+export function printWebviewToPdf(path: string, options: NativePrintOptions): Promise<void> {
+  return invoke("print_webview_to_pdf", { path, options });
+}

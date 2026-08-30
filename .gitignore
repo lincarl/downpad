@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Test output (Playwright)
+test-results/
+playwright-report/
+.playwright/
+e2e/__screens__/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+
+# Logs and local env
+*.log
+.env
+.env.local
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local/transient files (machine-specific permissions + runtime locks)
+.claude/settings.local.json
+.claude/*.lock

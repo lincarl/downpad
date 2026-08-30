@@ -1,0 +1,1464 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+}
+
+/* App chrome. React/Tailwind own the application layout and shadcn-style
+   controls; this scoped stylesheet preserves the established Win11 appearance
+   and styles complex editor, print, and platform-specific surfaces. */
+
+:root {
+  --background: var(--editor-bg);
+  --foreground: var(--chrome-fg);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-fg);
+  --muted: var(--chrome-bg);
+  --muted-foreground: var(--muted-fg);
+  --border: var(--chrome-border);
+  --ring: var(--accent);
+  --chrome-bg: #fff;
+  --tabstrip-bg: #f3f3f3;
+  --findbar-bg: #fff;
+  --status-bg: #f3f3f3;
+  --control-bg: #f3f3f3;
+  --menu-bg: #fff;
+  --tab-bg: #e9edf2;
+  --active-tab-bg: #fff;
+  --viewer-canvas: #3a3a3c;
+  --toolbar-hover: rgb(0 0 0 / 6%);
+  --toolbar-pressed: rgb(0 0 0 / 11%);
+  --input-border: rgb(0 0 0 / 14%);
+  --checkbox-border: rgb(0 0 0 / 35%);
+  --checkbox-bg: transparent;
+  --bar-border: rgb(0 0 0 / 14%);
+  --chrome-border: rgb(0 0 0 / 14%);
+  --chrome-fg: #1a1a1a;
+  --muted-fg: #6a6a6a;
+
+  /* Accent + a readable foreground for text/icons on top of it (spec §6.2).
+     Both are set live from settings by SettingsModel (default / system / custom). */
+  --accent: #0067c0;
+  --accent-fg: #fff;
+  --editor-bg: #fff;
+  --font-ui: "Segoe UI", system-ui, sans-serif;
+
+  /* Set live from settings by SettingsModel. */
+  --editor-width: 1188px;
+  --editor-font: "Segoe UI", system-ui, sans-serif;
+
+  /* Document text-size multiplier (spec §5.20), driven by the toolbar A-/A+. */
+  --editor-font-scale: 1;
+
+  /* Document surface palette (spec §6.2). Driven by data-editor-theme so the
+     document can stay light while the UI (data-theme) is dark, and vice versa. */
+  --editor-surface-bg: #fff;
+  --editor-surface-fg: #1a1a1a;
+}
+
+/* Dark chrome — the UI (chrome) palette. */
+:root[data-theme="dark"] {
+  --accent: #0067c0;
+  --accent-fg: #fff;
+  --chrome-bg: #1c222e;
+  --tabstrip-bg: #191e27;
+  --findbar-bg: #1c222e;
+  --status-bg: #161a23;
+  --control-bg: #10141d;
+  --menu-bg: #212834;
+  --tab-bg: #202938;
+  --active-tab-bg: #1b2030;
+  --viewer-canvas: #3c3f44;
+  --toolbar-hover: rgb(255 255 255 / 7%);
+  --toolbar-pressed: rgb(255 255 255 / 10%);
+  --input-border: rgb(255 255 255 / 10%);
+  --checkbox-border: #5b626c;
+  --checkbox-bg: transparent;
+  --bar-border: rgb(255 255 255 / 5%);
+  --chrome-border: rgb(255 255 255 / 10%);
+  --chrome-fg: #c2c9d6;
+  --muted-fg: #8b94a5;
+  --editor-bg: #10141d;
+}
+
+/* Dark document surface — independent of the chrome theme (spec §6.2). Matches
+   VS Code's "Dark+" editor: #1e1e1e page, #d4d4d4 text. */
+:root[data-editor-theme="dark"] {
+  --editor-surface-bg: #1e1e1e;
+  --editor-surface-fg: #d4d4d4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The `hidden` attribute must always win. Several components toggle visibility
+   via `el.hidden = true` while their class also sets `display` (flex/grid),
+   which would otherwise defeat the UA `[hidden] { display: none }` rule and
+   leave find bars / banners / hidden views permanently on screen. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--chrome-fg);
+  background: var(--editor-bg);
+}
+
+#app {
+  height: 100vh;
+}
+
+:root[data-theme="dark"] .tab-close:hover {
+  background: rgb(255 255 255 / 18%);
+}
+
+:root[data-theme="dark"] .banner:not([data-kind="error"]) {
+  background: #3a3320;
+  color: #f0e6c0;
+  border-bottom-color: #5a4f2a;
+}
+
+/* Match highlights painted by the find plugin's decorations. */
+.editor-host .md-find-match {
+  background: rgb(255 213 0 / 45%);
+  border-radius: 2px;
+}
+
+.editor-host .md-find-current {
+  background: rgb(255 145 0 / 70%);
+}
+
+/* The fixed width lives on React's editor-column utilities. SettingsModel changes
+   this data attribute live when the document should fill the window. */
+:root[data-width-mode="fill"] .editor-column {
+  max-width: none;
+}
+
+/* Split + Markdown-only views (§6.1): the panes sit across the full editor width,
+   so the centered reading column is dropped and each pane scrolls on its own (the
+   area itself no longer scrolls as one column). The split shows both panes with a
+   divider; Markdown-only shows just the raw source, full width. */
+.editor-area.split,
+.editor-area.markdown-only {
+  overflow: hidden;
+}
+
+.editor-area.split .editor-column,
+.editor-area.markdown-only .editor-column {
+  max-width: none;
+  padding: 0;
+  height: 100%;
+  background: var(--editor-surface-bg);
+}
+
+/* Give the document pane comfortable margins in the split (the dropped column
+   padding used to provide them); the raw pane carries CodeMirror's own padding. */
+.editor-area.split .editor-pane-wysiwyg {
+  padding: 16px 24px 64px;
+}
+
+/* One pane per (tab, view); the inactive ones are kept alive (to preserve undo,
+   §5.19) but hidden. A visible pane fills the available width by default. */
+.editor-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+}
+
+.editor-pane[hidden] {
+  display: none;
+}
+
+/* Split view layout (§6.1). The document keeps the left side (its width set by
+   the divider via --split-left); the Markdown source takes the rest. Visual order
+   is fixed regardless of DOM build order. */
+.editor-host.split .editor-pane-wysiwyg {
+  flex: 0 0 var(--split-left, 50%);
+  order: 0;
+}
+
+.editor-host.split .editor-pane-raw {
+  flex: 1 1 0;
+  order: 2;
+  border-left: 1px solid var(--chrome-border);
+}
+
+/* In the split (and Markdown-only) layouts each pane scrolls independently — the
+   editor-area no longer scrolls as one column (see .editor-area.split above). */
+.editor-area.split .editor-pane,
+.editor-area.markdown-only .editor-pane {
+  overflow: auto;
+}
+
+/* Draggable divider between the two split panes. A thin bar with a wider,
+   col-resize hit area; hidden (and out of the layout) when the split is closed. */
+.split-divider {
+  flex: 0 0 6px;
+  order: 1;
+  align-self: stretch;
+  cursor: col-resize;
+  background: var(--chrome-border);
+  position: relative;
+}
+
+.split-divider[hidden] {
+  display: none;
+}
+
+.split-divider:hover,
+.split-divider:focus-visible,
+.split-divider.dragging {
+  background: var(--accent);
+}
+
+/* Collapsed base64 data URI in raw view (§5.3). */
+.cm-base64-collapsed {
+  color: var(--accent);
+  background: var(--chrome-bg);
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin: 0 1px;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+/* Non-hyphen dashes (em/en dash, minus sign, …) in the raw Markdown view (§5.3).
+   A monospace font draws them almost identically to a plain hyphen, so they get a
+   chip — an amber tint that reads as "heads up, this is not a normal hyphen" and is
+   legible on both the light and dark editor surfaces. Hover shows the exact char. */
+.cm-special-dash {
+  background: rgb(240 158 11 / 28%);
+  box-shadow: inset 0 0 0 1px rgb(240 158 11 / 60%);
+  border-radius: 3px;
+}
+
+/* Make CodeMirror fill the column and wrap nicely */
+.editor-host .cm-editor {
+  height: auto;
+}
+
+.editor-host .cm-content {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* Document text size (spec §5.20): scale the raw view's base size. */
+  font-size: calc(13.5px * var(--editor-font-scale));
+}
+
+/* Crepe's bundled code-block theme uses a dark-editor syntax palette even on
+   its light surface (several tokens are below WCAG AA). Keep semantic colour in
+   the dark document theme; on a light document use one high-contrast ink. */
+:root:not([data-editor-theme="dark"]) .editor-host .milkdown .cm-content,
+:root:not([data-editor-theme="dark"]) .editor-host .milkdown .cm-content * {
+  color: #24292f !important;
+}
+
+/* Configurable body font + document text size apply to the WYSIWYG text (§5.9,
+   §5.20). 1rem (16px) is the document base; nested headings/code scale with it. */
+.editor-host .milkdown {
+  font-family: var(--editor-font);
+  font-size: calc(1rem * var(--editor-font-scale));
+  color: var(--editor-surface-fg);
+}
+
+/* Crepe's reset.css pins absolute px font-sizes on the ProseMirror headings and
+   paragraphs, which shadow the scale inherited from `.milkdown` above (so A−/A+
+   only ever moved code blocks + the raw view). Re-declare them at higher
+   specificity, multiplied by --editor-font-scale, so the body text scales too
+   (§5.20). Line-heights become unitless ratios (matching Crepe's px/px values)
+   so they track the scaled font size instead of staying fixed. */
+.editor-host .milkdown .ProseMirror h1 {
+  font-size: calc(42px * var(--editor-font-scale));
+  line-height: 1.19;
+}
+
+.editor-host .milkdown .ProseMirror h2 {
+  font-size: calc(36px * var(--editor-font-scale));
+  line-height: 1.222;
+}
+
+.editor-host .milkdown .ProseMirror h3 {
+  font-size: calc(32px * var(--editor-font-scale));
+  line-height: 1.25;
+}
+
+.editor-host .milkdown .ProseMirror h4 {
+  font-size: calc(28px * var(--editor-font-scale));
+  line-height: 1.286;
+}
+
+.editor-host .milkdown .ProseMirror h5 {
+  font-size: calc(24px * var(--editor-font-scale));
+  line-height: 1.333;
+}
+
+.editor-host .milkdown .ProseMirror h6 {
+  font-size: calc(18px * var(--editor-font-scale));
+  line-height: 1.556;
+}
+
+.editor-host .milkdown .ProseMirror p {
+  font-size: calc(16px * var(--editor-font-scale));
+  line-height: 1.5;
+}
+
+/* Markdown tables size to their content (§6.2). prosemirror-tables ships
+   `table-layout: fixed; width: 100%`, which stretches every table across the page
+   and gives each column an equal share regardless of what is in it — a two-column
+   table of short values ended up as two very wide, mostly empty columns. Auto
+   layout asks the browser for each column's content width instead, and `width:
+   auto` shrink-wraps the table itself; `max-width: 100%` keeps a wide table inside
+   the page, where the browser falls back to wrapping the roomiest columns.
+   Unscoped (not under `.editor-host`) so the printed clone — `.print-doc.milkdown`,
+   printRender.ts — lays out identically to what is on screen. */
+.milkdown .milkdown-table-block table {
+  table-layout: auto;
+  width: auto;
+  max-width: 100%;
+}
+
+/* Dark document surface for the WYSIWYG (Crepe) editor (§6.2). Crepe pins a full
+   LIGHT palette directly on `.milkdown` (white background, black text — see its
+   reset.css `--crepe-color-*` vars), so merely darkening the page left light text
+   sitting on Crepe's white box: unreadable. Re-map Crepe's whole palette to a VS
+   Code "Dark+" markdown look, keyed on the *document* theme so it stays
+   independent of the chrome theme. Every Crepe-rendered element (headings, code,
+   blockquotes, tables, inline code, block handles) reads off these vars, so this
+   one block themes the entire document surface. */
+:root[data-editor-theme="dark"] .editor-host .milkdown {
+  --crepe-color-background: var(--editor-surface-bg);
+  --crepe-color-on-background: var(--editor-surface-fg);
+  --crepe-color-surface: #252526;
+  --crepe-color-surface-low: #2d2d30;
+  --crepe-color-on-surface: var(--editor-surface-fg);
+  --crepe-color-on-surface-variant: #9da0a6;
+  --crepe-color-outline: #3c3c3c;
+  --crepe-color-primary: #4daafc;
+  --crepe-color-secondary: #37373d;
+  --crepe-color-on-secondary: var(--editor-surface-fg);
+  --crepe-color-inverse: #e6e6e6;
+  --crepe-color-on-inverse: #1e1e1e;
+  --crepe-color-inline-code: #ce9178;
+  --crepe-color-error: #f48771;
+  --crepe-color-hover: #2a2d2e;
+  --crepe-color-selected: #264f78;
+  --crepe-color-inline-area: #2b2b2b;
+
+  background: var(--editor-surface-bg);
+  color: var(--editor-surface-fg);
+}
+
+/* Links read as VS Code's link blue rather than inheriting the body text color. */
+:root[data-editor-theme="dark"] .editor-host .milkdown a {
+  color: #4daafc;
+}
+
+/* Dark coverage for the raw CodeMirror surfaces (§6.2): the raw Markdown view and
+   the embedded code-block editors. Nudge their backgrounds/foregrounds onto the
+   document-surface vars. (Syntax-token colors inside code blocks come from a
+   CodeMirror highlight extension, not CSS, so they're a separate refinement.) */
+:root[data-editor-theme="dark"] .editor-host .cm-editor {
+  background: var(--editor-surface-bg);
+  color: var(--editor-surface-fg);
+}
+
+:root[data-editor-theme="dark"] .editor-host .cm-editor .cm-gutters {
+  background: var(--chrome-bg);
+  color: var(--muted-fg);
+  border-right-color: var(--chrome-border);
+}
+
+:root[data-editor-theme="dark"] .editor-host .cm-editor .cm-activeLine,
+:root[data-editor-theme="dark"] .editor-host .cm-editor .cm-activeLineGutter {
+  background: rgb(255 255 255 / 4%);
+}
+
+:root[data-editor-theme="dark"] .editor-host .cm-editor .cm-cursor {
+  border-left-color: var(--editor-surface-fg);
+}
+
+/* Frontmatter table (§5.17): a VS Code-style key/value view of a leading `---`
+   block, pinned above the editor. One row per key; nested mappings show as an
+   indented group of sub-rows. Keys and scalar values are editable; add/delete
+   controls appear on row hover. Lists / deeper nesting stay read-only code. */
+.frontmatter-table-wrap {
+  margin-bottom: 16px;
+}
+
+/* width: max-content shrinks the table to its content; max-width caps it at the
+   editor column so a long value wraps instead of overflowing; margin auto centers
+   the (narrower) table. (auto/fit-content wrongly fill the column on display:table
+   in Chromium — max-content is the one that shrinks reliably.) */
+.frontmatter-table {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 0.9em;
+}
+
+/* Caption hosts the "Frontmatter" tab at the table's top-left (a <caption> is sized
+   to the table box, so the tab tracks the centered table's left edge). */
+.frontmatter-caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0;
+}
+
+/* A spreadsheet-style tab labelling the block as YAML frontmatter (§5.17), so it's
+   not mistaken for an editable Markdown table. Its borderless bottom edge overlaps
+   the table's top border (margin-bottom: -1px) so tab and table read as one shape.
+   Fill/text derive from the DOCUMENT-surface palette (like the table's own cells),
+   not the chrome palette, so the tab matches the surface it sits on even when the
+   document theme differs from the UI theme (§6.2). The border keeps --chrome-border
+   to line up with the table's cell borders. color-mix gives a subtle tint that
+   adapts to a light or dark surface; the plain declarations above it are fallbacks. */
+.frontmatter-tab {
+  display: inline-block;
+  position: relative;
+  z-index: 1;
+  margin-bottom: -1px;
+  padding: 2px 12px;
+  border: 1px solid var(--chrome-border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--editor-surface-bg);
+  background: color-mix(in srgb, var(--editor-surface-fg) 8%, var(--editor-surface-bg));
+  color: var(--editor-surface-fg);
+  color: color-mix(in srgb, var(--editor-surface-fg) 65%, var(--editor-surface-bg));
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Read-only fallback (top-level list / deep nesting): the tab sits above the code
+   block, left-aligned within the editor column. */
+.frontmatter-raw {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.frontmatter-table th,
+.frontmatter-table td {
+  border: 1px solid var(--chrome-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+/* Key column hugs its (short) text. */
+.frontmatter-key {
+  width: 1%;
+  white-space: nowrap;
+  font-weight: 600;
+  min-width: 3ch;
+  color: var(--editor-surface-fg);
+}
+
+/* Indent a nested mapping's child keys. */
+.frontmatter-row-nested .frontmatter-key {
+  padding-left: 26px;
+  font-weight: 400;
+}
+
+.frontmatter-value {
+  color: var(--editor-surface-fg);
+}
+
+/* Editable cell: the key/value element is itself contenteditable, so the table's
+   auto-layout measures the real text and the column hugs it. */
+.frontmatter-edit {
+  cursor: text;
+}
+
+.frontmatter-edit:focus {
+  outline: none;
+}
+
+/* pre-wrap keeps typed spacing faithful while still wrapping a long value
+   (overflow-wrap breaks an over-long unbroken token); min-width keeps an empty
+   cell clickable. */
+.frontmatter-value-edit {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 4ch;
+}
+
+/* Read-only nested block / unparsed YAML, rendered as inline code (à la VS Code). */
+.frontmatter-code {
+  margin: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--chrome-bg);
+  color: var(--muted-fg);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.92em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Actions gutter (delete / add-to-group), revealed on row hover or focus. */
+.frontmatter-actions {
+  border: none;
+  width: 1%;
+  white-space: nowrap;
+  padding: 4px 2px 4px 6px;
+  vertical-align: middle;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.frontmatter-actions:focus-within {
+  opacity: 1;
+}
+
+.frontmatter-row:hover .frontmatter-actions {
+  opacity: 1;
+}
+
+.frontmatter-icon-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-fg);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.frontmatter-icon-btn:hover {
+  background: var(--chrome-bg);
+  color: var(--editor-surface-fg);
+}
+
+/* "+ Add field" under the table, aligned with the centered table. */
+.frontmatter-add {
+  display: block;
+  margin: 8px auto 0;
+  padding: 3px 10px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-fg);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.frontmatter-add:hover {
+  background: var(--chrome-bg);
+  color: var(--editor-surface-fg);
+}
+
+/* Between-row insert controls (§5.17). A thin, border-/padding-less row sits in
+   every gap (before each row + after the last). Its children are absolutely
+   positioned out of flow, so the row collapses to a ~0-height line and the connected
+   grid is visually undisturbed. Hovering the adjacent data row (or the "+" itself)
+   reveals a full-width accent line plus a round "+", making it obvious exactly where
+   the new field will land. The "+" lives in the table's LEFT MARGIN (right edge flush
+   with the table border), so it never overlaps an editable cell and so can't swallow
+   a click meant to place the caret. */
+.frontmatter-table td.frontmatter-inserter-cell {
+  border: none;
+  padding: 0;
+  height: 0;
+  position: relative;
+}
+
+.frontmatter-inserter-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+  z-index: 1;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+
+/* The leading inserter sits directly under the "Frontmatter" caption tab; hide its
+   line so it can't draw across the tab (the "+" is in the margin, clear of the tab). */
+.frontmatter-inserter-first .frontmatter-inserter-line {
+  display: none;
+}
+
+.frontmatter-inserter-btn {
+  position: absolute;
+  top: -9px;
+  left: -18px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  background: var(--editor-surface-bg);
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+/* Reveal a gap's line + "+" only when THAT gap is hovered (the "+" sits in the left
+   margin at the row boundary, so hovering the edge between two rows reveals exactly
+   one "+"), or when the "+" is keyboard-focused. Hovering a data row does NOT reveal
+   its adjacent gaps — only the gutter actions appear on row hover. `.frontmatter-
+   inserter:hover` fires when the button (the row's only hittable element) is hovered,
+   which also reveals the sibling line. */
+.frontmatter-inserter-btn:hover,
+.frontmatter-inserter-btn:focus-visible {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.frontmatter-inserter-btn:focus-visible,
+.frontmatter-inserter:hover .frontmatter-inserter-line,
+.frontmatter-inserter:hover .frontmatter-inserter-btn {
+  opacity: 1;
+}
+
+/* Link rendering (§5.6): muted URL suffix after a link in text-and-url mode.
+   Non-interactive and click-through so editing the link text is unaffected. */
+.editor-host .md-link-url {
+  color: var(--muted-fg);
+  font-size: 0.9em;
+  margin-left: 0.15em;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Mermaid diagrams (§5.2): rendered preview below the editable code source. */
+.editor-host .mermaid-preview {
+  display: flex;
+  justify-content: center;
+  padding: 8px 4px;
+  overflow: auto;
+}
+
+.editor-host .mermaid-preview svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.editor-host .mermaid-loading {
+  color: var(--muted-fg);
+  font-size: 12px;
+  justify-content: flex-start;
+}
+
+.editor-host .mermaid-error {
+  color: #b00020;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  padding: 8px;
+}
+
+:root[data-theme="dark"] .editor-host .mermaid-error {
+  color: #ff6b6b;
+}
+
+/* Missing image (§5.5): when an image fails to load, its block is marked and
+   styled as a click-to-relocate placeholder showing the broken icon + path. */
+.editor-host .milkdown-image-block.md-image-missing,
+.editor-host img.md-image-missing {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 12px 14px;
+  border: 1px dashed var(--chrome-border);
+  border-radius: 6px;
+  background: var(--chrome-bg);
+  color: var(--muted-fg);
+  cursor: pointer;
+}
+
+.editor-host .md-image-missing img {
+  display: none;
+}
+
+.editor-host .md-image-missing::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  background: currentcolor;
+  -webkit-mask: url("/icons/broken-image.svg") center / contain no-repeat;
+  mask: url("/icons/broken-image.svg") center / contain no-repeat;
+}
+
+.editor-host .md-image-missing::after {
+  content: "Missing image — click to relocate · " attr(data-md-path);
+  font-size: 12px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  word-break: break-all;
+}
+
+/* PrintWorkspace still uses these established structural selectors. Keep them
+   scoped to print so React overlays can own their presentation with utilities. */
+.print-workspace .dialog-section {
+  padding: 10px 0;
+  border-top: 1px solid var(--chrome-border);
+}
+
+.print-workspace .dialog-section:first-child {
+  border-top: none;
+}
+
+.print-workspace .dialog-section-title {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-fg);
+}
+
+.print-workspace .dialog-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.print-workspace .dialog-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 16px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  background: var(--editor-bg);
+  color: var(--chrome-fg);
+  cursor: pointer;
+}
+
+.print-workspace .dialog-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ── Print workspace + printed sheets (spec §5.21) ───────────────────────
+   md-easy lays its own pages out: `printRender.ts` builds one fixed-size
+   `.print-page` per sheet — margins, running header/footer and any scaling
+   baked in — and `paginate.ts` only ever breaks between blocks. The very same
+   elements are shown scaled down in the print workspace preview and sent to the
+   printer, so the preview cannot drift from the output.
+
+   `.print-offscreen` hosts the transient WYSIWYG editor used when printing from
+   a view that isn't showing the formatted document; `.print-measure` is where a
+   page's worth of flow is laid out and measured. Neither is ever visible. */
+.print-offscreen,
+.print-measure {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.print-offscreen {
+  width: 800px;
+}
+
+/* The rendered sheets. Hidden until they are either previewed in the workspace
+   (which gives them `display:flex` below) or printed. */
+.print-root {
+  display: none;
+}
+
+.print-workspace .print-root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.print-page {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  background: #fff;
+  color: #000;
+}
+
+.print-page-header,
+.print-page-footer {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: #666;
+}
+
+.print-page-header {
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #ddd;
+}
+
+.print-page-footer {
+  justify-content: center;
+}
+
+.print-page-body {
+  position: absolute;
+  overflow: hidden;
+}
+
+/* Printed document surface. Always light (black on white) regardless of the
+   document theme, so a dark-mode document doesn't print as a black slab. */
+.print-doc {
+  font-family: var(--editor-font, "Segoe UI", system-ui, sans-serif);
+  color: #000;
+  background: #fff;
+}
+
+/* The flow is measured at an explicit width and then placed on the page at that
+   same width, so nothing may add padding or margins around it. Crepe styles the
+   editor body with `.milkdown .ProseMirror { padding: … }` at the same
+   specificity, hence `!important` rather than a selector arms race. */
+.print-doc .print-flow {
+  color: #000;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+}
+
+/* Nothing may spill past the page edge. Images are additionally capped to the
+   content box so a tall image can never push a page over. These print-only
+   selectors cannot overlap the editor-only image, diagram, and table rules. */
+/* stylelint-disable no-descending-specificity -- Independent print and editor component trees. */
+.print-doc img,
+.print-doc svg,
+.print-doc table {
+  max-width: 100%;
+}
+
+.print-page-body img {
+  max-height: 100%;
+  object-fit: contain;
+}
+/* stylelint-enable no-descending-specificity */
+
+/* The Markdown version: raw source, one block per line so breaks land between
+   lines (printRender.ts → markdownFlow). */
+.print-source {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.print-src-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Code blocks rebuilt line-by-line when they outgrow a page (paginate.ts). */
+.print-code-line {
+  display: block;
+  white-space: pre-wrap;
+}
+
+/* ── The print workspace itself ──────────────────────────────────────────
+   A full-window print mode (not a modal): preview on the left, options on the
+   right. Opened from Ctrl+P, the toolbar Print button and the right-click menu. */
+.print-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: var(--editor-bg);
+  color: var(--chrome-fg);
+  display: grid;
+  grid-template-columns: 1fr 312px;
+  grid-template-rows: auto 1fr;
+  font-family: var(--font-ui);
+}
+
+.print-ws-top {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--chrome-border);
+}
+
+.print-ws-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.print-ws-summary {
+  font-size: 12.5px;
+  color: var(--muted-fg);
+}
+
+.print-ws-status {
+  font-size: 12.5px;
+  color: var(--muted-fg);
+}
+
+.print-ws-spacer {
+  margin-left: auto;
+}
+
+.print-ws-canvas {
+  overflow: auto;
+  padding: 24px;
+  background: color-mix(in srgb, var(--chrome-fg) 12%, var(--editor-bg));
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+/* Sized in JS to the scaled sheet stack, since the transform that scales the
+   preview doesn't affect layout (PrintWorkspace.fitPreview). */
+.print-ws-scaler {
+  flex: none;
+}
+
+.print-workspace .print-page {
+  box-shadow: 0 3px 14px rgb(0 0 0 / 35%);
+}
+
+.print-ws-rail {
+  border-left: 1px solid var(--chrome-border);
+  overflow: auto;
+  padding: 4px 16px 16px;
+}
+
+.print-ws-rail .dialog-row input[type="text"],
+.print-ws-rail .dialog-row input[type="number"],
+.print-ws-rail .dialog-row select {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 5px;
+  background: var(--editor-bg);
+  color: var(--chrome-fg);
+  min-width: 150px;
+}
+
+.print-ws-rail .dialog-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.print-ws-hint {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-fg);
+}
+
+.print-ws-note {
+  font-size: 12.5px;
+  color: var(--muted-fg);
+}
+
+.print-ws-pages {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* stylelint-disable-next-line no-descending-specificity -- Separate preview and settings-rail scopes. */
+.print-ws-pages select {
+  min-width: 0 !important;
+}
+
+.print-ws-range {
+  width: 92px;
+  min-width: 0 !important;
+}
+
+/* Document | Markdown version chooser. */
+.print-ws-segmented {
+  display: flex;
+  border: 1px solid var(--chrome-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.print-ws-segmented > button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 16px;
+  border: none;
+  background: transparent;
+  color: var(--chrome-fg);
+  cursor: pointer;
+}
+
+.print-ws-segmented > button.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ── Compact Slate shell ───────────────────────────────────────────────────
+   The Markdown editor keeps its own document/editor implementations; these
+   rules only reproduce the reference reader's permanent application chrome. */
+.app {
+  color: var(--chrome-fg);
+  background: var(--chrome-bg);
+}
+
+.toolbar {
+  min-height: 38px;
+  border-bottom-color: var(--bar-border) !important;
+  color: var(--chrome-fg);
+}
+
+.toolbar button,
+.tabstrip button,
+.find-bar button,
+.find-bar input {
+  font-family: var(--font-ui);
+}
+
+.toolbar-file {
+  height: 30px;
+  min-width: 0;
+  gap: 5px;
+  padding-inline: 8px !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--chrome-fg) !important;
+  box-shadow: none !important;
+}
+
+.toolbar-file > svg:not(.toolbar-caret) {
+  width: 17px;
+  height: 17px;
+  color: var(--muted-fg);
+}
+
+.toolbar-file .toolbar-caret {
+  width: 11px;
+  height: 11px;
+  margin-left: -2px;
+  color: var(--muted-fg);
+}
+
+.toolbar-view {
+  height: 32px;
+  gap: 0;
+}
+
+.toolbar-view .toolbar-seg {
+  height: 30px;
+  min-width: 0;
+  border-color: var(--chrome-border);
+  background: var(--active-tab-bg);
+  padding: 0 10px;
+  color: var(--chrome-fg);
+  font-size: 12px;
+  line-height: 28px;
+  box-shadow: none;
+}
+
+.toolbar-view .toolbar-seg:hover:not(:disabled, .active) {
+  background: var(--toolbar-hover);
+}
+
+.toolbar-view .toolbar-seg.active {
+  border-color: var(--accent) !important;
+  background: var(--accent) !important;
+  color: var(--accent-fg) !important;
+  font-weight: 600;
+}
+
+.toolbar-icon {
+  width: 31px;
+  height: 30px;
+  min-width: 31px;
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--muted-fg) !important;
+  box-shadow: none !important;
+}
+
+/* stylelint-disable-next-line no-descending-specificity -- Toolbar icons cannot overlap editor diagram SVGs. */
+.toolbar-icon > svg {
+  width: 24px !important;
+  height: 24px !important;
+  flex: 0 0 24px;
+  stroke-width: 2.2;
+}
+
+.toolbar-icon > .document-theme-glyph {
+  width: 22px !important;
+  height: 22px !important;
+  flex-basis: 22px;
+}
+
+.toolbar-icon:disabled,
+.toolbar-file:disabled {
+  color: #5b626c !important;
+  opacity: 1 !important;
+}
+
+.toolbar-file:hover,
+.toolbar-menu:hover,
+.toolbar-icon:hover:not(:disabled) {
+  background: var(--toolbar-hover) !important;
+}
+
+.toolbar-icon:active:not(:disabled),
+.toolbar-file:active:not(:disabled) {
+  background: var(--toolbar-pressed) !important;
+}
+
+.toolbar-sep {
+  background: var(--bar-border) !important;
+}
+
+.zoom-readout {
+  position: relative;
+  justify-content: center !important;
+  gap: 0 !important;
+  padding: 0 26px 0 8px !important;
+  border-color: var(--input-border) !important;
+  background: var(--control-bg) !important;
+  color: var(--chrome-fg) !important;
+  box-shadow: none !important;
+}
+
+/* stylelint-disable-next-line no-descending-specificity -- Zoom controls cannot overlap editor diagram SVGs. */
+.zoom-readout > svg {
+  position: absolute;
+  right: 7px;
+  width: 12px;
+  height: 12px;
+}
+
+.zoom-readout:hover:not(:disabled) {
+  border-color: var(--chrome-border) !important;
+  background: var(--toolbar-hover) !important;
+}
+
+.tabstrip {
+  min-height: 45px;
+  border-bottom-color: var(--bar-border) !important;
+  color: var(--chrome-fg);
+  scrollbar-color: rgb(139 148 165 / 45%) transparent;
+}
+
+.toolbar-recent {
+  border-color: rgb(255 255 255 / 14%) !important;
+  color: var(--chrome-fg) !important;
+  box-shadow: none !important;
+}
+
+:root:not([data-theme="dark"]) .toolbar-recent {
+  border-color: var(--chrome-border) !important;
+}
+
+.toolbar-recent.active {
+  border-color: var(--accent) !important;
+  background: var(--active-tab-bg) !important;
+  color: var(--chrome-fg) !important;
+}
+
+.tab {
+  border-color: #465469 !important;
+  background: var(--tabstrip-bg) !important;
+  color: var(--chrome-fg) !important;
+}
+
+.tab.active {
+  border-color: #59677a !important;
+  border-bottom-color: var(--active-tab-bg) !important;
+  background: var(--active-tab-bg) !important;
+  color: #e6edf3 !important;
+}
+
+:root:not([data-theme="dark"]) .tab.active {
+  border-color: var(--chrome-border) !important;
+  border-bottom-color: var(--active-tab-bg) !important;
+  color: var(--chrome-fg) !important;
+}
+
+.tab:hover:not(.active),
+.tab-new:hover {
+  background: var(--toolbar-hover) !important;
+}
+
+/* Runtime dark-theme interaction states follow their base rules so their
+   more-specific colors win predictably through the cascade. */
+:root[data-theme="dark"] .toolbar-recent:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+:root[data-theme="dark"] .toolbar-recent.active {
+  background: rgb(255 255 255 / 12%);
+}
+
+:root[data-theme="dark"] .tab:not(.active):hover {
+  background: rgb(255 255 255 / 6%);
+}
+
+:root[data-theme="dark"] .tab-new:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.find-host {
+  min-height: 39px;
+  background: var(--findbar-bg);
+}
+
+.find-host > [data-react-find-bar],
+.find-bar {
+  width: 100%;
+}
+
+.find-bar {
+  border-bottom-color: var(--bar-border) !important;
+  color: var(--muted-fg);
+}
+
+.find-field {
+  border-color: var(--input-border) !important;
+  background: var(--control-bg) !important;
+}
+
+.find-field:focus-within,
+.find-input:focus {
+  border-color: var(--accent) !important;
+}
+
+.find-input::placeholder {
+  color: #7c8494;
+  opacity: 1;
+}
+
+.find-btn {
+  color: var(--muted-fg) !important;
+}
+
+.find-btn:hover:not(:disabled) {
+  background: var(--toolbar-hover) !important;
+  color: var(--chrome-fg) !important;
+}
+
+.find-prev {
+  padding-inline: 14px !important;
+}
+
+.find-toggle {
+  color: var(--muted-fg) !important;
+}
+
+.find-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--checkbox-border);
+  border-radius: 4px;
+  background: var(--checkbox-bg);
+  display: grid;
+  place-content: center;
+}
+
+.find-toggle input::before {
+  content: "";
+  width: 8px;
+  height: 5px;
+  margin-top: -1px;
+  border-left: 2px solid var(--accent-fg);
+  border-bottom: 2px solid var(--accent-fg);
+  transform: rotate(-45deg) scale(0);
+}
+
+.find-toggle input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.find-toggle input:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+.find-toggle input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.status-bar {
+  border-top-color: var(--bar-border) !important;
+  background: var(--status-bg) !important;
+  color: #7c8494 !important;
+}
+
+.editor-area {
+  background: var(--viewer-canvas) !important;
+  scrollbar-gutter: stable;
+  scrollbar-color: rgb(139 148 165 / 45%) transparent;
+  scrollbar-width: auto;
+}
+
+.editor-area::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editor-area::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background: rgb(139 148 165 / 48%);
+  background-clip: padding-box;
+}
+
+.editor-area:not(.split, .markdown-only) .editor-column {
+  min-height: 100%;
+  background: var(--editor-surface-bg);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 38%);
+}
+
+:root[data-width-mode="fixed"] .editor-area:not(.split, .markdown-only) .editor-column {
+  max-width: min(var(--editor-width), calc(100% - 72px));
+}
+
+.app-menu {
+  border-color: rgb(255 255 255 / 24%) !important;
+  background: var(--menu-bg) !important;
+}
+
+@media (width <= 820px) {
+  .toolbar-view {
+    margin-left: 10px !important;
+  }
+
+  .toolbar-right {
+    margin-left: 4px !important;
+  }
+
+  .toolbar-right .toolbar-sep {
+    margin-inline: 4px !important;
+  }
+}
+
+@media (width <= 620px) {
+  .toolbar-left > .toolbar-sep,
+  .toolbar-right > :first-child,
+  .toolbar-right > :nth-child(5),
+  .toolbar-right > :nth-child(6),
+  .toolbar-right > :nth-child(7) {
+    display: none !important;
+  }
+
+  .toolbar-file {
+    width: 31px;
+    min-width: 31px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 6px !important;
+  }
+
+  .toolbar-file-label,
+  .toolbar-file .toolbar-caret {
+    display: none;
+  }
+
+  .toolbar-view {
+    margin-left: 6px !important;
+  }
+
+  .toolbar .toolbar-right {
+    margin-left: 0 !important;
+    gap: 2px;
+  }
+
+  .toolbar-view .toolbar-seg {
+    padding-inline: 4px;
+  }
+
+  .zoom-readout {
+    width: 66px;
+  }
+}
+
+@media (width <= 560px) {
+  .find-bar > .find-row:first-child > .find-count,
+  .find-bar > .find-row:first-child > .find-btn,
+  .find-bar > .find-row:first-child > .find-toggle {
+    display: none;
+  }
+
+  .find-replace-row {
+    padding-inline: 6px !important;
+  }
+}
+
+@media print {
+  /* The sheets carry their own margins, so the paper itself gets none —
+     otherwise the printer would add a second margin around our page boxes. */
+  @page {
+    margin: 0;
+  }
+
+  /* Show only the sheets. Hiding `#app` (the mount container, `height: 100vh`)
+     rather than just the inner `.app` is what avoids a blank leading page; the
+     workspace and any open menu are body-level, so they are hidden explicitly. */
+  html.printing #app,
+  html.printing .print-workspace,
+  html.printing .md-context-menu,
+  html.printing .dialog-overlay,
+  html.printing .print-offscreen,
+  html.printing .print-measure {
+    display: none !important;
+  }
+
+  html.printing .print-root {
+    display: block !important;
+  }
+
+  html.printing .print-page {
+    box-shadow: none;
+    break-after: page;
+  }
+
+  html.printing .print-page:last-child {
+    break-after: auto;
+  }
+}

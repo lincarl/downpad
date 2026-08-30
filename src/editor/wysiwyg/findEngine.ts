@@ -1,0 +1,235 @@
+// WYSIWYG find/replace engine (spec §5.13). CodeMirror's panel can't drive the
+// ProseMirror document, so the WYSIWYG view gets its own search:
+//   - `findMatchRanges` is pure string matching (case/whole-word/regex) — tested.
+//   - `searchDoc` maps those matches onto ProseMirror positions per text block
+//     (so matches spanning inline marks work, but never cross block boundaries).
+//   - a ProseMirror plugin holds the match set + current index, paints
+//     decorations, and remaps on edits; replacements go through transactions so
+//     undo/redo behaves normally.
+
+import { $prose } from "@milkdown/kit/utils";
+import { Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
+import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
+import type { EditorView } from "@milkdown/kit/prose/view";
+import type { EditorState } from "@milkdown/kit/prose/state";
+import type { Node as ProseNode } from "@milkdown/kit/prose/model";
+
+export interface FindOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+}
+
+export interface MatchRange {
+  from: number;
+  to: number;
+}
+
+export interface FindCounts {
+  total: number;
+  /** 1-based index of the current match, 0 when none. */
+  current: number;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Find non-overlapping match ranges of `query` in `text` (string offsets). */
+export function findMatchRanges(text: string, query: string, opts: FindOptions): MatchRange[] {
+  if (!query) return [];
+  let re: RegExp;
+  try {
+    const flags = opts.caseSensitive ? "g" : "gi";
+    let pattern = opts.regex ? query : escapeRegExp(query);
+    if (opts.wholeWord) pattern = `\\b(?:${pattern})\\b`;
+    re = new RegExp(pattern, flags);
+  } catch {
+    return []; // invalid regex → no matches (the bar shows 0)
+  }
+  const ranges: MatchRange[] = [];
+  let m: RegExpExecArray | null;
+  let guard = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m[0].length === 0) {
+      re.lastIndex++; // avoid an infinite loop on zero-width matches
+      continue;
+    }
+    ranges.push({ from: m.index, to: m.index + m[0].length });
+    if (++guard > 100_000) break;
+  }
+  return ranges;
+}
+
+/** Per-textblock text + a map from each char index to its ProseMirror position. */
+function blockText(node: ProseNode, pos: number): { text: string; offsets: number[] } {
+  let text = "";
+  const offsets: number[] = [];
+  node.forEach((child, offset) => {
+    const base = pos + 1 + offset;
+    if (child.isText && child.text) {
+      for (let i = 0; i < child.text.length; i++) {
+        text += child.text[i];
+        offsets.push(base + i);
+      }
+    } else {
+      text += "￼"; // object-replacement sentinel for atomic inline nodes
+      offsets.push(base);
+    }
+  });
+  return { text, offsets };
+}
+
+/** Map string matches onto ProseMirror position ranges across all text blocks. */
+export function searchDoc(doc: ProseNode, query: string, opts: FindOptions): MatchRange[] {
+  if (!query) return [];
+  const result: MatchRange[] = [];
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    const { text, offsets } = blockText(node, pos);
+    for (const r of findMatchRanges(text, query, opts)) {
+      const from = offsets[r.from];
+      const lastChar = offsets[r.to - 1];
+      if (from != null && lastChar != null) result.push({ from, to: lastChar + 1 });
+    }
+    return false; // text blocks hold inline content only
+  });
+  return result;
+}
+
+// ── ProseMirror plugin ──
+
+interface FindPluginState {
+  query: string;
+  opts: FindOptions;
+  ranges: MatchRange[];
+  current: number; // 0-based index into ranges, -1 when none
+}
+
+const EMPTY_OPTS: FindOptions = { caseSensitive: false, wholeWord: false, regex: false };
+
+export const findKey = new PluginKey<FindPluginState>("md-easy-find");
+
+type FindMeta =
+  | { type: "search"; query: string; opts: FindOptions }
+  | { type: "current"; current: number }
+  | { type: "clear" };
+
+function buildDecorationSet(doc: ProseNode, s: FindPluginState): DecorationSet {
+  if (!s.ranges.length) return DecorationSet.empty;
+  const decos = s.ranges.map((r, i) =>
+    Decoration.inline(r.from, r.to, {
+      class: i === s.current ? "md-find-match md-find-current" : "md-find-match",
+    }),
+  );
+  return DecorationSet.create(doc, decos);
+}
+
+/** Milkdown wrapper so the search plugin can be registered via `editor.use`. */
+export function searchMilkdownPlugin() {
+  return $prose(() => findPlugin());
+}
+
+export function findPlugin() {
+  return new Plugin<FindPluginState>({
+    key: findKey,
+    state: {
+      init: () => ({ query: "", opts: EMPTY_OPTS, ranges: [], current: -1 }),
+      apply: (tr, prev) => {
+        const meta = tr.getMeta(findKey) as FindMeta | undefined;
+        if (meta?.type === "search") {
+          const ranges = searchDoc(tr.doc, meta.query, meta.opts);
+          return { query: meta.query, opts: meta.opts, ranges, current: ranges.length ? 0 : -1 };
+        }
+        if (meta?.type === "current") {
+          return { ...prev, current: meta.current };
+        }
+        if (meta?.type === "clear") {
+          return { query: "", opts: EMPTY_OPTS, ranges: [], current: -1 };
+        }
+        if (tr.docChanged && prev.query) {
+          // Re-run on edits so positions stay valid.
+          const ranges = searchDoc(tr.doc, prev.query, prev.opts);
+          const current = ranges.length ? Math.min(Math.max(prev.current, 0), ranges.length - 1) : -1;
+          return { ...prev, ranges, current };
+        }
+        return prev;
+      },
+    },
+    props: {
+      decorations(state: EditorState) {
+        const s = findKey.getState(state);
+        return s ? buildDecorationSet(state.doc, s) : null;
+      },
+    },
+  });
+}
+
+// ── View commands (called by the find bar via EditorHost) ──
+
+function counts(s: FindPluginState | undefined): FindCounts {
+  if (!s || !s.ranges.length) return { total: 0, current: 0 };
+  return { total: s.ranges.length, current: s.current + 1 };
+}
+
+function scrollToCurrent(view: EditorView, s: FindPluginState): void {
+  const range = s.ranges[s.current];
+  if (!range) return;
+  const tr = view.state.tr
+    .setSelection(TextSelection.create(view.state.doc, range.from, range.to))
+    .scrollIntoView();
+  view.dispatch(tr);
+}
+
+export function runSearch(view: EditorView, query: string, opts: FindOptions): FindCounts {
+  view.dispatch(view.state.tr.setMeta(findKey, { type: "search", query, opts }));
+  const s = findKey.getState(view.state);
+  if (s && s.ranges.length) scrollToCurrent(view, findKey.getState(view.state)!);
+  return counts(findKey.getState(view.state));
+}
+
+export function moveMatch(view: EditorView, delta: number): FindCounts {
+  const s = findKey.getState(view.state);
+  if (!s || !s.ranges.length) return { total: 0, current: 0 };
+  const next = (s.current + delta + s.ranges.length) % s.ranges.length;
+  view.dispatch(view.state.tr.setMeta(findKey, { type: "current", current: next }));
+  scrollToCurrent(view, findKey.getState(view.state)!);
+  return counts(findKey.getState(view.state));
+}
+
+export function clearSearch(view: EditorView): void {
+  view.dispatch(view.state.tr.setMeta(findKey, { type: "clear" }));
+}
+
+export function replaceCurrent(
+  view: EditorView,
+  replacement: string,
+  query: string,
+  opts: FindOptions,
+): FindCounts {
+  const s = findKey.getState(view.state);
+  const range = s?.ranges[s.current];
+  if (s && range) {
+    view.dispatch(view.state.tr.insertText(replacement, range.from, range.to));
+  }
+  // Re-search afterwards so counts/positions reflect the edit.
+  return runSearch(view, query, opts);
+}
+
+export function replaceAll(
+  view: EditorView,
+  replacement: string,
+  query: string,
+  opts: FindOptions,
+): FindCounts {
+  const s = findKey.getState(view.state);
+  if (s && s.ranges.length) {
+    const tr = view.state.tr;
+    // Replace from last to first so earlier ranges keep their positions.
+    for (let i = s.ranges.length - 1; i >= 0; i--) {
+      tr.insertText(replacement, s.ranges[i].from, s.ranges[i].to);
+    }
+    view.dispatch(tr);
+  }
+  return runSearch(view, query, opts);
+}

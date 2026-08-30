@@ -1,0 +1,95 @@
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach } from "vitest";
+import { closeContextMenu, showContextMenu, isContextMenuOpen } from "./contextMenu";
+import { MENU_ICONS } from "./menuIcons";
+
+afterEach(() => closeContextMenu());
+
+const menu = (): HTMLElement => document.querySelector(".md-context-menu")!;
+const rows = (): HTMLButtonElement[] =>
+  Array.from(document.querySelectorAll<HTMLButtonElement>(".md-context-menu-item"));
+
+describe("showContextMenu", () => {
+  it("renders one row per item, with its shortcut hint and icon", () => {
+    showContextMenu(10, 20, [
+      { label: "Cut", shortcut: "Ctrl+X", icon: MENU_ICONS.cut, run: () => {} },
+      { label: "Print…", shortcut: "Ctrl+P", icon: MENU_ICONS.print, run: () => {} },
+    ]);
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0].querySelector(".md-context-menu-label")!.textContent).toBe("Cut");
+    expect(rows()[0].querySelector(".md-context-menu-key")!.textContent).toBe("Ctrl+X");
+    expect(rows()[0].querySelector(".md-context-menu-icon svg")).not.toBeNull();
+    expect(menu().style.left).toBe("10px");
+    expect(menu().style.top).toBe("20px");
+  });
+
+  it("reserves the icon column on rows without an icon so labels stay aligned", () => {
+    showContextMenu(0, 0, [
+      { label: "With", icon: MENU_ICONS.copy, run: () => {} },
+      { label: "Without", run: () => {} },
+    ]);
+    // Both rows get the slot; only the first one has glyph markup inside it.
+    expect(rows()[1].querySelector(".md-context-menu-icon")).not.toBeNull();
+    expect(rows()[1].querySelector(".md-context-menu-icon svg")).toBeNull();
+  });
+
+  it("omits the icon column entirely for a text-only menu", () => {
+    showContextMenu(0, 0, [{ label: "Open", run: () => {} }]);
+    expect(rows()[0].querySelector(".md-context-menu-icon")).toBeNull();
+  });
+
+  it("runs an enabled item and closes, but ignores a disabled one", () => {
+    let ran = "";
+    showContextMenu(0, 0, [
+      {
+        label: "Enabled",
+        run: () => {
+          ran += "e";
+        },
+      },
+      {
+        label: "Disabled",
+        disabled: true,
+        run: () => {
+          ran += "d";
+        },
+      },
+    ]);
+    rows()[1].click();
+    expect(ran).toBe("");
+    expect(isContextMenuOpen()).toBe(true);
+    rows()[0].click();
+    expect(ran).toBe("e");
+    expect(isContextMenuOpen()).toBe(false);
+  });
+
+  it("draws a separator above an item that asks for one", () => {
+    showContextMenu(0, 0, [
+      { label: "A", run: () => {} },
+      { label: "B", separatorBefore: true, run: () => {} },
+    ]);
+    expect(menu().querySelectorAll(".md-context-menu-sep")).toHaveLength(1);
+    expect(menu().children[1].className).toBe("md-context-menu-sep");
+  });
+
+  it("replaces an already-open menu instead of stacking a second one", () => {
+    showContextMenu(0, 0, [{ label: "First", run: () => {} }]);
+    showContextMenu(0, 0, [{ label: "Second", run: () => {} }]);
+    expect(document.querySelectorAll(".md-context-menu")).toHaveLength(1);
+    expect(rows()[0].textContent).toBe("Second");
+  });
+
+  it("focuses its first item and closes immediately on Escape", () => {
+    const invoker = document.createElement("button");
+    document.body.append(invoker);
+    invoker.focus();
+    showContextMenu(0, 0, [{ label: "Open", run: () => {} }]);
+
+    expect(document.activeElement).toBe(rows()[0]);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(isContextMenuOpen()).toBe(false);
+    expect(document.querySelector(".md-context-menu")).toBeNull();
+    expect(document.activeElement).toBe(invoker);
+  });
+});

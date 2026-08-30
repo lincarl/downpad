@@ -1,0 +1,41 @@
+import { test, expect } from "@playwright/test";
+
+// Regression test for the spurious "unsaved changes" bug: opening a document and
+// merely opening/closing the Markdown split must NOT mark a never-edited document
+// dirty. Opening the split builds the raw pane and the toggle flushes the document
+// through WysiwygEditor.getMarkdown() — a markdown round-trip that normalizes the
+// text (trailing newline, list markers, table padding, …). The build reconciles
+// the canonical to that settled form WITHOUT dirtying, so the flush is a no-op.
+//
+// Dirty state surfaces two ways: a leading "● " in the window title (TitleBar) and
+// a `.tab-dot` in the tab strip (TabStrip). We assert neither appears.
+
+const wysiwyg = ".milkdown .ProseMirror";
+const rawContent = ".editor-pane-raw .cm-content";
+const splitSeg = ".toolbar-view button:has-text('Split')";
+const documentSeg = ".toolbar-view button:has-text('Document')";
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+});
+
+test("a freshly opened document is not dirty, even after opening/closing the split", async ({
+  page,
+}) => {
+  // Clean on load: no dirty dot anywhere.
+  await expect(page).not.toHaveTitle(/^●/);
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
+
+  // Open the Markdown split ("Split"), then return to the document ("Document").
+  // Each layout switch flushes the document through the round-trip that used to
+  // spuriously dirty the doc.
+  await page.locator(splitSeg).click();
+  await expect(page.locator(rawContent)).toBeVisible();
+  await page.locator(documentSeg).click();
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+
+  // Still clean — opening the split with no edits must never raise the unsaved flag.
+  await expect(page).not.toHaveTitle(/^●/);
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
+});

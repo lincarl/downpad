@@ -1,0 +1,892 @@
+// Owns the editor panes and the single-source-of-truth invariant (spec §8.3,
+// docs/design.md §4). `DocumentState.markdown` is canonical; each editor is a
+// *view* over that string.
+//
+// The toolbar's three-segment view control (§6.1) chooses the layout: the
+// document (WYSIWYG) view alone, the raw Markdown source alone, or both side by
+// side in a split with a draggable divider between them. In the split both panes
+// are live editors over the same canonical string; an edit in one is mirrored
+// into the other (debounced) so the split stays in sync without ever letting the
+// two views diverge.
+//
+// To preserve undo history across tab switches and while the split opens/closes
+// (spec §5.19), a live editor instance is kept per `(tab, view)` and hidden/shown
+// rather than destroyed. ProseMirror's undo history is not serializable across a
+// markdown re-parse, so keeping the instance alive is the only way to retain it.
+//
+// Cache invalidation is driven by a per-tab *revision* counter: any real change
+// to a tab's canonical string bumps its rev and stamps the authoring pane as
+// in-sync; every other pane of that tab is now stale. On reveal, a stale pane is
+// rebuilt from the canonical string (its undo resets) — so the views can never
+// diverge, yet an untouched view keeps its undo. At most `maxRetainedTabEditors`
+// tabs keep live panes (LRU); older tabs fall back to rebuild-on-revisit.
+
+import type { Store } from "../state/store";
+import { serializerStyleFromSettings } from "../state/types";
+import type { EditorLayout } from "../state/types";
+import { applyEditorMarkdownForTab, reconcileEditorMarkdownForTab } from "../document/DocumentModel";
+import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
+import { RawEditor } from "./raw/RawEditor";
+import { ScrollSync } from "./scrollSync";
+import { applySpellcheck } from "./wysiwyg/spellcheck";
+import type { WysiwygContext } from "./wysiwyg/context";
+import type { FindController } from "./wysiwyg/findBar";
+import type { FindCounts, FindOptions } from "./wysiwyg/findEngine";
+
+type View = "wysiwyg" | "raw";
+
+interface Pane {
+  tabId: string;
+  view: View;
+  /** Tab rev this pane's content is in sync with; stale when it lags the tab. */
+  syncedRev: number;
+  /** WYSIWYG config epoch this pane was built with (serializer style / link mode). */
+  configEpoch: number;
+  /** Wrapper element (a child of `root`); hidden via the `hidden` attribute. */
+  el: HTMLElement;
+  wysiwyg: WysiwygEditor | null;
+  raw: RawEditor | null;
+}
+
+const NO_MATCHES: FindCounts = { total: 0, current: 0 };
+const paneKey = (tabId: string, view: View): string => `${tabId} ${view}`;
+
+/** Debounce for mirroring an edit into the other split pane (§6.1). Coalesces a
+ *  burst of keystrokes so the (heavier) WYSIWYG re-parse doesn't run per key. */
+const SYNC_DEBOUNCE_MS = 120;
+/** How far the divider can travel: the narrower pane keeps at least this share. */
+const SPLIT_MIN_RATIO = 0.2;
+const SPLIT_MAX_RATIO = 0.8;
+
+export class EditorHost implements FindController {
+  /** Live panes keyed by `(tabId, view)`. */
+  private panes = new Map<string, Pane>();
+  /** Per-tab revision (monotonic; bumped on every canonical change). */
+  private rev = new Map<string, number>();
+  /** Tab ids in most-recently-active-first order, for LRU eviction. */
+  private tabMru: string[] = [];
+  /** WYSIWYG serializer/link-display config generation; bumped on settings change. */
+  private configEpoch = 0;
+  private activeTabId: string | null = null;
+  private currentView: View | null = null;
+  private switching = false;
+  /** Terminal lifecycle state. `unmount` clears editors but leaves this host
+   *  reusable; `dispose` permanently rejects future work for React cleanup. */
+  private disposed = false;
+  private disposePromise: Promise<void> | null = null;
+  /** Pane teardown can already be awaiting Crepe when terminal disposal starts
+   *  (for example, a reload removed a stale pane just before React unmounted).
+   *  Track those detached panes so `dispose()` still waits for their cleanup. */
+  private readonly pendingTeardowns = new Set<Promise<void>>();
+  private readonly paneTeardowns = new WeakMap<Pane, Promise<void>>();
+  /** Which editor panes are shown — document only, the split, or Markdown only
+   *  (§6.1). Mirrors `AppState.editorLayout`. */
+  private layout: EditorLayout = "document";
+  /** Set while a mirror sync writes into a pane, so that pane's resulting change
+   *  callback is ignored (it would otherwise echo back and clobber the author). */
+  private applyingSync = false;
+  /** Pending debounced mirror-sync timer (the source pane drives it). */
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Which split pane the user last edited — flushed on tab switch so the freshest
+   *  exact text (== canonical) is captured rather than the other pane's stale or
+   *  re-normalized serialization. */
+  private lastEditedView: View | null = null;
+  /** The draggable divider between the two split panes (lazily created). */
+  private divider: HTMLElement | null = null;
+  /** Best-effort fractional scroll-position sync between the two split panes
+   *  (§5.3): scrolling one pane keeps the other at the same %. Connected to the
+   *  visible pair while the split is open; disconnected otherwise. */
+  private readonly scrollSync = new ScrollSync();
+  /** Fraction of the host width given to the document (left) pane in split view. */
+  private leftRatio = 0.5;
+  private dragCleanup: (() => void) | null = null;
+  private dragPointerId: number | null = null;
+  /** Set by AppRuntime; lets the WYSIWYG paste/drop path trigger a save when an
+   *  untitled buffer needs an attachments folder (§5.5). */
+  private saveHandler: (() => Promise<boolean>) | null = null;
+  /** Set by AppRuntime; opens a local markdown file in a tab when a `.md` link is
+   *  double-clicked in the WYSIWYG view (§5.6). */
+  private openLinkHandler: ((absPath: string) => void) | null = null;
+
+  constructor(
+    private readonly root: HTMLElement,
+    private readonly store: Store,
+  ) {}
+
+  /** Wire the prompt-and-save action (FileService.save) used by image storage. */
+  setSaveHandler(handler: () => Promise<boolean>): void {
+    if (this.disposed) return;
+    this.saveHandler = handler;
+  }
+
+  /** Wire the open-in-tab action (FileService.openPath) used for `.md` links. */
+  setOpenLinkHandler(handler: (absPath: string) => void): void {
+    if (this.disposed) return;
+    this.openLinkHandler = handler;
+  }
+
+  /** Set the initial layout before the first `present` (bootstrap only). Use
+   *  `setLayout` for a runtime change — it flushes and re-presents. */
+  initLayout(layout: EditorLayout): void {
+    if (this.disposed) return;
+    this.layout = layout;
+  }
+
+  /** Insert markdown into the document editor at its current selection (§5.4). */
+  insertMarkdown(markdown: string): void {
+    if (this.disposed) return;
+    const pane = this.active();
+    if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown);
+    else if (pane?.raw) pane.raw.insertText(markdown);
+  }
+
+  /** (Re)apply the spell-check setting to every editor under the host (§5.14). */
+  applySpellcheck(): void {
+    if (this.disposed) return;
+    applySpellcheck(this.root, this.store.get().settings.spellCheckEnabled);
+  }
+
+  // ── FindController (§5.13): the permanent shell strip routes to the visible
+  // document editor, using ProseMirror in Document/Split and CM in Markdown. ──
+
+  search(query: string, opts: FindOptions): FindCounts {
+    if (this.disposed) return NO_MATCHES;
+    this.suppressMirrorScroll();
+    return this.layout === "markdown"
+      ? this.activeRaw()?.searchText(query, opts) ?? NO_MATCHES
+      : this.activeWysiwyg()?.search(query, opts) ?? NO_MATCHES;
+  }
+  next(): FindCounts {
+    if (this.disposed) return NO_MATCHES;
+    this.suppressMirrorScroll();
+    return this.layout === "markdown"
+      ? this.activeRaw()?.findNext() ?? NO_MATCHES
+      : this.activeWysiwyg()?.findNext() ?? NO_MATCHES;
+  }
+  prev(): FindCounts {
+    if (this.disposed) return NO_MATCHES;
+    this.suppressMirrorScroll();
+    return this.layout === "markdown"
+      ? this.activeRaw()?.findPrev() ?? NO_MATCHES
+      : this.activeWysiwyg()?.findPrev() ?? NO_MATCHES;
+  }
+  replaceCurrent(replacement: string, query: string, opts: FindOptions): FindCounts {
+    if (this.disposed) return NO_MATCHES;
+    this.suppressMirrorScroll();
+    return this.layout === "markdown"
+      ? this.activeRaw()?.replaceCurrent(replacement, query, opts) ?? NO_MATCHES
+      : this.activeWysiwyg()?.replaceCurrent(replacement, query, opts) ?? NO_MATCHES;
+  }
+  replaceAll(replacement: string, query: string, opts: FindOptions): FindCounts {
+    if (this.disposed) return NO_MATCHES;
+    this.suppressMirrorScroll();
+    return this.layout === "markdown"
+      ? this.activeRaw()?.replaceAll(replacement, query, opts) ?? NO_MATCHES
+      : this.activeWysiwyg()?.replaceAll(replacement, query, opts) ?? NO_MATCHES;
+  }
+
+  /** A Find/replace op scrolls the document to the match via ProseMirror's
+   *  `scrollIntoView` (per keystroke during incremental search). In the split,
+   *  tell the scroll sync that this scroll is app-originated so it doesn't drive
+   *  — and jerk, per keystroke — the Markdown pane (§5.3). */
+  private suppressMirrorScroll(): void {
+    if (this.layout === "split") this.scrollSync.suppressNext();
+  }
+  clear(): void {
+    if (this.disposed) return;
+    if (this.layout === "markdown") this.activeRaw()?.clearSearch();
+    else this.activeWysiwyg()?.clearSearch();
+  }
+  focusEditor(): void {
+    if (this.disposed) return;
+    const pane = this.active();
+    if (pane?.wysiwyg) pane.wysiwyg.focus();
+    else pane?.raw?.focus();
+  }
+
+  /** The active pane's `.ProseMirror` node (for print fidelity), or null when the
+   *  document editor isn't mounted. Scoped to the active pane so hidden panes are
+   *  never picked up. */
+  activeWysiwygNode(): Element | null {
+    if (this.disposed) return null;
+    const pane = this.active();
+    if (!pane || pane.view !== "wysiwyg") return null;
+    return pane.el.querySelector(".ProseMirror");
+  }
+
+  /** Wrap the active document selection in a link (§5.6), for the right-click
+   *  menu. False when the document editor isn't the active pane or nothing is
+   *  selected. */
+  insertLink(href: string): boolean {
+    if (this.disposed) return false;
+    return this.activeWysiwyg()?.insertLink(href) ?? false;
+  }
+
+  /** Whether any editor is currently mounted (false after `unmount`). */
+  isMounted(): boolean {
+    return !this.disposed && this.currentView !== null;
+  }
+
+  /**
+   * Flush the visible editor's current content into its tab WITHOUT tearing it
+   * down. Call before `store.activateTab(...)` so the outgoing tab keeps its
+   * in-progress edits (spec §5.19). Bumps the tab's rev iff the content actually
+   * changed (so the tab's other view becomes stale), keeping this pane in sync.
+   * Also cancels any pending mirror sync (it's about to be superseded).
+   */
+  flush(): void {
+    if (this.disposed) return;
+    this.cancelSync();
+    const pane = this.flushTarget();
+    if (!pane) return;
+    const md = this.paneMarkdown(pane);
+    if (md !== null && applyEditorMarkdownForTab(this.store, pane.tabId, md)) {
+      this.bumpRev(pane.tabId, pane);
+    }
+  }
+
+  /**
+   * Show the active tab's document (tab switch / close→neighbour / return from
+   * Recent). Reveals cached panes when in sync (undo preserved); rebuilds only
+   * stale ones. Honours the current split state.
+   */
+  async showActiveDoc(): Promise<void> {
+    if (this.disposed || this.switching) return;
+    this.switching = true;
+    try {
+      await this.present();
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /**
+   * Show the active tab's document after its canonical string was replaced from
+   * outside the editors (open / new / disk-reload / recovery). Forces a fresh
+   * rebuild (undo resets) and invalidates the tab's panes.
+   */
+  async reloadActiveDoc(): Promise<void> {
+    if (this.disposed || this.switching) return;
+    this.switching = true;
+    try {
+      const id = this.store.get().activeTabId;
+      if (id) this.bumpRev(id); // no author → every pane of this tab is now stale
+      await this.present({ rebuild: true });
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** Switch the editor layout — document / split / Markdown (§6.1). Flushes the
+   *  visible edits first so the (possibly newly built) panes start from the
+   *  current canonical. */
+  async setLayout(layout: EditorLayout): Promise<void> {
+    if (this.disposed || this.switching || this.layout === layout) return;
+    this.switching = true;
+    try {
+      this.flush();
+      this.layout = layout;
+      await this.present();
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /**
+   * Re-apply a WYSIWYG serializer/link-display settings change (§5.16, §5.6):
+   * bump the config epoch (invalidating every WYSIWYG pane) and rebuild the
+   * active one now; hidden WYSIWYG panes rebuild on their next reveal.
+   */
+  async reload(): Promise<void> {
+    if (this.disposed) return;
+    this.configEpoch += 1;
+    if (this.switching || !this.currentView) return;
+    this.switching = true;
+    try {
+      await this.present();
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** Destroy a closed tab's panes and free their DOM (spec §5.19). Call on every
+   *  tab close — including background tabs — so their panes don't leak. */
+  async discardTab(tabId: string): Promise<void> {
+    if (this.disposed) return;
+    if (this.activeTabId === tabId) {
+      this.cancelSync();
+      this.scrollSync.disconnect();
+    }
+    for (const view of ["wysiwyg", "raw"] as View[]) {
+      if (this.disposed) return;
+      const pane = this.panes.get(paneKey(tabId, view));
+      if (pane) await this.destroyPane(pane);
+    }
+    this.rev.delete(tabId);
+    this.tabMru = this.tabMru.filter((t) => t !== tabId);
+    if (this.activeTabId === tabId) this.activeTabId = null;
+  }
+
+  /** Tear every editor down — used when the last tab closes (§5.19). */
+  async unmount(): Promise<void> {
+    if (this.disposed || this.switching) return;
+    this.switching = true;
+    try {
+      this.cancelSync();
+      this.scrollSync.disconnect();
+      this.endDrag();
+      await this.destroyAllPanes();
+      // A terminal React cleanup can pre-empt this reusable unmount while Crepe
+      // is being destroyed. Never let the old continuation clear a root that a
+      // replacement island may now own.
+      if (this.disposed) return;
+      this.root.replaceChildren();
+      this.divider = null; // removed by replaceChildren; re-created on next present
+      this.root.classList.remove("split");
+      this.root.style.removeProperty("--split-left");
+      this.activeTabId = null;
+      this.currentView = null;
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** Evict retained panes beyond the configured limit — used when the user lowers
+   *  the `maxRetainedTabEditors` setting at runtime. */
+  async applyRetentionLimit(): Promise<void> {
+    if (this.disposed || this.switching) return;
+    this.switching = true;
+    try {
+      await this.enforceLru();
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /**
+   * Permanently tear down this host. Unlike `unmount`, this is terminal and is
+   * safe to call from a React effect cleanup:
+   *
+   * - lifecycle guards and callbacks are disabled synchronously;
+   * - timers, scroll listeners, pointer capture, panes, and the divider detach
+   *   synchronously before the returned promise waits for Crepe destruction;
+   * - repeated calls return the same cleanup promise;
+   * - an in-flight `buildPane` observes `disposed` after its await and cannot
+   *   reconcile markdown or reattach itself.
+   *
+   * The host removes only DOM it owns. It deliberately does not call
+   * `root.replaceChildren()`, so an old Strict-Mode cleanup cannot erase a newer
+   * island that happens to use the same React-owned root.
+   */
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
+
+    this.disposed = true;
+    this.switching = true;
+    this.saveHandler = null;
+    this.openLinkHandler = null;
+    this.cancelSync();
+    this.scrollSync.disconnect();
+    this.endDrag();
+    this.applyingSync = false;
+    this.lastEditedView = null;
+    this.currentView = null;
+    this.root.classList.remove("split");
+    this.root.style.removeProperty("--split-left");
+
+    const divider = this.divider;
+    this.divider = null;
+    divider?.remove();
+
+    const currentPanes = this.destroyAllPanes();
+    // `destroyAllPanes` starts each teardown synchronously before returning, so
+    // this snapshot includes both its panes and any pane already detached by an
+    // in-flight reload/eviction.
+    const allTeardowns = [...this.pendingTeardowns];
+    this.disposePromise = Promise.allSettled([currentPanes, ...allTeardowns]).then((results) => {
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error("md-easy: editor teardown failed", result.reason);
+        }
+      }
+    });
+    return this.disposePromise;
+  }
+
+  // ── internals ──────────────────────────────────────────────────────────────
+
+  private active(): Pane | null {
+    if (this.disposed || this.activeTabId === null || this.currentView === null) return null;
+    return this.panes.get(paneKey(this.activeTabId, this.currentView)) ?? null;
+  }
+
+  private activeWysiwyg(): WysiwygEditor | null {
+    return this.active()?.wysiwyg ?? null;
+  }
+
+  private activeRaw(): RawEditor | null {
+    return this.active()?.raw ?? null;
+  }
+
+  /** The pane whose content `flush` should capture. In split, that's the pane the
+   *  user last edited (its serialization already equals canonical, so the flush is
+   *  a no-op and can't clobber the other pane); otherwise the visible document. */
+  private flushTarget(): Pane | null {
+    if (this.layout === "split" && this.lastEditedView && this.activeTabId) {
+      const p = this.panes.get(paneKey(this.activeTabId, this.lastEditedView));
+      if (p) return p;
+    }
+    return this.active();
+  }
+
+  private revOf(tabId: string): number {
+    return this.rev.get(tabId) ?? 0;
+  }
+
+  private bumpRev(tabId: string, author?: Pane): void {
+    const next = this.revOf(tabId) + 1;
+    this.rev.set(tabId, next);
+    if (author) author.syncedRev = next; // the authoring pane stays in sync
+  }
+
+  private touchTab(tabId: string): void {
+    this.tabMru = [tabId, ...this.tabMru.filter((t) => t !== tabId)];
+  }
+
+  private paneMarkdown(pane: Pane): string | null {
+    if (pane.wysiwyg) return pane.wysiwyg.getMarkdown();
+    if (pane.raw) return pane.raw.getText();
+    return null;
+  }
+
+  /** Reveal the active tab's panes for the current layout: the document, the
+   *  Markdown source, or both side by side (§6.1). Rebuilds stale panes, hides
+   *  every other tab's pane, and lays out the divider. */
+  private async present(opts: { rebuild?: boolean } = {}): Promise<void> {
+    if (this.disposed) return;
+    const id = this.store.get().activeTabId;
+    if (!id) return;
+    const rebuild = opts.rebuild ?? false;
+    const showWysiwyg = this.layout !== "markdown";
+    const showRaw = this.layout !== "document";
+
+    // Build the document (WYSIWYG) pane first when it's shown: a fresh build
+    // reconciles the canonical to its settled serialization (and bumps the rev),
+    // so a Markdown pane built next mirrors that settled form rather than
+    // diverging. In the Markdown-only view the document pane isn't built at all,
+    // so the raw source shows the canonical (the file's exact bytes) untouched.
+    const wysiwygPane = showWysiwyg ? await this.ensurePane(id, "wysiwyg", rebuild) : null;
+    if (this.disposed || this.store.get().activeTabId !== id || (showWysiwyg && !wysiwygPane)) {
+      return;
+    }
+    const rawPane = showRaw ? await this.ensurePane(id, "raw", rebuild) : null;
+    if (this.disposed || this.store.get().activeTabId !== id || (showRaw && !rawPane)) return;
+
+    for (const pane of this.panes.values()) {
+      pane.el.hidden = pane !== wysiwygPane && pane !== rawPane;
+    }
+
+    // A different tab is now active, so "which pane was last edited" no longer
+    // applies — clear it so the next flush targets this tab's visible document.
+    if (id !== this.activeTabId) this.lastEditedView = null;
+    this.activeTabId = id;
+    // The "active" pane (find / print / focus target) is the document when it's
+    // shown, otherwise the Markdown source (Markdown-only view).
+    this.currentView = showWysiwyg ? "wysiwyg" : "raw";
+    this.touchTab(id);
+    this.layoutSplit();
+    this.applySpellcheck();
+    // Focus the document when shown; in the split the Markdown mirror only
+    // re-measures (focus=false) so it doesn't steal focus or fight the document.
+    // In the Markdown-only view the raw source is the sole pane, so it takes focus.
+    wysiwygPane?.wysiwyg?.onShow();
+    rawPane?.raw?.onShow(this.layout === "markdown");
+    // Keep the two visible panes' scroll positions in sync (§5.3); rewires to the
+    // current pair on every reveal, and disconnects whenever it isn't the split.
+    this.syncScroll(wysiwygPane, rawPane);
+
+    await this.enforceLru();
+  }
+
+  /** Connect the fractional scroll-position sync to the visible split pair, or
+   *  tear it down for the single-pane layouts (document / Markdown only). Called
+   *  on every reveal so it always tracks the current pane elements (a pane rebuild
+   *  or tab switch swaps the DOM nodes). */
+  private syncScroll(wysiwygPane: Pane | null, rawPane: Pane | null): void {
+    if (this.layout === "split" && wysiwygPane && rawPane) {
+      this.scrollSync.connect(wysiwygPane.el, rawPane.el);
+    } else {
+      this.scrollSync.disconnect();
+    }
+  }
+
+  /** Return the live `(tab, view)` pane, rebuilding it when forced or stale. */
+  private async ensurePane(tabId: string, view: View, rebuild: boolean): Promise<Pane | null> {
+    if (this.disposed || !this.hasTab(tabId)) return null;
+    let pane = this.panes.get(paneKey(tabId, view));
+    if (pane && (rebuild || this.isStale(pane))) {
+      await this.destroyPane(pane);
+      if (this.disposed || !this.hasTab(tabId)) return null;
+      pane = undefined;
+    }
+    if (!pane) return this.buildPane(tabId, view);
+    return pane;
+  }
+
+  /** A pane is stale when the tab moved on without it, or (WYSIWYG only) the
+   *  serializer/link config changed since it was built. */
+  private isStale(pane: Pane): boolean {
+    if (pane.syncedRev !== this.revOf(pane.tabId)) return true;
+    return pane.view === "wysiwyg" && pane.configEpoch !== this.configEpoch;
+  }
+
+  private async buildPane(tabId: string, view: View): Promise<Pane | null> {
+    if (this.disposed) return null;
+    const tab = this.store.get().tabs.find((t) => t.id === tabId);
+    // A tab can be closed while a stale pane is being destroyed. Never create a
+    // replacement under its old id from whichever document happens to be active.
+    if (!tab) return null;
+    const markdown = tab.doc.markdown;
+
+    const el = document.createElement("div");
+    el.className = `editor-pane editor-pane-${view}`;
+    el.hidden = true; // present() reveals the panes it wants
+    this.root.appendChild(el);
+
+    const pane: Pane = {
+      tabId,
+      view,
+      syncedRev: this.revOf(tabId),
+      configEpoch: this.configEpoch,
+      el,
+      wysiwyg: null,
+      raw: null,
+    };
+    this.panes.set(paneKey(tabId, view), pane);
+
+    // Bound to this tab id so a background pane writes to its own tab, never the
+    // active doc; a real change advances the tab's rev (staling its other view)
+    // and — in split — mirrors into the other visible pane. Changes caused by our
+    // own mirror sync are ignored (applyingSync) so they can't echo back.
+    const onChange = (m: string): void => {
+      if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
+        return;
+      }
+      if (applyEditorMarkdownForTab(this.store, tabId, m)) {
+        this.bumpRev(tabId, pane);
+        this.lastEditedView = pane.view;
+        if (this.layout === "split" && tabId === this.activeTabId) this.scheduleSync(pane);
+      }
+    };
+
+    if (view === "wysiwyg") {
+      const editor = new WysiwygEditor();
+      pane.wysiwyg = editor;
+      try {
+        await editor.mount(
+          el,
+          markdown,
+          { onChange },
+          serializerStyleFromSettings(this.store.get().settings),
+          this.wysiwygContext(tabId),
+        );
+      } catch (err) {
+        // A failed partial Crepe create must not poison the pane cache. Detach it
+        // now so a later presentation can make a clean attempt.
+        await this.destroyPane(pane).catch(() => {});
+        if (this.disposed) return null;
+        throw err;
+      }
+      // Disposal or another rebuild may have removed this pane while Crepe was
+      // creating. Its teardown has already been initiated; most importantly, do
+      // not reconcile its now-abandoned serialization into the canonical store.
+      if (this.disposed || this.panes.get(paneKey(tabId, view)) !== pane) return null;
+      if (!this.hasTab(tabId)) {
+        await this.destroyPane(pane).catch(() => {});
+        return null;
+      }
+      // A WYSIWYG round-trip normalizes markdown, so the editor's serialization of
+      // freshly-loaded content differs from the on-disk canonical even with no
+      // edits (the trailing newline alone trips it for most files). Adopt that
+      // settled form as the canonical baseline now — WITHOUT dirtying — so the
+      // close guard / view-switch / eviction flushes re-serialize to the same
+      // string and never raise a false unsaved-changes warning. Bumping the rev
+      // (this pane as author) keeps it in sync and stales the tab's other view so
+      // that view rebuilds from the settled form rather than diverging.
+      if (reconcileEditorMarkdownForTab(this.store, tabId, editor.getMarkdown())) {
+        this.bumpRev(tabId, pane);
+      }
+    } else {
+      const editor = new RawEditor();
+      pane.raw = editor;
+      try {
+        editor.mount(
+          el,
+          markdown,
+          { onChange },
+          { collapseBase64: this.store.get().settings.collapseBase64InRawView },
+        );
+      } catch (err) {
+        await this.destroyPane(pane).catch(() => {});
+        if (this.disposed) return null;
+        throw err;
+      }
+    }
+    return pane;
+  }
+
+  // ── split-view mirror sync (§6.1) ────────────────────────────────────────────
+
+  /** Schedule mirroring the source pane's edit into the other visible pane. */
+  private scheduleSync(source: Pane): void {
+    if (this.disposed) return;
+    this.cancelSync();
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      this.runSync(source);
+    }, SYNC_DEBOUNCE_MS);
+  }
+
+  private cancelSync(): void {
+    if (this.syncTimer != null) {
+      clearTimeout(this.syncTimer);
+      this.syncTimer = null;
+    }
+  }
+
+  /** Push the current canonical into the sibling (non-authoring) pane so the split
+   *  stays in sync. `applyingSync` makes the sibling's resulting change callback a
+   *  no-op, so this can never loop or clobber the author. */
+  private runSync(source: Pane): void {
+    if (this.disposed || this.layout !== "split" || source.tabId !== this.activeTabId) return;
+    const otherView: View = source.view === "wysiwyg" ? "raw" : "wysiwyg";
+    const sibling = this.panes.get(paneKey(source.tabId, otherView));
+    if (!sibling) return;
+    const tab = this.store.get().tabs.find((t) => t.id === source.tabId);
+    if (!tab) return;
+    const canonical = tab.doc.markdown;
+    this.applyingSync = true;
+    try {
+      sibling.raw?.setText(canonical);
+      sibling.wysiwyg?.setMarkdown(canonical);
+      sibling.syncedRev = this.revOf(source.tabId); // sibling now mirrors canonical
+    } finally {
+      this.applyingSync = false;
+    }
+  }
+
+  // ── split-view layout / divider (§6.1) ───────────────────────────────────────
+
+  /** Apply the split class + the document/Markdown width ratio, and show or hide
+   *  the draggable divider. */
+  private layoutSplit(): void {
+    if (this.disposed) return;
+    const split = this.layout === "split";
+    this.root.classList.toggle("split", split);
+    if (split) {
+      const divider = this.ensureDivider();
+      divider.hidden = false;
+      this.applySplitRatio(this.leftRatio);
+    } else if (this.divider) {
+      this.divider.hidden = true;
+    }
+  }
+
+  /** The divider element, created (and re-attached after an `unmount`) on demand. */
+  private ensureDivider(): HTMLElement {
+    if (!this.divider) {
+      const d = document.createElement("div");
+      d.className = "split-divider";
+      d.setAttribute("role", "separator");
+      d.setAttribute("aria-orientation", "vertical");
+      d.setAttribute("aria-label", "Resize Markdown split");
+      d.setAttribute("aria-valuemin", String(SPLIT_MIN_RATIO * 100));
+      d.setAttribute("aria-valuemax", String(SPLIT_MAX_RATIO * 100));
+      d.tabIndex = 0;
+      d.addEventListener("pointerdown", (e) => this.beginDrag(e));
+      d.addEventListener("keydown", (e) => this.resizeWithKeyboard(e));
+      this.divider = d;
+    }
+    if (this.divider.parentElement !== this.root) this.root.appendChild(this.divider);
+    return this.divider;
+  }
+
+  private applySplitRatio(ratio: number): void {
+    this.leftRatio = Math.min(SPLIT_MAX_RATIO, Math.max(SPLIT_MIN_RATIO, ratio));
+    const percent = this.leftRatio * 100;
+    this.root.style.setProperty("--split-left", `${percent.toFixed(3)}%`);
+    this.divider?.setAttribute("aria-valuenow", String(Math.round(percent)));
+    this.divider?.setAttribute("aria-valuetext", `${Math.round(percent)}% document`);
+  }
+
+  private resizeWithKeyboard(event: KeyboardEvent): void {
+    if (this.disposed || this.layout !== "split") return;
+    let next = this.leftRatio;
+    if (event.key === "ArrowLeft") next -= 0.02;
+    else if (event.key === "ArrowRight") next += 0.02;
+    else if (event.key === "Home") next = SPLIT_MIN_RATIO;
+    else if (event.key === "End") next = SPLIT_MAX_RATIO;
+    else return;
+    event.preventDefault();
+    this.applySplitRatio(next);
+    if (this.activeTabId) this.panes.get(paneKey(this.activeTabId, "raw"))?.raw?.onShow(false);
+  }
+
+  private beginDrag(e: PointerEvent): void {
+    if (this.disposed || !this.divider) return;
+    this.endDrag();
+    e.preventDefault();
+    const startX = e.clientX;
+    const startRatio = this.leftRatio;
+    const width = this.root.clientWidth || 1;
+    const pointerId = e.pointerId;
+    this.dragPointerId = pointerId;
+    this.divider.classList.add("dragging");
+    this.divider.setPointerCapture(pointerId);
+
+    const onMove = (ev: PointerEvent): void => {
+      if (this.disposed) return;
+      const ratio = startRatio + (ev.clientX - startX) / width;
+      this.applySplitRatio(ratio);
+    };
+    const onUp = (): void => {
+      this.endDrag();
+      // CodeMirror caches viewport metrics; re-measure after the resize settles.
+      if (!this.disposed && this.activeTabId) {
+        this.panes.get(paneKey(this.activeTabId, "raw"))?.raw?.onShow(false);
+      }
+    };
+    this.dragCleanup = () => {
+      this.divider?.removeEventListener("pointermove", onMove);
+      this.divider?.removeEventListener("pointerup", onUp);
+      this.divider?.removeEventListener("pointercancel", onUp);
+    };
+    this.divider.addEventListener("pointermove", onMove);
+    this.divider.addEventListener("pointerup", onUp);
+    this.divider.addEventListener("pointercancel", onUp);
+  }
+
+  private endDrag(): void {
+    const divider = this.divider;
+    const pointerId = this.dragPointerId;
+    if (
+      divider &&
+      pointerId !== null &&
+      typeof divider.hasPointerCapture === "function" &&
+      divider.hasPointerCapture(pointerId)
+    ) {
+      try {
+        divider.releasePointerCapture(pointerId);
+      } catch {
+        // Capture may have been released by the browser between the check and
+        // this call (e.g. as the WebView loses focus during teardown).
+      }
+    }
+    divider?.classList.remove("dragging");
+    this.dragCleanup?.();
+    this.dragCleanup = null;
+    this.dragPointerId = null;
+  }
+
+  private async destroyPane(pane: Pane): Promise<void> {
+    const key = paneKey(pane.tabId, pane.view);
+    if (this.panes.get(key) === pane) this.panes.delete(key);
+    await this.beginPaneTeardown(pane);
+  }
+
+  /** Start a pane teardown once and publish it to terminal disposal. */
+  private beginPaneTeardown(pane: Pane): Promise<void> {
+    const existing = this.paneTeardowns.get(pane);
+    if (existing) return existing;
+    const teardown = this.teardownPane(pane);
+    this.paneTeardowns.set(pane, teardown);
+    this.pendingTeardowns.add(teardown);
+    void teardown.then(
+      () => this.pendingTeardowns.delete(teardown),
+      () => this.pendingTeardowns.delete(teardown),
+    );
+    return teardown;
+  }
+
+  private async teardownPane(pane: Pane): Promise<void> {
+    // Detach/silence synchronously. WYSIWYG destruction may await an in-flight
+    // Crepe create, but no dead pane remains visible or able to publish changes.
+    const wysiwyg = pane.wysiwyg;
+    const raw = pane.raw;
+    pane.wysiwyg = null;
+    pane.raw = null;
+    pane.el.remove();
+    raw?.destroy();
+    if (wysiwyg) await wysiwyg.destroy();
+  }
+
+  private async destroyAllPanes(): Promise<void> {
+    const all = [...this.panes.values()];
+    this.panes.clear();
+    this.rev.clear();
+    this.tabMru = [];
+    this.activeTabId = null;
+    this.currentView = null;
+    await Promise.allSettled(all.map((pane) => this.beginPaneTeardown(pane)));
+  }
+
+  /** Distinct tab ids with at least one live pane, most-recent first. */
+  private retainedTabs(): string[] {
+    return this.tabMru.filter(
+      (id) => this.panes.has(paneKey(id, "wysiwyg")) || this.panes.has(paneKey(id, "raw")),
+    );
+  }
+
+  private hasTab(tabId: string): boolean {
+    return this.store.get().tabs.some((tab) => tab.id === tabId);
+  }
+
+  private async enforceLru(): Promise<void> {
+    if (this.disposed) return;
+    const cap = Math.max(1, Math.floor(this.store.get().settings.maxRetainedTabEditors ?? 5));
+    // Least-recent first, never the active tab.
+    const evictable = this.retainedTabs()
+      .filter((id) => id !== this.activeTabId)
+      .reverse();
+    let count = this.retainedTabs().length;
+    for (const id of evictable) {
+      if (this.disposed || count <= cap) break;
+      await this.evictTab(id);
+      count -= 1;
+    }
+  }
+
+  private async evictTab(tabId: string): Promise<void> {
+    if (this.disposed) return;
+    for (const view of ["wysiwyg", "raw"] as View[]) {
+      if (this.disposed) return;
+      const pane = this.panes.get(paneKey(tabId, view));
+      if (!pane) continue;
+      // Capture any not-yet-flushed edits before discarding — but only from a
+      // pane that is in sync. A stale pane (the other view advanced the canonical)
+      // holds outdated text and must NOT be written back, or it would clobber the
+      // newer content. (Edits flush eagerly via onChange, so this is belt-and-braces.)
+      if (!this.isStale(pane)) {
+        const md = this.paneMarkdown(pane);
+        if (md !== null) applyEditorMarkdownForTab(this.store, tabId, md);
+      }
+      await this.destroyPane(pane);
+    }
+    this.rev.delete(tabId);
+    this.tabMru = this.tabMru.filter((t) => t !== tabId);
+  }
+
+  /** Context handed to the WYSIWYG editor's custom plugins (image/paste, etc.),
+   *  bound to a specific tab so a background pane reads its own file path. */
+  private wysiwygContext(tabId: string): WysiwygContext {
+    return {
+      getSettings: () => this.store.get().settings,
+      getFilePath: () => {
+        const tab = this.store.get().tabs.find((t) => t.id === tabId);
+        return tab ? tab.doc.filePath : this.store.get().doc.filePath;
+      },
+      requestSave: () => this.saveHandler?.() ?? Promise.resolve(false),
+      openMarkdownFile: (path) => this.openLinkHandler?.(path),
+    };
+  }
+}
