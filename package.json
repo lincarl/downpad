@@ -11,7 +11,8 @@
     "check": "tsc --noEmit && pnpm lint:css",
     "lint:css": "stylelint \"src/**/*.css\"",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run && pnpm test:version",
+    "test:version": "node --test scripts/apply-version-from-tag.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "tauri": "node scripts/tauri.mjs"
