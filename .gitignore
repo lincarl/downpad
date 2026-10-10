@@ -25,6 +25,8 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
-# Claude Code local/transient files (machine-specific permissions + runtime locks)
-.claude/settings.local.json
-.claude/*.lock
+# Maintainer instructions and machine-local agent settings stay private.
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/

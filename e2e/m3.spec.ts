@@ -78,10 +78,10 @@ test("adding a field appends a new editable key/value to the YAML", async ({ pag
   await page.getByRole("button", { name: "+ Add field" }).click();
   // A new row appears with the placeholder key "key" (focused); set key + value.
   await page.getByRole("rowheader", { name: "key", exact: true }).fill("author");
-  await valueFor(page, "author").fill("Fredric");
+  await valueFor(page, "author").fill("Example Author");
 
   await page.locator(rawBtn).click();
-  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("author: Fredric");
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("author: Example Author");
 });
 
 // The inserter "+" buttons sit in the gaps, in DOM order: before title, before

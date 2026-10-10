@@ -18,6 +18,12 @@ Created to simplify collaboration when working with AI agents.
 
 The project is built with Tauri 2, Rust, React, TypeScript, Milkdown, and CodeMirror.
 
+## Maintainer workspace
+
+Maintainer-only agent instructions and personal project material are kept in the
+private [md-easy-internal](https://github.com/lincarl/md-easy-internal) companion
+repository. It is optional and is not required to build or use md-easy.
+
 ## License
 
 md-easy is open-source software licensed under the [MIT License](LICENSE).

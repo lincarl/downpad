@@ -2,7 +2,7 @@
 name = "md-easy"
 version = "0.2.2"
 description = "A lightweight, pure-WYSIWYG markdown editor"
-authors = ["Fredric Westerlund"]
+authors = ["md-easy contributors"]
 license = ""
 repository = ""
 edition = "2021"
