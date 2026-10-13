@@ -29,9 +29,10 @@ export function validateReviewGate(pr, reviews, threads, expectedSha, bots = REV
   if (threads.some((thread) => !thread.isResolved)) problems.push("Resolve every review thread before requesting CI.");
   for (const login of bots) {
     const review = newest(reviews.filter((entry) => entry.user?.login === login && entry.user.type === "Bot" && entry.commit_id === expectedSha));
-    if (!review || !review.submitted_at || !["COMMENTED", "APPROVED"].includes(review.state) || !review.body?.trim()) {
+    if (!review || !review.submitted_at || !["COMMENTED", "APPROVED"].includes(review.state) ||
+      (review.state === "COMMENTED" && !review.body?.trim())) {
       problems.push(`${login} has not submitted a completed review of ${expectedSha}.`);
-    } else if (incompleteReview.test(review.body)) {
+    } else if (review.body && incompleteReview.test(review.body)) {
       problems.push(`${login} reported an incomplete, paused, failed, skipped, or rate-limited review.`);
     }
     const checks = (signals.checkRuns ?? []).filter((check) => check.app?.id === REVIEW_APP_IDS[login]);
@@ -76,10 +77,10 @@ async function github(route, { method = "GET", body } = {}) {
   return response.status === 204 ? undefined : response.json();
 }
 
-async function paginate(route, key) {
+async function paginate(route, key, request = github) {
   const items = [];
   for (let page = 1; page <= 25; page++) {
-    const response = await github(`${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+    const response = await request(`${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
     const values = key ? response[key] : response;
     items.push(...values);
     if (values.length < 100) return items;
@@ -87,18 +88,28 @@ async function paginate(route, key) {
   throw new Error("GitHub pagination exceeded the gate's limit. No review decision was made.");
 }
 
-async function readPullRequest(repository, number) {
-  const pr = await github(`/repos/${repository}/pulls/${number}`);
+// Pin commit evidence to the requested revision, then refresh mutable review
+// decisions and threads after collection. Every graph page checks the head.
+export async function readPullRequest(repository, number, expectedSha, request = github) {
+  const pr = await request(`/repos/${repository}/pulls/${number}`);
+  if (pr.head.sha !== expectedSha) throw new Error("The pull request head changed. Request CI for its new SHA.");
+  const [reviews, checkRuns, statuses, comments] = await Promise.all([
+    paginate(`/repos/${repository}/pulls/${number}/reviews`, undefined, request),
+    paginate(`/repos/${repository}/commits/${expectedSha}/check-runs?filter=latest`, "check_runs", request),
+    paginate(`/repos/${repository}/commits/${expectedSha}/statuses`, undefined, request),
+    paginate(`/repos/${repository}/issues/${number}/comments`, undefined, request),
+  ]);
   const [owner, name] = repository.split("/");
   const threads = [];
   let cursor = null;
   for (let page = 0; page < 25; page++) {
-    const result = await github("/graphql", {
+    const result = await request("/graphql", {
       method: "POST",
       body: {
         query: `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
+              headRefOid
               reviewDecision
               reviewThreads(first: 100, after: $cursor) {
                 nodes { isResolved }
@@ -113,16 +124,12 @@ async function readPullRequest(repository, number) {
     if (result.errors?.length) throw new Error("GitHub could not read the review threads. No review decision was made.");
     const data = result.data?.repository?.pullRequest;
     if (!data) throw new Error("GitHub did not return the pull request's review state.");
+    if (data.headRefOid !== expectedSha) throw new Error("The pull request head changed. Request CI for its new SHA.");
     pr.reviewDecision = data.reviewDecision;
     threads.push(...data.reviewThreads.nodes);
     if (!data.reviewThreads.pageInfo.hasNextPage) {
-      const [reviews, checkRuns, statuses, comments] = await Promise.all([
-        paginate(`/repos/${repository}/pulls/${number}/reviews`),
-        paginate(`/repos/${repository}/commits/${pr.head.sha}/check-runs?filter=latest`, "check_runs"),
-        paginate(`/repos/${repository}/commits/${pr.head.sha}/statuses`),
-        paginate(`/repos/${repository}/issues/${number}/comments`),
-      ]);
-      return { pr, threads, reviews, signals: { checkRuns, statuses, comments } };
+      const latest = await request(`/repos/${repository}/pulls/${number}`);
+      return { pr: { ...latest, reviewDecision: pr.reviewDecision }, threads, reviews, signals: { checkRuns, statuses, comments } };
     }
     cursor = data.reviewThreads.pageInfo.endCursor;
   }
@@ -184,9 +191,10 @@ async function main() {
   if (command === "request" && process.env.VERSION?.trim()) {
     throw new Error("PR builds use the version committed in package.json. Version overrides are available for main builds only.");
   }
-  const { pr, threads, reviews, signals } = await readPullRequest(repository, number);
-  const latest = await github(`/repos/${repository}/pulls/${number}`);
-  Object.assign(pr, latest);
+  const { pr, threads, reviews, signals } = await readPullRequest(repository, number, sha).catch(async (error) => {
+    if (command === "finalize") await setStatus(repository, sha, "error", "Cannot verify the reviewed PR revision. Request an explicit retry.");
+    throw error;
+  });
   const problems = validateReviewGate(pr, reviews, threads, sha, REVIEW_BOTS, signals);
   if (command === "finalize") {
     if (pr.head.sha !== sha) {

@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
 reviews:
+  request_changes_workflow: true
   review_status: true
   commit_status: true
   fail_commit_status: true

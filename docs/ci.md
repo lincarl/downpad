@@ -1,6 +1,6 @@
 # Reviewed CI
 
-Regular pull requests receive CodeRabbit reviews before installer builds run. A pull request push starts only the small control job, which marks `reviewed-ci` pending and cancels an older build for that pull request. It does not install dependencies or build installers.
+Regular pull requests receive CodeRabbit reviews before installer builds run. CodeRabbit uses its request changes workflow so a clean review also produces a submitted GitHub review tied to the commit. A pull request push starts only the small control job, which marks `reviewed-ci` pending and cancels an older build for that pull request. It does not install dependencies or build installers.
 
 ## Request a build
 
