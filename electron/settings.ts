@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { parse } from "smol-toml";
+import { isDeepStrictEqual } from "node:util";
+import { parse, type TomlTable } from "smol-toml";
+import { parseForESLint, type AST } from "toml-eslint-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { Settings } from "../src/state/types";
 import { writeAtomic } from "./io";
@@ -46,58 +48,73 @@ export function normalizeSettings(input: unknown): Settings {
   return settings;
 }
 
-/** Locate a scalar TOML value without treating a quoted # as an inline comment. */
-function scalarEnd(text: string, start: number): number {
-  const quote = text[start];
-  if (quote !== '"' && quote !== "'") {
-    let end = start;
-    while (end < text.length && text[end] !== "\n" && text[end] !== "#" && text[end] !== "\r") end++;
-    while (end > start && /\s/.test(text[end - 1]!)) end--;
-    return end;
-  }
-  const delimiter = text.startsWith(quote.repeat(3), start) ? quote.repeat(3) : quote;
-  let cursor = start + delimiter.length;
-  while (cursor < text.length) {
-    if (quote === '"' && text[cursor] === "\\") { cursor += 2; continue; }
-    if (text.startsWith(delimiter, cursor)) {
-      let end = cursor + delimiter.length;
-      if (delimiter.length === 3) while (text[end] === quote) end++;
-      return end;
-    }
-    cursor++;
-  }
-  return text.length;
-}
-
 /** Patch valid settings while preserving malformed files for the user to repair. */
 export function patchSettingsToml(existing: string, settings: Settings): string {
-  let text = existing;
+  let original: TomlTable;
   try {
-    parse(text);
+    original = parse(existing);
   } catch (error) {
     throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
   }
-  for (const [key, value] of Object.entries(settings)) {
-    const scalar = JSON.stringify(value);
-    // Root settings precede any optional user-defined tables.
-    const table = text.search(/^\s*\[/m);
-    const root = table < 0 ? text : text.slice(0, table);
-    const match = new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*`, "m").exec(root);
-    if (match) {
-      const start = match.index + match[0].length;
-      text = text.slice(0, start) + scalar + text.slice(scalarEnd(text, start));
-    } else {
-      const separator = root.endsWith("\n") || root.length === 0 ? "" : "\n";
-      text = root + separator + `${key} = ${scalar}\n` + (table < 0 ? "" : text.slice(table));
+
+  try {
+    // The syntax parser rejects a leading BOM, but settings loading accepts it.
+    const bom = existing.startsWith("\uFEFF") ? "\uFEFF" : "";
+    let text = existing.slice(bom.length);
+    const root = parseForESLint(text, { tomlVersion: "1.1" }).ast.body[0];
+    const missing = new Map<string, string>((Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]).map((key) => {
+      const value = settings[key];
+      return [key, Object.is(value, -0) ? "-0.0" : JSON.stringify(value).replace(/\u007f/g, "\\u007f")];
+    }));
+    const replacements: { range: AST.Range; text: string }[] = [];
+    for (const node of root.body) {
+      if (node.type !== "TOMLKeyValue" || node.key.keys.length !== 1) continue;
+      const keyNode = node.key.keys[0]!;
+      const key = keyNode.type === "TOMLBare" ? keyNode.name : keyNode.value;
+      const scalar = missing.get(key);
+      if (scalar === undefined) continue;
+      replacements.push({ range: node.value.range, text: scalar });
+      missing.delete(key);
     }
+
+    // Insert root defaults before a real table, retaining the table's indentation.
+    const table = root.body.find((node) => node.type === "TOMLTable");
+    const insertion = table ? text.lastIndexOf("\n", table.range[0] - 1) + 1 : text.length;
+    if (missing.size > 0) {
+      const eol = text.includes("\r\n") ? "\r\n" : "\n";
+      const separator = insertion === 0 || text[insertion - 1] === "\n" ? "" : eol;
+      const additions = [...missing].map(([key, scalar]) => `${key} = ${scalar}${eol}`).join("");
+      replacements.push({ range: [insertion, insertion], text: separator + additions });
+    }
+    // Apply original source ranges from right to left so earlier offsets stay valid.
+    replacements.sort((left, right) => right.range[0] - left.range[0]);
+    for (const replacement of replacements) {
+      text = text.slice(0, replacement.range[0]) + replacement.text + text.slice(replacement.range[1]);
+    }
+    const output = bom + text;
+    if (!isDeepStrictEqual({ ...parse(output) }, { ...original, ...settings })) {
+      throw new Error("The settings update changed unrelated TOML values or did not update root settings.");
+    }
+    return output;
+  } catch (error) {
+    throw new Error("Cannot save settings because this TOML structure cannot be updated safely. The original file was preserved.", { cause: error });
   }
-  return text;
+}
+
+/** Reject invalid UTF-8 without replacing bytes, and retain a leading BOM. */
+async function readSettingsText(path: string): Promise<string> {
+  const bytes = await readFile(path);
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new Error("Cannot save settings because settings.toml contains invalid UTF-8. Convert the file to UTF-8 before saving settings.", { cause: error });
+  }
 }
 
 export async function loadSettingsFile(path: string): Promise<Settings> {
   let text: string;
   try {
-    text = await readFile(path, "utf8");
+    text = await readSettingsText(path);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       await writeAtomic(path, patchSettingsToml("", DEFAULT_SETTINGS));
@@ -108,7 +125,7 @@ export async function loadSettingsFile(path: string): Promise<Settings> {
 }
 
 export async function saveSettingsFile(path: string, input: unknown): Promise<void> {
-  const existing = await readFile(path, "utf8").catch((error: unknown) => {
+  const existing = await readSettingsText(path).catch((error: unknown) => {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
     throw error;
   });

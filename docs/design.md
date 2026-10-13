@@ -45,6 +45,8 @@ User documents remain standard Markdown files. md-easy does not use a proprietar
 
 Application preferences are stored in `settings.toml`. Recent-file history and recovery snapshots are stored separately in the application's local data directory. File writes are performed atomically where practical to reduce the chance of corruption.
 
+Settings saves use TOML syntax-tree ranges to update complete root values and insert missing settings before the first table. Quoted keys, surrounding comments, unknown data, a leading BOM, and existing line endings are preserved. Settings reads reject invalid UTF-8 rather than replacing bytes, and loading failures use defaults without changing the file. Before writing, the app checks that the result parses and contains exactly the requested settings plus the original unknown values. Invalid UTF-8, invalid TOML, or known settings expressed as dotted keys or table declarations remain untouched, and the app reports that saving failed. Known settings must use root key-value assignments.
+
 Images can either live inside Markdown as data URIs or as files in a configurable attachments directory. Relative paths are used for attachment links so a document and its attachments can be moved together.
 
 Attachment writes stage complete bytes in a sibling temporary file before publication. On filesystems with hard links, publication atomically claims a free name. FAT and exFAT use serialized application writes, a fresh name check, and atomic rename instead. That fallback preserves support for these filesystems, but another process creating the same name between the check and rename can have its file replaced.

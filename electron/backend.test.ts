@@ -119,6 +119,120 @@ describe("Existing settings and history compatibility", () => {
     expect(parse(output)).toMatchObject({ fontFamily: "Segoe UI", theme: "dark", custom: { value: 1 } });
   });
 
+  it.each(['"theme"', "'theme'", '"th\\u0065me"'])("saves decoded quoted root key %s without duplicating it", async (key) => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    const original = `# Keep quoted keys\n${key} = "light" # chosen theme\nunknownKey = 42\n`;
+    await writeFile(path, original);
+    await saveSettingsFile(path, { ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
+    const saved = await readFile(path, "utf8");
+    expect(saved).toContain(`${key} = "dark" # chosen theme`);
+    expect(saved).toContain("# Keep quoted keys\n");
+    expect(parse(saved)).toMatchObject({ theme: "dark", unknownKey: 42, hasSeenWelcome: true });
+    expect((saved.match(/# chosen theme/g) ?? []).length).toBe(1);
+  });
+
+  it.each([
+    '[\n  "Readable",\n]',
+    '[\n  ["Readable"],\n]',
+    '{ nested = ["Readable"] }',
+  ])("replaces a complete wrong-type settings value %s", async (value) => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    const original = `# Font preference\nfontFamily = ${value} # font comment\nunknownKey = 42\n`;
+    expect(parse(original).fontFamily).not.toBeTypeOf("string");
+    await writeFile(path, original);
+    await saveSettingsFile(path, DEFAULT_SETTINGS);
+    const saved = await readFile(path, "utf8");
+    expect(saved).toContain('# Font preference\nfontFamily = "Segoe UI" # font comment\nunknownKey = 42\n');
+    expect(parse(saved)).toMatchObject({ ...DEFAULT_SETTINGS, unknownKey: 42 });
+  });
+
+  it("preserves unknown multiline strings, arrays, dates, and tables containing settings-like text", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    const unknownRoot = 'unknownText = """\n[custom]\ntheme = "inside a string"\n[[other]]\n""" # text comment\n' +
+      'unknownArray = [\n  ["nested"],\n  { theme = "inside an array" },\n]\n' +
+      'savedOn = 2026-10-14T11:00:00+02:00\nlocalDate = 2026-10-14\n';
+    const tables = '  [custom]\ntheme = "nested theme"\nfontFamily = "nested font"\n' +
+      '[[custom.items]]\nvalue = 42\n[custom.empty]\n';
+    const original = unknownRoot + 'theme = "light" # root theme\n' + tables;
+    const parsed = parse(original);
+    await writeFile(path, original);
+    await saveSettingsFile(path, { ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
+    const saved = await readFile(path, "utf8");
+    expect(saved).toContain(unknownRoot);
+    expect(saved.endsWith(tables)).toBe(true);
+    expect(saved).toContain('theme = "dark" # root theme');
+    expect(parse(saved)).toEqual({ ...parsed, ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
+  });
+
+  it("preserves BOM and CRLF while escaping quotes, backslashes, hashes, and controls", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    const original = '\uFEFF"fontFamily" = "Original" # font\r\nunknownKey = "keep"\r\n  [custom]\r\nvalue = 1\r\n';
+    const fontFamily = 'Readable "Font" \\ # name\n\t\u007F';
+    await writeFile(path, original);
+    expect(await loadSettingsFile(path)).toMatchObject({ fontFamily: "Original" });
+    await saveSettingsFile(path, { ...DEFAULT_SETTINGS, fontFamily });
+    const saved = await readFile(path, "utf8");
+    expect(saved.startsWith('\uFEFF"fontFamily" = ')).toBe(true);
+    expect(saved).toContain('\\u007f" # font\r\n');
+    expect(saved.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(saved.endsWith('  [custom]\r\nvalue = 1\r\n')).toBe(true);
+    expect(parse(saved)).toMatchObject({ fontFamily, unknownKey: "keep", custom: { value: 1 } });
+  });
+
+  it("retains negative zero in accepted numeric settings", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    await writeFile(path, 'editorFontScale = -0.0 # retain sign\nunknownKey = 42\n');
+    const loaded = await loadSettingsFile(path);
+    expect(Object.is(loaded.editorFontScale, -0)).toBe(true);
+    await saveSettingsFile(path, { ...loaded, hasSeenWelcome: true });
+    const saved = await readFile(path, "utf8");
+    expect(saved).toContain('editorFontScale = -0.0 # retain sign');
+    expect(Object.is(parse(saved).editorFontScale, -0)).toBe(true);
+    expect(parse(saved)).toMatchObject({ unknownKey: 42, hasSeenWelcome: true });
+  });
+
+  it.each([
+    'theme.child = "keep"\n',
+    '[theme]\nchild = "keep"\n',
+    '[[theme]]\nchild = "keep"\n',
+  ])("preserves unsupported known-setting subtrees %s instead of writing a conflicting scalar", async (subtree) => {
+    const directory = await fixtureDirectory();
+    const path = join(directory, "settings.toml");
+    const original = '# Preserve this unusual configuration\nunknownKey = "keep"\n' + subtree;
+    expect(() => parse(original)).not.toThrow();
+    await writeFile(path, original);
+    await expect(saveSettingsFile(path, DEFAULT_SETTINGS)).rejects.toThrow("cannot be updated safely. The original file was preserved");
+    expect(await readFile(path, "utf8")).toBe(original);
+    expect(await readdir(directory)).toEqual(["settings.toml"]);
+  });
+
+  it("preserves settings when a string cannot be represented in TOML", async () => {
+    const directory = await fixtureDirectory();
+    const path = join(directory, "settings.toml");
+    const original = 'fontFamily = "Readable" # keep\nunknownKey = 42\n';
+    await writeFile(path, original);
+    await expect(saveSettingsFile(path, { ...DEFAULT_SETTINGS, fontFamily: "\uD800" }))
+      .rejects.toThrow("cannot be updated safely. The original file was preserved");
+    expect(await readFile(path, "utf8")).toBe(original);
+    expect(await readdir(directory)).toEqual(["settings.toml"]);
+  });
+
+  it("uses read-only defaults and preserves original bytes when settings contain invalid UTF-8", async () => {
+    const directory = await fixtureDirectory();
+    const path = join(directory, "settings.toml");
+    const original = Buffer.concat([
+      Buffer.from('# Keep unknown bytes '), Buffer.from([0xff]),
+      Buffer.from('\nunknownKey = "keep"\ntheme = "light"\n'),
+    ]);
+    await writeFile(path, original);
+    expect(await loadSettingsFile(path)).toEqual(DEFAULT_SETTINGS);
+    expect(await readFile(path)).toEqual(original);
+    await expect(saveSettingsFile(path, { ...DEFAULT_SETTINGS, hasSeenWelcome: true }))
+      .rejects.toMatchObject({ message: expect.stringContaining("contains invalid UTF-8. Convert the file to UTF-8"), cause: expect.any(TypeError) });
+    expect(await readFile(path)).toEqual(original);
+    expect(await readdir(directory)).toEqual(["settings.toml"]);
+  });
+
   it("preserves malformed settings when startup saves flags and resumes saving after syntax repair", async () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);

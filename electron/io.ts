@@ -11,6 +11,22 @@ export function absolutePath(value: unknown): string {
   return resolve(value);
 }
 
+const WINDOWS_SHARING_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** Allow briefly held Windows handles to close before failing an atomic replacement. */
+async function renameAtomic(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error: unknown) {
+      if (process.platform !== "win32" || attempt >= 10 || !(error instanceof Error && "code" in error
+        && typeof error.code === "string" && WINDOWS_SHARING_ERRORS.has(error.code))) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
+}
+
 /** Replace the real target after its complete replacement reaches disk, preserving symlinks. */
 export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<void> {
   const requested = absolutePath(destination);
@@ -30,7 +46,7 @@ export async function writeAtomic(destination: string, bytes: Uint8Array | strin
     await file.writeFile(bytes);
     await file.sync();
     await file.close();
-    await rename(temporary, path);
+    await renameAtomic(temporary, path);
   } catch (error) {
     await file.close().catch(() => {});
     await unlink(temporary).catch(() => {});
