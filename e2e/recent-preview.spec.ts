@@ -4,7 +4,7 @@ import path from "node:path";
 
 // Visual verification of the Recent view (spec §5.8). Mounts the real RecentView
 // component (served by Vite in dev) against an in-page mock data source so we can
-// screenshot fully-populated states without a Tauri backend. Screenshots land in
+// screenshot fully-populated states without an Electron backend. Screenshots land in
 // e2e/__screens__/ for manual comparison to the spec; this is a screenshot
 // harness, not an assertion test.
 

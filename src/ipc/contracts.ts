@@ -1,5 +1,5 @@
-// The IPC contract: TypeScript mirrors of the Rust payload structs in
-// src-tauri/src/models.rs. Keep these in lockstep (camelCase on both sides).
+// Payloads shared by the Electron main process and renderer.
+// Keep property names consistent across the isolated preload boundary.
 
 import type { Eol } from "../state/types";
 
@@ -107,7 +107,7 @@ export interface PrintCompleted {
   message?: string;
 }
 
-/** Serialized form of the Rust AppError. */
+/** A native operation error reported by the Electron main process. */
 export interface AppError {
   kind: string;
   message: string;

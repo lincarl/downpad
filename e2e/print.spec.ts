@@ -216,6 +216,7 @@ test("an over-tall code block and list split too, keeping line numbers and item 
 
   const result = await page.evaluate(() => {
     const numbers: string[] = [];
+    const sourceLines: string[] = [];
     const listItems: string[] = [];
     let codePieces = 0;
     let listPieces = 0;
@@ -228,6 +229,9 @@ test("an over-tall code block and list split too, keeping line numbers and item 
       const codeBlock = sheet.querySelector<HTMLElement>(".milkdown-code-block");
       if (codeBlock) {
         codePieces++;
+        for (const line of codeBlock.querySelectorAll(".cm-line")) {
+          sourceLines.push(line.textContent ?? "");
+        }
         for (const cell of Array.from(codeBlock.querySelectorAll(".cm-gutterElement"))) {
           // Skip CodeMirror's hidden width-measuring spacer.
           if (getComputedStyle(cell).visibility === "hidden") continue;
@@ -242,7 +246,7 @@ test("an over-tall code block and list split too, keeping line numbers and item 
         }
       }
     }
-    return { codePieces, listPieces, clipped, numbers, listItems };
+    return { codePieces, listPieces, clipped, numbers, sourceLines, listItems };
   });
 
   // Both blocks really did span more than one sheet, and nothing overflows a page.
@@ -251,6 +255,7 @@ test("an over-tall code block and list split too, keeping line numbers and item 
   expect(result.clipped).toBe(0);
   // Line numbers run 1..60 unbroken across the pieces, matched to their own lines.
   expect(result.numbers).toEqual(Array.from({ length: 60 }, (_, i) => String(i + 1)));
+  expect(result.sourceLines).toEqual(code);
   // Every list item printed exactly once, in order.
   expect(result.listItems).toEqual(Array.from({ length: 40 }, (_, i) => `item ${i + 1}`));
 });

@@ -12,6 +12,7 @@
 // a page option.
 
 import { WysiwygEditor } from "../editor/wysiwyg/WysiwygEditor";
+import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { serializerStyleFromSettings, type Settings } from "../state/types";
 import type { WysiwygContext } from "../editor/wysiwyg/context";
 import { sanitize } from "./printRender";
@@ -42,7 +43,7 @@ export async function preparePrintJob(req: PrintRequest): Promise<PrintJob | nul
 }
 
 async function renderDocumentNode(req: PrintRequest): Promise<Element | null> {
-  if (req.liveNode) return sanitize(req.liveNode.cloneNode(true) as Element);
+  if (req.liveNode) return cloneCompleteDocument(req.liveNode);
 
   const host = document.createElement("div");
   host.className = "print-offscreen";
@@ -58,7 +59,7 @@ async function renderDocumentNode(req: PrintRequest): Promise<Element | null> {
     );
     await sleep(MERMAID_SETTLE_MS);
     const node = host.querySelector(".ProseMirror");
-    return node ? sanitize(node.cloneNode(true) as Element) : null;
+    return node ? cloneCompleteDocument(node) : null;
   } catch (err) {
     console.error("md-easy: offscreen print render failed", err);
     return null;
@@ -66,6 +67,55 @@ async function renderDocumentNode(req: PrintRequest): Promise<Element | null> {
     await editor.destroy().catch(() => {});
     host.remove();
   }
+}
+
+/** CodeMirror renders visible lines only. Print every source line, including
+ *  lines outside the editor viewport or behind a collapsed code section. */
+function cloneCompleteDocument(source: Element): Element {
+  const clone = source.cloneNode(true) as Element;
+  const liveEditors = source.querySelectorAll<HTMLElement>(".cm-editor");
+  const clonedEditors = clone.querySelectorAll<HTMLElement>(".cm-editor");
+  liveEditors.forEach((live, index) => {
+    const view = CodeMirrorView.findFromDOM(live);
+    const copy = clonedEditors[index];
+    const content = copy?.querySelector<HTMLElement>(".cm-content");
+    if (!view || !content) return;
+
+    const rendered = new Map<number, HTMLElement>();
+    for (const line of live.querySelectorAll<HTMLElement>(".cm-content > .cm-line")) {
+      const position = view.posAtDOM(line, 0);
+      rendered.set(view.state.doc.lineAt(position).number, line);
+    }
+    const lines = Array.from({ length: view.state.doc.lines }, (_, offset) => {
+      const number = offset + 1;
+      const text = view.state.doc.line(number).text;
+      const visible = rendered.get(number);
+      // Preserve highlighting when the live line contains the complete source.
+      if (visible?.textContent === text) return visible.cloneNode(true) as HTMLElement;
+      const line = document.createElement("div");
+      line.className = "cm-line";
+      if (text) line.textContent = text;
+      else line.appendChild(document.createElement("br"));
+      return line;
+    });
+    content.replaceChildren(...lines);
+
+    const column = copy?.querySelector<HTMLElement>(".cm-lineNumbers");
+    const template = live.querySelector<HTMLElement>(".cm-lineNumbers .cm-gutterElement");
+    if (!column || !template) return;
+    const cells = lines.map((_, offset) => {
+      const cell = template.cloneNode(false) as HTMLElement;
+      cell.style.visibility = "";
+      cell.style.height = "";
+      cell.style.marginTop = "";
+      cell.textContent = String(offset + 1);
+      return cell;
+    });
+    column.replaceChildren(...cells);
+    const gutters = copy?.querySelector<HTMLElement>(".cm-gutters");
+    if (gutters) gutters.style.minHeight = "";
+  });
+  return sanitize(clone);
 }
 
 function sleep(ms: number): Promise<void> {

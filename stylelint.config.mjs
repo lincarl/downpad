@@ -23,7 +23,7 @@ export default {
     "selector-class-pattern": [
       "^([a-z][a-z0-9]*)(-[a-z0-9]+)*$|^(ProseMirror|cm-activeLine|cm-activeLineGutter)$",
     ],
-    // WebKit masks still require the prefixed declaration in WebView2/Safari.
+    // WebKit masks still need the prefixed declaration in Safari.
     "property-no-vendor-prefix": [true, { ignoreProperties: ["-webkit-mask"] }],
   },
 };

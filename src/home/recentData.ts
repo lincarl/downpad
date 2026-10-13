@@ -1,9 +1,8 @@
 // Data source for the Recent view (spec §5.8). The view talks to this interface
-// rather than to `invoke()` directly, so it works unchanged outside Tauri (a
+// rather than to `invoke()` directly, so it works unchanged outside Electron (a
 // browser dev/preview build gets the no-op source) and can be driven by a mock
 // in tests and screenshots. The default implementation wraps the IPC commands.
 
-import { Channel } from "@tauri-apps/api/core";
 import {
   getRecentFiles,
   statFiles,
@@ -13,7 +12,7 @@ import {
   cancelSearch,
 } from "../ipc/commands";
 import type { FileStat, SearchHit } from "../ipc/contracts";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
 import type { RecentEntry } from "../state/types";
 
 export interface ContentSearchCallbacks {
@@ -51,34 +50,33 @@ export interface RecentDataSource {
   cancelContentSearch(searchId: string): void;
 }
 
-/** IPC-backed source. Outside Tauri every call degrades to an empty/no-op. */
+/** IPC-backed source. Outside Electron every call degrades to an empty/no-op. */
 export function createIpcRecentDataSource(): RecentDataSource {
   return {
     async list() {
-      return isTauri() ? getRecentFiles() : [];
+      return isElectron() ? getRecentFiles() : [];
     },
     async stat(paths) {
-      if (isTauri()) return statFiles(paths);
+      if (isElectron()) return statFiles(paths);
       return paths.map((path) => ({ path, exists: true, sizeBytes: 0, folderExists: true }));
     },
     async setFavorite(path, favorite) {
-      return isTauri() ? setFavorite(path, favorite) : null;
+      return isElectron() ? setFavorite(path, favorite) : null;
     },
     async remove(path) {
-      if (isTauri()) await removeRecent(path);
+      if (isElectron()) await removeRecent(path);
     },
     searchContents(searchId, query, cb) {
-      if (!isTauri()) return Promise.resolve({ scanned: 0, matched: 0, cancelled: false });
-      const channel = new Channel<SearchHit>();
-      channel.onmessage = (hit) => {
+      if (!isElectron()) return Promise.resolve({ scanned: 0, matched: 0, cancelled: false });
+      const onResult = (hit: SearchHit): void => {
         if (hit.kind === "content" && hit.line != null)
           cb.onHit(hit.path, hit.line, hit.snippet ?? "");
         else if (hit.kind === "progress") cb.onProgress(hit.scanned);
       };
-      return searchRecentContents(searchId, query, { caseSensitive: false }, channel);
+      return searchRecentContents(searchId, query, { caseSensitive: false }, onResult);
     },
     cancelContentSearch(searchId) {
-      if (isTauri()) void cancelSearch(searchId).catch(() => {});
+      if (isElectron()) void cancelSearch(searchId).catch(() => {});
     },
   };
 }

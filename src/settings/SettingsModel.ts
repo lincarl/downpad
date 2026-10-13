@@ -6,7 +6,7 @@ import type { Store } from "../state/store";
 import type { Settings } from "../state/types";
 import { loadSettings, saveSettings, getSystemAccentColor } from "../ipc/commands";
 import { onSettingsChanged } from "../ipc/events";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
 import { applyTheme } from "../shell/theme";
 import { DEFAULT_ACCENT, normalizeHex, readableForeground } from "../shell/accent";
 
@@ -44,7 +44,7 @@ export class SettingsModel {
 
   async init(): Promise<void> {
     if (this.disposed) return;
-    if (isTauri()) {
+    if (isElectron()) {
       try {
         const settings = await loadSettings();
         if (this.disposed) return;
@@ -82,7 +82,7 @@ export class SettingsModel {
   }
 
   /** Persist settings edited via the in-app dialog. Applies immediately even if
-   *  the disk write fails (e.g. running outside Tauri). Disk writes are serialized
+   *  the disk write fails (e.g. running outside Electron). Disk writes are serialized
    *  (in call order) via writeChain: on first run the welcome flag and the
    *  default-handler flag are saved from two separate fire-and-forget calls, and
    *  without ordering the second's write could land before the first's and be
@@ -95,7 +95,7 @@ export class SettingsModel {
     this.store.set({ settings: next });
     this.applySideEffects();
     if (wysiwygConfigSignature(next) !== before) this.onWysiwygConfigChange();
-    if (isTauri()) {
+    if (isElectron()) {
       this.writeChain = this.writeChain.then(() =>
         saveSettings(next).catch((err) => {
           console.error("md-easy: failed to save settings", err);
@@ -151,7 +151,7 @@ export class SettingsModel {
       return;
     }
     set(DEFAULT_ACCENT);
-    if (!isTauri()) {
+    if (!isElectron()) {
       this.systemAccent = null;
       return;
     }

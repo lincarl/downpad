@@ -4,15 +4,15 @@ node_modules/
 # Build output
 dist/
 dist-ssr/
+electron-dist/
+release/
+dev-temp/
 
 # Test output (Playwright)
 test-results/
 playwright-report/
 .playwright/
 e2e/__screens__/
-
-# Rust / Tauri build artifacts
-src-tauri/target/
 
 # Logs and local env
 *.log

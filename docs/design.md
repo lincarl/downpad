@@ -1,18 +1,18 @@
-# md-easy — Design Overview
+# md-easy design
 
 This document describes the main design of md-easy. It intentionally omits internal API listings, historical migration notes, and development plans.
 
 ## Technology
 
-md-easy is a Tauri 2 desktop application:
+md-easy is an Electron desktop application:
 
 - The frontend uses React and TypeScript.
 - Milkdown Crepe provides the WYSIWYG Markdown editor.
 - CodeMirror provides the Markdown source editor.
-- The Rust backend handles native file access, settings, recovery data, printing, and Windows integration.
+- The TypeScript main process handles native file access, settings, recovery data, printing, and desktop integration.
 - Local application data is stored in human-readable or standard formats such as Markdown, TOML, and JSON.
 
-This structure keeps the installer and runtime lightweight while supporting native desktop behavior.
+Electron packages Chromium and Node.js with the app. This gives development and installed builds the same browser runtime at the cost of a larger installer.
 
 ## Editing model
 
@@ -37,7 +37,7 @@ The frontend is organized around a small observable application store and servic
 - Recent files, search, settings, and recovery.
 - Printing and platform integration.
 
-The Rust backend provides operations that require native access. File reads and writes, attachment storage, recovery snapshots, recent-file data, and settings persistence are kept outside the webview.
+The Electron main process provides operations that require native access. File reads and writes, attachment storage, recovery snapshots, recent-file data, and settings persistence stay outside the renderer. A bundled preload exposes typed operations through Electron's context bridge. The renderer uses context isolation and sandboxing without Node.js access.
 
 ## Data and persistence
 
@@ -49,7 +49,9 @@ Images can either live inside Markdown as data URIs or as files in a configurabl
 
 ## Desktop integration
 
-The Tauri shell provides native windows and access to Windows features. md-easy supports file associations, single-instance behavior, native open/save dialogs, opening links and folders, system appearance settings, and printing.
+Electron provides native windows, file associations, single-instance behavior, native open/save dialogs, opening links and folders, system appearance settings, and printing. Linux builds provide AppImage and DEB installers. Windows builds provide NSIS and MSI installers.
+
+The print workspace mounts a rendered copy of the document in the app window. Electron prints that document using the selected printer or writes a PDF. Printing waits for the workspace to finish rendering before starting the job.
 
 The frontend can also run in a browser-backed development environment with platform operations represented by adapters. This allows most interface and editing behavior to be tested independently of the desktop shell.
 

@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 // Right-click menu on a document tab (§5.19/§6.1): Open folder, Copy folder path,
 // Copy file path, Close all tabs. In a plain browser the seed/new tabs are
 // untitled (no path on disk), so the three path actions are disabled; "Close all
-// tabs" always works. Reveal/clipboard are Tauri-only and aren't exercised here.
+// tabs" always works. Reveal/clipboard are Electron-only and aren't exercised here.
 //
 // Rows are addressed by the `menuitem` role: the shared popup marks itself up as
 // a real menu (role="menu" / role="menuitem") now that it also serves the custom

@@ -1,32 +1,34 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
 import { applyVersionFromTag } from "./apply-version-from-tag.mjs";
 
-async function fixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "md-easy-version-"));
-  await mkdir(path.join(root, "src-tauri"));
-  await writeFile(path.join(root, "package.json"), '{"name":"md-easy","version":"0.2.2"}\n');
-  await writeFile(path.join(root, "src-tauri", "tauri.conf.json"), '{"version":"0.2.2"}\n');
-  await writeFile(path.join(root, "src-tauri", "Cargo.toml"), '[package]\nname = "md-easy"\nversion = "0.2.2"\n');
-  await writeFile(path.join(root, "src-tauri", "Cargo.lock"), '[[package]]\nname = "md-easy"\nversion = "0.2.2"\n');
+async function fixture(context) {
+  const directory = path.join(process.cwd(), "dev-temp", "version-tests");
+  await mkdir(directory, { recursive: true });
+  const root = await mkdtemp(path.join(directory, "run-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "package.json"), '{"name":"md-easy","version":"0.2.2","main":"electron-dist/main.js"}\n');
   return root;
 }
 
-test("applies a stable tag version to all build metadata", async () => {
-  const root = await fixture();
+test("applies a stable tag without changing other Electron build metadata", async (context) => {
+  const root = await fixture(context);
 
   assert.equal(await applyVersionFromTag("v1.2.3", root), "1.2.3");
-  assert.equal(JSON.parse(await readFile(path.join(root, "package.json"))).version, "1.2.3");
-  assert.equal(JSON.parse(await readFile(path.join(root, "src-tauri", "tauri.conf.json"))).version, "1.2.3");
-  assert.match(await readFile(path.join(root, "src-tauri", "Cargo.toml"), "utf8"), /^version = "1\.2\.3"$/m);
-  assert.match(await readFile(path.join(root, "src-tauri", "Cargo.lock"), "utf8"), /^version = "1\.2\.3"$/m);
+  assert.deepEqual(JSON.parse(await readFile(path.join(root, "package.json"))), {
+    name: "md-easy",
+    version: "1.2.3",
+    main: "electron-dist/main.js",
+  });
 });
 
-test("rejects tags that are not stable semantic versions", async () => {
-  await assert.rejects(() => applyVersionFromTag("1.2.3", "."), /expected vMAJOR\.MINOR\.PATCH/);
-  await assert.rejects(() => applyVersionFromTag("v01.2.3", "."), /expected vMAJOR\.MINOR\.PATCH/);
+test("rejects malformed or prerelease tags without changing the version", async (context) => {
+  const root = await fixture(context);
+  for (const tag of ["1.2.3", "v01.2.3", "v1.2.3-beta.1"]) {
+    await assert.rejects(() => applyVersionFromTag(tag, root), /expected vMAJOR\.MINOR\.PATCH/);
+  }
+  assert.equal(JSON.parse(await readFile(path.join(root, "package.json"))).version, "0.2.2");
 });

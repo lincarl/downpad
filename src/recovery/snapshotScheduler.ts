@@ -4,12 +4,12 @@
 //     the snapshot (so a clean shutdown leaves nothing to recover).
 //   - autosave-to-file is opt-in: every autosaveIntervalSeconds, if enabled and
 //     the doc has a path and is dirty, save it.
-// No-op outside Tauri.
+// No-op outside Electron.
 
 import type { Store } from "../state/store";
 import type { FileService } from "../files/FileService";
 import { writeSnapshot, deleteSnapshot } from "../ipc/commands";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
 
 export class SnapshotScheduler {
   private recoveryTimer: ReturnType<typeof setInterval> | null = null;
@@ -22,7 +22,7 @@ export class SnapshotScheduler {
   ) {}
 
   start(): void {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     const s = this.store.get().settings;
     const recoveryMs = Math.max(2, s.recoverySnapshotIntervalSeconds) * 1000;
     const autosaveMs = Math.max(5, s.autosaveIntervalSeconds) * 1000;
@@ -38,7 +38,7 @@ export class SnapshotScheduler {
 
   /** Delete this session's snapshot (called on a clean shutdown). */
   async clear(): Promise<void> {
-    if (isTauri()) await deleteSnapshot(this.store.get().sessionId).catch(() => {});
+    if (isElectron()) await deleteSnapshot(this.store.get().sessionId).catch(() => {});
     this.wroteSnapshot = false;
   }
 

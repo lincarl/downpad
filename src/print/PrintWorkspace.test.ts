@@ -40,7 +40,7 @@ vi.mock("../ipc/commands", () => ({
 }));
 
 vi.mock("../ipc/events", () => ({ onPrintCompleted: nativeMocks.onPrintCompleted }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ save: nativeMocks.saveDialog }));
+vi.mock("../ipc/dialogs", () => ({ saveDialog: nativeMocks.saveDialog }));
 
 class TestResizeObserver implements ResizeObserver {
   static latest: TestResizeObserver | null = null;
@@ -59,8 +59,9 @@ const JOB: PrintJob = {
   docTitle: "notes.md",
 };
 
-const tauriWindow = (): Window & { __TAURI_INTERNALS__?: unknown } =>
-  window as Window & { __TAURI_INTERNALS__?: unknown };
+function enableElectron(): void {
+  Object.defineProperty(window, "mdEasy", { value: {}, configurable: true });
+}
 
 async function flush(): Promise<void> {
   await act(async () => {
@@ -97,7 +98,7 @@ describe("PrintWorkspace React view", () => {
     vi.clearAllMocks();
     document.body.innerHTML = "";
     document.documentElement.classList.remove("printing");
-    delete tauriWindow().__TAURI_INTERNALS__;
+    delete window.mdEasy;
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     saveSettings = vi.fn<(settings: Settings) => void>();
@@ -110,6 +111,7 @@ describe("PrintWorkspace React view", () => {
   afterEach(() => {
     workspace?.close();
     workspace = null;
+    delete window.mdEasy;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -211,7 +213,7 @@ describe("PrintWorkspace React view", () => {
   });
 
   it("keeps native PDF options and default-printer persistence semantics", async () => {
-    tauriWindow().__TAURI_INTERNALS__ = {};
+    enableElectron();
     nativeMocks.listPrinters.mockResolvedValueOnce([
       { name: "Office", isDefault: true },
     ]);
@@ -286,7 +288,7 @@ describe("PrintWorkspace React view", () => {
 
   it("releases a pending native completion listener when closed", async () => {
     vi.useFakeTimers();
-    tauriWindow().__TAURI_INTERNALS__ = {};
+    enableElectron();
     const unlisten = vi.fn();
     const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
     nativeMocks.onPrintCompleted.mockImplementationOnce(() => Promise.resolve(unlisten));

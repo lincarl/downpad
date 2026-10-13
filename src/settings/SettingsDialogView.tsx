@@ -22,7 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { openDefaultAppsSettings } from "@/ipc/commands";
-import { isTauri } from "@/ipc/env";
+import { isElectron } from "@/ipc/env";
 import { DEFAULT_ACCENT, normalizeHex } from "@/shell/accent";
 import { checkForUpdates } from "@/shell/updater";
 import type { Settings } from "@/state/types";
@@ -313,23 +313,29 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 </DialogRow>
               </DialogSection>
 
-              {isTauri() && (
+              {isElectron() && (
                 <>
-                  <DialogSection heading="Default app for .md">
-                    <div className="dialog-row flex items-center justify-between gap-3 py-1 text-[13px]">
-                      <span className="settings-status flex-1 text-[13px] text-muted-foreground">
-                        Set md-easy as the default app for .md files.
-                      </span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className={cn("dialog-btn", dialogButtonClassName)}
-                        onClick={() => void openDefaultAppsSettings()}
-                      >
-                        Set as default…
-                      </Button>
-                    </div>
-                  </DialogSection>
+                  {window.mdEasy?.platform === "win32" && (
+                    <DialogSection heading="Default app for .md">
+                      <div className="dialog-row flex items-center justify-between gap-3 py-1 text-[13px]">
+                        <span className="settings-status flex-1 text-[13px] text-muted-foreground">
+                          Set md-easy as the default app for .md files.
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className={cn("dialog-btn", dialogButtonClassName)}
+                          onClick={() => {
+                            void openDefaultAppsSettings().catch((error) => {
+                              console.error("md-easy: could not open default-app settings", error);
+                            });
+                          }}
+                        >
+                          Set as default…
+                        </Button>
+                      </div>
+                    </DialogSection>
+                  )}
                   <DialogSection heading="Updates">
                     <div className="dialog-row flex items-center justify-between gap-3 py-1 text-[13px]">
                       <span className="settings-status flex-1 text-[13px] text-muted-foreground">

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 // The custom right-click menu (spec §5.14 / §6.1, shell/documentContextMenu):
 // md-easy's own menu replaces the native WebView one everywhere, carries a single
-// Print entry, and steps aside for Shift+right-click so WebView2's spell-check
+// Print entry, and steps aside for Shift+right-click so Electron's spell-check
 // suggestions stay reachable.
 
 const wysiwyg = ".milkdown .ProseMirror";
@@ -40,7 +40,7 @@ test("Escape closes the menu", async ({ page }) => {
   await expect(page.locator(menu)).toHaveCount(0);
 });
 
-test("Shift+right-click leaves the native menu to WebView2 (spell check, §5.14)", async ({
+test("Shift+right-click leaves the native menu to Electron (spell check, §5.14)", async ({
   page,
 }) => {
   await page.goto("/");

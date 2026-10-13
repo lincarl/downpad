@@ -3,7 +3,7 @@
 //
 //   1. proxyDomURL — map a markdown `src` to something the WebView can load:
 //      data:/http: pass through; a relative/absolute file path is resolved
-//      against the document dir and turned into a Tauri asset URL so linked
+//      against the document dir and turned into an Electron asset URL so linked
 //      images render inline.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
@@ -11,11 +11,11 @@
 //   3. Node helpers (isImageNode / imageAttrs / setImageAttrs / lookups) reused
 //      by the image context menu (imageContextMenu.ts).
 
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "../../ipc/bridge";
+import { openDialog } from "../../ipc/dialogs";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
-import { isTauri } from "../../ipc/env";
+import { isElectron } from "../../ipc/env";
 import { isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
 import { resolveImageSrc } from "../../images/imageStore";
 import type { WysiwygContext } from "./context";
@@ -136,11 +136,11 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
       // src empty so nothing dangling (a blob URL) is written.
       return src ?? "";
     },
-    proxyDomURL: (url: string): string => {
+    proxyDomURL: async (url: string): Promise<string> => {
       try {
-        if (!isTauri() || isRemoteOrData(url)) return url;
+        if (!isElectron() || isRemoteOrData(url)) return url;
         const abs = resolveImagePath(url, ctx.getFilePath());
-        return abs ? convertFileSrc(abs) : url;
+        return abs ? await convertFileSrc(abs) : url;
       } catch {
         return url;
       }

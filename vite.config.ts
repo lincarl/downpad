@@ -3,39 +3,32 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// Tauri expects a fixed port and does not want Vite to clear the screen so
-// Rust compiler output stays visible. See https://v2.tauri.app/start/frontend/vite/
-const host = process.env.TAURI_DEV_HOST;
+const host = process.env.MD_EASY_DEV_HOST;
 
-// Single source of truth for the displayed app version: package.json (kept in
-// lockstep with tauri.conf.json / Cargo.toml). Injected at build time as the
-// __APP_VERSION__ global so the Settings dialog can show it (spec §7).
+// Electron and the Settings dialog use the package version.
 const appVersion = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
 ).version as string;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base: "./",
   resolve: { alias: { "@": new URL("./src", import.meta.url).pathname } },
-  // Prevent Vite from obscuring Rust errors.
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host
-      ? { protocol: "ws", host, port: 1421 }
-      : undefined,
-    // Don't watch the Rust backend; Tauri handles that.
-    watch: { ignored: ["**/src-tauri/**"] },
+    host: host || "127.0.0.1",
+    allowedHosts: process.env.MD_EASY_DEV_HOSTNAME
+      ? [process.env.MD_EASY_DEV_HOSTNAME]
+      : [],
+    watch: { ignored: ["**/electron/**", "**/electron-dist/**", "**/release/**"] },
   },
-  // Produce assets compatible with the WebView2 (Chromium) target.
+  // Electron loads the packaged frontend from disk.
   build: {
     target: "es2022",
-    sourcemap: !!process.env.TAURI_DEBUG,
+    sourcemap: !!process.env.MD_EASY_DEBUG,
   },
-  // Expose TAURI_* env vars to the frontend if needed.
-  envPrefix: ["VITE_", "TAURI_"],
   // Crepe bundles Vue for some of its UI; define Vue's compile-time flags to
   // silence the dev warning and enable production tree-shaking.
   define: {

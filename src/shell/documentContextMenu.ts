@@ -5,7 +5,7 @@
 // chrome just the document actions.
 //
 // Two things deliberately still reach the native menu:
-//   • Shift+right-click anywhere. WebView2's spell-check suggestions exist only
+//   • Shift+right-click anywhere. Chromium's spell-check suggestions exist only
 //     in its built-in menu and no API exposes them to the page (spec §5.14), so
 //     holding Shift is the escape hatch that gets them back.
 //   • Any right-click a more specific in-app menu already handled — the image
