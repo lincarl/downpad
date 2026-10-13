@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,7 +14,7 @@ const appVersion = JSON.parse(
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: "./",
-  resolve: { alias: { "@": new URL("./src", import.meta.url).pathname } },
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   clearScreen: false,
   server: {
     port: 1420,
