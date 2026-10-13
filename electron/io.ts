@@ -59,11 +59,18 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
   };
 }
 
-export async function writeMarkdown(path: string, content: string, eol: Eol): Promise<FileMeta> {
-  if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
-  const normalized = content.replace(/\r\n?/g, "\n");
-  await writeAtomic(path, eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized);
-  return { modifiedMs: Math.floor((await stat(path)).mtimeMs) };
+let pendingMarkdownWrite: Promise<void> = Promise.resolve();
+
+/** Serialize document saves before path resolution so aliases cannot reorder writes. */
+export function writeMarkdown(path: string, content: string, eol: Eol): Promise<FileMeta> {
+  const result = pendingMarkdownWrite.then(async () => {
+    if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
+    const normalized = content.replace(/\r\n?/g, "\n");
+    await writeAtomic(path, eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized);
+    return { modifiedMs: Math.floor((await stat(path)).mtimeMs) };
+  });
+  pendingMarkdownWrite = result.then(() => {}, () => {});
+  return result;
 }
 
 export async function exists(path: string): Promise<boolean> {

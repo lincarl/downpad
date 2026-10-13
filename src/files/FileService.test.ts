@@ -2,17 +2,19 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppStore } from "../app/createAppStore";
-import type { FilePayload } from "../ipc/contracts";
-import { blankDoc } from "../state/types";
+import type { FileMeta, FilePayload } from "../ipc/contracts";
+import { blankDoc, type Eol } from "../state/types";
 import { FileService } from "./FileService";
 
 const native = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<FilePayload>>(),
+  writeFile: vi.fn<(path: string, content: string, eol: Eol) => Promise<FileMeta>>(),
   ask: vi.fn<(message: string) => Promise<boolean>>(),
+  saveDialog: vi.fn<(options: unknown) => Promise<string | null>>(),
 }));
 
-vi.mock("../ipc/commands", () => ({ readFile: native.readFile }));
-vi.mock("../ipc/dialogs", () => ({ ask: native.ask }));
+vi.mock("../ipc/commands", () => ({ readFile: native.readFile, writeFile: native.writeFile }));
+vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog }));
 
 const filePath = "/docs/notes.md";
 const onDisk: FilePayload = {
@@ -42,9 +44,155 @@ function setup(dirty = false) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   native.readFile.mockResolvedValue(onDisk);
+  native.writeFile.mockResolvedValue({ modifiedMs: 200 });
   native.ask.mockResolvedValue(true);
+  native.saveDialog.mockResolvedValue(null);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((complete, fail) => { resolve = complete; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+describe("saving document snapshots", () => {
+  it("keeps edits made while a save is pending dirty", async () => {
+    const { store, files } = setup(true);
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saving = files.save();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    store.patchDoc({ markdown: "# New edits\n", isDirty: true });
+    write.resolve({ modifiedMs: 200 });
+
+    expect(await saving).toBe(true);
+    expect(native.writeFile).toHaveBeenCalledWith(filePath, "# Original content\n", "lf");
+    expect(store.get().doc).toMatchObject({ markdown: "# New edits\n", isDirty: true, modifiedMs: 200 });
+  });
+
+  it("updates the initiating tab when another tab becomes active", async () => {
+    const { store, files } = setup(true);
+    const savedId = store.get().activeTabId;
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saving = files.save();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    const other = { ...blankDoc(), filePath: "/docs/other.md", markdown: "# Other edits\n", isDirty: true, modifiedMs: 300 };
+    store.addTab(other);
+    write.resolve({ modifiedMs: 200 });
+
+    await saving;
+    expect(store.get().tabs.find((tab) => tab.id === savedId)?.doc).toMatchObject({ isDirty: false, modifiedMs: 200 });
+    expect(store.get().doc).toEqual(other);
+    expect(store.get().saveStatus.lastSavedAt).toBeNull();
+  });
+
+  it("orders overlapping save requests and retains each requested buffer", async () => {
+    const { store, files } = setup(true);
+    const first = deferred<FileMeta>();
+    const second = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const initialSave = files.save();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    store.patchDoc({ markdown: "# Later buffer\n", isDirty: true });
+    const laterSave = files.save();
+    expect(native.writeFile).toHaveBeenCalledOnce();
+    first.resolve({ modifiedMs: 200 });
+    await initialSave;
+    expect(store.get().doc.isDirty).toBe(true);
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
+    expect(native.writeFile).toHaveBeenNthCalledWith(2, filePath, "# Later buffer\n", "lf");
+    second.resolve({ modifiedMs: 300 });
+
+    await laterSave;
+    expect(store.get().doc).toMatchObject({ markdown: "# Later buffer\n", isDirty: false, modifiedMs: 300 });
+  });
+
+  it("routes a queued Save to the path chosen by Save As and preserves later edits", async () => {
+    const { store, files } = setup(true);
+    store.patchDoc({ filePath: null });
+    const dialog = deferred<string | null>();
+    const first = deferred<FileMeta>();
+    const second = deferred<FileMeta>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    native.writeFile.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const saveAs = files.saveAs();
+    await vi.waitFor(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    store.patchDoc({ markdown: "# Edited during dialog\n", isDirty: true });
+    const queuedSave = files.save();
+    dialog.resolve("/docs/selected.md");
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    expect(native.writeFile).toHaveBeenNthCalledWith(1, "/docs/selected.md", "# Original content\n", "lf");
+    first.resolve({ modifiedMs: 200 });
+    await saveAs;
+    expect(store.get().doc).toMatchObject({ filePath: "/docs/selected.md", isDirty: true });
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
+    expect(native.writeFile).toHaveBeenNthCalledWith(2, "/docs/selected.md", "# Edited during dialog\n", "lf");
+    second.resolve({ modifiedMs: 300 });
+
+    await queuedSave;
+    expect(native.saveDialog).toHaveBeenCalledOnce();
+    expect(store.get().doc).toMatchObject({ filePath: "/docs/selected.md", markdown: "# Edited during dialog\n", isDirty: false });
+  });
+
+  it("allows Save after a cancelled Save As without changing the document path", async () => {
+    const { store, files } = setup(true);
+    const before = store.get().doc;
+    expect(await files.saveAs()).toBe(false);
+    expect(store.get().doc).toEqual(before);
+    expect(native.writeFile).not.toHaveBeenCalled();
+
+    expect(await files.save()).toBe(true);
+    expect(native.writeFile).toHaveBeenCalledExactlyOnceWith(filePath, before.markdown, before.eol);
+    expect(store.get().doc.filePath).toBe(filePath);
+  });
+
+  it("does not write or patch another tab after its Save As owner closes", async () => {
+    const { store, files } = setup(true);
+    const owner = store.get().activeTabId!;
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const saving = files.saveAs();
+    await vi.waitFor(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    store.closeTab(owner);
+    const other = { ...blankDoc(), markdown: "# Other edits\n", isDirty: true };
+    store.addTab(other);
+    dialog.resolve("/docs/closed.md");
+
+    expect(await saving).toBe(false);
+    expect(native.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc).toEqual(other);
+  });
+
+  it("abandons a queued save when its tab now contains a different file", async () => {
+    const { store, files } = setup(true);
+    const saving = files.save();
+    const replacement = { ...blankDoc(), filePath: "/docs/replacement.md", markdown: "# Replacement\n" };
+    store.replaceActiveDoc(replacement);
+
+    expect(await saving).toBe(false);
+    expect(native.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc).toEqual(replacement);
+  });
+
+  it("continues a queued save after the earlier write fails", async () => {
+    const { store, files } = setup(true);
+    const first = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(first.promise);
+    const saving = files.save();
+    const rejected = expect(saving).rejects.toThrow("Disk unavailable");
+    store.patchDoc({ markdown: "# Retry buffer\n", isDirty: true });
+    const retry = files.save();
+    first.reject(new Error("Disk unavailable"));
+
+    await rejected;
+    expect(await retry).toBe(true);
+    expect(native.writeFile).toHaveBeenNthCalledWith(2, filePath, "# Retry buffer\n", "lf");
+    expect(store.get().doc).toMatchObject({ markdown: "# Retry buffer\n", isDirty: false });
+  });
 });
 
 describe("reloading an open file", () => {

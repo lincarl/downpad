@@ -34,7 +34,17 @@ export interface EditorPresenter {
   reloadActiveDoc(): Promise<void>;
 }
 
+interface SaveRequest {
+  tabId: string;
+  snapshot: DocumentState;
+  expectedPath: string | null;
+  saveAs: boolean;
+}
+
 export class FileService {
+  private saveQueue: Promise<void> = Promise.resolve();
+  private pendingSaves = new Set<SaveRequest>();
+
   constructor(
     private readonly store: Store,
     private readonly present: EditorPresenter,
@@ -128,34 +138,63 @@ export class FileService {
   }
 
   /** Save to the current path, or fall back to Save As for an untitled buffer. */
-  async save(): Promise<boolean> {
-    const { doc } = this.store.get();
-    if (!doc.filePath) return this.saveAs();
-    const meta = await writeFile(doc.filePath, doc.markdown, doc.eol);
-    this.markSaved(meta.modifiedMs);
-    return true;
+  save(): Promise<boolean> {
+    return this.queueSave(false);
   }
 
-  async saveAs(): Promise<boolean> {
-    const { doc } = this.store.get();
-    const path = await saveDialog({
-      filters: MD_FILTERS,
-      defaultPath: doc.filePath ?? "Untitled.md",
-    });
+  saveAs(): Promise<boolean> {
+    return this.queueSave(true);
+  }
+
+  /** Capture the requested buffer now, then order saves and Save As dialogs. */
+  private queueSave(saveAs: boolean): Promise<boolean> {
+    const { doc, activeTabId } = this.store.get();
+    if (!activeTabId) return Promise.resolve(false);
+    const request = { tabId: activeTabId, snapshot: doc, expectedPath: doc.filePath, saveAs };
+    this.pendingSaves.add(request);
+    const operation = this.saveQueue.then(() => this.saveSnapshot(request))
+      .finally(() => this.pendingSaves.delete(request));
+    // A failed or cancelled operation must not prevent a subsequent save.
+    this.saveQueue = operation.then(() => {}, () => {});
+    return operation;
+  }
+
+  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs }: SaveRequest): Promise<boolean> {
+    const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!current || current.filePath !== expectedPath) return false;
+    const originalPath = current.filePath;
+    let path = originalPath;
+    const choosePath = saveAs || !path;
+    if (choosePath) {
+      path = await saveDialog({ filters: MD_FILTERS, defaultPath: originalPath ?? "Untitled.md" });
+      const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+      if (!path || !afterDialog || afterDialog.filePath !== originalPath) return false;
+    }
     if (!path) return false;
-    const meta = await writeFile(path, doc.markdown, doc.eol);
-    this.store.patchDoc({ filePath: path });
-    this.markSaved(meta.modifiedMs);
-    this.recordOpened(path);
-    this.watch(path);
+    const meta = await writeFile(path, snapshot.markdown, snapshot.eol);
+    this.markSaved(tabId, snapshot, originalPath, path, meta.modifiedMs);
+    if (choosePath) this.recordOpened(path);
     return true;
   }
 
-  /** Record a save: clear dirty, remember the on-disk mtime (suppresses the
-   *  watcher's self-write event, §5.1), and update the status bar. */
-  private markSaved(modifiedMs: number): void {
-    this.store.patchDoc({ isDirty: false, modifiedMs });
-    this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
+  /** Apply saved metadata to its owner, keeping later edits dirty. */
+  private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, modifiedMs: number): void {
+    const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!current || current.filePath !== originalPath) return;
+    this.store.patchDocById(tabId, {
+      filePath: path,
+      isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
+      modifiedMs,
+    });
+    // Requests queued during Save As follow the owner's new path, retaining
+    // the content each caller asked to save.
+    for (const pending of this.pendingSaves) {
+      if (pending.tabId === tabId && pending.expectedPath === originalPath) pending.expectedPath = path;
+    }
+    if (this.store.get().activeTabId === tabId) {
+      this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
+      if (path !== originalPath) this.watch(path);
+    }
   }
 
   /** Whether any open tab has unsaved changes (window-close guard, §5.19). */
