@@ -35,6 +35,36 @@ test("accepts a submitted exact-head APPROVED review without a body but rejects 
   assert.match(problems(data).join("\n"), /not submitted a completed review/);
 });
 
+test("ignores later blank submitted chat reviews after a real APPROVED or COMMENTED review", () => {
+  for (const state of ["APPROVED", "COMMENTED"]) {
+    for (const body of ["", null, undefined, " \n "]) {
+      const data = fixture();
+      data.reviews[0].state = state;
+      if (state === "APPROVED") {
+        data.pr.reviewDecision = "APPROVED";
+        data.reviews[0].body = "";
+      }
+      data.reviews.push({ ...data.reviews[0], id: 10, state: "COMMENTED", submitted_at: "2026-10-13T13:00:00Z", body });
+      assert.deepEqual(problems(data), []);
+    }
+  }
+});
+
+test("blank chat alone cannot satisfy review requirements or hide a later pending, dismissed, or negative review", () => {
+  const chatOnly = fixture();
+  chatOnly.reviews[0].body = "";
+  chatOnly.reviews.push({ ...chatOnly.reviews[0], id: 10 });
+  assert.match(problems(chatOnly).join("\n"), /not submitted a completed review/);
+
+  for (const state of ["PENDING", "DISMISSED", "CHANGES_REQUESTED", "COMMENTED"]) {
+    const data = fixture();
+    data.reviews[0].state = "APPROVED";
+    data.reviews.push({ ...data.reviews[0], id: 10, state, body: "", submitted_at: ["PENDING", "COMMENTED"].includes(state) ? null : "2026-10-13T13:00:00Z" });
+    data.reviews.push({ ...data.reviews[0], id: 11, state: "COMMENTED", body: "", submitted_at: "2026-10-13T14:00:00Z" });
+    assert.match(problems(data).join("\n"), /not submitted a completed review/);
+  }
+});
+
 test("rejects a missing CodeRabbit review, stale review, or non-bot identity", () => {
   const data = fixture();
   data.reviews.pop();
