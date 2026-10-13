@@ -76,6 +76,8 @@ jobs:
       head_repository: ${{ steps.gate.outputs.head_repository }}
       should_build: ${{ steps.gate.outputs.should_build }}
       control_sha: ${{ steps.controls.outputs.sha }}
+      control_trusted: ${{ steps.controls.outputs.trusted }}
+      default_branch: ${{ steps.controls.outputs.default_branch }}
     steps:
       - name: Select trusted gate controls
         id: controls
@@ -87,8 +89,9 @@ jobs:
           set -euo pipefail
           default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
           control_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$default_branch" --jq .sha)
+          printf 'default_branch=%s\n' "$default_branch" >> "$GITHUB_OUTPUT"
           if result=$(gh api --method GET "repos/$GITHUB_REPOSITORY/contents/scripts/reviewed-ci.mjs" -f ref="$control_sha" 2>&1); then
-            printf 'sha=%s\n' "$control_sha" >> "$GITHUB_OUTPUT"
+            printf 'sha=%s\ntrusted=true\n' "$control_sha" >> "$GITHUB_OUTPUT"
           else
             [[ "$result" == *"(HTTP 404)"* ]] || { printf '%s\n' "$result" >&2; exit 1; }
             # Bootstrap only while the default branch has no gate. A maintainer
@@ -100,7 +103,7 @@ jobs:
             [[ "$role" == admin || "$role" == maintain ]]
             read -r head_sha head_repository < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.head.sha, .head.repo.full_name] | @tsv')
             [[ "$head_sha" == "$EXPECTED_SHA" && "$head_repository" == "$GITHUB_REPOSITORY" ]]
-            printf 'sha=%s\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+            printf 'sha=%s\ntrusted=false\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
           fi
       - name: Check out trusted gate controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

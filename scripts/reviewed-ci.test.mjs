@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { REVIEW_BOTS, selectPreviousAttempt, validateReviewGate } from "./reviewed-ci.mjs";
+import { REVIEW_BOTS, readPullRequest, selectPreviousAttempt, validateReviewGate } from "./reviewed-ci.mjs";
 
 const sha = "a".repeat(40);
 function fixture() {
@@ -16,6 +16,23 @@ function problems(data, signals) {
 
 test("accepts a completed exact-head CodeRabbit review when no approval policy requires APPROVED", () => {
   assert.deepEqual(problems(fixture()), []);
+});
+
+test("accepts a submitted exact-head APPROVED review without a body but rejects empty COMMENTED reviews", () => {
+  for (const body of ["", null, undefined]) {
+    const data = fixture();
+    data.reviews[0] = { ...data.reviews[0], state: "APPROVED", body };
+    assert.deepEqual(problems(data), []);
+    data.reviews[0].state = "COMMENTED";
+    assert.match(problems(data).join("\n"), /not submitted a completed review/);
+  }
+  const data = fixture();
+  data.reviews[0].state = "APPROVED";
+  data.reviews[0].body = "Review skipped";
+  assert.match(problems(data).join("\n"), /incomplete/);
+  data.reviews[0].body = "";
+  data.reviews[0].commit_id = "b".repeat(40);
+  assert.match(problems(data).join("\n"), /not submitted a completed review/);
 });
 
 test("rejects a missing CodeRabbit review, stale review, or non-bot identity", () => {
@@ -90,4 +107,75 @@ test("waiting statuses do not erase failure and retry history", () => {
   const waiting = { ...failure, state: "pending", description: "Waiting for CodeRabbit review" };
   assert.equal(selectPreviousAttempt([waiting, failure]), failure);
   assert.equal(selectPreviousAttempt([{ ...failure, creator: { login: "another-bot" } }]), undefined);
+});
+
+function collectionClient(heads) {
+  const routes = [];
+  let headRead = 0;
+  return {
+    routes,
+    request: async (route) => {
+      routes.push(route);
+      if (route === "/repos/example/app/pulls/1") return { ...fixture().pr, head: { sha: heads[headRead++] } };
+      if (route === "/graphql") return { data: { repository: { pullRequest: { headRefOid: sha, reviewDecision: null, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } };
+      if (route.includes("/reviews?")) return fixture().reviews;
+      if (route.includes("/check-runs?")) return { check_runs: [] };
+      if (route.includes("/statuses?") || route.includes("/comments?")) return [];
+      throw new Error(`Unexpected route ${route}`);
+    },
+  };
+}
+
+test("rejects a different initial head even when it would transition to the requested SHA", async () => {
+  const client = collectionClient(["b".repeat(40), sha]);
+  await assert.rejects(readPullRequest("example/app", "1", sha, client.request), /head changed/);
+  assert.deepEqual(client.routes, ["/repos/example/app/pulls/1"]);
+});
+
+test("pins evidence to the requested SHA and rejects a head change during collection", async () => {
+  const client = collectionClient([sha, "b".repeat(40)]);
+  const data = await readPullRequest("example/app", "1", sha, client.request);
+  assert.match(problems(data, data.signals).join("\n"), /head changed/);
+  const commitRoutes = client.routes.filter((route) => route.includes("/commits/"));
+  assert.equal(commitRoutes.length, 2);
+  assert.ok(commitRoutes.every((route) => route.includes(`/commits/${sha}/`)));
+});
+
+test("refreshes unchanged-head review decisions and threads added while signals are collected", async () => {
+  const client = collectionClient([sha, sha]);
+  let updatedDuringSignals = false;
+  const request = async (route, options) => {
+    if (route.includes("/reviews?")) updatedDuringSignals = true;
+    if (route === "/graphql") {
+      assert.match(options.body.query, /headRefOid/);
+      return { data: { repository: { pullRequest: {
+        headRefOid: sha,
+        reviewDecision: updatedDuringSignals ? "REVIEW_REQUIRED" : null,
+        reviewThreads: { nodes: updatedDuringSignals ? [{ isResolved: false }] : [], pageInfo: { hasNextPage: false } },
+      } } } };
+    }
+    return client.request(route, options);
+  };
+  const data = await readPullRequest("example/app", "1", sha, request);
+  const result = problems(data, data.signals).join("\n");
+  assert.match(result, /approving review/);
+  assert.match(result, /every review thread/);
+  assert.equal(data.pr.head.sha, sha);
+});
+
+test("rejects a changed GraphQL head even if the next REST snapshot would return to the requested SHA", async () => {
+  const client = collectionClient([sha, sha]);
+  let changedDuringSignals = false;
+  const request = async (route, options) => {
+    if (route.includes("/statuses?")) changedDuringSignals = true;
+    if (route === "/graphql") {
+      return { data: { repository: { pullRequest: {
+        headRefOid: changedDuringSignals ? "b".repeat(40) : sha,
+        reviewDecision: null,
+        reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
+      } } } };
+    }
+    return client.request(route, options);
+  };
+  await assert.rejects(readPullRequest("example/app", "1", sha, request), /head changed/);
 });
