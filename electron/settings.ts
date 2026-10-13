@@ -69,9 +69,14 @@ function scalarEnd(text: string, start: number): number {
   return text.length;
 }
 
+/** Patch valid settings while preserving malformed files for the user to repair. */
 export function patchSettingsToml(existing: string, settings: Settings): string {
   let text = existing;
-  try { parse(text); } catch { text = "# md-easy settings\n# Changes are watched and applied live.\n"; }
+  try {
+    parse(text);
+  } catch (error) {
+    throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
+  }
   for (const [key, value] of Object.entries(settings)) {
     const scalar = JSON.stringify(value);
     // Root settings precede any optional user-defined tables.
@@ -103,6 +108,9 @@ export async function loadSettingsFile(path: string): Promise<Settings> {
 }
 
 export async function saveSettingsFile(path: string, input: unknown): Promise<void> {
-  const existing = await readFile(path, "utf8").catch(() => "");
+  const existing = await readFile(path, "utf8").catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+    throw error;
+  });
   await writeAtomic(path, patchSettingsToml(existing, normalizeSettings(input)));
 }

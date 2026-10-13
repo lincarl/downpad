@@ -47,6 +47,8 @@ Application preferences are stored in `settings.toml`. Recent-file history and r
 
 Images can either live inside Markdown as data URIs or as files in a configurable attachments directory. Relative paths are used for attachment links so a document and its attachments can be moved together.
 
+Attachment writes stage complete bytes in a sibling temporary file before publication. On filesystems with hard links, publication atomically claims a free name. FAT and exFAT use serialized application writes, a fresh name check, and atomic rename instead. That fallback preserves support for these filesystems, but another process creating the same name between the check and rename can have its file replaced.
+
 ## Desktop integration
 
 Electron provides native windows, file associations, single-instance behavior, native open/save dialogs, opening links and folders, system appearance settings, and printing. Linux builds provide AppImage and DEB installers. Windows builds provide NSIS and MSI installers.

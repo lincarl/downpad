@@ -52,6 +52,8 @@ Users can choose light, dark, or system themes; adjust the accent color, documen
 
 Settings are stored locally in `settings.toml` and can be changed from the app or by editing the settings file.
 
+If the file contains invalid TOML, the app uses defaults for the session and preserves the original file. Settings changes apply in memory, but saving them requires repairing the file's syntax first.
+
 ## Platform and scope
 
 md-easy is a local, single-user Electron application for Windows and Linux. Documents remain ordinary Markdown files on disk. The app does not provide cloud sync, real-time collaboration, mobile clients, or a plugin system.

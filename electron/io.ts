@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileMeta, FilePayload, ImageBytes } from "../src/ipc/contracts";
 import type { Eol } from "../src/state/types";
@@ -96,40 +96,56 @@ export async function ensureAttachmentsDirectory(docPath: string, folderName: st
   return directory;
 }
 
-/** Reserve a unique attachment name so existing image bytes cannot be replaced. */
-export async function writeAttachment(
+let pendingAttachmentWrite: Promise<void> = Promise.resolve();
+const UNSUPPORTED_LINK_ERRORS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
+
+/** Stage complete attachments, then publish without replacing existing names when hard links are supported. */
+export function writeAttachment(
   docPath: string,
   folderName: string,
   fileName: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  if (!fileName || fileName === "." || fileName === ".." || /[\\/\0]/.test(fileName)) {
-    throw new Error("An attachment name must be a file name.");
-  }
-  const directory = await ensureAttachmentsDirectory(docPath, folderName);
-  const extension = extname(fileName);
-  const stem = basename(fileName, extension);
-  for (let suffix = 0; ; suffix++) {
-    const name = suffix === 0 ? fileName : `${stem}-${suffix}${extension}`;
-    const destination = join(directory, name);
-    let file;
-    try {
-      file = await open(destination, "wx");
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "EEXIST") continue;
-      throw error;
+  const result = pendingAttachmentWrite.then(async () => {
+    if (!fileName || fileName === "." || fileName === ".." || /[\\/\0]/.test(fileName)) {
+      throw new Error("An attachment name must be a file name.");
     }
+    const directory = await ensureAttachmentsDirectory(docPath, folderName);
+    const extension = extname(fileName);
+    const stem = basename(fileName, extension);
+    const temporary = join(directory, `.attachment-${randomUUID()}.tmp`);
+    const file = await open(temporary, "wx");
     try {
       await file.writeFile(bytes);
       await file.sync();
       await file.close();
-    } catch (error) {
+      for (let suffix = 0; ; suffix++) {
+        const name = suffix === 0 ? fileName : `${stem}-${suffix}${extension}`;
+        const destination = join(directory, name);
+        try {
+          await link(temporary, destination);
+        } catch (error: unknown) {
+          if (!(error instanceof Error && "code" in error)) throw error;
+          if (error.code === "EEXIST") continue;
+          if (typeof error.code !== "string" || !UNSUPPORTED_LINK_ERRORS.has(error.code)) throw error;
+          // FAT/exFAT lack hard links. Serialize application writers and recheck
+          // the name before rename. A separate process can still create it here.
+          const occupied = await lstat(destination).then(() => true, (statError: unknown) => {
+            if (statError instanceof Error && "code" in statError && statError.code === "ENOENT") return false;
+            throw statError;
+          });
+          if (occupied) continue;
+          await rename(temporary, destination);
+        }
+        return `${folderName.replace(/\\/g, "/")}/${name}`;
+      }
+    } finally {
       await file.close().catch(() => {});
-      await unlink(destination).catch(() => {});
-      throw error;
+      await unlink(temporary).catch(() => {});
     }
-    return `${folderName.replace(/\\/g, "/")}/${name}`;
-  }
+  });
+  pendingAttachmentWrite = result.then(() => {}, () => {});
+  return result;
 }
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {

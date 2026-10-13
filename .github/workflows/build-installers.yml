@@ -262,7 +262,10 @@ jobs:
 
       - name: Test Linux desktop
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Linux'
-        run: xvfb-run -a pnpm test:electron
+        run: |
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          xvfb-run -a pnpm test:electron
 
       - name: Test Windows desktop
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'

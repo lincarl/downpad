@@ -1,6 +1,7 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { WebPreferences } from "electron";
 import type {} from "../src/ipc/bridge";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
@@ -36,11 +37,11 @@ async function launch(file?: string): Promise<void> {
   );
   const executablePath = process.env.MD_EASY_EXECUTABLE;
   app = await electron.launch({
+    chromiumSandbox: true,
     executablePath,
     cwd: projectRoot,
     args: [
       ...(executablePath ? [] : [path.join(projectRoot, "electron-dist", "main.js")]),
-      ...(process.env.MD_EASY_TEST_NO_SANDBOX === "1" ? ["--no-sandbox"] : []),
       ...(file ? [file] : []),
     ],
     env: { ...environment, MD_EASY_USER_DATA_DIR: path.join(directory, "profile") },
@@ -81,10 +82,18 @@ test("launching a Markdown file renders formatting and relative images in an iso
     process: typeof Reflect.get(window, "process"),
   }));
   expect(isolation).toEqual({ bridge: "function", require: "undefined", process: "undefined" });
-  const preferences = await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.getLastWebPreferences());
+  const preferences = await app!.evaluate(({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
+    // This runtime inspection method is absent from Electron's public typings.
+    const getPreferences: unknown = Reflect.get(contents, "getLastWebPreferences");
+    if (typeof getPreferences !== "function") throw new Error("Electron cannot report its window preferences.");
+    const preferences: WebPreferences = getPreferences.call(contents);
+    return preferences;
+  });
   expect(preferences.contextIsolation).toBe(true);
   expect(preferences.nodeIntegration).toBe(false);
   expect(preferences.sandbox).toBe(true);
+  expect(await app!.evaluate(({ app }) => app.commandLine.hasSwitch("no-sandbox"))).toBe(false);
   await page.screenshot({ path: path.join(directory, "electron-open.png") });
 });
 

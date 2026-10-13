@@ -1,12 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import filesystem, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { basename, join, resolve } from "node:path";
 import { parse } from "smol-toml";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { absolutePath, ensureAttachmentsDirectory, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { pageRanges, pdfOptions, printerOptions, validatePrintOptions } from "./printing";
 import { clipboardPermission, externalUrl, ImageAccess, trustedPage } from "./security";
-import { normalizeSettings, patchSettingsToml } from "./settings";
+import { loadSettingsFile, normalizeSettings, patchSettingsToml, saveSettingsFile } from "./settings";
 import { ConfigStore, firstMatch, parseRecent, pathKey, RecentSearch } from "./storage";
 import { watchPath } from "./watchers";
 
@@ -116,6 +117,51 @@ describe("Existing settings and history compatibility", () => {
     const output = patchSettingsToml(original, DEFAULT_SETTINGS);
     expect(output).toContain('fontFamily = "Segoe UI" # preserve');
     expect(parse(output)).toMatchObject({ fontFamily: "Segoe UI", theme: "dark", custom: { value: 1 } });
+  });
+
+  it("preserves malformed settings when startup saves flags and resumes saving after syntax repair", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    const malformed = '# Keep these comments\ntheme = "light"\nunknownKey = "keep me"\nfontFamily = "unfinished\n';
+    await writeFile(store.settingsPath, malformed);
+    const loaded = await store.settings();
+    expect(loaded).toEqual(DEFAULT_SETTINGS);
+    await expect(store.saveSettings({ ...loaded, hasSeenWelcome: true })).rejects.toThrow("contains invalid TOML. Fix the file's syntax");
+    await expect(store.saveSettings({ ...loaded, hasSeenWelcome: true, hasCheckedDefaultHandler: true })).rejects.toThrow("contains invalid TOML");
+    expect(await readFile(store.settingsPath, "utf8")).toBe(malformed);
+    expect(await readdir(directory)).toEqual(["settings.toml"]);
+
+    const repaired = malformed.replace('fontFamily = "unfinished\n', 'fontFamily = "Readable"\n');
+    await writeFile(store.settingsPath, repaired);
+    await store.saveSettings({ ...await store.settings(), hasSeenWelcome: true });
+    const saved = await readFile(store.settingsPath, "utf8");
+    expect(saved).toContain("# Keep these comments\n");
+    expect(parse(saved)).toMatchObject({ theme: "light", unknownKey: "keep me", fontFamily: "Readable", hasSeenWelcome: true });
+  });
+
+  it("creates and saves complete defaults when the settings file does not exist", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    const settings = { ...DEFAULT_SETTINGS, hasSeenWelcome: true };
+    await saveSettingsFile(path, settings);
+    expect(await loadSettingsFile(path)).toEqual(settings);
+    expect(parse(await readFile(path, "utf8"))).toMatchObject(settings);
+  });
+
+  it("propagates read failures without replacing an existing settings file", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    const original = '# Keep existing configuration\ntheme = "light"\nunknownKey = "keep me"\n';
+    await writeFile(path, original);
+    const denied = Object.assign(new Error("Cannot read the existing settings file."), { code: "EACCES" });
+    const reading = vi.spyOn(filesystem, "readFile").mockRejectedValueOnce(denied);
+    try {
+      syncBuiltinESMExports();
+      await expect(saveSettingsFile(path, DEFAULT_SETTINGS)).rejects.toBe(denied);
+    } finally {
+      reading.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(await readFile(path, "utf8")).toBe(original);
   });
 
   it("fills missing settings, migrates old view values, and clamps invalid bounds", () => {
