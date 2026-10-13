@@ -14,14 +14,14 @@ function problems(data, signals) {
   return validateReviewGate(data.pr, data.reviews, data.threads, sha, REVIEW_BOTS, signals);
 }
 
-test("accepts completed exact-head bot reviews when no approval policy requires APPROVED", () => {
+test("accepts a completed exact-head CodeRabbit review when no approval policy requires APPROVED", () => {
   assert.deepEqual(problems(fixture()), []);
 });
 
-test("rejects a missing bot, stale review, or non-bot identity", () => {
+test("rejects a missing CodeRabbit review, stale review, or non-bot identity", () => {
   const data = fixture();
   data.reviews.pop();
-  assert.match(problems(data).join("\n"), /greptile-apps/);
+  assert.match(problems(data).join("\n"), /coderabbitai/);
   data.reviews = fixture().reviews;
   data.reviews[0].commit_id = "b".repeat(40);
   assert.match(problems(data).join("\n"), /coderabbitai/);
@@ -78,7 +78,7 @@ test("rejects later unsuccessful bot checks and comments even after a completed 
     }).join("\n"), /check has not completed/);
   }
   assert.match(problems(data, {
-    comments: [{ user: { login: REVIEW_BOTS[1], type: "Bot" }, updated_at: "2026-10-13T13:00:00Z", body: "Review is paused" }],
+    comments: [{ user: { login: REVIEW_BOTS[0], type: "Bot" }, updated_at: "2026-10-13T13:00:00Z", body: "Review is paused" }],
   }).join("\n"), /latest comment/);
   assert.deepEqual(problems(data, {
     checkRuns: [{ id: 10, name: "CodeRabbit", app: { id: 347564 }, status: "completed", conclusion: "success" }],
@@ -87,7 +87,7 @@ test("rejects later unsuccessful bot checks and comments even after a completed 
 
 test("waiting statuses do not erase failure and retry history", () => {
   const failure = { context: "reviewed-ci", creator: { login: "github-actions[bot]" }, state: "failure" };
-  const waiting = { ...failure, state: "pending", description: "Waiting for both bot reviews" };
+  const waiting = { ...failure, state: "pending", description: "Waiting for CodeRabbit review" };
   assert.equal(selectPreviousAttempt([waiting, failure]), failure);
   assert.equal(selectPreviousAttempt([{ ...failure, creator: { login: "another-bot" } }]), undefined);
 });

@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 export const REVIEW_CONTEXT = "reviewed-ci";
-export const REVIEW_BOTS = ["coderabbitai[bot]", "greptile-apps[bot]"];
-const REVIEW_APP_IDS = { "coderabbitai[bot]": 347564, "greptile-apps[bot]": 867647 };
+export const REVIEW_BOTS = ["coderabbitai[bot]"];
+const REVIEW_APP_IDS = { "coderabbitai[bot]": 347564 };
 const incompleteReview = /(?:\breview(?:ing)?(?:\s+has\s+been|\s+was|\s+is)?\s+(?:skipped|paused|failed|pending|in progress)\b|\bunable to (?:complete|perform) (?:the )?review\b|^\s*(?:[#>*!\s]|<[^>]+>)*(?:rate[- ]limit(?:ed| exceeded| reached)?|quota exceeded)\b)/im;
 
 function newest(entries) {
@@ -165,7 +165,7 @@ async function main() {
   if (command === "initialize") {
     const number = pullRequestNumber(process.env.PR_NUMBER);
     const pr = await github(`/repos/${repository}/pulls/${number}`);
-    await setStatus(repository, pr.head.sha, "pending", "Waiting for both bot reviews and an explicit CI request.");
+    await setStatus(repository, pr.head.sha, "pending", "Waiting for CodeRabbit review and an explicit CI request.");
     return;
   }
   if (!["request", "finalize"].includes(command)) throw new Error("Expected initialize, request, or finalize.");
@@ -197,11 +197,11 @@ async function main() {
       await setStatus(repository, sha, "failure", problems.length ? "Review requirements changed during CI." : "Reviewed CI failed. An explicit retry is required.");
       throw new Error(problems.join("\n") || `Installer jobs finished with ${process.env.BUILD_RESULT}.`);
     }
-    await setStatus(repository, sha, "success", "Both current-head bot reviews and all installer checks passed.");
+    await setStatus(repository, sha, "success", "CodeRabbit reviewed the current head and all installer checks passed.");
     return;
   }
   if (problems.length) {
-    if (pr.head.sha === sha) await setStatus(repository, sha, "pending", "Bot reviews or unresolved findings still block CI.");
+    if (pr.head.sha === sha) await setStatus(repository, sha, "pending", "CodeRabbit review or unresolved findings still block CI.");
     throw new Error(problems.join("\n"));
   }
   const previous = selectPreviousAttempt(signals.statuses);
@@ -218,7 +218,7 @@ async function main() {
         throw new Error(`The previous CI run has no retained ${platform} installer evidence for this SHA. Request an explicit retry.`);
       }
     }
-    await setStatus(repository, sha, "success", "Both current-head bot reviews passed. Reused successful installer checks.", previous.target_url);
+    await setStatus(repository, sha, "success", "CodeRabbit reviewed the current head. Reused successful installer checks.", previous.target_url);
     await output({ mode: "pr", head_sha: sha, head_repository: pr.head.repo.full_name, should_build: false });
     console.log("A successful reviewed CI build already exists for this revision.");
     return;
