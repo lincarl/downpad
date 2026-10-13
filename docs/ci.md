@@ -16,7 +16,7 @@ gh workflow run build-installers.yml --ref main \
 
 The gate requires a completed submitted review from `coderabbitai[bot]` with GitHub's `commit_id` equal to `expected_sha`. Blank submitted `COMMENTED` reviews from inline chat do not replace an earlier completed review and cannot satisfy the gate on their own. An `APPROVED` review may have an empty body. The gate rejects missing, dismissed, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified CodeRabbit app also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
 
-CI checks out the exact requested head with read-only permissions. PR builds use the version committed in `package.json`. Version overrides remain available for main builds only. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
+CI checks out the exact requested head with read-only permissions. PR requests must dispatch from a branch. A tag-selected dispatch with PR inputs fails before building or changing the app version. PR builds use the version committed in `package.json`. Version overrides remain available for main builds only. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
 
 ## Duplicate requests and retries
 
@@ -32,6 +32,8 @@ gh workflow run build-installers.yml --ref main \
 ```
 
 Installer evidence expires with the artifacts after 30 days. A revision without retained evidence needs a fresh explicit retry. Main pushes keep their automatic builds, and version tags keep the release workflow. Intermediate PR runs are cancelled, while main runs use separate concurrency groups so every main commit builds.
+
+Regular dispatches may select the default branch or a release tag without PR inputs. Tag pushes and regular tag dispatches can publish a release only when the built commit and repository match the workflow's tag source. PR builds cannot publish releases.
 
 ## First installation
 

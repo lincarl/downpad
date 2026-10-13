@@ -62,6 +62,16 @@ export function selectPreviousAttempt(statuses) {
     && (status.state !== "pending" || status.description?.startsWith("Running reviewed CI")));
 }
 
+// Tag dispatches build only their own revision. A PR request must select a
+// branch so its source cannot be confused with the release tag's source.
+export function validateDispatchRef(ref, number, defaultBranch) {
+  if (number) {
+    if (!ref?.startsWith("refs/heads/")) throw new Error("PR builds must dispatch from a branch, not a tag.");
+  } else if (ref !== `refs/heads/${defaultBranch}` && !ref?.startsWith("refs/tags/")) {
+    throw new Error("PR branch builds require pr_number and expected_sha.");
+  }
+}
+
 async function github(route, { method = "GET", body } = {}) {
   const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GH_TOKEN or GITHUB_TOKEN is required.");
@@ -179,10 +189,13 @@ async function main() {
   }
   if (!["request", "finalize"].includes(command)) throw new Error("Expected initialize, request, or finalize.");
   const number = process.env.PR_NUMBER;
+  if (command === "request" && number && process.env.GITHUB_EVENT_NAME === "workflow_dispatch") {
+    validateDispatchRef(process.env.GITHUB_REF, number);
+  }
   if (!number && command === "request") {
     const metadata = await github(`/repos/${repository}`);
-    if (process.env.GITHUB_EVENT_NAME === "workflow_dispatch" && process.env.GITHUB_REF !== `refs/heads/${metadata.default_branch}`) {
-      throw new Error("PR branch builds require pr_number and expected_sha.");
+    if (process.env.GITHUB_EVENT_NAME === "workflow_dispatch") {
+      validateDispatchRef(process.env.GITHUB_REF, number, metadata.default_branch);
     }
     if (process.env.EXPECTED_SHA || process.env.RETRY === "true") throw new Error("expected_sha and retry require pr_number.");
     await output({ mode: "regular", head_sha: expectedHead(process.env.GITHUB_SHA), head_repository: repository, should_build: true });
