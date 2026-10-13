@@ -1,8 +1,45 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { REVIEW_BOTS, readPullRequest, selectPreviousAttempt, validateReviewGate } from "./reviewed-ci.mjs";
+import { fileURLToPath } from "node:url";
+import { REVIEW_BOTS, readPullRequest, selectPreviousAttempt, validateDispatchRef, validateReviewGate } from "./reviewed-ci.mjs";
 
 const sha = "a".repeat(40);
+
+test("allows PR requests on branch refs and rejects selected tags before any GitHub request", () => {
+  for (const ref of ["refs/heads/main", "refs/heads/reviewed-feature"]) {
+    assert.doesNotThrow(() => validateDispatchRef(ref, "1", "main"));
+  }
+  for (const ref of ["refs/tags/v1.2.3", "refs/pull/1/merge", undefined]) {
+    assert.throws(() => validateDispatchRef(ref, "1", "main"), /dispatch from a branch/);
+  }
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("./reviewed-ci.mjs", import.meta.url)), "request"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_REPOSITORY: "example/app",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: "refs/tags/v1.2.3",
+      PR_NUMBER: "1",
+      EXPECTED_SHA: sha,
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+    },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /PR builds must dispatch from a branch, not a tag/);
+  assert.equal(result.stdout, "");
+});
+
+test("preserves regular default-branch and tag dispatches while requiring inputs for other branches", () => {
+  for (const ref of ["refs/heads/main", "refs/tags/v1.2.3"]) {
+    assert.doesNotThrow(() => validateDispatchRef(ref, undefined, "main"));
+  }
+  for (const ref of ["refs/heads/reviewed-feature", "refs/pull/1/merge", undefined]) {
+    assert.throws(() => validateDispatchRef(ref, undefined, "main"), /require pr_number and expected_sha/);
+  }
+});
+
 function fixture() {
   return {
     pr: { state: "open", draft: false, head: { sha }, reviewDecision: null },
