@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { parse } from "smol-toml";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { absolutePath, ensureAttachmentsDirectory, readMarkdown, writeAttachment, writeMarkdown } from "./io";
@@ -126,6 +126,17 @@ describe("Existing settings and history compatibility", () => {
     });
   });
 
+  it("bounds recent history settings to supported sizes and limits visible rows by retention", () => {
+    expect(normalizeSettings({ recentFilesMaxRetained: 0, recentFilesVisibleCount: 0 }))
+      .toMatchObject({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 1 });
+    expect(normalizeSettings({ recentFilesMaxRetained: Number.MAX_VALUE, recentFilesVisibleCount: Number.MAX_VALUE }))
+      .toMatchObject({ recentFilesMaxRetained: 100_000, recentFilesVisibleCount: 100_000 });
+    expect(normalizeSettings({ recentFilesMaxRetained: 50.9, recentFilesVisibleCount: 100 }))
+      .toMatchObject({ recentFilesMaxRetained: 50, recentFilesVisibleCount: 50 });
+    expect(normalizeSettings({ recentFilesMaxRetained: 500, recentFilesVisibleCount: 100 }))
+      .toMatchObject({ recentFilesMaxRetained: 500, recentFilesVisibleCount: 100 });
+  });
+
   it("normalizes recovery retention and intervals while preserving valid configured durations", () => {
     expect(normalizeSettings({ recoveryRetentionDays: 0, recoverySnapshotIntervalSeconds: 0, autosaveIntervalSeconds: 0 }))
       .toMatchObject({ recoveryRetentionDays: 1, recoverySnapshotIntervalSeconds: 2, autosaveIntervalSeconds: 5 });
@@ -162,21 +173,54 @@ describe("Existing settings and history compatibility", () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);
     await store.initialize();
-    await store.saveSettings({ ...DEFAULT_SETTINGS, recentFilesMaxRetained: 2 });
+    await store.saveSettings({ ...DEFAULT_SETTINGS, recentFilesMaxRetained: 10 });
+    const older = Array.from({ length: 8 }, (_, index) => ({
+      path: join(directory, `older-${index + 1}.md`), lastOpenedMs: index + 1, favorite: false,
+    }));
+    await Promise.all(older.map(async (entry) => {
+      await writeFile(entry.path, `# Older document ${entry.lastOpenedMs}\n`);
+      await store.recordOpened(entry.path, entry.lastOpenedMs);
+    }));
     const first = join(directory, "first.md");
     const second = join(directory, "second.md");
     const third = join(directory, "third.md");
-    await Promise.all([store.recordOpened(first, 1), store.recordOpened(second, 2)]);
+    await Promise.all([store.recordOpened(first, 9), store.recordOpened(second, 10)]);
     await store.setFavorite(first, true);
-    await store.recordOpened(first, 3);
-    await store.recordOpened(third, 4);
+    await store.recordOpened(first, 11);
+    await store.recordOpened(third, 12);
     expect(await store.recent()).toEqual([
-      { path: third, lastOpenedMs: 4, favorite: false }, { path: first, lastOpenedMs: 3, favorite: true },
+      { path: third, lastOpenedMs: 12, favorite: false }, { path: first, lastOpenedMs: 11, favorite: true },
+      { path: second, lastOpenedMs: 10, favorite: false }, ...older.slice(1).reverse(),
     ]);
     expect(JSON.parse(await readFile(join(directory, "recent.json"), "utf8")) as unknown).toEqual([
-      { p: third, t: 4 }, { p: first, t: 3, f: true },
+      { p: third, t: 12 }, { p: first, t: 11, f: true }, { p: second, t: 10 },
+      ...older.slice(1).reverse().map((entry) => ({ p: entry.path, t: entry.lastOpenedMs })),
     ]);
-    await expect(store.setFavorite(second, true)).rejects.toThrow("not in recent");
+    await expect(store.setFavorite(older[0]!.path, true)).rejects.toThrow("not in recent");
+  });
+
+  it("preserves existing history when opening a file with hand-edited zero retention settings", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    const first = join(directory, "earlier.md");
+    const second = join(directory, "previous.md");
+    const next = join(directory, "newly-opened.md");
+    await Promise.all([first, second, next].map((path) => writeFile(path, `# ${basename(path)}\n`)));
+    await store.recordOpened(first, 1);
+    await store.recordOpened(second, 2);
+    await store.setFavorite(first, true);
+    await writeFile(store.settingsPath, "recentFilesMaxRetained = 0\nrecentFilesVisibleCount = 0\n");
+    await store.recordOpened(next, 3);
+    expect(await store.settings()).toMatchObject({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 1 });
+    expect(await store.recent()).toEqual([
+      { path: next, lastOpenedMs: 3, favorite: false },
+      { path: second, lastOpenedMs: 2, favorite: false },
+      { path: first, lastOpenedMs: 1, favorite: true },
+    ]);
+    expect(JSON.parse(await readFile(join(directory, "recent.json"), "utf8")) as unknown).toEqual([
+      { p: next, t: 3 }, { p: second, t: 2 }, { p: first, t: 1, f: true },
+    ]);
   });
 
   it("loads valid recovery, removes expired/corrupt snapshots, and blocks session traversal", async () => {

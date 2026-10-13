@@ -35,8 +35,8 @@ export function normalizeSettings(input: unknown): Settings {
       target[key] = value;
     }
   }
-  settings.recentFilesMaxRetained = Math.floor(settings.recentFilesMaxRetained);
-  settings.recentFilesVisibleCount = Math.min(Math.floor(settings.recentFilesVisibleCount), settings.recentFilesMaxRetained);
+  settings.recentFilesMaxRetained = Math.max(10, Math.min(100_000, Math.floor(settings.recentFilesMaxRetained)));
+  settings.recentFilesVisibleCount = Math.max(1, Math.min(100_000, Math.floor(settings.recentFilesVisibleCount), settings.recentFilesMaxRetained));
   settings.maxRetainedTabEditors = Math.max(1, Math.min(20, Math.floor(settings.maxRetainedTabEditors)));
   settings.printScalePercent = Math.max(50, Math.min(200, Math.round(settings.printScalePercent)));
   settings.printCopies = Math.max(1, Math.min(999, Math.floor(settings.printCopies)));

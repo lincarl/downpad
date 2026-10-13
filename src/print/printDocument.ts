@@ -86,32 +86,37 @@ function cloneCompleteDocument(source: Element): Element {
       const position = view.posAtDOM(line, 0);
       rendered.set(view.state.doc.lineAt(position).number, line);
     }
-    const lines = Array.from({ length: view.state.doc.lines }, (_, offset) => {
+    const lines = document.createDocumentFragment();
+    for (let offset = 0; offset < view.state.doc.lines; offset++) {
       const number = offset + 1;
       const text = view.state.doc.line(number).text;
       const visible = rendered.get(number);
       // Preserve highlighting when the live line contains the complete source.
-      if (visible?.textContent === text) return visible.cloneNode(true) as HTMLElement;
-      const line = document.createElement("div");
-      line.className = "cm-line";
-      if (text) line.textContent = text;
-      else line.appendChild(document.createElement("br"));
-      return line;
-    });
-    content.replaceChildren(...lines);
+      if (visible?.textContent === text) {
+        lines.appendChild(visible.cloneNode(true));
+      } else {
+        const line = document.createElement("div");
+        line.className = "cm-line";
+        if (text) line.textContent = text;
+        else line.appendChild(document.createElement("br"));
+        lines.appendChild(line);
+      }
+    }
+    content.replaceChildren(lines);
 
     const column = copy?.querySelector<HTMLElement>(".cm-lineNumbers");
     const template = live.querySelector<HTMLElement>(".cm-lineNumbers .cm-gutterElement");
     if (!column || !template) return;
-    const cells = lines.map((_, offset) => {
+    const cells = document.createDocumentFragment();
+    for (let offset = 0; offset < view.state.doc.lines; offset++) {
       const cell = template.cloneNode(false) as HTMLElement;
       cell.style.visibility = "";
       cell.style.height = "";
       cell.style.marginTop = "";
       cell.textContent = String(offset + 1);
-      return cell;
-    });
-    column.replaceChildren(...cells);
+      cells.appendChild(cell);
+    }
+    column.replaceChildren(cells);
     const gutters = copy?.querySelector<HTMLElement>(".cm-gutters");
     if (gutters) gutters.style.minHeight = "";
   });
