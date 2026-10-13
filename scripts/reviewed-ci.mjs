@@ -28,7 +28,9 @@ export function validateReviewGate(pr, reviews, threads, expectedSha, bots = REV
   if ([...decisions.values()].includes("CHANGES_REQUESTED")) problems.push("An active review requests changes.");
   if (threads.some((thread) => !thread.isResolved)) problems.push("Resolve every review thread before requesting CI.");
   for (const login of bots) {
-    const review = newest(reviews.filter((entry) => entry.user?.login === login && entry.user.type === "Bot" && entry.commit_id === expectedSha));
+    // CodeRabbit creates blank COMMENTED reviews when replying to inline chat.
+    const review = newest(reviews.filter((entry) => entry.user?.login === login && entry.user.type === "Bot" && entry.commit_id === expectedSha
+      && !(entry.state === "COMMENTED" && entry.submitted_at && !entry.body?.trim())));
     if (!review || !review.submitted_at || !["COMMENTED", "APPROVED"].includes(review.state) ||
       (review.state === "COMMENTED" && !review.body?.trim())) {
       problems.push(`${login} has not submitted a completed review of ${expectedSha}.`);

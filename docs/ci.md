@@ -14,7 +14,7 @@ gh workflow run build-installers.yml --ref main \
   -f expected_sha=0123456789abcdef0123456789abcdef01234567
 ```
 
-The gate requires a completed submitted review from `coderabbitai[bot]` with GitHub's `commit_id` equal to `expected_sha`. It rejects missing, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified CodeRabbit app also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
+The gate requires a completed submitted review from `coderabbitai[bot]` with GitHub's `commit_id` equal to `expected_sha`. Blank submitted `COMMENTED` reviews from inline chat do not replace an earlier completed review and cannot satisfy the gate on their own. An `APPROVED` review may have an empty body. The gate rejects missing, dismissed, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified CodeRabbit app also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
 
 CI checks out the exact requested head with read-only permissions. PR builds use the version committed in `package.json`. Version overrides remain available for main builds only. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
 
