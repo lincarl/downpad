@@ -1,0 +1,46 @@
+# Reviewed CI
+
+Regular pull requests receive CodeRabbit and Greptile reviews before installer builds run. A pull request push starts only the small control job, which marks `reviewed-ci` pending and cancels an older build for that pull request. It does not install dependencies or build installers.
+
+## Request a build
+
+Read both bots' latest summaries and inline findings, verify findings against the source, fix valid issues, and explain disagreements before resolving threads. Wait for both bots to finish reviewing the current head. A score, an old review, or a passing check without a submitted review is insufficient.
+
+Request CI explicitly for that immutable revision.
+
+```sh
+gh workflow run build-installers.yml --ref main \
+  -f pr_number=123 \
+  -f expected_sha=0123456789abcdef0123456789abcdef01234567
+```
+
+The gate requires a completed submitted review from `coderabbitai[bot]` and `greptile-apps[bot]` with GitHub's `commit_id` equal to `expected_sha`. It rejects missing, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified bot apps also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
+
+CI checks out the exact requested head with read-only permissions. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
+
+## Duplicate requests and retries
+
+Requests for the same pull request serialize. A queued request reuses a prior successful run for the same revision after validating the current reviews and retained Linux and Windows installer evidence. It preserves the original successful run link.
+
+A failed or unfinished attempt requires an explicit retry. Read its failure before requesting another run.
+
+```sh
+gh workflow run build-installers.yml --ref main \
+  -f pr_number=123 \
+  -f expected_sha=0123456789abcdef0123456789abcdef01234567 \
+  -f retry=true
+```
+
+Installer evidence expires with the artifacts after 30 days. A revision without retained evidence needs a fresh explicit retry. Main pushes keep their automatic builds, and version tags keep the release workflow. Intermediate PR runs are cancelled, while main runs use separate concurrency groups so every main commit builds.
+
+## First installation
+
+The existing installer workflow accepts dispatches from a selected branch. Before the default branch contains the gate script, an administrator or maintainer may explicitly dispatch the gate PR's own branch with `pr_number` and `expected_sha`. The workflow verifies that its source commit, the PR head, and `expected_sha` all match and that the PR belongs to this repository. It then performs the same real bot-review and installer checks.
+
+This bootstrap path becomes unavailable as soon as the default branch contains the gate script. Later requests use trusted default-branch controls and should dispatch from `main`.
+
+## Repository settings
+
+The default branch requires a pull request, an up-to-date `reviewed-ci` status from GitHub Actions, and resolved review conversations, including for administrators. A completed `COMMENTED` bot review is acceptable when approving reviews are optional. Any stricter approval policy still applies.
+
+Workflow artifacts and repository Actions logs are retained for 30 days. Do not publish a synthetic success status or bypass these requirements to merge a change.

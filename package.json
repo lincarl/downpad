@@ -11,11 +11,12 @@
     "check": "tsc --noEmit && pnpm lint:css",
     "lint:css": "stylelint \"src/**/*.css\"",
     "preview": "vite preview",
-    "test": "vitest run && pnpm test:version",
+    "test": "vitest run && pnpm test:version && pnpm test:reviewed-ci",
     "test:version": "node --test scripts/apply-version-from-tag.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "tauri": "node scripts/tauri.mjs"
+    "tauri": "node scripts/tauri.mjs",
+    "test:reviewed-ci": "node --test scripts/reviewed-ci.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

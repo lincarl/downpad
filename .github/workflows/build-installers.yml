@@ -4,24 +4,124 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-  pull_request:
+  pull_request_target:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
     inputs:
+      pr_number:
+        description: Pull request number, required for PR builds
+        required: false
+        type: string
+      expected_sha:
+        description: Full immutable PR head SHA, required with pr_number
+        required: false
+        type: string
+      retry:
+        description: Explicitly retry CI for a previously attempted revision
+        required: false
+        default: false
+        type: boolean
       version:
-        description: Optional version override for a non-release test build (for example 1.2.3)
+        description: Optional version override for a non-release test build
         required: false
         type: string
 
 permissions:
   contents: read
 
+# PR pushes cancel obsolete runs. Dispatches serialize within the same PR, so a
+# second request cannot start duplicate installers while the first is running.
+# Each main push has its own group, preserving every main build.
 concurrency:
-  group: installers-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: installers-${{ github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) || inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || (inputs.pr_number == '' && github.ref != 'refs/heads/main') }}
 
 jobs:
+  initialize:
+    name: Wait for reviewed CI
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: read
+    steps:
+      - name: Check out trusted controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Require reviews and an explicit request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/reviewed-ci.mjs initialize
+
+  prepare:
+    name: Validate reviewed CI request
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      mode: ${{ steps.gate.outputs.mode }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+      head_repository: ${{ steps.gate.outputs.head_repository }}
+      should_build: ${{ steps.gate.outputs.should_build }}
+      control_sha: ${{ steps.controls.outputs.sha }}
+    steps:
+      - name: Select trusted gate controls
+        id: controls
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          control_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$default_branch" --jq .sha)
+          if result=$(gh api --method GET "repos/$GITHUB_REPOSITORY/contents/scripts/reviewed-ci.mjs" -f ref="$control_sha" 2>&1); then
+            printf 'sha=%s\n' "$control_sha" >> "$GITHUB_OUTPUT"
+          else
+            [[ "$result" == *"(HTTP 404)"* ]] || { printf '%s\n' "$result" >&2; exit 1; }
+            # Bootstrap only while the default branch has no gate. A maintainer
+            # must explicitly select this repository's exact PR head workflow.
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ && "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+            [[ "$GITHUB_SHA" == "$EXPECTED_SHA" ]]
+            role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .role_name)
+            [[ "$role" == admin || "$role" == maintain ]]
+            read -r head_sha head_repository < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.head.sha, .head.repo.full_name] | @tsv')
+            [[ "$head_sha" == "$EXPECTED_SHA" && "$head_repository" == "$GITHUB_REPOSITORY" ]]
+            printf 'sha=%s\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out trusted gate controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.controls.outputs.sha }}
+          persist-credentials: false
+      - name: Verify both reviews and the immutable head
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RETRY: ${{ inputs.retry }}
+        run: node scripts/reviewed-ci.mjs request
   build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    permissions:
+      actions: read
+      contents: read
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -48,6 +148,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          repository: ${{ needs.prepare.outputs.head_repository }}
+          ref: ${{ needs.prepare.outputs.head_sha }}
           persist-credentials: false
 
       - name: Install Linux dependencies
@@ -90,6 +192,14 @@ jobs:
         with:
           toolchain: 1.88.0
 
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$ ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -108,15 +218,43 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ matrix.artifact }}-${{ steps.version.outputs.version }}-${{ needs.prepare.outputs.head_sha }}
           overwrite: true
+          retention-days: 30
           if-no-files-found: error
           path: ${{ matrix.paths }}
+
+  reviewed-ci:
+    name: Publish reviewed CI result
+    needs: [prepare, build]
+    if: always() && needs.prepare.outputs.mode == 'pr' && needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Check out the validated gate controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.prepare.outputs.control_sha }}
+          persist-credentials: false
+      - name: Verify reviews and publish the actual build result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: node scripts/reviewed-ci.mjs finalize
 
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -142,9 +280,10 @@ jobs:
       - name: Download installers
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_SHA: ${{ needs.prepare.outputs.head_sha }}
         run: |
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name md-easy-linux --dir artifacts/md-easy-linux
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name md-easy-windows --dir artifacts/md-easy-windows
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "md-easy-linux-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/md-easy-linux
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "md-easy-windows-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/md-easy-windows
 
       - name: Publish release
         shell: bash
