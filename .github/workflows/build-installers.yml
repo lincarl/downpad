@@ -107,7 +107,7 @@ jobs:
         with:
           ref: ${{ steps.controls.outputs.sha }}
           persist-credentials: false
-      - name: Verify both reviews and the immutable head
+      - name: Verify CodeRabbit review and the immutable head
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,10 +1,10 @@
 # Reviewed CI
 
-Regular pull requests receive CodeRabbit and Greptile reviews before installer builds run. A pull request push starts only the small control job, which marks `reviewed-ci` pending and cancels an older build for that pull request. It does not install dependencies or build installers.
+Regular pull requests receive CodeRabbit reviews before installer builds run. A pull request push starts only the small control job, which marks `reviewed-ci` pending and cancels an older build for that pull request. It does not install dependencies or build installers.
 
 ## Request a build
 
-Read both bots' latest summaries and inline findings, verify findings against the source, fix valid issues, and explain disagreements before resolving threads. Wait for both bots to finish reviewing the current head. A score, an old review, or a passing check without a submitted review is insufficient.
+Read CodeRabbit's latest summary and inline findings, verify findings against the source, fix valid issues, and explain disagreements before resolving threads. Wait for CodeRabbit to finish reviewing the current head. A score, an old review, or a passing check without a submitted review is insufficient.
 
 Request CI explicitly for that immutable revision.
 
@@ -14,7 +14,7 @@ gh workflow run build-installers.yml --ref main \
   -f expected_sha=0123456789abcdef0123456789abcdef01234567
 ```
 
-The gate requires a completed submitted review from `coderabbitai[bot]` and `greptile-apps[bot]` with GitHub's `commit_id` equal to `expected_sha`. It rejects missing, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified bot apps also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
+The gate requires a completed submitted review from `coderabbitai[bot]` with GitHub's `commit_id` equal to `expected_sha`. It rejects missing, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified CodeRabbit app also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
 
 CI checks out the exact requested head with read-only permissions. PR builds use the version committed in `package.json`. Version overrides remain available for main builds only. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
 
@@ -35,7 +35,7 @@ Installer evidence expires with the artifacts after 30 days. A revision without 
 
 ## First installation
 
-The existing installer workflow accepts dispatches from a selected branch. Before the default branch contains the gate script, an administrator or maintainer may explicitly dispatch the gate PR's own branch with `pr_number` and `expected_sha`. The workflow verifies that its source commit, the PR head, and `expected_sha` all match and that the PR belongs to this repository. It then performs the same real bot-review and installer checks.
+The existing installer workflow accepts dispatches from a selected branch. Before the default branch contains the gate script, an administrator or maintainer may explicitly dispatch the gate PR's own branch with `pr_number` and `expected_sha`. The workflow verifies that its source commit, the PR head, and `expected_sha` all match and that the PR belongs to this repository. It then performs the same real CodeRabbit review and installer checks.
 
 This bootstrap path becomes unavailable as soon as the default branch contains the gate script. Later requests use trusted default-branch controls and should dispatch from `main`.
 

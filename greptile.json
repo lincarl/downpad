@@ -1,6 +1,0 @@
-{
-  "autoReview": ["open", "push", "rebase"],
-  "triggerOnDrafts": false,
-  "statusCheck": true,
-  "shouldUpdateDescription": false
-}
