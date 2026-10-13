@@ -115,6 +115,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           RETRY: ${{ inputs.retry }}
+          VERSION: ${{ inputs.version }}
         run: node scripts/reviewed-ci.mjs request
   build:
     needs: prepare

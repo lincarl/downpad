@@ -181,9 +181,12 @@ async function main() {
   }
   pullRequestNumber(number);
   const sha = expectedHead(process.env.EXPECTED_SHA);
+  if (command === "request" && process.env.VERSION?.trim()) {
+    throw new Error("PR builds use the version committed in package.json. Version overrides are available for main builds only.");
+  }
   const { pr, threads, reviews, signals } = await readPullRequest(repository, number);
   const latest = await github(`/repos/${repository}/pulls/${number}`);
-  pr.head.sha = latest.head.sha;
+  Object.assign(pr, latest);
   const problems = validateReviewGate(pr, reviews, threads, sha, REVIEW_BOTS, signals);
   if (command === "finalize") {
     if (pr.head.sha !== sha) {

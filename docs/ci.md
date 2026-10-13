@@ -16,7 +16,7 @@ gh workflow run build-installers.yml --ref main \
 
 The gate requires a completed submitted review from `coderabbitai[bot]` and `greptile-apps[bot]` with GitHub's `commit_id` equal to `expected_sha`. It rejects missing, skipped, paused, failed, rate-limited, or unfinished reviews. Later pending or unsuccessful checks from the verified bot apps also block the request. Every review thread must be resolved, and no active review may request changes. If the repository requires an approving review, GitHub must report that requirement satisfied.
 
-CI checks out the exact requested head with read-only permissions. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
+CI checks out the exact requested head with read-only permissions. PR builds use the version committed in `package.json`. Version overrides remain available for main builds only. The control jobs use scripts from the default branch. They validate reviews again after Linux and Windows installer jobs finish, then publish the `reviewed-ci` status on that same immutable SHA. Changing the PR head prevents an older run from passing the new revision.
 
 ## Duplicate requests and retries
 

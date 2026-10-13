@@ -41,6 +41,15 @@ test("rejects changed heads, unresolved threads, and an active approval requirem
   assert.match(result, /every review thread/);
 });
 
+test("rejects a pull request that has closed or returned to draft", () => {
+  const data = fixture();
+  data.pr.state = "closed";
+  assert.match(problems(data).join("\n"), /must be open/);
+  data.pr.state = "open";
+  data.pr.draft = true;
+  assert.match(problems(data).join("\n"), /still a draft/);
+});
+
 test("does not treat COMMENTED as clearing an earlier request for changes", () => {
   const data = fixture();
   data.reviews.unshift({ id: 0, user: { login: "reviewer" }, state: "CHANGES_REQUESTED", submitted_at: "2026-10-12T12:00:00Z" });
