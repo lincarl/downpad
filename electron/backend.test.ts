@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parse } from "smol-toml";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -40,6 +40,35 @@ describe("Markdown file operations", () => {
     await writeFile(path, Buffer.from([0xc3, 0x28]));
     await expect(readMarkdown(path)).rejects.toThrow("UTF-8");
     expect(() => absolutePath("relative.md")).toThrow("absolute");
+  });
+
+  it.skipIf(process.platform === "win32")("saves through a relative symlink without replacing the link or leaving temporary files", async () => {
+    const directory = await fixtureDirectory();
+    const targetDirectory = join(directory, "originals");
+    await mkdir(targetDirectory);
+    const target = join(targetDirectory, "note.md");
+    const linked = join(directory, "linked.md");
+    await writeFile(target, "# Original\n");
+    await symlink("originals/note.md", linked);
+    const opened = await readMarkdown(linked);
+    expect(opened.content).toBe("# Original\n");
+    await writeMarkdown(linked, "# Saved through link\n", opened.eol);
+    expect(await readFile(target, "utf8")).toBe("# Saved through link\n");
+    expect(await readFile(linked, "utf8")).toBe("# Saved through link\n");
+    expect((await lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await readlink(linked)).toBe("originals/note.md");
+    expect(await readdir(targetDirectory)).toEqual(["note.md"]);
+    expect((await readdir(directory)).sort()).toEqual(["linked.md", "originals"]);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects dangling symlink saves and keeps the existing link intact", async () => {
+    const directory = await fixtureDirectory();
+    const linked = join(directory, "dangling.md");
+    await symlink("missing.md", linked);
+    await expect(writeMarkdown(linked, "Unsaved text\n", "lf")).rejects.toThrow("target does not exist");
+    expect((await lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await readlink(linked)).toBe("missing.md");
+    expect(await readdir(directory)).toEqual(["dangling.md"]);
   });
 
   it("keeps attachment names unique and rejects traversal", async () => {
@@ -95,6 +124,30 @@ describe("Existing settings and history compatibility", () => {
       defaultView: "split", maxRetainedTabEditors: 20, printCopies: 1, printScalePercent: 200,
       recentFilesMaxRetained: 10, recentFilesVisibleCount: 10, theme: "dark", mdHardWrap: false,
     });
+  });
+
+  it("normalizes recovery retention and intervals while preserving valid configured durations", () => {
+    expect(normalizeSettings({ recoveryRetentionDays: 0, recoverySnapshotIntervalSeconds: 0, autosaveIntervalSeconds: 0 }))
+      .toMatchObject({ recoveryRetentionDays: 1, recoverySnapshotIntervalSeconds: 2, autosaveIntervalSeconds: 5 });
+    expect(normalizeSettings({ recoveryRetentionDays: 0.25, recoverySnapshotIntervalSeconds: 1.5, autosaveIntervalSeconds: 4.5 }))
+      .toMatchObject({ recoveryRetentionDays: 1, recoverySnapshotIntervalSeconds: 2, autosaveIntervalSeconds: 5 });
+    expect(normalizeSettings({ recoveryRetentionDays: 30, recoverySnapshotIntervalSeconds: 15, autosaveIntervalSeconds: 45 }))
+      .toMatchObject({ recoveryRetentionDays: 30, recoverySnapshotIntervalSeconds: 15, autosaveIntervalSeconds: 45 });
+    expect(normalizeSettings({ recoverySnapshotIntervalSeconds: Number.MAX_VALUE, autosaveIntervalSeconds: Number.MAX_VALUE }))
+      .toMatchObject({ recoverySnapshotIntervalSeconds: 2_147_483, autosaveIntervalSeconds: 2_147_483 });
+  });
+
+  it("keeps recent crash recovery when hand-edited settings specify zero retention", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    await writeFile(store.settingsPath, "recoveryRetentionDays = 0\nrecoverySnapshotIntervalSeconds = 0\nautosaveIntervalSeconds = 0\n");
+    const snapshot = { sessionId: "recent-crash", savedAt: new Date().toISOString(), filePath: null, markdown: "Recover this text\n", isDirty: true };
+    await store.writeSnapshot(snapshot);
+    const created = new Date(Date.now() - 60_000);
+    await utimes(join(directory, "recovery", "recent-crash.json"), created, created);
+    expect(await store.settings()).toMatchObject({ recoveryRetentionDays: 1, recoverySnapshotIntervalSeconds: 2, autosaveIntervalSeconds: 5 });
+    expect(await store.snapshots()).toEqual([snapshot]);
   });
 
   it("migrates old recent rows and recognizes normalized paths", () => {

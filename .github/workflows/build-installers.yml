@@ -183,29 +183,57 @@ jobs:
 
       - name: Reuse an existing build of this commit
         id: existing
+        if: needs.prepare.outputs.control_trusted == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_PREFIX: ${{ matrix.artifact }}
           BUILD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ needs.prepare.outputs.default_branch }}
         run: |
           set -euo pipefail
           version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
           artifact="$ARTIFACT_PREFIX-$version-$BUILD_SHA"
           printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
           printf 'reused=false\n' >> "$GITHUB_OUTPUT"
-          run_ids=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/build-installers.yml/runs" \
+          # Fork and manual PR runs cannot supply installers to this cache.
+          if ! run_ids=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/build-installers.yml/runs" \
+            -f head_sha="$BUILD_SHA" -f branch="$DEFAULT_BRANCH" -f event=push \
             -f status=success -f per_page=100 \
-            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | .id")
+            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .event == \"push\" and .head_sha == \"$BUILD_SHA\" and .head_repository.full_name == \"$GITHUB_REPOSITORY\") | .id"); then
+            printf 'Installer cache lookup failed. Building fresh.\n'
+            exit 0
+          fi
+          cache_directory=dev-temp/installer-cache
+          shopt -s nullglob
           for run_id in $run_ids; do
-            artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
-              --jq ".artifacts[] | select(.name == \"$artifact\" and .expired == false) | .id")
-            if [[ -n "$artifact_id" ]]; then
-              gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir release
-              printf 'reused=true\n' >> "$GITHUB_OUTPUT"
-              break
+            if ! artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+              --jq ".artifacts[] | select(.name == \"$artifact\" and .expired == false and .size_in_bytes > 0) | .id"); then
+              printf 'Installer cache artifact lookup failed for run %s.\n' "$run_id"
+              continue
             fi
+            [[ -n "$artifact_id" ]] || continue
+            rm -rf -- "$cache_directory"
+            if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir "$cache_directory"; then
+              printf 'Installer cache download failed for run %s.\n' "$run_id"
+              continue
+            fi
+            if [[ "$ARTIFACT_PREFIX" == md-easy-linux ]]; then
+              first=("$cache_directory"/*.deb)
+              second=("$cache_directory"/*.AppImage)
+            else
+              first=("$cache_directory"/*.msi)
+              second=("$cache_directory"/*.exe)
+            fi
+            [[ ${#first[@]} -eq 1 && ${#second[@]} -eq 1 ]] || continue
+            [[ -f "${first[0]}" && ! -L "${first[0]}" && -s "${first[0]}" ]] || continue
+            [[ -f "${second[0]}" && ! -L "${second[0]}" && -s "${second[0]}" ]] || continue
+            mkdir -p release
+            cp -- "${first[0]}" "${second[0]}" release/
+            printf 'reused=true\n' >> "$GITHUB_OUTPUT"
+            break
           done
+          rm -rf -- "$cache_directory"
 
       - name: Install dependencies
         if: steps.existing.outputs.reused != 'true'
@@ -219,9 +247,14 @@ jobs:
         if: steps.existing.outputs.reused != 'true'
         run: pnpm test
 
-      - name: Install browser and desktop test dependencies
-        if: steps.existing.outputs.reused != 'true'
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Linux desktop test dependencies
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2 libatk-bridge2.0-0 libcups2 libgbm1 libgtk-3-0 \
+            libnss3 libxcomposite1 libxdamage1 libxkbcommon0 libxrandr2 \
+            xauth xvfb
 
       - name: Build app
         if: steps.existing.outputs.reused != 'true'
@@ -242,7 +275,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ steps.existing.outputs.artifact }}
+          name: ${{ matrix.artifact }}-${{ steps.version.outputs.version }}-${{ needs.prepare.outputs.head_sha }}
           overwrite: true
           retention-days: 30
           if-no-files-found: error

@@ -58,14 +58,16 @@ const initialLaunchPath = firstFileArgument(process.argv);
 const pendingOpenPaths: string[] = initialLaunchPath ? [initialLaunchPath] : [];
 
 function emit<K extends keyof DesktopEventPayloads>(event: K, payload: DesktopEventPayloads[K]): void {
-  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() && !mainWindow.webContents.isCrashed()) {
     mainWindow.webContents.send(`md-easy:event:${event}`, payload);
   }
 }
 
 function requestOpen(path: string): void {
   const target = absolutePath(path);
-  if (mainWindow && openListenerAttached) emit("open-file-requested", { path: target });
+  if (mainWindow && openListenerAttached && !mainWindow.webContents.isDestroyed() && !mainWindow.webContents.isCrashed()) {
+    emit("open-file-requested", { path: target });
+  }
   else pendingOpenPaths.push(target);
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -393,10 +395,20 @@ async function createWindow(): Promise<void> {
   window.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
     contents === window.webContents && clipboardPermission(permission, details.requestingUrl ?? "", entryUrl, details.isMainFrame));
   window.on("close", (event) => {
-    if (!allowClose && closeListenerAttached && !window.webContents.isDestroyed()) {
+    if (!allowClose && closeListenerAttached && !window.webContents.isDestroyed() && !window.webContents.isCrashed()) {
       event.preventDefault();
       emit("close-requested", undefined);
     } else saveWindowState(window);
+  });
+  // Subscriptions belong to the current renderer, which disappears on reload
+  // or crash. Keep new file requests queued until the replacement subscribes.
+  const resetRendererListeners = (): void => {
+    closeListenerAttached = false;
+    openListenerAttached = false;
+  };
+  window.webContents.on("render-process-gone", resetRendererListeners);
+  window.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) resetRendererListeners();
   });
   window.on("closed", () => {
     unwatchDocument?.(); unwatchDocument = undefined;

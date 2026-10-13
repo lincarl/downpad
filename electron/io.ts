@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileMeta, FilePayload, ImageBytes } from "../src/ipc/contracts";
 import type { Eol } from "../src/state/types";
@@ -11,9 +11,18 @@ export function absolutePath(value: unknown): string {
   return resolve(value);
 }
 
-/** Replace a file only after the complete replacement has reached disk. */
+/** Replace the real target after its complete replacement reaches disk, preserving symlinks. */
 export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<void> {
-  const path = absolutePath(destination);
+  const requested = absolutePath(destination);
+  const path = await realpath(requested).catch(async (error: unknown) => {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    const info = await lstat(requested).catch((statError: unknown) => {
+      if (statError instanceof Error && "code" in statError && statError.code === "ENOENT") return null;
+      throw statError;
+    });
+    if (info?.isSymbolicLink()) throw new Error("The symbolic link's target does not exist.");
+    return requested;
+  });
   const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   const mode = await stat(path).then((info) => info.mode, () => undefined);
   const file = await open(temporary, "wx", mode);

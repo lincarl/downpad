@@ -19,7 +19,14 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  if (app) await app.close();
+  if (app) {
+    // Every test uses a disposable profile. Approve discarding its unsaved
+    // edits so cleanup cannot wait on a native confirmation dialog.
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+    }).catch(() => {});
+    await app.close();
+  }
   app = undefined;
 });
 
@@ -155,5 +162,87 @@ test("the preload rejects unknown commands", async () => {
     catch (error) { return String(error); }
   });
   expect(result).not.toBe("accepted");
+});
+
+test("a crashed renderer does not trap native window close", async () => {
+  const file = path.join(directory, "crash.md");
+  await writeFile(file, "# Crash lifecycle\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Crash lifecycle");
+  await page.evaluate(async () => {
+    window.mdEasy!.listen("close-requested", () => {});
+    await window.mdEasy!.invoke("settings_path");
+  });
+
+  const crashed = await app!.evaluate(async ({ app, BrowserWindow }) => {
+    // Keep the process alive after the window closes, as macOS normally does.
+    app.removeAllListeners("window-all-closed");
+    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
+    await new Promise<void>((resolve) => {
+      contents.once("render-process-gone", () => resolve());
+      contents.forcefullyCrashRenderer();
+    });
+    const crashed = contents.isCrashed();
+    BrowserWindow.getAllWindows()[0]!.close();
+    return crashed;
+  });
+
+  expect(crashed).toBe(true);
+  await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
+});
+
+test("file requests during reload reach the replacement renderer", async () => {
+  const original = path.join(directory, "before-reload.md");
+  const first = path.join(directory, "queued-first.md");
+  const second = path.join(directory, "queued-second.md");
+  await writeFile(original, "# Before reload\n");
+  await writeFile(first, "# First queued file\n");
+  await writeFile(second, "# Second queued file\n");
+  await launch(original);
+  await expect(page.locator(heading)).toHaveText("Before reload");
+  await page.evaluate(async () => {
+    window.mdEasy!.listen("open-file-requested", () => {});
+    await window.mdEasy!.invoke("settings_path");
+  });
+
+  const reloaded = page.waitForEvent("domcontentloaded");
+  await app!.evaluate(({ app, BrowserWindow }, paths) => {
+    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
+    contents.once("did-start-navigation", (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      for (const filePath of paths) app.emit("open-file", { preventDefault: () => {} }, filePath);
+    });
+    contents.reload();
+  }, [first, second]);
+  await reloaded;
+
+  await expect(page.getByRole("tab", { name: "queued-first.md", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "queued-second.md", exact: true })).toBeVisible();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Second queued file");
+});
+
+test("same-document navigation preserves the unsaved close confirmation", async () => {
+  const file = path.join(directory, "same-document.md");
+  await writeFile(file, "# Same document\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Same document");
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const raw = page.locator(".editor-pane-raw .cm-content");
+  await raw.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.insertText("\nUnsaved edits.\n");
+  await expect(raw).toContainText("Unsaved edits.");
+  await page.evaluate(() => { window.location.hash = "same-document"; });
+
+  await app!.evaluate(({ BrowserWindow, dialog }) => new Promise<void>((resolve) => {
+    dialog.showMessageBox = async () => {
+      resolve();
+      return { response: 0, checkboxChecked: false };
+    };
+    BrowserWindow.getAllWindows()[0]!.close();
+  }));
+
+  await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  await expect(raw).toContainText("Unsaved edits.");
 });
 

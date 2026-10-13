@@ -14,6 +14,9 @@ const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
   printMargins: ["normal", "narrow", "wide", "none"],
 };
 
+// Longer intervals overflow browser timers and run almost immediately.
+const MAX_INTERVAL_SECONDS = Math.floor(0x7fffffff / 1000);
+
 /** Ignore malformed keys while retaining complete defaults for older settings files. */
 export function normalizeSettings(input: unknown): Settings {
   const settings = { ...DEFAULT_SETTINGS };
@@ -37,6 +40,9 @@ export function normalizeSettings(input: unknown): Settings {
   settings.maxRetainedTabEditors = Math.max(1, Math.min(20, Math.floor(settings.maxRetainedTabEditors)));
   settings.printScalePercent = Math.max(50, Math.min(200, Math.round(settings.printScalePercent)));
   settings.printCopies = Math.max(1, Math.min(999, Math.floor(settings.printCopies)));
+  settings.recoveryRetentionDays = Math.max(1, Math.floor(settings.recoveryRetentionDays));
+  settings.recoverySnapshotIntervalSeconds = Math.max(2, Math.min(MAX_INTERVAL_SECONDS, Math.floor(settings.recoverySnapshotIntervalSeconds)));
+  settings.autosaveIntervalSeconds = Math.max(5, Math.min(MAX_INTERVAL_SECONDS, Math.floor(settings.autosaveIntervalSeconds)));
   return settings;
 }
 

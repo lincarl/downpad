@@ -48,11 +48,13 @@ try {
       await server.close();
     } else {
       server.printUrls();
+      const developmentUrl = server.resolvedUrls?.local[0] ?? server.resolvedUrls?.network[0];
+      if (!developmentUrl) throw new Error("Vite did not provide a reachable development URL.");
       const child = startChild(electron, [".", ...process.argv.slice(2)], {
         stdio: "inherit",
         env: {
           ...process.env,
-          MD_EASY_DEV_URL: server.resolvedUrls?.local[0] ?? "http://127.0.0.1:1420",
+          MD_EASY_DEV_URL: developmentUrl,
         },
       });
       child.once("error", (error) => {
