@@ -16,8 +16,10 @@ async function loadMermaid(): Promise<MermaidModule> {
   return mermaidPromise;
 }
 
+/** Diagrams sit on the document page, so they follow the document theme, which
+ *  can differ from the UI theme. */
 function currentTheme(): "dark" | "default" {
-  return document.documentElement.dataset.theme === "dark" ? "dark" : "default";
+  return document.documentElement.dataset.editorTheme === "dark" ? "dark" : "default";
 }
 
 function loadingElement(): HTMLElement {
