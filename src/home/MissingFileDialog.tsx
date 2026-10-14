@@ -20,6 +20,7 @@ import {
   dialogTitleClassName,
 } from "@/components/ui/dialog-layout";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
+import { captureFocus } from "@/app/restoreFocus";
 import { cn } from "@/lib/utils";
 
 export type MissingFileAction = "locate" | "remove" | "cancel";
@@ -33,6 +34,7 @@ export function openMissingFileDialog(
     host.className = "missing-dialog-root";
     document.body.append(host);
     const root = createRoot(host);
+    const restoreFocus = captureFocus();
     let settled = false;
     const onAbort = (): void => finish("cancel");
     const finish = (action: MissingFileAction): void => {
@@ -40,6 +42,7 @@ export function openMissingFileDialog(
       settled = true;
       signal?.removeEventListener("abort", onAbort);
       disposeReactRoot(root, host);
+      restoreFocus();
       resolve(action);
     };
     if (signal?.aborted) {

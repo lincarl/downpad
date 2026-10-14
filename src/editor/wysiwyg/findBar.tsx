@@ -203,8 +203,6 @@ const FindBarView = forwardRef<
     const next = { ...options, [key]: !options[key] };
     setOptions(next);
     runSearch(query, next);
-    // Clicking an option keeps the caret in the field, as in Mervin.
-    inputRef.current?.focus();
   };
 
   return (
@@ -350,12 +348,13 @@ function FindToggle({
   onClick(): void;
 }) {
   return (
-    <label className="find-toggle flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink dark:text-ink-soft">
-      <Checkbox
-        checked={active}
-        onChange={onClick}
-        onMouseDown={(event) => event.preventDefault()}
-      />
+    // A click keeps the caret in the field, as in Mervin; the keyboard keeps
+    // focus on the check box.
+    <label
+      className="find-toggle flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink dark:text-ink-soft"
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <Checkbox checked={active} onChange={onClick} />
       <span>{label}</span>
     </label>
   );

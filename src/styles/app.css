@@ -1245,6 +1245,11 @@ body {
 .print-doc .cm-content * {
   color: #24292f !important;
 }
+
+/* The editor's empty-line hint never reaches the page. */
+.print-doc .crepe-placeholder::before {
+  content: none;
+}
 /* stylelint-enable no-descending-specificity */
 
 /* The Markdown version: raw source, one block per line so breaks land between

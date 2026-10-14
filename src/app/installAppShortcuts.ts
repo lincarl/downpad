@@ -24,6 +24,14 @@ export function installAppShortcuts(actions: AppShortcutActions): () => void {
     // The print workspace owns its own key handling while it covers the window.
     if (actions.isPrintOpen()) return;
 
+    // A modal dialog (Settings, File not found, a prompt) owns the keyboard, so
+    // app shortcuts must not act behind it. Ctrl+P still never reaches the
+    // browser's own printing.
+    if (document.querySelector('[role="dialog"][data-state="open"]')) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") event.preventDefault();
+      return;
+    }
+
     if (event.key === "F3") {
       if (actions.store.get().view === "wysiwyg" && actions.isFindOpen()) {
         event.preventDefault();

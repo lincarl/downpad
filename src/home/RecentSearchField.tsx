@@ -116,7 +116,7 @@ function ScopeToggle({ label, on, onClick }: { label: string; on: boolean; onCli
       type="button"
       className={cn(
         "recent-scope-btn grid h-[22px] cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent px-[5px] py-0",
-        "font-[inherit] text-[11px] leading-none outline-none focus-visible:bg-hover",
+        "font-[inherit] text-[11px] leading-none outline-none focus-ring-inset",
         on ? "font-bold text-accent" : "text-ink-faint hover:text-ink",
       )}
       aria-pressed={on}

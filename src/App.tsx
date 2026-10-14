@@ -38,6 +38,7 @@ import { AppRuntime } from "@/app/AppRuntime";
 import { AppRuntimeProvider, useAppRuntime } from "@/app/AppRuntimeContext";
 import { useOwnedAppRuntime } from "@/app/useAppRuntime";
 import { useDocumentTitle } from "@/app/useDocumentTitle";
+import { captureFocus } from "@/app/restoreFocus";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
@@ -293,19 +294,42 @@ function ToolSeparator({ className }: { className?: string }) {
   );
 }
 
-/** Focus the first enabled row when a popover menu opens, instead of the popover itself. */
+/** Focus the first enabled row when a command menu opens, instead of the popover itself. */
 function focusFirstMenuRow(event: Event): void {
   event.preventDefault();
   const menu = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-  const checked = menu?.querySelector<HTMLButtonElement>(".md-context-menu-item[aria-checked='true']");
-  (checked ?? menu?.querySelector<HTMLButtonElement>(".md-context-menu-item:not(.disabled)"))?.focus();
+  menu?.querySelector<HTMLButtonElement>(".md-context-menu-item:not(.disabled)")?.focus();
+}
+
+/** Focus the current choice when a list of choices opens, like a combo box. */
+function focusCheckedMenuRow(event: Event): void {
+  event.preventDefault();
+  const menu = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  menu?.querySelector<HTMLButtonElement>(".md-context-menu-item[aria-checked='true']")?.focus();
+}
+
+/**
+ * Open state for a toolbar popover menu and the activation that closes it,
+ * returns focus to its button and then runs the item. Radix returns focus on
+ * Escape but not when an item closes the menu, and a dialog the item opens
+ * needs that focus to know where to return.
+ */
+function useToolbarMenu() {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const activate = (item: MenuItem): void => {
+    setOpen(false);
+    triggerRef.current?.focus();
+    setTimeout(() => void item.run(), 0);
+  };
+  return { open, setOpen, triggerRef, activate };
 }
 
 /** The hamburger menu: file actions, document actions, view choices and Settings. */
 function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDark: boolean }) {
   const runtime = useAppRuntime();
   const editorLayout = useAppState((state) => state.editorLayout);
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, triggerRef, activate } = useToolbarMenu();
   const layout = (value: EditorLayout, label: string, icon: LucideIcon): MenuItem => ({
     label,
     icon,
@@ -339,6 +363,7 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
       <TooltipLabel text="Menu">
         <PopoverTrigger asChild>
           <Button
+            ref={triggerRef}
             type="button"
             variant="tool"
             size="tool-icon"
@@ -361,10 +386,7 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
       >
         <MenuRows
           items={items}
-          onActivate={(item) => {
-            setOpen(false);
-            void item.run();
-          }}
+          onActivate={activate}
         />
       </PopoverContent>
     </Popover>
@@ -430,12 +452,11 @@ function SplitButton({
   onClick(): void;
   items: MenuItem[];
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, triggerRef, activate } = useToolbarMenu();
   // Hover, pressed and open washes belong to the whole box, as in Mervin; the
   // two parts only carry their own keyboard focus outline.
   const part = cn(
     "flex h-full cursor-pointer items-center bg-transparent text-ink-body outline-none",
-    "focus-ring-inset",
     "disabled:cursor-default disabled:text-ink-disabled",
   );
   return (
@@ -444,6 +465,9 @@ function SplitButton({
         <div
           className={cn(
             "toolbar-split inline-flex h-[33px] shrink-0 rounded-control border",
+            // The main part's keyboard focus rings the whole box, clear of its label.
+            "has-[.toolbar-file:focus-visible]:outline-2 has-[.toolbar-file:focus-visible]:outline-offset-1",
+            "has-[.toolbar-file:focus-visible]:outline-solid has-[.toolbar-file:focus-visible]:outline-accent",
             disabled
               ? "pointer-events-none border-line-tool-disabled"
               : cn(
@@ -470,8 +494,9 @@ function SplitButton({
           </TooltipLabel>
           <PopoverTrigger asChild>
             <button
+              ref={triggerRef}
               type="button"
-              className={cn(part, "toolbar-caret w-[17px] justify-center rounded-r-control")}
+              className={cn(part, "toolbar-caret focus-ring-inset w-[17px] justify-center rounded-r-control")}
               aria-label={menuLabel}
               aria-haspopup="menu"
               disabled={disabled}
@@ -493,10 +518,7 @@ function SplitButton({
       >
         <MenuRows
           items={items}
-          onActivate={(item) => {
-            setOpen(false);
-            void item.run();
-          }}
+          onActivate={activate}
         />
       </PopoverContent>
     </Popover>
@@ -514,13 +536,14 @@ function TextSizeControl({
   scale: number;
 }) {
   const runtime = useAppRuntime();
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, triggerRef, activate } = useToolbarMenu();
   const current = Math.round(scale * 100);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipLabel text="Document text size">
         <PopoverTrigger asChild>
           <button
+            ref={triggerRef}
             type="button"
             className={cn(
               "zoom-readout relative flex h-[29px] w-24 shrink-0 cursor-pointer items-center justify-center rounded-control border border-line bg-well pr-5 pl-2 text-[12px] text-ink-primary outline-none",
@@ -550,7 +573,7 @@ function TextSizeControl({
         role="menu"
         aria-label="Document text size"
         onKeyDown={onMenuKeyDown}
-        onOpenAutoFocus={focusFirstMenuRow}
+        onOpenAutoFocus={focusCheckedMenuRow}
       >
         <MenuRows
           items={TEXT_SIZES.map((size) => ({
@@ -559,10 +582,7 @@ function TextSizeControl({
             radio: true,
             run: () => runtime?.zoomDocument(size - scale),
           }))}
-          onActivate={(item) => {
-            setOpen(false);
-            void item.run();
-          }}
+          onActivate={activate}
         />
       </PopoverContent>
     </Popover>
@@ -776,6 +796,10 @@ function DocumentTab({
 function Banner() {
   const runtime = useAppRuntime();
   const banner = useAppState((state) => state.banner);
+  const visible = banner !== null;
+  // Answering or dismissing the bar removes the focused button; focus then goes
+  // back to where it was when the bar appeared instead of the page body.
+  useEffect(() => (visible ? captureFocus() : undefined), [visible]);
   if (!banner) return <div className="banner row-start-3" hidden />;
   const error = banner.kind === "error";
   return (

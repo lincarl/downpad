@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "@/settings/defaults";
@@ -120,7 +120,7 @@ describe("App shell", () => {
 
     await user.click(screen.getByRole("button", { name: "Application menu" }));
     await user.click(screen.getByRole("menuitem", { name: "Settings" }));
-    expect(runtime.openSettings).toHaveBeenCalledOnce();
+    await waitFor(() => expect(runtime.openSettings).toHaveBeenCalledOnce());
   });
 
   it("shows the sun action for a dark document surface", () => {
