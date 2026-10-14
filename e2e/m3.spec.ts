@@ -75,7 +75,7 @@ test("editing a NESTED value patches its indented YAML line, preserving the rest
 });
 
 test("adding a field appends a new editable key/value to the YAML", async ({ page }) => {
-  await page.getByRole("button", { name: "+ Add field" }).click();
+  await page.getByRole("button", { name: "Add field", exact: true }).click();
   // A new row appears with the placeholder key "key" (focused); set key + value.
   await page.getByRole("rowheader", { name: "key", exact: true }).fill("author");
   await valueFor(page, "author").fill("Example Author");
@@ -217,7 +217,7 @@ test("renaming a key works; an invalid key (with a colon) is rejected", async ({
   await expect(raw).not.toContainText("ta:gs");
 });
 
-test("deleting every field still leaves a working '+ Add field' (no dead end)", async ({ page }) => {
+test("deleting every field still leaves a working 'Add field' (no dead end)", async ({ page }) => {
   for (const key of ["title", "tags", "metadata"]) {
     await page
       .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) })
@@ -226,7 +226,7 @@ test("deleting every field still leaves a working '+ Add field' (no dead end)", 
   }
   await expect(page.locator(".frontmatter-table")).toHaveCount(0);
 
-  const addBtn = page.getByRole("button", { name: "+ Add field" });
+  const addBtn = page.getByRole("button", { name: "Add field", exact: true });
   await expect(addBtn).toBeVisible();
   await addBtn.click();
   await page.getByRole("rowheader", { name: "key", exact: true }).fill("title");

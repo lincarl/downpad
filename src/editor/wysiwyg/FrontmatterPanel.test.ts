@@ -100,7 +100,7 @@ describe("FrontmatterPanel", () => {
     const placeholderRow = placeholder.closest("tr");
     if (!placeholderRow) throw new Error("Placeholder row is missing");
     fireEvent.click(within(placeholderRow).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "+ Add field" })));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add field" })));
     expect(screen.queryByRole("rowheader", { name: "key" })).toBeNull();
   });
 
@@ -116,6 +116,6 @@ describe("FrontmatterPanel", () => {
     expect(container.querySelector(".frontmatter-raw .frontmatter-code")?.textContent).toBe(
       "# authored note",
     );
-    expect(screen.queryByRole("button", { name: "+ Add field" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
   });
 });

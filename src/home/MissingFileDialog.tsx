@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { useRef } from "react";
+import { CircleHelp } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +51,11 @@ export function openMissingFileDialog(
   });
 }
 
+/**
+ * Mervin's message box for a Recent entry whose file is gone: the title as the
+ * first line, a question icon beside the main and informative text, and the
+ * buttons in GNOME order with the accent "Locate" rightmost and focused.
+ */
 function MissingFileDialog({ name, finish }: { name: string; finish(action: MissingFileAction): void }) {
   const locateRef = useRef<HTMLButtonElement>(null);
   return (
@@ -57,7 +63,11 @@ function MissingFileDialog({ name, finish }: { name: string; finish(action: Miss
       <DialogPortal>
         <DialogOverlay className={cn("dialog-overlay", dialogOverlayClassName)} />
         <DialogContent
-          className={cn("dialog missing-dialog", dialogContentClassName)}
+          className={cn(
+            "dialog missing-dialog",
+            dialogContentClassName,
+            "w-max min-w-[min(400px,92vw)] max-w-[min(560px,92vw)]",
+          )}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             locateRef.current?.focus();
@@ -66,25 +76,26 @@ function MissingFileDialog({ name, finish }: { name: string; finish(action: Miss
           <DialogTitle asChild>
             <h2 className={cn("dialog-title", dialogTitleClassName)}>File not found</h2>
           </DialogTitle>
-          <DialogDescription asChild>
-            <div className={cn("dialog-body", dialogBodyClassName)}>
-              <p className="missing-text mb-1.5 mt-0 text-sm">
-                &quot;{name}&quot; could not be found.
-              </p>
-              <p className="missing-subtext m-0 text-[13px] text-muted-foreground">
-                It may have been moved, renamed, or deleted.
-              </p>
-            </div>
-          </DialogDescription>
+          <div className="flex min-h-0 items-start gap-[13px] px-[22px] pb-5 pt-1">
+            <CircleHelp
+              aria-hidden="true"
+              focusable="false"
+              className="size-8 shrink-0 text-ink-soft"
+              absoluteStrokeWidth
+              strokeWidth={1.5}
+            />
+            <DialogDescription asChild>
+              <div className={cn("dialog-body", dialogBodyClassName, "min-w-0 px-0 pb-0 pt-1.5")}>
+                <p className="missing-text m-0 text-ink [overflow-wrap:anywhere]">
+                  &quot;{name}&quot; could not be found.
+                </p>
+                <p className="missing-subtext mb-0 mt-[7px] text-ink-soft">
+                  It may have been moved, renamed, or deleted.
+                </p>
+              </div>
+            </DialogDescription>
+          </div>
           <div className={cn("dialog-footer", dialogFooterClassName)}>
-            <Button
-              type="button"
-              variant="outline"
-              className={cn("dialog-btn", dialogButtonClassName)}
-              onClick={() => finish("cancel")}
-            >
-              Cancel
-            </Button>
             <Button
               type="button"
               variant="outline"
@@ -92,6 +103,14 @@ function MissingFileDialog({ name, finish }: { name: string; finish(action: Miss
               onClick={() => finish("remove")}
             >
               Remove from history
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className={cn("dialog-btn", dialogButtonClassName)}
+              onClick={() => finish("cancel")}
+            >
+              Cancel
             </Button>
             <Button
               ref={locateRef}
