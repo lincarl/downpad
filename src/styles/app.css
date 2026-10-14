@@ -1320,17 +1320,6 @@ body {
   max-width: min(var(--editor-width), calc(100% - 72px));
 }
 
-/* Narrow windows: the split buttons drop their labels before anything wraps. */
-@media (width <= 760px) {
-  .toolbar-file-label {
-    display: none;
-  }
-
-  .toolbar-file {
-    padding-right: 6px;
-  }
-}
-
 @media print {
   /* The sheets carry their own margins, so the paper itself gets none —
      otherwise the printer would add a second margin around our page boxes. */

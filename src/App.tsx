@@ -208,12 +208,12 @@ function Toolbar() {
           { label: "Copy as Markdown", icon: FileCode2, run: () => runtime?.copyDocumentMarkdown(), separatorBefore: true },
         ]}
       />
-      <ToolSeparator />
+      <ToolSeparator className="max-[574px]:hidden" />
       <ToggleGroup
         type="single"
         value={inEditor ? editorLayout : ""}
         disabled={!inEditor}
-        className="toolbar-view inline-flex"
+        className="toolbar-view inline-flex max-[574px]:hidden"
         aria-label="Editor view"
         onValueChange={(value) => {
           if (value) runtime?.selectLayout(value as EditorLayout);
@@ -239,12 +239,22 @@ function Toolbar() {
           );
         })}
       </ToggleGroup>
-      <ToolSeparator />
-      <ToolButton label="Decrease text size" disabled={!inEditor} onClick={() => runtime?.zoomDocument(-0.1)}>
+      <ToolSeparator className="max-[683px]:hidden" />
+      <ToolButton
+        className="max-[773px]:hidden"
+        label="Decrease text size"
+        disabled={!inEditor}
+        onClick={() => runtime?.zoomDocument(-0.1)}
+      >
         <Minus aria-hidden="true" {...ICON_STROKE} />
       </ToolButton>
-      <TextSizeControl disabled={!inEditor} scale={settings.editorFontScale} />
-      <ToolButton label="Increase text size" disabled={!inEditor} onClick={() => runtime?.zoomDocument(0.1)}>
+      <TextSizeControl className="max-[683px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
+      <ToolButton
+        className="max-[773px]:hidden"
+        label="Increase text size"
+        disabled={!inEditor}
+        onClick={() => runtime?.zoomDocument(0.1)}
+      >
         <Plus aria-hidden="true" {...ICON_STROKE} />
       </ToolButton>
       <ToolSeparator />
@@ -277,9 +287,9 @@ function Toolbar() {
 }
 
 /** A Mervin toolbar divider: a 1px hairline, 20px tall, centred in a 5px slot. */
-function ToolSeparator() {
+function ToolSeparator({ className }: { className?: string }) {
   return (
-    <Separator orientation="vertical" className="toolbar-sep mx-0.5 h-5 w-px shrink-0 bg-hairline" />
+    <Separator orientation="vertical" className={cn("toolbar-sep mx-0.5 h-5 w-px shrink-0 bg-hairline", className)} />
   );
 }
 
@@ -361,6 +371,7 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
 
 /** An icon-only toolbar button with a tooltip. `pressed` marks a toggle that is on. */
 function ToolButton({
+  className,
   label,
   tooltip = label,
   disabled,
@@ -368,6 +379,7 @@ function ToolButton({
   onClick,
   children,
 }: {
+  className?: string;
   label: string;
   tooltip?: string;
   disabled?: boolean;
@@ -381,7 +393,7 @@ function ToolButton({
         type="button"
         variant="tool"
         size="tool-icon"
-        className="toolbar-icon [&_svg]:size-5"
+        className={cn("toolbar-icon [&_svg]:size-5", className)}
         aria-label={label}
         aria-pressed={pressed}
         disabled={disabled}
@@ -446,12 +458,16 @@ function SplitButton({
       <ToolTip text={tooltip}>
         <button
           type="button"
-          className={cn(part, "toolbar-file gap-[5px] rounded-l-control pl-2.5 pr-0.5 text-[13px] leading-[18px]")}
+          className={cn(
+            part,
+            "toolbar-file gap-[5px] rounded-l-control pl-2.5 pr-0.5 text-[13px] leading-[18px] max-[849px]:pr-1",
+          )}
           disabled={disabled}
           onClick={onClick}
         >
           <Icon aria-hidden="true" className="size-5" {...ICON_STROKE} />
-          <span className="toolbar-file-label">{label}</span>
+          {/* Narrow windows keep the icon and drop the label before anything clips. */}
+          <span className="toolbar-file-label max-[849px]:hidden">{label}</span>
         </button>
       </ToolTip>
       <Popover open={open} onOpenChange={setOpen}>
@@ -488,7 +504,15 @@ function SplitButton({
 }
 
 /** The document text size readout, which opens a list of size presets like Mervin's zoom combo. */
-function TextSizeControl({ disabled, scale }: { disabled: boolean; scale: number }) {
+function TextSizeControl({
+  className,
+  disabled,
+  scale,
+}: {
+  className?: string;
+  disabled: boolean;
+  scale: number;
+}) {
   const runtime = useAppRuntime();
   const [open, setOpen] = useState(false);
   const current = Math.round(scale * 100);
@@ -502,6 +526,7 @@ function TextSizeControl({ disabled, scale }: { disabled: boolean; scale: number
               "zoom-readout relative flex h-[29px] w-24 shrink-0 cursor-pointer items-center justify-center rounded-control border border-line bg-well pr-5 pl-2 text-[13px] text-ink-primary outline-none",
               "hover:border-line-strong focus-visible:border-accent data-[state=open]:border-accent",
               "disabled:cursor-default disabled:border-line-disabled disabled:text-ink-disabled",
+              className,
             )}
             aria-label={`Document text size, ${current}%`}
             disabled={disabled}

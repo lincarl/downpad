@@ -354,7 +354,8 @@ async function createWindow(): Promise<void> {
   const icon = join(appRoot, "build", "icon.png");
   const window = new BrowserWindow({
     ...state, title: "md-easy", minWidth: 480, minHeight: 360,
-    backgroundColor: "#171719", show: false, autoHideMenuBar: true,
+    // Nord window chrome, the default dark theme, until the renderer paints.
+    backgroundColor: "#2e3440", show: false, autoHideMenuBar: true,
     icon: existsSync(icon) ? icon : undefined,
     webPreferences: {
       preload: join(appRoot, "electron-dist", "preload.cjs"),
