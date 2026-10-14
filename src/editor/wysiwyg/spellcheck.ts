@@ -1,5 +1,5 @@
 // Spell check toggle (spec §5.14). We don't ship a dictionary — this just flips
-// the `spellcheck` attribute on the editor's editable elements so WebView2's
+// the `spellcheck` attribute on the editor's editable elements so Chromium's
 // built-in checker (red squiggles + right-click suggestions) turns on/off.
 //
 // The attribute is inheritable, so setting it on the editor host covers both the

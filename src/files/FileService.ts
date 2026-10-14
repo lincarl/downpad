@@ -1,13 +1,14 @@
 // File lifecycle: new / open / save / save-as (spec §5.1) with multi-document
-// tabs (§5.19). Reads and writes go through the Rust commands (UTF-8, no BOM,
-// EOL preserved, atomic); dialogs use the Tauri dialog plugin. Opening reuses an
+// tabs (§5.19). Reads and writes go through Electron IPC (UTF-8, no BOM,
+// EOL preserved, atomic); dialogs use Electron native dialogs. Opening reuses an
 // empty untitled tab or focuses an already-open file; otherwise a new tab is
 // added. The active tab's document is the canonical markdown string; after it
 // changes the EditorPresenter re-shows it in the editor.
 
-import { open as openDialog, save as saveDialog, ask } from "@tauri-apps/plugin-dialog";
+import { openDialog, saveDialog, ask } from "../ipc/dialogs";
 import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
+import { sameFilePath } from "./pathIdentity";
 import { blankDoc, type DocumentState } from "../state/types";
 import type { Store } from "../state/store";
 
@@ -33,7 +34,17 @@ export interface EditorPresenter {
   reloadActiveDoc(): Promise<void>;
 }
 
+interface SaveRequest {
+  tabId: string;
+  snapshot: DocumentState;
+  expectedPath: string | null;
+  saveAs: boolean;
+}
+
 export class FileService {
+  private saveQueue: Promise<void> = Promise.resolve();
+  private pendingSaves = new Set<SaveRequest>();
+
   constructor(
     private readonly store: Store,
     private readonly present: EditorPresenter,
@@ -49,17 +60,24 @@ export class FileService {
   /**
    * Open a known path (drag-drop, the Recent view, launch args). If the file is
    * already open, focuses that tab; if the active tab is an empty untitled
-   * buffer, replaces it; otherwise opens a new tab.
+   * buffer, replaces it; otherwise opens a new tab. Reload rereads an existing
+   * tab from disk after confirming any unsaved changes.
    */
-  async openPath(path: string): Promise<void> {
+  async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
     this.present.flush();
 
     const existing = this.store.get().tabs.find((t) => samePath(t.doc.filePath, path));
-    if (existing) {
+    if (existing && !options.reload) {
       this.store.activateTab(existing.id);
       await this.present.showActiveDoc(); // focus the open tab — keep its undo
       this.recordOpened(path);
       return;
+    }
+
+    if (existing?.doc.isDirty) {
+      const label = path.split(/[\\/]/).pop() ?? path;
+      const discard = await this.confirmDiscard(`"${label}" has unsaved changes. Discard them and reload?`);
+      if (!discard) return;
     }
 
     const payload = await readFile(path);
@@ -70,9 +88,12 @@ export class FileService {
       hadBom: payload.hadBom,
       modifiedMs: payload.modifiedMs,
       isDirty: false,
-      frontmatterCollapsed: false,
+      frontmatterCollapsed: existing?.doc.frontmatterCollapsed ?? false,
     };
-    if (this.activeIsReusable()) this.store.replaceActiveDoc(doc);
+    if (existing) {
+      this.store.activateTab(existing.id);
+      this.store.replaceActiveDoc(doc);
+    } else if (this.activeIsReusable()) this.store.replaceActiveDoc(doc);
     else this.store.addTab(doc);
 
     await this.present.reloadActiveDoc(); // fresh content → fresh editor
@@ -89,7 +110,7 @@ export class FileService {
   /** Point the single backend watcher at the active document's file, or clear
    *  it for an untitled buffer. Call after the active tab changes (§5.1, §5.19). */
   watchActive(): void {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     const path = this.store.get().doc.filePath;
     if (path) void watchFile(path).catch((err) => console.error("md-easy: watch failed", err));
     else void unwatchFile().catch(() => {});
@@ -97,13 +118,13 @@ export class FileService {
 
   /** Watch a specific path (used by the recovery flow before the editor mounts). */
   watch(path: string): void {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     void watchFile(path).catch((err) => console.error("md-easy: watch failed", err));
   }
 
   /** Add/refresh the recent-files entry for a just-opened path (§5.8.1). */
   private recordOpened(path: string): void {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     void recordFileOpened(path, Date.now()).catch((err) =>
       console.error("md-easy: failed to record recent file", err),
     );
@@ -117,34 +138,63 @@ export class FileService {
   }
 
   /** Save to the current path, or fall back to Save As for an untitled buffer. */
-  async save(): Promise<boolean> {
-    const { doc } = this.store.get();
-    if (!doc.filePath) return this.saveAs();
-    const meta = await writeFile(doc.filePath, doc.markdown, doc.eol);
-    this.markSaved(meta.modifiedMs);
-    return true;
+  save(): Promise<boolean> {
+    return this.queueSave(false);
   }
 
-  async saveAs(): Promise<boolean> {
-    const { doc } = this.store.get();
-    const path = await saveDialog({
-      filters: MD_FILTERS,
-      defaultPath: doc.filePath ?? "Untitled.md",
-    });
+  saveAs(): Promise<boolean> {
+    return this.queueSave(true);
+  }
+
+  /** Capture the requested buffer now, then order saves and Save As dialogs. */
+  private queueSave(saveAs: boolean): Promise<boolean> {
+    const { doc, activeTabId } = this.store.get();
+    if (!activeTabId) return Promise.resolve(false);
+    const request = { tabId: activeTabId, snapshot: doc, expectedPath: doc.filePath, saveAs };
+    this.pendingSaves.add(request);
+    const operation = this.saveQueue.then(() => this.saveSnapshot(request))
+      .finally(() => this.pendingSaves.delete(request));
+    // A failed or cancelled operation must not prevent a subsequent save.
+    this.saveQueue = operation.then(() => {}, () => {});
+    return operation;
+  }
+
+  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs }: SaveRequest): Promise<boolean> {
+    const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!current || current.filePath !== expectedPath) return false;
+    const originalPath = current.filePath;
+    let path = originalPath;
+    const choosePath = saveAs || !path;
+    if (choosePath) {
+      path = await saveDialog({ filters: MD_FILTERS, defaultPath: originalPath ?? "Untitled.md" });
+      const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+      if (!path || !afterDialog || afterDialog.filePath !== originalPath) return false;
+    }
     if (!path) return false;
-    const meta = await writeFile(path, doc.markdown, doc.eol);
-    this.store.patchDoc({ filePath: path });
-    this.markSaved(meta.modifiedMs);
-    this.recordOpened(path);
-    this.watch(path);
+    const meta = await writeFile(path, snapshot.markdown, snapshot.eol);
+    this.markSaved(tabId, snapshot, originalPath, path, meta.modifiedMs);
+    if (choosePath) this.recordOpened(path);
     return true;
   }
 
-  /** Record a save: clear dirty, remember the on-disk mtime (suppresses the
-   *  watcher's self-write event, §5.1), and update the status bar. */
-  private markSaved(modifiedMs: number): void {
-    this.store.patchDoc({ isDirty: false, modifiedMs });
-    this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
+  /** Apply saved metadata to its owner, keeping later edits dirty. */
+  private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, modifiedMs: number): void {
+    const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!current || current.filePath !== originalPath) return;
+    this.store.patchDocById(tabId, {
+      filePath: path,
+      isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
+      modifiedMs,
+    });
+    // Requests queued during Save As follow the owner's new path, retaining
+    // the content each caller asked to save.
+    for (const pending of this.pendingSaves) {
+      if (pending.tabId === tabId && pending.expectedPath === originalPath) pending.expectedPath = path;
+    }
+    if (this.store.get().activeTabId === tabId) {
+      this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
+      if (path !== originalPath) this.watch(path);
+    }
   }
 
   /** Whether any open tab has unsaved changes (window-close guard, §5.19). */
@@ -174,9 +224,8 @@ export class FileService {
   }
 }
 
-/** Normalized path comparison for tab dedup (Windows is case-insensitive). */
+/** Compare saved paths without merging distinct files on POSIX filesystems. */
 function samePath(a: string | null, b: string | null): boolean {
   if (!a || !b) return false;
-  const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
-  return norm(a) === norm(b);
+  return sameFilePath(a, b);
 }

@@ -1,5 +1,5 @@
-// Classifies a file dropped from Explorer (spec §5.4). Tauri's drag-drop gives
-// us file *paths* (not File objects), so classification is by extension:
+// Classifies a file dropped from the desktop (spec §5.4). Electron's preload
+// resolves dropped File objects to paths, so classification is by extension:
 //   - markdown → open it
 //   - image    → embed (base64 or attachment, per imageStore)
 //   - other    → copy into the attachments folder and link

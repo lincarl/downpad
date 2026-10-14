@@ -5,7 +5,7 @@
 // handler (imageView.ts). All mutations go through ProseMirror transactions.
 //
 // "Copy image" uses the DOM clipboard (ClipboardItem) per design risk #9 — no
-// Rust command needed — normalizing to image/png via a canvas.
+// native command needed — normalizing to image/png via a canvas.
 
 import { $prose } from "@milkdown/kit/utils";
 import { Plugin, PluginKey } from "@milkdown/kit/prose/state";

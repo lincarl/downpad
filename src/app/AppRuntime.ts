@@ -8,14 +8,15 @@ import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
 import { readImageBytes, writeAttachment } from "../ipc/commands";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
 import { classifyDrop, baseName } from "../paste/dropHandler";
 import { mdLink, mdImage } from "../paste/mdLink";
 import { resolveImageSrc, type ImageStoreContext } from "../images/imageStore";
 import { FindBar } from "../editor/wysiwyg/findBar";
 import { RecentView } from "../home/RecentView";
 import { createIpcRecentDataSource } from "../home/recentData";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openDialog } from "../ipc/dialogs";
+import { desktopBridge } from "../ipc/bridge";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
 import { layoutFromDefaultView } from "../state/types";
@@ -24,7 +25,7 @@ import { preparePrintJob } from "../print/printDocument";
 import { PrintWorkspace } from "../print/PrintWorkspace";
 import { installAppShortcuts } from "./installAppShortcuts";
 import { StartupCoordinator } from "./StartupCoordinator";
-import { TauriEventBindings } from "./TauriEventBindings";
+import { DesktopEventBindings } from "./DesktopEventBindings";
 
 export interface AppRuntimeHosts {
   editorArea: HTMLElement;
@@ -45,7 +46,7 @@ export class AppRuntime {
   private readonly scheduler: SnapshotScheduler;
   private readonly printWorkspace: PrintWorkspace;
   private readonly startup: StartupCoordinator;
-  private readonly tauriEvents: TauriEventBindings;
+  private readonly desktopEvents: DesktopEventBindings;
   private switchingView = false;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
@@ -82,7 +83,7 @@ export class AppRuntime {
     // offers the editing commands over editable text and the document actions
     // (Copy as Markdown, Print) everywhere, instead of the browser-level entries
     // the native menu carries. Shift+right-click still opens the native menu so
-    // WebView2's spell-check suggestions stay reachable (§5.14).
+    // Chromium's spell-check suggestions stay reachable (§5.14).
     this.cleanups.push(installDocumentContextMenu({
       hasDocument: () => this.store.get().activeTabId !== null,
       print: () => void this.printActiveDocument(),
@@ -102,7 +103,7 @@ export class AppRuntime {
       settings: this.settingsModel,
       isDisposed: () => this.disposed,
     });
-    this.tauriEvents = new TauriEventBindings({
+    this.desktopEvents = new DesktopEventBindings({
       store,
       files: this.files,
       editorHost: this.editorHost,
@@ -134,7 +135,7 @@ export class AppRuntime {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.tauriEvents.dispose();
+    this.desktopEvents.dispose();
     this.startup.dispose();
     this.scheduler.stop();
     this.printWorkspace.close();
@@ -202,7 +203,7 @@ export class AppRuntime {
   }
 
   handleBannerAction(id: string): void {
-    this.tauriEvents.handleBannerAction(id);
+    this.desktopEvents.handleBannerAction(id);
   }
 
   dismissBanner(): void {
@@ -271,7 +272,7 @@ export class AppRuntime {
       create: () => this.run(() => this.files.newDocument()),
       print: () => void this.printActiveDocument(),
     }));
-    this.tauriEvents.start();
+    this.desktopEvents.start();
     // First desktop launch only: offer to make md-easy the default .md app.
     void this.startup.maybePromptDefaultHandler();
   }
@@ -415,7 +416,7 @@ export class AppRuntime {
    *  left over from the previously active file (§5.1, §5.19). */
   private afterActiveDocChanged(): void {
     this.store.set({ banner: null });
-    this.tauriEvents.resetPendingChange();
+    this.desktopEvents.resetPendingChange();
     this.files.watchActive();
   }
 
@@ -437,7 +438,7 @@ export class AppRuntime {
 
   /** File picker for the Recent view's Locate action (§5.8). */
   private async pickMarkdownFile(): Promise<string | null> {
-    if (!isTauri()) return null;
+    if (!isElectron()) return null;
     const selected = await openDialog({
       multiple: false,
       filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
@@ -447,10 +448,9 @@ export class AppRuntime {
 
   /** Reveal a file (selected) in Explorer (§5.8 row context menu). */
   private async reveal(path: string): Promise<void> {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     try {
-      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-      await revealItemInDir(path);
+      await desktopBridge().revealItemInFolder(path);
     } catch {
       // ignore
     }

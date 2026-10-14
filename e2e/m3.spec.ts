@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // M3: frontmatter table (§5.17) and the settings dialog (§5.9). Runs in a plain
-// browser; settings persistence (Tauri) is a no-op here, but the in-app apply
+// browser; settings persistence (Electron) is a no-op here, but the in-app apply
 // path still runs.
 
 const wysiwyg = ".milkdown .ProseMirror";

@@ -16,7 +16,8 @@ import { Plugin, PluginKey } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
-import { isTauri } from "../../ipc/env";
+import { isElectron } from "../../ipc/env";
+import { desktopBridge } from "../../ipc/bridge";
 import { resolveMarkdownLinkTarget } from "../../images/pathResolve";
 import type { WysiwygContext } from "./context";
 
@@ -102,8 +103,8 @@ function hrefAt(doc: ProseNode, pos: number): string | null {
 }
 
 function openExternally(href: string): void {
-  if (isTauri()) {
-    void import("@tauri-apps/plugin-opener").then((m) => m.openUrl(href)).catch(() => {});
+  if (isElectron()) {
+    void desktopBridge().openExternal(href).catch(() => {});
   } else {
     window.open(href, "_blank", "noopener");
   }

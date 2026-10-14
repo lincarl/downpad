@@ -2,7 +2,7 @@
 // Keeping startup policy here makes AppRuntime a lifecycle coordinator rather
 // than the place where recovery, launch arguments, and first-run policy live.
 
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask } from "../ipc/dialogs";
 import { loadDocument } from "../document/DocumentModel";
 import type { EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
@@ -14,7 +14,7 @@ import {
   openDefaultAppsSettings,
 } from "../ipc/commands";
 import type { Snapshot } from "../ipc/contracts";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
 import { RecoveryDialog } from "../recovery/RecoveryDialog";
 import type { SettingsModel } from "../settings/SettingsModel";
 import type { Store } from "../state/store";
@@ -44,7 +44,7 @@ export class StartupCoordinator {
    *  document and therefore always lands in the editor. */
   async resolve(): Promise<boolean> {
     if (this.dependencies.isDisposed()) return false;
-    if (!isTauri()) return true;
+    if (!isElectron()) return true;
 
     const { store } = this.dependencies;
     // The seed document is a browser/e2e convenience. The desktop app starts
@@ -79,7 +79,7 @@ export class StartupCoordinator {
   /** Offer the Windows default-app settings once, without delaying startup. */
   async maybePromptDefaultHandler(): Promise<void> {
     const { store, settings, isDisposed } = this.dependencies;
-    if (isDisposed() || !isTauri()) return;
+    if (isDisposed() || !isElectron() || window.mdEasy?.platform !== "win32") return;
     const current = store.get().settings;
     if (current.hasCheckedDefaultHandler) return;
 

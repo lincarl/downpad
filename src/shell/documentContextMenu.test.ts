@@ -126,7 +126,7 @@ describe("installDocumentContextMenu", () => {
     expect(result.menu).toBe(true);
   });
 
-  it("lets Shift+right-click through so WebView2 spell-check suggestions survive (§5.14)", () => {
+  it("lets Shift+right-click through so Chromium spell-check suggestions survive (§5.14)", () => {
     const editable = document.createElement("div");
     editable.className = "ProseMirror";
     document.body.appendChild(editable);

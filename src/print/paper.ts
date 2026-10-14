@@ -4,8 +4,8 @@
 // disagree about how much room a page has.
 //
 // CSS pixels are the layout unit (96 px = 1 in, the CSS reference DPI that
-// Chromium/WebView2 lays print pages out in); inches are carried alongside for
-// the native WebView2 print settings, which are specified in inches.
+// Chromium lays print pages out in); inches are carried alongside for Electron's
+// native printer and PDF settings.
 
 export type PaperSize = "a4" | "letter" | "legal" | "a5";
 export type Orientation = "portrait" | "landscape";

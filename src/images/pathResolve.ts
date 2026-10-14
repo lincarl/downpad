@@ -1,5 +1,5 @@
 // Resolving a markdown `src`/`href` to an absolute filesystem path (spec §5.5,
-// §5.6, §5.7). Used to (a) display linked/relative images via the Tauri asset
+// §5.6, §5.7). Used to (a) display linked/relative images via the Electron asset
 // protocol, (b) read image bytes for "Copy image", and (c) decide whether a
 // double-clicked link points at a local markdown file to open in a tab
 // (resolveMarkdownLinkTarget). Pure string logic so it's testable; the actual

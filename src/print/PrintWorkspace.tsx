@@ -7,13 +7,13 @@
 // scaled-down size, so "what you see is the sheet". Changing any option
 // re-paginates immediately.
 
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { saveDialog } from "../ipc/dialogs";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
 import { listPrinters, printWebview, printWebviewToPdf } from "../ipc/commands";
 import { onPrintCompleted } from "../ipc/events";
 import type { NativePrintOptions, PrinterInfo } from "../ipc/contracts";
@@ -271,7 +271,7 @@ export class PrintWorkspace {
       pageRange: this.pageRange,
       summary: this.summaryText,
       status: this.statusText,
-      tauri: isTauri(),
+      electron: isElectron(),
     };
     for (const listener of this.listeners) listener();
   }
@@ -389,7 +389,7 @@ export class PrintWorkspace {
 
   private async print(): Promise<void> {
     await this.withPrintDom(async () => {
-      if (!isTauri()) {
+      if (!isElectron()) {
         // Browser dev builds have no backend: fall back to the browser dialog.
         await this.runBrowserPrint();
         return;
@@ -397,8 +397,7 @@ export class PrintWorkspace {
       try {
         await this.runNative(() => printWebview(this.nativeOptions()), "Printing…");
       } catch (err) {
-        // The backend print path is unavailable (older WebView2 runtime, or the
-        // command failed to start). Printing the sheets through the browser
+        // The backend print command failed to start. Printing through the browser
         // dialog still produces the right pages — it just shows one more dialog.
         console.error("md-easy: native print unavailable, using the browser dialog", err);
         if (this.host) await this.runBrowserPrint();
@@ -407,7 +406,7 @@ export class PrintWorkspace {
   }
 
   private async saveAsPdf(): Promise<void> {
-    if (!isTauri()) {
+    if (!isElectron()) {
       this.flash("Save as PDF needs the installed app.");
       return;
     }
@@ -457,7 +456,7 @@ export class PrintWorkspace {
   }
 
   /** Start a backend print job and wait for its `print-completed` event. The
-   *  listener has to be in place before the job starts — Tauri events aren't
+   *  listener has to be in place before the job starts. Electron events aren't
    *  buffered — so it is torn down explicitly if the job never starts. */
   private async runNative(start: () => Promise<void>, label: string): Promise<void> {
     this.setStatus(label);
@@ -505,7 +504,7 @@ export class PrintWorkspace {
   }
 
   private async loadPrinters(openedHost: HTMLElement | null): Promise<void> {
-    if (!isTauri()) return;
+    if (!isElectron()) return;
     const printers = await listPrinters().catch(() => []);
     if (!openedHost || this.host !== openedHost || !this.settings) return;
     this.printers = printers;
@@ -610,7 +609,7 @@ interface PrintWorkspaceSnapshot {
   pageRange: string;
   summary: string;
   status: string;
-  tauri: boolean;
+  electron: boolean;
 }
 
 interface PrintWorkspaceViewProps {
@@ -700,7 +699,7 @@ function PrintWorkspaceView({
 
         <PrintSection heading="Printer">
           <PrintRow label="Printer">
-            {view.tauri ? (
+            {view.electron ? (
               <SelectControl
                 name="Printer"
                 options={printerOptions}

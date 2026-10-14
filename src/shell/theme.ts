@@ -7,7 +7,8 @@
 // OS for the UI (and, when the document follows the UI, for the document too).
 
 import type { Settings } from "../state/types";
-import { isTauri } from "../ipc/env";
+import { isElectron } from "../ipc/env";
+import { desktopBridge } from "../ipc/bridge";
 
 let disposeActiveSystemTheme: (() => void) | null = null;
 
@@ -58,9 +59,8 @@ export function applyTheme(
 
 /** Keep Windows/macOS native title chrome on the same palette as the webview. */
 function syncNativeWindowTheme(theme: "light" | "dark"): void {
-  if (!isTauri()) return;
-  void import("@tauri-apps/api/window")
-    .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(theme))
+  if (!isElectron()) return;
+  void desktopBridge().setTheme(theme)
     .catch(() => {
       // Theme sync is cosmetic; startup and editing must remain usable if the
       // platform does not implement it or the window is already closing.

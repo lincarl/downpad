@@ -1,6 +1,6 @@
-// Typed wrappers over Tauri's invoke(), one per #[command]. See docs/design.md §3.
+// Typed wrappers over the isolated Electron preload API. See docs/design.md §3.
 
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { desktopBridge, invoke } from "./bridge";
 import type { Eol, RecentEntry, Settings } from "../state/types";
 import type {
   DefaultHandler,
@@ -57,7 +57,7 @@ export function writeAttachment(
   fileName: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  // Vec<u8> on the Rust side; a plain number array deserializes unambiguously.
+  // A plain number array crosses the isolated preload boundary without casts.
   return invoke("write_attachment", { docPath, folderName, fileName, bytes: Array.from(bytes) });
 }
 
@@ -91,17 +91,22 @@ export function statFiles(paths: string[]): Promise<FileStat[]> {
   return invoke("stat_files", { paths });
 }
 
-// ── Content search (§5.8 "Inside documents") — streams over a channel ──
+// Content search streams matching files and progress through desktop events.
 
-export { Channel };
-
-export function searchRecentContents(
+export async function searchRecentContents(
   searchId: string,
   query: string,
   opts: SearchOpts,
-  onResult: Channel<SearchHit>,
+  onResult: (hit: SearchHit) => void,
 ): Promise<SearchSummary> {
-  return invoke("search_recent_contents", { searchId, query, opts, onResult });
+  const unlisten = desktopBridge().listen("search-result", (result) => {
+    if (result.searchId === searchId) onResult(result.hit);
+  });
+  try {
+    return await invoke("search_recent_contents", { searchId, query, opts });
+  } finally {
+    unlisten();
+  }
 }
 
 export function cancelSearch(searchId: string): Promise<void> {
@@ -157,7 +162,7 @@ export function settingsPath(): Promise<string> {
 }
 
 // ── Printing (§5.21) ──────────────────────────────────────────────────────
-// md-easy prints through WebView2 directly instead of `window.print()`, so the
+// md-easy prints through Electron directly instead of `window.print()`, so the
 // browser's own print dialog — and the URL/date header it stamps on every sheet —
 // never appears. Both commands start the job and return; completion arrives as
 // the `print-completed` event (see ipc/events.ts).
