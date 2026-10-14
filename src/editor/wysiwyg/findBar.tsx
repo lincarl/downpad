@@ -4,13 +4,15 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Search } from "lucide-react";
+import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import type { FindCounts, FindOptions } from "./findEngine";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { fieldClassName } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
 
@@ -27,19 +29,31 @@ export interface FindController {
 interface FindBarHandle {
   show(mode: "find" | "replace"): void;
   close(): void;
+  refresh(): void;
   next(): void;
   prev(): void;
 }
 
-/** Permanent application search strip. Ctrl+F focuses the already-visible input;
- * Ctrl+H expands its replace row without replacing the shell chrome. */
+/**
+ * The find card: Mervin's floating search panel over the top right of the
+ * document. Ctrl+F (or the toolbar's Find button) opens it with the field
+ * focused, Ctrl+H adds the replace row, and Escape or Close hides it, clears
+ * the highlights and returns focus to the document. The query and options
+ * survive closing, so reopening searches again.
+ */
 export class FindBar {
   private readonly host = document.createElement("div");
   private readonly root: Root;
   private handle: FindBarHandle | null = null;
+  private open = false;
 
-  constructor(parent: HTMLElement, controller: FindController) {
+  constructor(
+    parent: HTMLElement,
+    controller: FindController,
+    private readonly onOpenChange: (open: boolean) => void = () => {},
+  ) {
     this.host.dataset.reactFindBar = "";
+    this.host.className = "contents";
     parent.append(this.host);
     this.root = createRoot(this.host);
     flushSync(() => {
@@ -49,22 +63,35 @@ export class FindBar {
             this.handle = handle;
           }}
           controller={controller}
+          onOpenChange={(open) => this.setOpen(open)}
         />,
       );
     });
   }
 
   isOpen(): boolean {
-    return true;
+    return this.open;
   }
 
+  /** Open the card in find or replace mode and focus its field. */
   show(mode: "find" | "replace"): void {
     this.handle?.show(mode);
   }
 
-  /** Clears transient search state but deliberately keeps the strip mounted. */
+  /** Open the card, or close it when it is already open (the toolbar button). */
+  toggle(): void {
+    if (this.open) this.close();
+    else this.show("find");
+  }
+
+  /** Hide the card, clear the highlights and return focus to the document. */
   close(): void {
     this.handle?.close();
+  }
+
+  /** Search again in the editor that is now visible, keeping the card open. */
+  refresh(): void {
+    this.handle?.refresh();
   }
 
   next(): void {
@@ -80,6 +107,12 @@ export class FindBar {
     this.handle = null;
     disposeReactRoot(this.root, this.host);
   }
+
+  private setOpen(open: boolean): void {
+    if (this.open === open) return;
+    this.open = open;
+    this.onOpenChange(open);
+  }
 }
 
 const DEFAULT_OPTIONS: FindOptions = {
@@ -88,144 +121,217 @@ const DEFAULT_OPTIONS: FindOptions = {
   regex: false,
 };
 
-const FIND_BUTTON_CLASS =
-  "find-btn h-[28px] rounded-[4px] border border-transparent bg-transparent px-2 py-0 font-[var(--font-ui)] text-[12px] font-normal text-[var(--muted-fg)] hover:bg-[var(--toolbar-hover)] hover:text-[var(--chrome-fg)] focus-visible:ring-1 disabled:pointer-events-none disabled:opacity-45";
+/** The card's 28px icon buttons: transparent until hovered, glyph in the toolbar ink. */
+const ICON_BUTTON_CLASS = cn(
+  "find-btn size-7 border-transparent p-0 text-ink-body",
+  "focus-visible:outline-1 focus-visible:-outline-offset-1 [&_svg]:size-4",
+);
 
-const FindBarView = forwardRef<FindBarHandle, { controller: FindController }>(
-  function FindBarView({ controller }, ref) {
-    const [mode, setMode] = useState<"find" | "replace">("find");
-    const [query, setQuery] = useState("");
-    const [replacement, setReplacement] = useState("");
-    const [options, setOptions] = useState(DEFAULT_OPTIONS);
-    const [counts, setCounts] = useState<FindCounts>({ current: 0, total: 0 });
-    const inputRef = useRef<HTMLInputElement>(null);
+/** The card's text buttons in the replace row. */
+const TEXT_BUTTON_CLASS = "find-btn find-btn-text h-[29px] px-3";
 
-    const apply = (next: FindCounts) => setCounts(next);
-    const close = () => {
-      setMode("find");
-      setQuery("");
+const FindBarView = forwardRef<
+  FindBarHandle,
+  { controller: FindController; onOpenChange(open: boolean): void }
+>(function FindBarView({ controller, onOpenChange }, ref) {
+  const [open, setOpenState] = useState(false);
+  const [mode, setMode] = useState<"find" | "replace">("find");
+  const [query, setQuery] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [options, setOptions] = useState(DEFAULT_OPTIONS);
+  const [counts, setCounts] = useState<FindCounts>({ current: 0, total: 0 });
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    onOpenChange(next);
+  };
+  const apply = (next: FindCounts) => setCounts(next);
+  const runSearch = (value = query, opts = options) => apply(controller.search(value, opts));
+  const close = () => {
+    setMode("find");
+    controller.clear();
+    setCounts({ current: 0, total: 0 });
+    setOpen(false);
+    controller.focusEditor();
+  };
+
+  useImperativeHandle(ref, () => ({
+    show(nextMode) {
+      flushSync(() => {
+        setMode(nextMode);
+        setOpen(true);
+      });
+      inputRef.current?.focus();
+      inputRef.current?.select();
+      if (query) runSearch();
+    },
+    close: () => flushSync(close),
+    refresh() {
       controller.clear();
       setCounts({ current: 0, total: 0 });
-      controller.focusEditor();
-    };
-    const runSearch = (value = query, opts = options) => apply(controller.search(value, opts));
+      if (open && query) runSearch();
+    },
+    next: () => apply(controller.next()),
+    prev: () => apply(controller.prev()),
+  }));
 
-    useImperativeHandle(ref, () => ({
-      show(nextMode) {
-        flushSync(() => setMode(nextMode));
-        inputRef.current?.focus();
-        inputRef.current?.select();
-        if (query) runSearch();
-      },
-      close,
-      next: () => apply(controller.next()),
-      prev: () => apply(controller.prev()),
-    }));
+  const countText = !query
+    ? ""
+    : counts.total
+      ? `${counts.current} of ${counts.total}`
+      : "No results";
+  const noMatches = !query || !counts.total;
 
-    const countText = !query
-      ? ""
-      : counts.total
-        ? `${counts.current} of ${counts.total}`
-        : "No results";
+  // Escape closes the card from any of its controls; the editor never sees the
+  // keys the card handles.
+  const onCardKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  };
+  const onFindKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    apply(event.shiftKey ? controller.prev() : controller.next());
+  };
+  const toggle = (key: keyof FindOptions) => {
+    const next = { ...options, [key]: !options[key] };
+    setOptions(next);
+    runSearch(query, next);
+    // Clicking an option keeps the caret in the field, as in Mervin.
+    inputRef.current?.focus();
+  };
 
-    const onFindKey = (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        apply(event.shiftKey ? controller.prev() : controller.next());
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        close();
-      }
-    };
-
-    const toggle = (key: keyof FindOptions) => {
-      const next = { ...options, [key]: !options[key] };
-      setOptions(next);
-      runSearch(query, next);
-    };
-
-    return (
-      <div className="find-bar flex h-full min-w-0 flex-col border-b border-[var(--chrome-border)] bg-[var(--findbar-bg)]">
-        <div className="find-row flex h-[38px] min-w-0 items-center gap-[6px] px-[6px] py-[5px]">
-          <label className="find-field flex h-[28px] w-[199px] shrink-0 items-center gap-3 rounded-[6px] border border-[var(--input-border)] bg-[var(--control-bg)] px-2 text-[var(--muted-fg)]">
-            <Search aria-hidden="true" className="size-4 shrink-0" />
-            <Input
-              ref={inputRef}
-              type="text"
-              className="find-input h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-[12px] text-[var(--chrome-fg)] shadow-none outline-none focus-visible:ring-0"
-              placeholder="Find in document"
-              aria-label="Find in document"
-              value={query}
-              onChange={(event) => {
-                const value = event.target.value;
-                setQuery(value);
-                runSearch(value);
-              }}
-              onKeyDown={onFindKey}
-            />
-          </label>
+  return (
+    <div
+      className={cn(
+        "find-bar pointer-events-auto flex flex-col gap-1.5 rounded-[10px] border bg-popover py-[7px] pr-[5px] pl-[7px] text-[13px] text-ink",
+        "border-line-popover dark:border-line-strong",
+      )}
+      role="search"
+      aria-label="Find in document"
+      hidden={!open}
+      onKeyDown={onCardKey}
+    >
+      <div className="find-row flex items-center gap-0.5">
+        <label
+          className={cn(
+            fieldClassName,
+            "find-field relative flex w-[236px] min-w-0 shrink-0 cursor-text items-center gap-0 border-line-popover-control px-0",
+            // A 2px accent ring while focused, drawn outside so the text never moves.
+            "focus-within:border-accent focus-within:outline-1 focus-within:outline-accent",
+          )}
+        >
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1.5 size-4 text-ink-faint"
+            absoluteStrokeWidth
+            strokeWidth={1}
+          />
+          <input
+            ref={inputRef}
+            type="text"
+            className="find-input h-full min-w-0 flex-1 border-0 bg-transparent pr-2 pl-[30px] text-[13px] text-ink-primary outline-none placeholder:text-ink-faint"
+            placeholder="Find in document"
+            aria-label="Find in document"
+            value={query}
+            onChange={(event) => {
+              const value = event.target.value;
+              setQuery(value);
+              runSearch(value);
+            }}
+            onKeyDown={onFindKey}
+          />
           <span
-            className="find-count flex h-[28px] min-w-16 items-center justify-center text-center text-[12px] text-[var(--muted-fg)]"
+            className="find-count shrink-0 pr-2 whitespace-nowrap text-ink-soft empty:hidden"
             aria-live="polite"
           >
             {countText}
           </span>
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn(FIND_BUTTON_CLASS, "find-prev")}
-            disabled={!query || !counts.total}
-            onClick={() => apply(controller.prev())}
-          >
-            Previous
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            className={FIND_BUTTON_CLASS}
-            disabled={!query || !counts.total}
-            onClick={() => apply(controller.next())}
-          >
-            Next
-          </Button>
-          <FindToggle label="Match case" active={options.caseSensitive} onClick={() => toggle("caseSensitive")} />
-          <FindToggle label="Whole word" active={options.wholeWord} onClick={() => toggle("wholeWord")} />
-        </div>
-        <div
-          className="find-row find-replace-row flex min-h-[38px] items-center gap-2 border-t border-[var(--chrome-border)] px-[214px] py-[5px]"
-          hidden={mode !== "replace"}
+        </label>
+        <span className="w-1" />
+        <Button
+          type="button"
+          variant="ghost"
+          className={cn(ICON_BUTTON_CLASS, "find-prev")}
+          title="Previous match (Shift+Enter)"
+          aria-label="Previous match"
+          disabled={noMatches}
+          onClick={() => apply(controller.prev())}
         >
-          <Input
-            type="text"
-            className="find-input h-[28px] w-[200px] min-w-0 rounded-[6px] border border-[var(--input-border)] bg-[var(--control-bg)] px-2 text-[12px] text-[var(--chrome-fg)]"
-            placeholder="Replace"
-            value={replacement}
-            onChange={(event) => setReplacement(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") close();
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn(FIND_BUTTON_CLASS, "find-btn-text px-2.5")}
-            onClick={() => apply(controller.replaceCurrent(replacement, query, options))}
-          >
-            Replace
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn(FIND_BUTTON_CLASS, "find-btn-text px-2.5")}
-            onClick={() => apply(controller.replaceAll(replacement, query, options))}
-          >
-            All
-          </Button>
-        </div>
+          <ChevronUp aria-hidden="true" absoluteStrokeWidth strokeWidth={1} />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className={cn(ICON_BUTTON_CLASS, "find-next")}
+          title="Next match (Enter)"
+          aria-label="Next match"
+          disabled={noMatches}
+          onClick={() => apply(controller.next())}
+        >
+          <ChevronDown aria-hidden="true" absoluteStrokeWidth strokeWidth={1} />
+        </Button>
+        <CardSeparator />
+        <FindToggle label="Match case" active={options.caseSensitive} onClick={() => toggle("caseSensitive")} />
+        <span className="w-2.5" />
+        <FindToggle label="Whole word" active={options.wholeWord} onClick={() => toggle("wholeWord")} />
+        <CardSeparator />
+        <Button
+          type="button"
+          variant="ghost"
+          className="find-close size-7 border-transparent p-0 text-ink-soft [&_svg]:size-4"
+          title="Close (Esc)"
+          aria-label="Close find"
+          onClick={close}
+        >
+          <X aria-hidden="true" absoluteStrokeWidth strokeWidth={1} />
+        </Button>
       </div>
-    );
-  },
-);
+      <div className="find-row find-replace-row flex items-center gap-1.5" hidden={mode !== "replace"}>
+        <input
+          type="text"
+          className={cn(fieldClassName, "find-input w-[236px] min-w-0 border-line-popover-control")}
+          placeholder="Replace with"
+          aria-label="Replace with"
+          value={replacement}
+          onChange={(event) => setReplacement(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            apply(controller.replaceCurrent(replacement, query, options));
+          }}
+        />
+        <span className="w-0.5" />
+        <Button
+          type="button"
+          variant="outline"
+          className={TEXT_BUTTON_CLASS}
+          disabled={noMatches}
+          onClick={() => apply(controller.replaceCurrent(replacement, query, options))}
+        >
+          Replace
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className={TEXT_BUTTON_CLASS}
+          disabled={noMatches}
+          onClick={() => apply(controller.replaceAll(replacement, query, options))}
+        >
+          Replace all
+        </Button>
+      </div>
+    </div>
+  );
+});
+
+/** A 1x18px divider between the card's control groups. */
+function CardSeparator(): ReactNode {
+  return <span aria-hidden="true" className="mx-2 h-[18px] w-px shrink-0 bg-line" />;
+}
 
 function FindToggle({
   label,
@@ -237,8 +343,12 @@ function FindToggle({
   onClick(): void;
 }) {
   return (
-    <label className="find-toggle flex h-[28px] cursor-pointer items-center gap-1.5 whitespace-nowrap text-[12px] text-[var(--chrome-fg)]">
-      <input type="checkbox" checked={active} onChange={onClick} />
+    <label className="find-toggle flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink dark:text-ink-soft">
+      <Checkbox
+        checked={active}
+        onChange={onClick}
+        onMouseDown={(event) => event.preventDefault()}
+      />
       <span>{label}</span>
     </label>
   );

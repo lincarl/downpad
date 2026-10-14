@@ -47,6 +47,8 @@
   --color-line-popover-control: var(--line-popover-control);
   --color-line-notice: var(--line-notice);
   --color-line-menu: var(--line-menu);
+  --color-line-toolbar: var(--line-toolbar);
+  --color-line-chrome-row: var(--line-chrome-row);
   --color-line-tool: var(--line-tool);
   --color-line-tool-strong: var(--line-tool-strong);
   --color-line-tool-disabled: var(--line-tool-disabled);
@@ -101,6 +103,10 @@
   --line-popover: rgb(31 42 55 / 35%);
   --line-popover-control: rgb(31 42 55 / 35%);
   --line-menu: var(--line-popover);
+
+  /* Chrome row edges: light keeps the toolbar open to the tab row. */
+  --line-toolbar: transparent;
+  --line-chrome-row: var(--line);
   --hover: rgb(31 42 55 / 7%);
   --pressed: rgb(31 42 55 / 13%);
   --row-hover: rgb(31 42 55 / 6%);
@@ -209,6 +215,8 @@
   --line-popover: rgb(236 239 244 / 17%);
   --line-popover-control: rgb(236 239 244 / 24%);
   --line-menu: var(--line);
+  --line-toolbar: var(--line-bar);
+  --line-chrome-row: var(--line-bar);
   --hover: rgb(236 239 244 / 8%);
   --pressed: rgb(236 239 244 / 12%);
   --row-hover: rgb(236 239 244 / 7%);
@@ -399,16 +407,6 @@ body {
 
 #app {
   height: 100vh;
-}
-
-:root[data-theme="dark"] .tab-close:hover {
-  background: rgb(255 255 255 / 18%);
-}
-
-:root[data-theme="dark"] .banner:not([data-kind="error"]) {
-  background: #3a3320;
-  color: #f0e6c0;
-  border-bottom-color: #5a4f2a;
 }
 
 /* Match highlights painted by the find plugin's decorations. */
@@ -1308,403 +1306,28 @@ body {
   color: var(--accent-fg);
 }
 
-/* ── Compact Slate shell ───────────────────────────────────────────────────
-   The Markdown editor keeps its own document/editor implementations; these
-   rules only reproduce the reference reader's permanent application chrome. */
-.app {
-  color: var(--chrome-fg);
-  background: var(--chrome-bg);
-}
-
-.toolbar {
-  min-height: 38px;
-  border-bottom-color: var(--bar-border) !important;
-  color: var(--chrome-fg);
-}
-
-.toolbar button,
-.tabstrip button,
-.find-bar button,
-.find-bar input {
-  font-family: var(--font-ui);
-}
-
-.toolbar-file {
-  height: 30px;
-  min-width: 0;
-  gap: 5px;
-  padding-inline: 8px !important;
-  border-color: transparent !important;
-  background: transparent !important;
-  color: var(--chrome-fg) !important;
-  box-shadow: none !important;
-}
-
-.toolbar-file > svg:not(.toolbar-caret) {
-  width: 17px;
-  height: 17px;
-  color: var(--muted-fg);
-}
-
-.toolbar-file .toolbar-caret {
-  width: 11px;
-  height: 11px;
-  margin-left: -2px;
-  color: var(--muted-fg);
-}
-
-.toolbar-view {
-  height: 32px;
-  gap: 0;
-}
-
-.toolbar-view .toolbar-seg {
-  height: 30px;
-  min-width: 0;
-  border-color: var(--chrome-border);
-  background: var(--active-tab-bg);
-  padding: 0 10px;
-  color: var(--chrome-fg);
-  font-size: 12px;
-  line-height: 28px;
-  box-shadow: none;
-}
-
-.toolbar-view .toolbar-seg:hover:not(:disabled, .active) {
-  background: var(--toolbar-hover);
-}
-
-.toolbar-view .toolbar-seg.active {
-  border-color: var(--accent) !important;
-  background: var(--accent) !important;
-  color: var(--accent-fg) !important;
-  font-weight: 600;
-}
-
-.toolbar-icon {
-  width: 31px;
-  height: 30px;
-  min-width: 31px;
-  border-color: transparent !important;
-  background: transparent !important;
-  color: var(--muted-fg) !important;
-  box-shadow: none !important;
-}
-
-/* stylelint-disable-next-line no-descending-specificity -- Toolbar icons cannot overlap editor diagram SVGs. */
-.toolbar-icon > svg {
-  width: 24px !important;
-  height: 24px !important;
-  flex: 0 0 24px;
-  stroke-width: 2.2;
-}
-
-.toolbar-icon > .document-theme-glyph {
-  width: 22px !important;
-  height: 22px !important;
-  flex-basis: 22px;
-}
-
-.toolbar-icon:disabled,
-.toolbar-file:disabled {
-  color: #5b626c !important;
-  opacity: 1 !important;
-}
-
-.toolbar-file:hover,
-.toolbar-menu:hover,
-.toolbar-icon:hover:not(:disabled) {
-  background: var(--toolbar-hover) !important;
-}
-
-.toolbar-icon:active:not(:disabled),
-.toolbar-file:active:not(:disabled) {
-  background: var(--toolbar-pressed) !important;
-}
-
-.toolbar-sep {
-  background: var(--bar-border) !important;
-}
-
-.zoom-readout {
-  position: relative;
-  justify-content: center !important;
-  gap: 0 !important;
-  padding: 0 26px 0 8px !important;
-  border-color: var(--input-border) !important;
-  background: var(--control-bg) !important;
-  color: var(--chrome-fg) !important;
-  box-shadow: none !important;
-}
-
-/* stylelint-disable-next-line no-descending-specificity -- Zoom controls cannot overlap editor diagram SVGs. */
-.zoom-readout > svg {
-  position: absolute;
-  right: 7px;
-  width: 12px;
-  height: 12px;
-}
-
-.zoom-readout:hover:not(:disabled) {
-  border-color: var(--chrome-border) !important;
-  background: var(--toolbar-hover) !important;
-}
-
-.tabstrip {
-  min-height: 45px;
-  border-bottom-color: var(--bar-border) !important;
-  color: var(--chrome-fg);
-  scrollbar-color: rgb(139 148 165 / 45%) transparent;
-}
-
-.toolbar-recent {
-  border-color: rgb(255 255 255 / 14%) !important;
-  color: var(--chrome-fg) !important;
-  box-shadow: none !important;
-}
-
-:root:not([data-theme="dark"]) .toolbar-recent {
-  border-color: var(--chrome-border) !important;
-}
-
-.toolbar-recent.active {
-  border-color: var(--accent) !important;
-  background: var(--active-tab-bg) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.tab {
-  border-color: #465469 !important;
-  background: var(--tabstrip-bg) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.tab.active {
-  border-color: #59677a !important;
-  border-bottom-color: var(--active-tab-bg) !important;
-  background: var(--active-tab-bg) !important;
-  color: #e6edf3 !important;
-}
-
-:root:not([data-theme="dark"]) .tab.active {
-  border-color: var(--chrome-border) !important;
-  border-bottom-color: var(--active-tab-bg) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.tab:hover:not(.active),
-.tab-new:hover {
-  background: var(--toolbar-hover) !important;
-}
-
-/* Runtime dark-theme interaction states follow their base rules so their
-   more-specific colors win predictably through the cascade. */
-:root[data-theme="dark"] .toolbar-recent:hover {
-  background: rgb(255 255 255 / 8%);
-}
-
-:root[data-theme="dark"] .toolbar-recent.active {
-  background: rgb(255 255 255 / 12%);
-}
-
-:root[data-theme="dark"] .tab:not(.active):hover {
-  background: rgb(255 255 255 / 6%);
-}
-
-:root[data-theme="dark"] .tab-new:hover {
-  background: rgb(255 255 255 / 8%);
-}
-
-.find-host {
-  min-height: 39px;
-  background: var(--findbar-bg);
-}
-
-.find-host > [data-react-find-bar],
-.find-bar {
-  width: 100%;
-}
-
-.find-bar {
-  border-bottom-color: var(--bar-border) !important;
-  color: var(--muted-fg);
-}
-
-.find-field {
-  border-color: var(--input-border) !important;
-  background: var(--control-bg) !important;
-}
-
-.find-field:focus-within,
-.find-input:focus {
-  border-color: var(--accent) !important;
-}
-
-.find-input::placeholder {
-  color: #7c8494;
-  opacity: 1;
-}
-
-.find-btn {
-  color: var(--muted-fg) !important;
-}
-
-.find-btn:hover:not(:disabled) {
-  background: var(--toolbar-hover) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.find-prev {
-  padding-inline: 14px !important;
-}
-
-.find-toggle {
-  color: var(--muted-fg) !important;
-}
-
-.find-toggle input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  appearance: none;
-  border: 1px solid var(--checkbox-border);
-  border-radius: 4px;
-  background: var(--checkbox-bg);
-  display: grid;
-  place-content: center;
-}
-
-.find-toggle input::before {
-  content: "";
-  width: 8px;
-  height: 5px;
-  margin-top: -1px;
-  border-left: 2px solid var(--accent-fg);
-  border-bottom: 2px solid var(--accent-fg);
-  transform: rotate(-45deg) scale(0);
-}
-
-.find-toggle input:checked {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.find-toggle input:checked::before {
-  transform: rotate(-45deg) scale(1);
-}
-
-.find-toggle input:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: 1px;
-}
-
-.status-bar {
-  border-top-color: var(--bar-border) !important;
-  background: var(--status-bg) !important;
-  color: #7c8494 !important;
-}
-
-.editor-area {
-  background: var(--viewer-canvas) !important;
-  scrollbar-gutter: stable;
-  scrollbar-color: rgb(139 148 165 / 45%) transparent;
-  scrollbar-width: auto;
-}
-
-.editor-area::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-.editor-area::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.editor-area::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 8px;
-  background: rgb(139 148 165 / 48%);
-  background-clip: padding-box;
-}
-
+/* ── Application shell ───────────────────────────────────────────────────
+   React/Tailwind classes in App.tsx own the toolbar, tab row, notice bar and
+   status bar. These rules cover the document canvas, which the editor panes
+   and EditorHost share. */
 .editor-area:not(.split, .markdown-only) .editor-column {
   min-height: 100%;
   background: var(--editor-surface-bg);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 38%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 45%);
 }
 
 :root[data-width-mode="fixed"] .editor-area:not(.split, .markdown-only) .editor-column {
   max-width: min(var(--editor-width), calc(100% - 72px));
 }
 
-.app-menu {
-  border-color: rgb(255 255 255 / 24%) !important;
-  background: var(--menu-bg) !important;
-}
-
-@media (width <= 820px) {
-  .toolbar-view {
-    margin-left: 10px !important;
-  }
-
-  .toolbar-right {
-    margin-left: 4px !important;
-  }
-
-  .toolbar-right .toolbar-sep {
-    margin-inline: 4px !important;
-  }
-}
-
-@media (width <= 620px) {
-  .toolbar-left > .toolbar-sep,
-  .toolbar-right > :first-child,
-  .toolbar-right > :nth-child(5),
-  .toolbar-right > :nth-child(6),
-  .toolbar-right > :nth-child(7) {
-    display: none !important;
+/* Narrow windows: the split buttons drop their labels before anything wraps. */
+@media (width <= 760px) {
+  .toolbar-file-label {
+    display: none;
   }
 
   .toolbar-file {
-    width: 31px;
-    min-width: 31px;
-    justify-content: center;
-    gap: 0;
-    padding-inline: 6px !important;
-  }
-
-  .toolbar-file-label,
-  .toolbar-file .toolbar-caret {
-    display: none;
-  }
-
-  .toolbar-view {
-    margin-left: 6px !important;
-  }
-
-  .toolbar .toolbar-right {
-    margin-left: 0 !important;
-    gap: 2px;
-  }
-
-  .toolbar-view .toolbar-seg {
-    padding-inline: 4px;
-  }
-
-  .zoom-readout {
-    width: 66px;
-  }
-}
-
-@media (width <= 560px) {
-  .find-bar > .find-row:first-child > .find-count,
-  .find-bar > .find-row:first-child > .find-btn,
-  .find-bar > .find-row:first-child > .find-toggle {
-    display: none;
-  }
-
-  .find-replace-row {
-    padding-inline: 6px !important;
+    padding-right: 6px;
   }
 }
 

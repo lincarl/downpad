@@ -75,9 +75,10 @@ export class AppRuntime {
     // focuses it if already open, else opens a new tab (consistent with §5.19).
     this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
     this.scheduler = new SnapshotScheduler(store, this.files);
-    // The application find/replace bar is permanent shell chrome. It searches
-    // the formatted document or raw Markdown according to the active layout.
-    this.findBar = new FindBar(hosts.findHost, this.editorHost);
+    // The find card floats over the document and searches the formatted
+    // document or raw Markdown according to the active layout. Its open state
+    // lives in the store so the toolbar's Find button can show as pressed.
+    this.findBar = new FindBar(hosts.findHost, this.editorHost, (open) => this.store.patchFind({ open }));
 
     // Replace the native WebView right-click menu with md-easy's own (§6.1). It
     // offers the editing commands over editable text and the document actions
@@ -156,6 +157,16 @@ export class AppRuntime {
 
   saveDocument(): void {
     this.run(() => this.files.save());
+  }
+
+  saveDocumentAs(): void {
+    this.run(() => this.files.saveAs());
+  }
+
+  /** Open the find card, or close it when it is open (the toolbar's Find button). */
+  toggleFind(): void {
+    if (this.store.get().view === "recent" || !this.store.get().activeTabId) return;
+    this.findBar.toggle();
   }
 
   selectLayout(layout: EditorLayout): void {
@@ -295,10 +306,13 @@ export class AppRuntime {
     if (this.store.get().editorLayout === layout) return;
     this.switchingView = true;
     try {
-      // Reset stale results while retaining the permanent search strip.
-      if (this.findBar.isOpen()) this.findBar.close();
+      // Drop the previous editor's highlights; an open find card searches the
+      // newly shown editor once it is in place.
+      const searching = this.findBar.isOpen();
+      if (searching) this.findBar.refresh();
       this.store.set({ editorLayout: layout });
       await this.editorHost.setLayout(layout);
+      if (searching) this.findBar.refresh();
     } finally {
       this.switchingView = false;
     }

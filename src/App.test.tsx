@@ -11,6 +11,8 @@ const runtime = vi.hoisted(() => ({
   newDocument: vi.fn(),
   openDocument: vi.fn(),
   saveDocument: vi.fn(),
+  saveDocumentAs: vi.fn(),
+  toggleFind: vi.fn(),
   selectLayout: vi.fn(),
   printDocument: vi.fn(),
   copyDocumentMarkdown: vi.fn(),
@@ -108,7 +110,7 @@ describe("App shell", () => {
     render(<App store={store} />);
     const user = userEvent.setup();
 
-    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Settings" })).toBeNull();
     const themeButton = screen.getByRole("button", {
       name: "Switch to dark document theme",
     });
@@ -117,7 +119,7 @@ describe("App shell", () => {
     expect(runtime.toggleDocumentTheme).toHaveBeenCalledOnce();
 
     await user.click(screen.getByRole("button", { name: "Application menu" }));
-    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
     expect(runtime.openSettings).toHaveBeenCalledOnce();
   });
 

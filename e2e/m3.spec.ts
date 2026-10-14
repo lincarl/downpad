@@ -26,7 +26,7 @@ const valueFor = (page: Page, key: string) =>
 
 async function openSettings(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Application menu" }).click();
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
 }
 
 test("frontmatter renders as an editable key/value table by default", async ({ page }) => {
