@@ -39,6 +39,8 @@ The frontend is organized around a small observable application store and servic
 
 The Electron main process provides operations that require native access. File reads and writes, attachment storage, recovery snapshots, recent-file data, and settings persistence stay outside the renderer. A bundled preload exposes typed operations through Electron's context bridge. The renderer uses context isolation and sandboxing without Node.js access.
 
+Packaged builds always load the bundled frontend and ignore development URL overrides. Unpackaged development launches accept only HTTP or HTTPS URLs on localhost, 127.0.0.1, or ::1, without credentials. Native commands accept only the authorized main frame.
+
 ## Data and persistence
 
 User documents remain standard Markdown files. md-easy does not use a proprietary document format.

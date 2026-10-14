@@ -12,7 +12,7 @@ import type { DesktopEventPayloads } from "../src/ipc/bridge";
 import type { DefaultHandler } from "../src/ipc/contracts";
 import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { PrintService, validatePrintOptions } from "./printing";
-import { clipboardPermission, externalUrl, ImageAccess, trustedPage } from "./security";
+import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
 import { ConfigStore, RecentSearch, statFiles } from "./storage";
 import { watchPath } from "./watchers";
 
@@ -29,7 +29,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const developmentUrl = process.env.MD_EASY_DEV_URL;
+const developmentUrl = developmentEntryUrl(process.env.MD_EASY_DEV_URL, app.isPackaged);
 const entryUrl = developmentUrl ?? pathToFileURL(join(appRoot, "dist", "index.html")).href;
 const config = new ConfigStore(app.getPath("userData"));
 const imageAccess = new ImageAccess();

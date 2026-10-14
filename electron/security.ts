@@ -2,6 +2,17 @@ import { realpath } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { absolutePath, imageMime } from "./io";
 
+/** Packaged apps use bundled content. Development entries must stay on loopback. */
+export function developmentEntryUrl(value: string | undefined, isPackaged: boolean): string | undefined {
+  if (isPackaged || !value) return undefined;
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    || url.username || url.password) {
+    throw new Error("The development URL must use HTTP or HTTPS on localhost, 127.0.0.1, or [::1], without credentials.");
+  }
+  return url.href;
+}
+
 export function externalUrl(value: unknown): string {
   if (typeof value !== "string") throw new Error("A link is required.");
   const url = new URL(value);

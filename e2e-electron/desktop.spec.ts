@@ -31,7 +31,7 @@ test.afterEach(async () => {
   app = undefined;
 });
 
-async function launch(file?: string): Promise<void> {
+async function launch(file?: string, developmentOverride?: string): Promise<void> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE" && entry[0] !== "MD_EASY_DEV_URL"),
   );
@@ -44,7 +44,11 @@ async function launch(file?: string): Promise<void> {
       ...(executablePath ? [] : [path.join(projectRoot, "electron-dist", "main.js")]),
       ...(file ? [file] : []),
     ],
-    env: { ...environment, MD_EASY_USER_DATA_DIR: path.join(directory, "profile") },
+    env: {
+      ...environment,
+      MD_EASY_USER_DATA_DIR: path.join(directory, "profile"),
+      ...(developmentOverride ? { MD_EASY_DEV_URL: developmentOverride } : {}),
+    },
   });
   page = await app.firstWindow();
   await expect(page.getByTestId("app-shell")).toBeVisible();
@@ -95,6 +99,16 @@ test("launching a Markdown file renders formatting and relative images in an iso
   expect(preferences.sandbox).toBe(true);
   expect(await app!.evaluate(({ app }) => app.commandLine.hasSwitch("no-sandbox"))).toBe(false);
   await page.screenshot({ path: path.join(directory, "electron-open.png") });
+});
+
+test("the packaged app ignores a remote development URL override", async () => {
+  test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
+  const file = path.join(directory, "packaged.md");
+  await writeFile(file, "# Bundled application\n");
+  await launch(file, "https://example.invalid/");
+  await expect(page.locator(heading)).toHaveText("Bundled application");
+  expect(new URL(page.url()).protocol).toBe("file:");
+  expect(await app!.evaluate(({ app }) => app.isPackaged)).toBe(true);
 });
 
 test("native Open, edit, Save, and external file reload use actual files", async () => {
