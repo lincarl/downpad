@@ -604,6 +604,18 @@ body {
   line-height: 1.5;
 }
 
+/* Crepe captions its slash-menu groups and diagram previews in capitals. md-easy
+   writes captions in sentence case, as Mervin's menus do. */
+.editor-host .milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
+  padding: 12px 10px 6px;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.editor-host .milkdown .milkdown-code-block .preview-panel .preview-label {
+  text-transform: none;
+}
+
 /* Markdown tables size to their content (§6.2). prosemirror-tables ships
    `table-layout: fixed; width: 100%`, which stretches every table across the page
    and gives each column an equal share regardless of what is in it — a two-column
