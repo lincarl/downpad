@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
+/* `dark:` follows the app's UI theme attribute, not the OS preference. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme inline {
+  /* shadcn/ui semantic names, used by the primitives in src/components/ui. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-primary: var(--primary);
@@ -9,90 +13,338 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
+
+  /* Chrome surfaces, from the deepest well up to floating popovers. */
+  --color-well: var(--well);
+  --color-status: var(--status);
+  --color-bar: var(--bar);
+  --color-window: var(--window);
+  --color-fill: var(--fill);
+  --color-popover: var(--popover);
+  --color-canvas: var(--canvas);
+  --color-notice: var(--notice);
+  --color-push: var(--push-bg);
+
+  /* Ink, brightest first. */
+  --color-ink-primary: var(--ink-primary);
+  --color-ink: var(--ink);
+  --color-ink-body: var(--ink-body);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-ink-disabled: var(--ink-disabled);
+  --color-ink-menu-header: var(--ink-menu-header);
+  --color-ink-danger: var(--ink-danger);
+  --color-ink-link: var(--ink-link);
+  --color-ink-canvas: var(--ink-canvas);
+
+  /* Translucent edges and washes, which read over any surface. */
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-bar: var(--line-bar);
+  --color-line-push: var(--line-push);
+  --color-line-disabled: var(--line-disabled);
+  --color-line-popover: var(--line-popover);
+  --color-line-popover-control: var(--line-popover-control);
+  --color-line-notice: var(--line-notice);
+  --color-line-menu: var(--line-menu);
+  --color-line-tool: var(--line-tool);
+  --color-line-tool-strong: var(--line-tool-strong);
+  --color-line-tool-disabled: var(--line-tool-disabled);
+  --color-hover: var(--hover);
+  --color-pressed: var(--pressed);
+  --color-row-hover: var(--row-hover);
+  --color-separator: var(--separator);
+  --color-hairline: var(--hairline);
+  --color-tool-checked: var(--tool-checked);
+
+  /* One accent carries selection, focus and the primary button. */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-wash: var(--accent-wash);
+
+  /* Buttons, fields, segments and tabs: 8px in light, 6px in dark. */
+  --radius-control: var(--control-radius);
 }
 
-/* App chrome. React/Tailwind own the application layout and shadcn-style
-   controls; this scoped stylesheet preserves the established Win11 appearance
-   and styles complex editor, print, and platform-specific surfaces. */
-
+/* Application chrome tokens, ported from Mervin PDF's theme (ThemeTokens.cpp).
+   Light is "Cool slate": cool blue-grey bands with white controls. Dark is
+   "Nord": lifted blue-grey surfaces with body text at about 9.4:1 and a soft
+   frost accent that carries dark text. Every token is explicit in both themes.
+   Components use them through the Tailwind colors above (bg-well, text-ink-faint,
+   border-line-push, ...). SettingsModel overrides --accent and --accent-fg inline
+   for the system and custom accent modes. */
 :root {
-  --background: var(--editor-bg);
-  --foreground: var(--chrome-fg);
+  color-scheme: light;
+
+  --well: #ebeef2;
+  --status: #dee3e9;
+  --bar: #e8ecf0;
+  --window: #f5f7f9;
+  --fill: #fff;
+  --popover: #f0f3f6;
+  --canvas: #3c3f44;
+  --ink-primary: #1a1f24;
+  --ink: #1f2328;
+  --ink-body: #31373e;
+  --ink-soft: #59636e;
+  --ink-faint: #58616b;
+  --ink-disabled: #a3abb5;
+  --ink-menu-header: #5f6873;
+  --ink-danger: #c4232e;
+  --ink-link: #0969da;
+  --line: rgb(31 42 55 / 16%);
+  --line-strong: rgb(31 42 55 / 30%);
+  --line-bar: rgb(31 42 55 / 12%);
+  --line-push: rgb(31 42 55 / 20%);
+  --line-disabled: rgb(31 42 55 / 8%);
+  --line-popover: rgb(31 42 55 / 35%);
+  --line-popover-control: rgb(31 42 55 / 35%);
+  --line-menu: var(--line-popover);
+  --hover: rgb(31 42 55 / 7%);
+  --pressed: rgb(31 42 55 / 13%);
+  --row-hover: rgb(31 42 55 / 6%);
+  --separator: rgb(31 42 55 / 12%);
+  --hairline: rgb(31 42 55 / 18%);
+  --scroll-thumb: rgb(31 42 55 / 28%);
+  --scroll-thumb-hover: rgb(31 42 55 / 45%);
+
+  /* Text and buttons drawn on the canvas, which is dark in both themes. */
+  --ink-canvas: #f2f4f7;
+  --canvas-control: #4a505a;
+  --line-canvas-control: #6a717c;
+
+  /* The in-app notice bar (file changed on disk and similar). */
+  --notice: #fdf6dc;
+  --line-notice: #e3d79e;
+
+  /* Light draws outlined white push buttons and outlined toolbar buttons. */
+  --push-bg: var(--fill);
+  --line-tool: var(--line);
+  --line-tool-strong: var(--line-strong);
+  --line-tool-disabled: var(--line-disabled);
+  --tool-checked: var(--pressed);
+  --control-radius: 8px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2331373e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3abb5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* The design accent. SettingsModel overrides it for system and custom accents. */
+  --accent: #0969da;
+  --accent-fg: #fff;
+  --accent-hover: color-mix(in srgb, var(--accent) 91%, #000);
+  --accent-wash: color-mix(in srgb, var(--accent) 15%, transparent);
+
+  /* shadcn/ui semantic names. */
+  --background: var(--window);
+  --foreground: var(--ink);
   --primary: var(--accent);
   --primary-foreground: var(--accent-fg);
-  --muted: var(--chrome-bg);
-  --muted-foreground: var(--muted-fg);
-  --border: var(--chrome-border);
+  --muted: var(--bar);
+  --muted-foreground: var(--ink-soft);
+  --border: var(--line);
   --ring: var(--accent);
-  --chrome-bg: #fff;
-  --tabstrip-bg: #f3f3f3;
-  --findbar-bg: #fff;
-  --status-bg: #f3f3f3;
-  --control-bg: #f3f3f3;
-  --menu-bg: #fff;
-  --tab-bg: #e9edf2;
-  --active-tab-bg: #fff;
-  --viewer-canvas: #3a3a3c;
-  --toolbar-hover: rgb(0 0 0 / 6%);
-  --toolbar-pressed: rgb(0 0 0 / 11%);
-  --input-border: rgb(0 0 0 / 14%);
-  --checkbox-border: rgb(0 0 0 / 35%);
-  --checkbox-bg: transparent;
-  --bar-border: rgb(0 0 0 / 14%);
-  --chrome-border: rgb(0 0 0 / 14%);
-  --chrome-fg: #1a1a1a;
-  --muted-fg: #6a6a6a;
 
-  /* Accent + a readable foreground for text/icons on top of it (spec §6.2).
-     Both are set live from settings by SettingsModel (default / system / custom). */
-  --accent: #0067c0;
-  --accent-fg: #fff;
-  --editor-bg: #fff;
+  /* The platform UI font, as Mervin uses it. */
   --font-ui: "Segoe UI", system-ui, sans-serif;
 
   /* Set live from settings by SettingsModel. */
   --editor-width: 1188px;
   --editor-font: "Segoe UI", system-ui, sans-serif;
 
-  /* Document text-size multiplier (spec §5.20), driven by the toolbar A-/A+. */
+  /* Document text-size multiplier (spec §5.20), driven by the toolbar zoom. */
   --editor-font-scale: 1;
 
   /* Document surface palette (spec §6.2). Driven by data-editor-theme so the
      document can stay light while the UI (data-theme) is dark, and vice versa. */
   --editor-surface-bg: #fff;
   --editor-surface-fg: #1a1a1a;
-}
 
-/* Dark chrome — the UI (chrome) palette. */
-:root[data-theme="dark"] {
-  --accent: #0067c0;
-  --accent-fg: #fff;
-  --chrome-bg: #1c222e;
-  --tabstrip-bg: #191e27;
-  --findbar-bg: #1c222e;
-  --status-bg: #161a23;
-  --control-bg: #10141d;
-  --menu-bg: #212834;
-  --tab-bg: #202938;
-  --active-tab-bg: #1b2030;
-  --viewer-canvas: #3c3f44;
-  --toolbar-hover: rgb(255 255 255 / 7%);
-  --toolbar-pressed: rgb(255 255 255 / 10%);
-  --input-border: rgb(255 255 255 / 10%);
-  --checkbox-border: #5b626c;
+  /* Legacy chrome names still used by the editor, print and frontmatter styles.
+     They resolve to the tokens above. */
+  --chrome-bg: var(--window);
+  --chrome-fg: var(--ink);
+  --chrome-border: var(--line);
+  --bar-border: var(--line-bar);
+  --muted-fg: var(--ink-soft);
+  --editor-bg: var(--window);
+  --tabstrip-bg: var(--bar);
+  --findbar-bg: var(--window);
+  --status-bg: var(--status);
+  --control-bg: var(--well);
+  --menu-bg: var(--popover);
+  --tab-bg: var(--bar);
+  --active-tab-bg: var(--fill);
+  --viewer-canvas: var(--canvas);
+  --toolbar-hover: var(--hover);
+  --toolbar-pressed: var(--pressed);
+  --input-border: var(--line);
+  --checkbox-border: var(--ink-disabled);
   --checkbox-bg: transparent;
-  --bar-border: rgb(255 255 255 / 5%);
-  --chrome-border: rgb(255 255 255 / 10%);
-  --chrome-fg: #c2c9d6;
-  --muted-fg: #8b94a5;
-  --editor-bg: #10141d;
 }
 
-/* Dark document surface — independent of the chrome theme (spec §6.2). Matches
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --well: #242933;
+  --status: #272c36;
+  --bar: #2a303b;
+  --window: #2e3440;
+  --fill: #353c4a;
+  --popover: #3b4252;
+  --canvas: #424853;
+  --ink-primary: #e5e9f0;
+  --ink: #dbe0ea;
+  --ink-body: #c5ccd8;
+  --ink-soft: #a5afc1;
+  --ink-faint: #98a2b4;
+  --ink-disabled: #646e81;
+  --ink-menu-header: #a8b2c4;
+  --ink-danger: #ec8f97;
+  --ink-link: #9dbde3;
+  --line: rgb(236 239 244 / 11%);
+  --line-strong: rgb(236 239 244 / 25%);
+  --line-bar: rgb(236 239 244 / 6%);
+  --line-push: rgb(236 239 244 / 15%);
+  --line-disabled: rgb(236 239 244 / 8%);
+  --line-popover: rgb(236 239 244 / 17%);
+  --line-popover-control: rgb(236 239 244 / 24%);
+  --line-menu: var(--line);
+  --hover: rgb(236 239 244 / 8%);
+  --pressed: rgb(236 239 244 / 12%);
+  --row-hover: rgb(236 239 244 / 7%);
+  --separator: rgb(236 239 244 / 8%);
+  --hairline: rgb(236 239 244 / 11%);
+  --scroll-thumb: rgb(236 239 244 / 26%);
+  --scroll-thumb-hover: rgb(236 239 244 / 42%);
+  --ink-canvas: #e5e9f0;
+  --canvas-control: #4c566a;
+  --line-canvas-control: #616e88;
+  --notice: #3b4252;
+  --line-notice: rgb(235 203 139 / 70%);
+
+  /* Dark draws flat borderless toolbar buttons and outlined transparent push
+     buttons, and marks a checked tool with the accent wash. */
+  --push-bg: transparent;
+  --line-tool: transparent;
+  --line-tool-strong: transparent;
+  --line-tool-disabled: transparent;
+  --tool-checked: var(--accent-wash);
+  --control-radius: 6px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c5ccd8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23646e81' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Nord's frost blue, which carries dark text. */
+  --accent: #88c0d0;
+  --accent-fg: #232831;
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, #fff);
+}
+
+/* Dark document surface, independent of the chrome theme (spec §6.2). Matches
    VS Code's "Dark+" editor: #1e1e1e page, #d4d4d4 text. */
 :root[data-editor-theme="dark"] {
   --editor-surface-bg: #1e1e1e;
   --editor-surface-fg: #d4d4d4;
+}
+
+/* Form controls shared by every surface. They sit in the components layer so
+   Tailwind utilities on the same element still win. */
+@layer components {
+  /* Native selects keep their behaviour and popup; the chevron advertises them. */
+  .md-select {
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 12px 12px;
+  }
+
+  .md-select:disabled {
+    background-image: var(--select-chevron-disabled);
+  }
+
+  /* Check boxes and radio buttons: a 16px box outlined in the disabled ink that
+     fills with the accent when on, with the mark in the accent's text colour. */
+  .md-check,
+  .md-radio {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-content: center;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 1px solid var(--ink-disabled);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    appearance: none;
+  }
+
+  .md-radio {
+    border-radius: 50%;
+  }
+
+  .md-check::before {
+    content: "";
+    width: 9px;
+    height: 5px;
+    margin-top: -2px;
+    border-bottom: 2px solid var(--accent-fg);
+    border-left: 2px solid var(--accent-fg);
+    transform: rotate(-45deg) scale(0);
+  }
+
+  .md-radio::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-fg);
+    transform: scale(0);
+  }
+
+  .md-check:hover,
+  .md-radio:hover {
+    border-color: var(--ink-soft);
+  }
+
+  .md-check:checked,
+  .md-radio:checked {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .md-check:checked::before,
+  .md-radio:checked::before {
+    transform: rotate(-45deg) scale(1);
+  }
+
+  .md-radio:checked::before {
+    transform: scale(1);
+  }
+
+  .md-check:focus-visible,
+  .md-radio:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .md-check:disabled,
+  .md-radio:disabled {
+    border-color: var(--line-disabled);
+    cursor: default;
+  }
+
+  .md-check:checked:disabled,
+  .md-radio:checked:disabled {
+    background: var(--line-disabled);
+  }
+
+  .md-check:checked:disabled::before {
+    border-color: var(--ink-faint);
+  }
+
+  .md-radio:checked:disabled::before {
+    background: var(--ink-faint);
+  }
 }
 
 * {
@@ -115,8 +367,34 @@ body {
 
 body {
   font-family: var(--font-ui);
-  color: var(--chrome-fg);
-  background: var(--editor-bg);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--window);
+}
+
+/* Scrollbars follow Mervin: a 12px transparent track with a rounded thumb inset
+   2px. Setting scrollbar-color or scrollbar-width on an element switches Chromium
+   back to its native bars, so neither is used. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--scroll-thumb) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scroll-thumb-hover);
+}
+
+::-webkit-scrollbar-corner,
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 #app {

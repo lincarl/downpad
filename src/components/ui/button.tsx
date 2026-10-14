@@ -3,16 +3,48 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
+/**
+ * Buttons in Mervin's style. `default` is the accent-filled primary action,
+ * `outline` the neutral push button (transparent in dark, white in light),
+ * `tool` the toolbar button (flat in dark, outlined in light) and `ghost` a
+ * borderless button for compact rows. Disabled buttons change ink, not opacity.
+ */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+  cn(
+    "inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-1.5 whitespace-nowrap",
+    "rounded-control border font-[var(--font-ui)] text-[13px] font-normal leading-[18px] outline-none",
+    "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+    "disabled:cursor-default [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  ),
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:opacity-90",
-        outline: "border border-border bg-background hover:bg-muted",
-        ghost: "hover:bg-muted",
+        default: cn(
+          "border-accent bg-accent text-accent-fg hover:border-accent-hover hover:bg-accent-hover",
+          "disabled:border-line-disabled disabled:bg-push disabled:text-ink-disabled",
+        ),
+        outline: cn(
+          "border-line-push bg-push text-ink hover:border-line-strong hover:bg-hover active:bg-pressed",
+          "disabled:border-line-disabled disabled:bg-push disabled:text-ink-disabled",
+        ),
+        tool: cn(
+          "border-line-tool bg-transparent text-ink-body hover:border-line-tool-strong hover:bg-hover",
+          "active:bg-pressed data-[state=open]:border-line-tool-strong data-[state=open]:bg-pressed",
+          "aria-pressed:border-line-tool-strong aria-pressed:bg-tool-checked",
+          "disabled:border-line-tool-disabled disabled:bg-transparent disabled:text-ink-disabled",
+        ),
+        ghost: cn(
+          "border-transparent bg-transparent text-ink-body hover:bg-hover active:bg-pressed",
+          "disabled:bg-transparent disabled:text-ink-disabled",
+        ),
       },
-      size: { default: "h-9 px-4 py-2", sm: "h-8 px-3", icon: "size-9" },
+      size: {
+        default: "h-[31px] px-[14px]",
+        sm: "h-[25px] px-2.5",
+        icon: "size-7 p-0",
+        tool: "h-[33px] px-2",
+        "tool-icon": "h-[33px] w-[41px] p-0",
+      },
     },
     defaultVariants: { variant: "default", size: "default" },
   },
