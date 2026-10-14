@@ -165,6 +165,16 @@
   --editor-surface-bg: #fff;
   --editor-surface-fg: #1a1a1a;
 
+  /* Document-surface details derived from the surface itself, so they follow
+     the document theme rather than the chrome theme. */
+  --editor-surface-line: color-mix(in srgb, var(--editor-surface-fg) 16%, transparent);
+  --editor-surface-raised: color-mix(in srgb, var(--editor-surface-fg) 6%, var(--editor-surface-bg));
+  --editor-surface-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
+
+  /* Marks drawn on the page use the design accent of a theme with the page's
+     lightness, so a pale dark-chrome accent never lands on white paper. */
+  --editor-surface-accent: #0969da;
+
   /* Legacy chrome names still used by the editor, print and frontmatter styles.
      They resolve to the tokens above. */
   --chrome-bg: var(--window);
@@ -252,6 +262,7 @@
 :root[data-editor-theme="dark"] {
   --editor-surface-bg: #1e1e1e;
   --editor-surface-fg: #d4d4d4;
+  --editor-surface-accent: #88c0d0;
 }
 
 /* Form controls shared by every surface. They sit in the components layer so
@@ -471,7 +482,6 @@ body {
 .editor-host.split .editor-pane-raw {
   flex: 1 1 0;
   order: 2;
-  border-left: 1px solid var(--chrome-border);
 }
 
 /* In the split (and Markdown-only) layouts each pane scrolls independently — the
@@ -481,14 +491,15 @@ body {
   overflow: auto;
 }
 
-/* Draggable divider between the two split panes. A thin bar with a wider,
-   col-resize hit area; hidden (and out of the layout) when the split is closed. */
+/* Draggable divider between the two split panes: a strip of the canvas the
+   pages sit on, accented while hovered or dragged. Hidden (and out of the
+   layout) when the split is closed. */
 .split-divider {
   flex: 0 0 6px;
   order: 1;
   align-self: stretch;
   cursor: col-resize;
-  background: var(--chrome-border);
+  background: var(--canvas);
   position: relative;
 }
 
@@ -504,9 +515,9 @@ body {
 
 /* Collapsed base64 data URI in raw view (§5.3). */
 .cm-base64-collapsed {
-  color: var(--accent);
-  background: var(--chrome-bg);
-  border: 1px solid var(--chrome-border);
+  color: var(--editor-surface-accent);
+  background: var(--editor-surface-raised);
+  border: 1px solid var(--editor-surface-line);
   border-radius: 4px;
   padding: 0 5px;
   margin: 0 1px;
@@ -654,9 +665,9 @@ body {
 }
 
 :root[data-editor-theme="dark"] .editor-host .cm-editor .cm-gutters {
-  background: var(--chrome-bg);
-  color: var(--muted-fg);
-  border-right-color: var(--chrome-border);
+  background: var(--editor-surface-raised);
+  color: var(--editor-surface-muted);
+  border-right-color: var(--editor-surface-line);
 }
 
 :root[data-editor-theme="dark"] .editor-host .cm-editor .cm-activeLine,
