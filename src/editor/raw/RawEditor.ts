@@ -49,7 +49,7 @@ export class RawEditor {
           EditorView.contentAttributes.of({ "aria-label": "Markdown source editor" }),
           // Install CodeMirror's search state without exposing its own panel.
           // The app-level capture handler owns Ctrl+F/Ctrl+H and drives this
-          // state through the permanent shell search strip.
+          // state through the find card.
           search({ top: true }),
           ...(opts.collapseBase64 ? [base64Collapse()] : []),
           // Make non-hyphen dashes (em/en dash, …) unmistakable in the source: a
@@ -92,7 +92,7 @@ export class RawEditor {
     this.view.focus();
   }
 
-  /** Drive CodeMirror's search state from the permanent application find strip. */
+  /** Drive CodeMirror's search state from the application's find card. */
   searchText(query: string, opts: FindOptions, replacement = ""): FindCounts {
     const view = this.view;
     if (!view) return { current: 0, total: 0 };

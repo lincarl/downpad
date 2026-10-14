@@ -80,7 +80,8 @@ function MissingFileDialog({ name, finish }: { name: string; finish(action: Miss
             <CircleHelp
               aria-hidden="true"
               focusable="false"
-              className="size-8 shrink-0 text-ink-soft"
+              className="shrink-0 text-ink-soft"
+              size={32}
               absoluteStrokeWidth
               strokeWidth={1.5}
             />

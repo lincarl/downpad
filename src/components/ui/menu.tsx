@@ -13,6 +13,8 @@ export interface MenuItem {
   disabled?: boolean;
   /** Marks an active toggle or choice with an accent check at the row's right end. */
   checked?: boolean;
+  /** The row is one of a set of exclusive choices (with `checked`), not a toggle. */
+  radio?: boolean;
   separatorBefore?: boolean;
   /** Caption printed above this row, after its separator, to name a group of rows. */
   section?: string;
@@ -21,8 +23,8 @@ export interface MenuItem {
 /** The floating surface every menu shares: popover fill, hairline rim, 10px corners. */
 export const menuSurfaceClassName = cn(
   "min-w-[180px] rounded-[10px] border border-line-menu bg-popover p-1.5",
-  "font-[var(--font-ui)] text-[12px] leading-4 text-ink",
-  "shadow-[0_10px_28px_rgb(0_0_0/0.22)]",
+  // Mervin's popups carry no shadow: the 1px rim separates them from the page.
+  "font-[family-name:var(--font-ui)] text-[12px] leading-4 text-ink",
   // Separators carry no classes of their own so their markup stays minimal.
   "[&_.md-context-menu-sep]:mx-1 [&_.md-context-menu-sep]:my-1.5 [&_.md-context-menu-sep]:h-px [&_.md-context-menu-sep]:bg-separator",
 );
@@ -70,7 +72,7 @@ function MenuRow({
       {item.section && (
         <div
           className={cn(
-            "md-menu-section select-none px-2 pb-[3px] text-[10px] font-semibold tracking-[0.02em] text-ink-menu-header",
+            "md-menu-section select-none pr-2.5 pb-[3px] pl-0.5 text-[10px] font-semibold tracking-[0.02em] text-ink-menu-header",
             first || item.separatorBefore ? "pt-1" : "pt-[7px]",
           )}
           role="presentation"
@@ -81,12 +83,14 @@ function MenuRow({
       <button
         type="button"
         className={cn(
-          "md-context-menu-item group my-px flex h-[29px] w-full cursor-pointer items-center gap-2 rounded-[6px] border-0 bg-transparent px-2 text-left font-[inherit] text-[inherit] outline-none",
+          "md-context-menu-item group my-px flex h-[29px] w-full cursor-pointer items-center rounded-[6px] border-0 bg-transparent text-left font-[inherit] text-[inherit] outline-none",
+          // Mervin sets the 16px icon at the row's edge and starts labels 30px in.
+          withIcons ? "gap-3.5 pr-2.5 pl-0.5" : "gap-2 px-2.5",
           "hover:bg-row-hover focus-visible:bg-row-hover",
           item.danger && "danger text-ink-danger",
           item.disabled && "disabled cursor-default text-ink-disabled hover:bg-transparent",
         )}
-        role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+        role={item.checked === undefined ? "menuitem" : item.radio ? "menuitemradio" : "menuitemcheckbox"}
         aria-checked={item.checked}
         disabled={item.disabled}
         onClick={item.disabled ? undefined : () => onActivate(item)}
@@ -98,7 +102,7 @@ function MenuRow({
               item.disabled && "text-ink-disabled",
             )}
           >
-            {Icon && <Icon aria-hidden="true" focusable="false" absoluteStrokeWidth strokeWidth={1} />}
+            {Icon && <Icon aria-hidden="true" focusable="false" size={16} absoluteStrokeWidth strokeWidth={1} />}
           </span>
         )}
         <span className="md-context-menu-label flex-1 whitespace-nowrap pr-2">{item.label}</span>

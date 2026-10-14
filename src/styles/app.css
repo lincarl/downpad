@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+/* Keyboard focus for hand-built controls: a 2px accent ring outside the control,
+   or inside it where neighbours would clip it. Tailwind's outline-none sets the
+   outline style to none, so these name the full outline rather than a width. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+
+@utility focus-ring-inset {
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+}
+
 /* `dark:` follows the app's UI theme attribute, not the OS preference. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
@@ -175,27 +192,6 @@
   --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
   --doc-accent: var(--accent);
 
-  /* Legacy chrome names still used by the editor, print and frontmatter styles.
-     They resolve to the tokens above. */
-  --chrome-bg: var(--window);
-  --chrome-fg: var(--ink);
-  --chrome-border: var(--line);
-  --bar-border: var(--line-bar);
-  --muted-fg: var(--ink-soft);
-  --editor-bg: var(--window);
-  --tabstrip-bg: var(--bar);
-  --findbar-bg: var(--window);
-  --status-bg: var(--status);
-  --control-bg: var(--well);
-  --menu-bg: var(--popover);
-  --tab-bg: var(--bar);
-  --active-tab-bg: var(--fill);
-  --viewer-canvas: var(--canvas);
-  --toolbar-hover: var(--hover);
-  --toolbar-pressed: var(--pressed);
-  --input-border: var(--line);
-  --checkbox-border: var(--ink-disabled);
-  --checkbox-bg: transparent;
 }
 
 :root[data-theme="dark"] {
@@ -450,6 +446,9 @@ body {
 .editor-area.split,
 .editor-area.markdown-only {
   overflow: hidden;
+
+  /* Each pane scrolls on its own, so the area reserves no scroll bar gutter. */
+  scrollbar-gutter: auto;
 }
 
 .editor-area.split .editor-column,
@@ -498,15 +497,15 @@ body {
   overflow: auto;
 }
 
-/* Draggable divider between the two split panes: a strip of the canvas the
-   pages sit on, accented while hovered or dragged. Hidden (and out of the
-   layout) when the split is closed. */
+/* Draggable divider between the two split panes: a hairline in the document's
+   own line colour, centred in a 6px hit area and accented while hovered or
+   dragged. Hidden (and out of the layout) when the split is closed. */
 .split-divider {
   flex: 0 0 6px;
   order: 1;
   align-self: stretch;
   cursor: col-resize;
-  background: var(--canvas);
+  background: linear-gradient(var(--doc-line), var(--doc-line)) center / 1px 100% no-repeat var(--editor-surface-bg);
   position: relative;
 }
 
@@ -518,6 +517,16 @@ body {
 .split-divider:focus-visible,
 .split-divider.dragging {
   background: var(--accent);
+}
+
+/* The Markdown source fills its pane, and CodeMirror's dotted focus outline
+   (which crossed the pane under the last line) gives way to the caret. */
+.editor-pane-raw .cm-editor {
+  min-height: 100%;
+}
+
+.editor-host .cm-editor.cm-focused {
+  outline: none;
 }
 
 /* Collapsed base64 data URI in raw view (§5.3). */
@@ -1057,6 +1066,63 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Crepe's selection toolbar floats over the page like Mervin's floating
+   panels: the popover surface, a hairline rim, and icons in the toolbar ink.
+   Crepe tints the icons with its outline colour, which the dark document
+   palette sets to a border tone, so they were nearly invisible there. */
+.editor-host .milkdown .milkdown-toolbar {
+  padding: 3px;
+  border: 1px solid var(--line-popover);
+  border-radius: 10px;
+  background: var(--popover);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .editor-host .milkdown .milkdown-toolbar {
+  border-color: var(--line-strong);
+}
+
+.editor-host .milkdown .milkdown-toolbar .toolbar-item {
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 5px;
+  border-radius: var(--control-radius);
+}
+
+.editor-host .milkdown .milkdown-toolbar .toolbar-item:hover {
+  background: var(--hover);
+}
+
+.editor-host .milkdown .milkdown-toolbar .toolbar-item:active {
+  background: var(--pressed);
+}
+
+.editor-host .milkdown .milkdown-toolbar .toolbar-item svg {
+  width: 20px;
+  height: 20px;
+  color: var(--ink-body);
+  fill: var(--ink-body);
+}
+
+.editor-host .milkdown .milkdown-toolbar .toolbar-item.active svg {
+  color: var(--accent);
+  fill: var(--accent);
+}
+
+.editor-host .milkdown .milkdown-toolbar .divider {
+  height: 18px;
+  margin: 6px 5px;
+  background: var(--line);
+}
+
+/* Crepe's code blocks keep their dark editor theme's active line number cell,
+   which showed as a near-black block on a light document. */
+:root:not([data-editor-theme="dark"]) .editor-host .milkdown .cm-editor .cm-activeLineGutter {
+  background: transparent;
+  color: var(--doc-muted);
+}
+
 /* ── Print workspace + printed sheets (spec §5.21) ───────────────────────
    md-easy lays its own pages out: `printRender.ts` builds one fixed-size
    `.print-page` per sheet — margins, running header/footer and any scaling
@@ -1196,6 +1262,13 @@ body {
   min-height: 100%;
   background: var(--editor-surface-bg);
   box-shadow: 0 0 0 1px rgb(0 0 0 / 45%);
+}
+
+/* Mervin paints the viewport's scroll bar column in the window colour, so the
+   thumb reads in both themes instead of sinking into the dark canvas. */
+.editor-area::-webkit-scrollbar-track,
+.editor-area::-webkit-scrollbar-corner {
+  background: var(--window);
 }
 
 :root[data-width-mode="fixed"] .editor-area:not(.split, .markdown-only) .editor-column {

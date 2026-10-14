@@ -146,8 +146,8 @@ export class EditorHost implements FindController {
     applySpellcheck(this.root, this.store.get().settings.spellCheckEnabled);
   }
 
-  // ── FindController (§5.13): the permanent shell strip routes to the visible
-  // document editor, using ProseMirror in Document/Split and CM in Markdown. ──
+  // ── FindController (§5.13): the find card routes to the visible document
+  // editor, using ProseMirror in Document/Split and CM in Markdown. ──
 
   search(query: string, opts: FindOptions): FindCounts {
     if (this.disposed) return NO_MATCHES;

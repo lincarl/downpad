@@ -306,10 +306,10 @@ export class AppRuntime {
     if (this.store.get().editorLayout === layout) return;
     this.switchingView = true;
     try {
-      // Drop the previous editor's highlights; an open find card searches the
-      // newly shown editor once it is in place.
+      // Clear the outgoing editor's highlights (clear acts on the current
+      // layout's editor); an open find card then searches the newly shown one.
       const searching = this.findBar.isOpen();
-      if (searching) this.findBar.refresh();
+      if (searching) this.editorHost.clear();
       this.store.set({ editorLayout: layout });
       await this.editorHost.setLayout(layout);
       if (searching) this.findBar.refresh();

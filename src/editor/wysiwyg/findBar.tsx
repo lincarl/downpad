@@ -13,6 +13,7 @@ import type { FindCounts, FindOptions } from "./findEngine";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { fieldClassName } from "@/components/ui/input";
+import { TooltipLabel, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
 
@@ -58,13 +59,15 @@ export class FindBar {
     this.root = createRoot(this.host);
     flushSync(() => {
       this.root.render(
+        <TooltipProvider delayDuration={600}>
         <FindBarView
           ref={(handle) => {
             this.handle = handle;
           }}
           controller={controller}
           onOpenChange={(open) => this.setOpen(open)}
-        />,
+        />
+        </TooltipProvider>,
       );
     });
   }
@@ -124,7 +127,7 @@ const DEFAULT_OPTIONS: FindOptions = {
 /** The card's 28px icon buttons: transparent until hovered, glyph in the toolbar ink. */
 const ICON_BUTTON_CLASS = cn(
   "find-btn size-7 border-transparent p-0 text-ink-body",
-  "focus-visible:outline-1 focus-visible:outline-solid focus-visible:-outline-offset-1 [&_svg]:size-4",
+  "focus-visible:outline-1 focus-visible:outline-solid focus-visible:-outline-offset-1",
 );
 
 /** The card's text buttons in the replace row. */
@@ -226,7 +229,8 @@ const FindBarView = forwardRef<
         >
           <Search
             aria-hidden="true"
-            className="pointer-events-none absolute left-1.5 size-4 text-ink-faint"
+            className="pointer-events-none absolute left-1.5 text-ink-faint"
+            size={16}
             absoluteStrokeWidth
             strokeWidth={1}
           />
@@ -252,43 +256,46 @@ const FindBarView = forwardRef<
           </span>
         </label>
         <span className="w-1" />
-        <Button
-          type="button"
-          variant="ghost"
-          className={cn(ICON_BUTTON_CLASS, "find-prev")}
-          title="Previous match (Shift+Enter)"
-          aria-label="Previous match"
-          disabled={noMatches}
-          onClick={() => apply(controller.prev())}
-        >
-          <ChevronUp aria-hidden="true" absoluteStrokeWidth strokeWidth={1} />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          className={cn(ICON_BUTTON_CLASS, "find-next")}
-          title="Next match (Enter)"
-          aria-label="Next match"
-          disabled={noMatches}
-          onClick={() => apply(controller.next())}
-        >
-          <ChevronDown aria-hidden="true" absoluteStrokeWidth strokeWidth={1} />
-        </Button>
+        <TooltipLabel text="Previous match (Shift+Enter)">
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(ICON_BUTTON_CLASS, "find-prev")}
+            aria-label="Previous match"
+            disabled={noMatches}
+            onClick={() => apply(controller.prev())}
+          >
+            <ChevronUp aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
+          </Button>
+        </TooltipLabel>
+        <TooltipLabel text="Next match (Enter)">
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(ICON_BUTTON_CLASS, "find-next")}
+            aria-label="Next match"
+            disabled={noMatches}
+            onClick={() => apply(controller.next())}
+          >
+            <ChevronDown aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
+          </Button>
+        </TooltipLabel>
         <CardSeparator />
         <FindToggle label="Match case" active={options.caseSensitive} onClick={() => toggle("caseSensitive")} />
         <span className="w-2.5" />
         <FindToggle label="Whole word" active={options.wholeWord} onClick={() => toggle("wholeWord")} />
         <CardSeparator />
-        <Button
-          type="button"
-          variant="ghost"
-          className="find-close size-7 border-transparent p-0 text-ink-soft [&_svg]:size-4"
-          title="Close (Esc)"
-          aria-label="Close find"
-          onClick={close}
-        >
-          <X aria-hidden="true" absoluteStrokeWidth strokeWidth={1} />
-        </Button>
+        <TooltipLabel text="Close (Esc)">
+          <Button
+            type="button"
+            variant="ghost"
+            className="find-close size-7 border-transparent p-0 text-ink-soft"
+            aria-label="Close find"
+            onClick={close}
+          >
+            <X aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
+          </Button>
+        </TooltipLabel>
       </div>
       <div className="find-row find-replace-row flex items-center gap-1.5" hidden={mode !== "replace"}>
         <input

@@ -1,7 +1,7 @@
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import type { KeyboardEvent } from "react";
-import { FolderOpen } from "lucide-react";
+import { File, FolderOpen } from "lucide-react";
 import type { RecentEntry } from "@/state/types";
 import type { FileStat } from "@/ipc/contracts";
 import type { RecentDataSource } from "./recentData";
@@ -18,6 +18,7 @@ import {
   type SearchScope,
 } from "./recentListing";
 import { RecentSearchField } from "./RecentSearchField";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { RecentCaption, RecentRow } from "./RecentRow";
 import { showContextMenu } from "@/shell/contextMenu";
 import { openMissingFileDialog } from "./MissingFileDialog";
@@ -399,6 +400,7 @@ export class RecentView {
       ));
     flushSync(() => {
       this.root.render(
+        <TooltipProvider delayDuration={600}>
         <div className="recent-view flex h-full flex-col bg-window px-6 pt-4 pb-3">
           <div className="recent-searchbar mb-3 flex h-[29px] shrink-0 items-center">
             <RecentSearchField
@@ -458,12 +460,13 @@ export class RecentView {
             )}
             {renderRows(recent)}
             {empty && (
-              <div className="recent-empty flex h-9 shrink-0 items-center px-4 text-[12px] text-ink-disabled">
+              <div className="recent-empty flex h-9 shrink-0 items-center px-4 text-[12px] text-ink-soft">
                 {empty}
               </div>
             )}
           </div>
-        </div>,
+        </div>
+        </TooltipProvider>,
       );
     });
     if (rows.length) void this.ensureStats(rows.map(({ entry }) => entry.path));
@@ -534,11 +537,10 @@ export class RecentView {
     const stat = this.stats.get(entry.path);
     const folderMissing = stat ? !stat.folderExists : false;
     showContextMenu(x, y, [
-      { label: "Open", run: () => this.openEntry(entry) },
+      { label: "Open", icon: File, run: () => this.openEntry(entry) },
       {
         label: "Open folder",
         icon: FolderOpen,
-        separatorBefore: true,
         disabled: folderMissing,
         run: () => void this.cb.reveal(entry.path),
       },

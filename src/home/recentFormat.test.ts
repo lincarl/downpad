@@ -7,6 +7,7 @@ import {
   formatDate,
   formatSize,
   filterByName,
+  plainSnippet,
 } from "./recentFormat";
 import type { RecentEntry } from "../state/types";
 
@@ -100,5 +101,21 @@ describe("filterByName", () => {
     // The folder "n" is in every path; matching by folder would return all 3.
     // Filename-only matching returns just "meeting-notes.md".
     expect(filterByName(entries, "n").map((e) => fileName(e.path))).toEqual(["meeting-notes.md"]);
+  });
+});
+
+describe("plainSnippet", () => {
+  it("reads table rows, headings, quotes and list items as plain text", () => {
+    expect(plainSnippet("| Print | Grace | Planned |")).toBe("Print · Grace · Planned");
+    expect(plainSnippet("| --- | :---: |")).toBe("");
+    expect(plainSnippet("## Status of the print layout")).toBe("Status of the print layout");
+    expect(plainSnippet("> Keep the document readable")).toBe("Keep the document readable");
+    expect(plainSnippet("- [ ] Review the print layout")).toBe("Review the print layout");
+    expect(plainSnippet("2. Print **twice**, then `ship`")).toBe("Print twice, then ship");
+  });
+
+  it("keeps text that only looks like markup", () => {
+    expect(plainSnippet("Costs 3 * 4 = 12 and a_b_c")).toBe("Costs 3 * 4 = 12 and a_b_c");
+    expect(plainSnippet("…it, for example pnpm start ./notes.md.")).toBe("…it, for example pnpm start ./notes.md.");
   });
 });

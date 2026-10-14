@@ -121,6 +121,9 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   );
   const [systemAccent, setSystemAccent] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState("");
+  // Fields that only apply while their check box is on are disabled with it.
+  const [autosaveOn, setAutosaveOn] = useState(initial.autosaveEnabled);
+  const [hardWrapOn, setHardWrapOn] = useState(initial.mdHardWrap !== false);
 
   useEffect(() => {
     if (!isElectron()) return;
@@ -261,7 +264,9 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
           <DialogDescription className="sr-only">
             Configure the editor appearance, editing behavior, files, autosave, and updates.
           </DialogDescription>
-          <form ref={formRef} className="settings-form flex min-h-0 flex-1 flex-col" onSubmit={save}>
+          {/* No native validation: it cannot point at a field on a hidden page, so
+              it would cancel Save silently. Save clamps every number instead. */}
+          <form ref={formRef} className="settings-form flex min-h-0 flex-1 flex-col" noValidate onSubmit={save}>
             <div className="flex min-h-0 flex-1">
               <nav className="settings-nav flex w-[196px] shrink-0 flex-col overflow-y-auto border-r border-line-bar bg-status px-2 py-2.5">
                 <DialogTitle asChild>
@@ -319,7 +324,11 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 <SettingsPage {...pageProps("general")}>
                   <SettingsBox title="Autosave">
                     <CheckRow label="Autosave to file" placement="box">
-                      <Checkbox name="autosaveEnabled" defaultChecked={initial.autosaveEnabled} />
+                      <Checkbox
+                        name="autosaveEnabled"
+                        defaultChecked={initial.autosaveEnabled}
+                        onChange={(event) => setAutosaveOn(event.target.checked)}
+                      />
                     </CheckRow>
                     <FormRow label="Autosave interval (seconds)">
                       <NumberInput
@@ -327,6 +336,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                         value={initial.autosaveIntervalSeconds}
                         min={5}
                         max={3600}
+                        disabled={!autosaveOn}
                       />
                     </FormRow>
                   </SettingsBox>
@@ -580,7 +590,11 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                       />
                     </FormRow>
                     <CheckRow label="Hard wrap">
-                      <Checkbox name="hardWrapOn" defaultChecked={initial.mdHardWrap !== false} />
+                      <Checkbox
+                        name="hardWrapOn"
+                        defaultChecked={initial.mdHardWrap !== false}
+                        onChange={(event) => setHardWrapOn(event.target.checked)}
+                      />
                     </CheckRow>
                     <FormRow label="Wrap column">
                       <NumberInput
@@ -588,6 +602,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                         value={typeof initial.mdHardWrap === "number" ? initial.mdHardWrap : 80}
                         min={20}
                         max={400}
+                        disabled={!hardWrapOn}
                       />
                     </FormRow>
                     <Hint placement="box">
@@ -725,11 +740,13 @@ function NumberInput({
   value,
   min,
   max,
+  disabled,
 }: {
   name: string;
   value: number;
   min: number;
   max: number;
+  disabled?: boolean;
 }) {
   return (
     <Input
@@ -738,6 +755,7 @@ function NumberInput({
       defaultValue={value}
       min={min}
       max={max}
+      disabled={disabled}
       style={{ width: `calc(${String(max).length}ch + 26px)` }}
       className="min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />

@@ -111,6 +111,26 @@ describe("SettingsDialogView pages", () => {
     expect(onRequestClose).toHaveBeenCalled();
   });
 
+  it("saves an out-of-range number on a hidden page clamped to its range", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, autosaveEnabled: true });
+    const interval = document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!;
+    await user.clear(interval);
+    await user.type(interval, "2");
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].autosaveIntervalSeconds).toBe(5);
+  });
+
+  it("disables the fields that depend on an unchecked box", async () => {
+    const { user } = renderDialog({ ...DEFAULT_SETTINGS, autosaveEnabled: false });
+    const interval = document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!;
+    expect(interval.disabled).toBe(true);
+    await user.click(document.querySelector<HTMLInputElement>('input[name="autosaveEnabled"]')!);
+    expect(interval.disabled).toBe(false);
+  });
+
   it("closes on Escape without saving", async () => {
     const { user, onSave, onRequestClose } = renderDialog();
     await user.keyboard("{Escape}");

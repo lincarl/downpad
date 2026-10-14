@@ -171,8 +171,13 @@ function RecoveryItem({
         </span>
       </div>
       {snapshot.filePath && (
-        <div className="recovery-item-path mt-0.5 text-[11px] leading-4 text-ink-soft [overflow-wrap:anywhere]">
-          {snapshot.filePath}
+        <div
+          className="recovery-item-path mt-0.5 truncate text-left text-[11px] leading-4 text-ink-soft [direction:rtl]"
+          title={snapshot.filePath}
+        >
+          {/* One line, shortened on the left so the file name stays visible. The
+              left-to-right mark keeps a path's leading slash in place. */}
+          {"\u200e" + snapshot.filePath}
         </div>
       )}
       <div className="recovery-item-preview mt-1.5 line-clamp-2 text-ink">

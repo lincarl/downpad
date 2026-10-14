@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampScale, describeSetup, pageGeometry, type PageSetup } from "./paper";
+import { clampScale, pageGeometry, type PageSetup } from "./paper";
 
 const A4_PORTRAIT: PageSetup = {
   paperSize: "a4",
@@ -76,14 +76,5 @@ describe("clampScale", () => {
     expect(clampScale(-3)).toBe(0.5);
     expect(clampScale(9)).toBe(2);
     expect(clampScale(Number.NaN)).toBe(1);
-  });
-});
-
-describe("describeSetup", () => {
-  it("summarizes the sheet without the dimension suffix", () => {
-    expect(describeSetup(A4_PORTRAIT)).toBe("A4 portrait");
-    expect(describeSetup({ ...A4_PORTRAIT, paperSize: "letter", orientation: "landscape" })).toBe(
-      "Letter landscape",
-    );
   });
 });

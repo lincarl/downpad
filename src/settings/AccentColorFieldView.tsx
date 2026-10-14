@@ -63,7 +63,7 @@ export function AccentColorFieldView({ value, defaultColor, disabled, onCommit }
         <button
           type="button"
           disabled={disabled}
-          className="accent-swatch h-6 w-12 shrink-0 cursor-pointer rounded-[4px] border border-black/35 p-0 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-accent disabled:cursor-default"
+          className="accent-swatch h-6 w-12 shrink-0 cursor-pointer rounded-[4px] border border-black/35 p-0 outline-none focus-ring disabled:cursor-default"
           aria-label="Choose custom accent color"
           title="Choose accent color"
           style={{ background: value }}
@@ -71,7 +71,7 @@ export function AccentColorFieldView({ value, defaultColor, disabled, onCommit }
       </PopoverTrigger>
       <PopoverPortal>
         <PopoverContent
-          className="accent-popover relative z-[1100] flex flex-col gap-2.5 rounded-[10px] border border-line-popover bg-popover p-3 font-[var(--font-ui)] text-[12px] text-ink shadow-[0_10px_28px_rgb(0_0_0/0.22)] outline-none dark:border-line-strong"
+          className="accent-popover relative z-[1100] flex flex-col gap-2.5 rounded-[10px] border border-line-popover bg-popover p-3 font-[family-name:var(--font-ui)] text-[12px] text-ink outline-none dark:border-line-strong"
           align="start"
           side="bottom"
           sideOffset={6}

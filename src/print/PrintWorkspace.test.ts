@@ -180,8 +180,8 @@ describe("PrintWorkspace React view", () => {
     const dialog = document.querySelector<HTMLElement>('.print-workspace[role="dialog"]');
     expect(dialog?.getAttribute("aria-label")).toBe("Print");
     expect(dialog?.querySelector(".print-ws-title")?.textContent).toBe("Print");
-    expect(dialog?.querySelector(".print-ws-summary")?.textContent).toContain(
-      "notes.md · 2 pages",
+    expect(dialog?.querySelector(".print-ws-paper")?.textContent).toBe(
+      "A4 · Portrait · 210 × 297 mm · 2 pages",
     );
     expect(dialog?.querySelector(".print-ws-note")?.textContent).toBe("System dialog");
     expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
@@ -208,7 +208,7 @@ describe("PrintWorkspace React view", () => {
   it("switches orientation with radios and describes the paper under the preview", () => {
     act(() => workspace!.open(JOB));
     const paper = document.querySelector(".print-ws-paper");
-    expect(paper?.textContent).toBe("A4 · Portrait · 210 × 297 mm");
+    expect(paper?.textContent).toContain("A4 · Portrait · 210 × 297 mm");
     expect(document.querySelector('[role="radiogroup"][aria-label="Orientation"]')).not.toBeNull();
 
     act(() => radio("Landscape").click());
@@ -220,11 +220,10 @@ describe("PrintWorkspace React view", () => {
       }
     ).geometry;
     expect(geometry.widthPx).toBeGreaterThan(geometry.heightPx);
-    expect(paper?.textContent).toBe("A4 · Landscape · 297 × 210 mm");
-    expect(document.querySelector(".print-ws-summary")?.textContent).toContain("A4 landscape");
+    expect(paper?.textContent).toContain("A4 · Landscape · 297 × 210 mm");
 
     changeSelect("Paper size", "letter");
-    expect(paper?.textContent).toBe("Letter · Landscape · 279.4 × 215.9 mm");
+    expect(paper?.textContent).toContain("Letter · Landscape · 279.4 × 215.9 mm");
   });
 
   it("traps Tab through the checked radio of each group and wraps at both ends", () => {
@@ -301,7 +300,6 @@ describe("PrintWorkspace React view", () => {
 
     const printer = document.querySelector<HTMLSelectElement>('select[aria-label="Printer"]');
     expect(printer?.value).toBe("Office");
-    expect(document.querySelector(".print-ws-summary")?.textContent).toContain("Office");
     // Auto-detecting the default alone must not make the working copy dirty.
     expect(saveSettings).not.toHaveBeenCalled();
 

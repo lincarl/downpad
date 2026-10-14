@@ -35,7 +35,6 @@ import {
   MARGIN_PRESETS,
   PAPER_SIZES,
   clampScale,
-  describeSetup,
   pageGeometry,
   type MarginPreset,
   type Orientation,
@@ -394,12 +393,10 @@ export class PrintWorkspace {
     scaler.style.setProperty("--print-preview-scale", String(scale));
   }
 
+  /** The page count shown at the end of the paper line under the preview. */
   private updateSummary(): void {
     const pages = this.printRoot ? pageCount(this.printRoot) : 0;
-    const printer = this.settings!.printerName || "system default";
-    this.summaryText = `${this.job!.docTitle} · ${pages} ${
-      pages === 1 ? "page" : "pages"
-    } · ${describeSetup(this.setup())} · ${printer}`;
+    this.summaryText = `${pages} ${pages === 1 ? "page" : "pages"}`;
     this.publish();
   }
 
@@ -707,14 +704,9 @@ function PrintWorkspaceView({
       <div className="flex min-h-0 flex-1 px-[11px] pb-2.5 pt-[11px]">
         {/* Settings column: fixed width, scrolls on its own. */}
         <div className="print-ws-settings flex w-[390px] shrink-0 flex-col gap-1.5 overflow-y-auto leading-[18px] [scrollbar-gutter:stable]">
-          <div className="mb-1 pt-1">
-            <h2 className="print-ws-title m-0 text-[15px] font-semibold leading-5 text-ink-primary">
-              Print
-            </h2>
-            <p className="print-ws-summary m-0 mt-0.5 text-ink-soft [overflow-wrap:anywhere]">
-              {view.summary}
-            </p>
-          </div>
+          <h2 className="print-ws-title m-0 mb-1 pt-1 text-[15px] font-semibold leading-5 text-ink-primary">
+            Print
+          </h2>
 
           <PrintGroup legend="Version">
             <RadioChoice<PrintVersion>
@@ -774,7 +766,7 @@ function PrintWorkspaceView({
                     }
                   >
                     <option value="all">All</option>
-                    <option value="custom">Custom…</option>
+                    <option value="custom">Custom</option>
                   </Select>
                   {view.pageRange && (
                     <PageRangeField value={view.pageRange} onChange={onPageRangeChange} />
@@ -889,7 +881,10 @@ function PrintWorkspaceView({
               className="print-ws-scaler m-auto flex-none overflow-clip [overflow-clip-margin:2px]"
             />
           </div>
-          <p className="print-ws-paper m-0 leading-[18px] text-ink">{describePaper(s)}</p>
+          <p className="print-ws-paper m-0 leading-[18px] text-ink">
+            {describePaper(s)}
+            {view.summary && <span className="print-ws-summary"> · {view.summary}</span>}
+          </p>
         </div>
       </div>
 

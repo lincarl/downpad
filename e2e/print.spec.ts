@@ -43,7 +43,7 @@ test("the Print button opens the workspace with a paginated preview", async ({ p
   );
   // Page numbers stay on by default.
   await expect(page.locator(".print-page .print-page-footer").first()).toHaveText("1 / 1");
-  await expect(page.locator(".print-ws-summary")).toContainText("A4 portrait");
+  await expect(page.locator(".print-ws-paper")).toContainText("A4 · Portrait");
 });
 
 test("the version chooser switches between the document and the Markdown source", async ({
@@ -77,7 +77,7 @@ test("changing the page setup re-paginates the preview", async ({ page }) => {
     () => (document.querySelector(".print-page") as HTMLElement).offsetWidth,
   );
   expect(landscapeWidth).toBeGreaterThan(portraitWidth);
-  await expect(page.locator(".print-ws-summary")).toContainText("A4 landscape");
+  await expect(page.locator(".print-ws-paper")).toContainText("A4 · Landscape");
 });
 
 test("enabling page numbers reserves the footer band without clipping content", async ({ page }) => {

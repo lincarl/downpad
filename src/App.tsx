@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -45,15 +46,11 @@ import { MenuRows, menuSurfaceClassName, onMenuKeyDown, type MenuItem } from "@/
 import { FileCopyIcon, FolderCopyIcon } from "@/components/icons";
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { TooltipLabel, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { countWords } from "@/document/wordcount";
 import { byteLength, formatKB } from "@/document/docSize";
@@ -66,8 +63,10 @@ export interface AppProps {
   store: Store;
 }
 
-/** Mervin draws chrome icons at a 1px line weight, whatever their size. */
-const ICON_STROKE = { absoluteStrokeWidth: true, strokeWidth: 1 } as const;
+/** Mervin draws chrome icons with a 1px line at any size. lucide's absolute stroke
+ *  scales by the `size` prop, so each icon passes the size it renders at. */
+const TOOL_ICON = { size: 20, absoluteStrokeWidth: true, strokeWidth: 1 } as const;
+const SMALL_ICON = { size: 16, absoluteStrokeWidth: true, strokeWidth: 1 } as const;
 
 /** Text-size presets offered by the toolbar's size control. */
 const TEXT_SIZES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
@@ -125,7 +124,8 @@ function AppContent({ store }: { store: Store }) {
             aria-labelledby={state.activeTabId ? `document-tab-${state.activeTabId}` : undefined}
             className={cn(
               "editor-area absolute inset-0 flex justify-center overflow-auto",
-              "bg-canvas text-[var(--editor-surface-fg)] [scrollbar-gutter:stable]",
+              "bg-canvas text-[var(--editor-surface-fg)]",
+              editorLayout === "document" && "[scrollbar-gutter:stable]",
               editorLayout === "split" && "split",
               editorLayout === "markdown" && "markdown-only",
             )}
@@ -222,20 +222,20 @@ function Toolbar() {
         {layouts.map(({ value, label, title }) => {
           const active = inEditor && editorLayout === value;
           return (
+            <TooltipLabel key={value} text={title}>
             <ToggleGroupItem
-              key={value}
               value={value}
               className={cn(
                 "toolbar-seg h-[29px] cursor-pointer border border-l-0 border-line bg-fill px-3.5 text-[12px] font-normal leading-4 text-ink",
                 "first:rounded-l-control first:border-l last:rounded-r-control",
-                "hover:bg-[color-mix(in_srgb,var(--fill),var(--ink)_8%)] focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-accent",
+                "hover:bg-[color-mix(in_srgb,var(--fill),var(--ink)_8%)] focus-ring",
                 "disabled:cursor-default disabled:bg-transparent disabled:text-ink-disabled disabled:opacity-100",
                 active && "active border-accent bg-accent text-accent-fg hover:bg-accent-hover",
               )}
-              title={title}
             >
               {label}
             </ToggleGroupItem>
+            </TooltipLabel>
           );
         })}
       </ToggleGroup>
@@ -246,7 +246,7 @@ function Toolbar() {
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(-0.1)}
       >
-        <Minus aria-hidden="true" {...ICON_STROKE} />
+        <Minus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
       <TextSizeControl className="max-[683px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
       <ToolButton
@@ -255,11 +255,11 @@ function Toolbar() {
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(0.1)}
       >
-        <Plus aria-hidden="true" {...ICON_STROKE} />
+        <Plus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
       <ToolSeparator />
       <ToolButton label="Print" tooltip="Print (Ctrl+P)" disabled={!inEditor} onClick={() => runtime?.printDocument()}>
-        <Printer aria-hidden="true" {...ICON_STROKE} />
+        <Printer aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
       <ToolButton
         label="Find"
@@ -268,7 +268,7 @@ function Toolbar() {
         pressed={inEditor && find.open}
         onClick={() => runtime?.toggleFind()}
       >
-        <Search aria-hidden="true" {...ICON_STROKE} />
+        <Search aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
       <ToolSeparator />
       <ToolButton
@@ -277,9 +277,9 @@ function Toolbar() {
         onClick={() => runtime?.toggleDocumentTheme()}
       >
         {documentIsDark ? (
-          <Sun aria-hidden="true" className="document-theme-glyph" {...ICON_STROKE} />
+          <Sun aria-hidden="true" className="document-theme-glyph" {...TOOL_ICON} />
         ) : (
-          <Moon aria-hidden="true" className="document-theme-glyph" {...ICON_STROKE} />
+          <Moon aria-hidden="true" className="document-theme-glyph" {...TOOL_ICON} />
         )}
       </ToolButton>
     </header>
@@ -311,6 +311,7 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
     icon,
     disabled: !inEditor,
     checked: inEditor && editorLayout === value,
+    radio: true,
     run: () => runtime?.selectLayout(value),
   });
   const items: MenuItem[] = [
@@ -335,7 +336,7 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
   ];
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <ToolTip text="Menu">
+      <TooltipLabel text="Menu">
         <PopoverTrigger asChild>
           <Button
             type="button"
@@ -343,14 +344,15 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
             size="tool-icon"
             className="toolbar-menu"
             aria-label="Application menu"
+            aria-haspopup="menu"
           >
-            <Menu aria-hidden="true" className="size-5" {...ICON_STROKE} />
+            <Menu aria-hidden="true" {...TOOL_ICON} />
           </Button>
         </PopoverTrigger>
-      </ToolTip>
+      </TooltipLabel>
       <PopoverContent
         align="start"
-        sideOffset={2}
+        sideOffset={0}
         className={cn("app-menu z-[100] min-w-[210px]", menuSurfaceClassName)}
         role="menu"
         aria-label="Application menu"
@@ -388,12 +390,12 @@ function ToolButton({
   children: ReactNode;
 }) {
   return (
-    <ToolTip text={tooltip}>
+    <TooltipLabel text={tooltip}>
       <Button
         type="button"
         variant="tool"
         size="tool-icon"
-        className={cn("toolbar-icon [&_svg]:size-5", className)}
+        className={cn("toolbar-icon", className)}
         aria-label={label}
         aria-pressed={pressed}
         disabled={disabled}
@@ -401,17 +403,7 @@ function ToolButton({
       >
         {children}
       </Button>
-    </ToolTip>
-  );
-}
-
-/** Wraps a control in the shared chrome tooltip. */
-function ToolTip({ text, children }: { text: string; children: ReactNode }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{text}</TooltipContent>
-    </Tooltip>
+    </TooltipLabel>
   );
 }
 
@@ -439,67 +431,75 @@ function SplitButton({
   items: MenuItem[];
 }) {
   const [open, setOpen] = useState(false);
+  // Hover, pressed and open washes belong to the whole box, as in Mervin; the
+  // two parts only carry their own keyboard focus outline.
   const part = cn(
-    "flex h-full cursor-pointer items-center text-ink-body outline-none",
-    "focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-1 focus-visible:outline-accent",
-    "group-hover/split:bg-hover active:bg-pressed data-[state=open]:bg-pressed",
-    "disabled:cursor-default disabled:bg-transparent disabled:text-ink-disabled",
+    "flex h-full cursor-pointer items-center bg-transparent text-ink-body outline-none",
+    "focus-ring-inset",
+    "disabled:cursor-default disabled:text-ink-disabled",
   );
   return (
-    <div
-      className={cn(
-        "toolbar-split group/split inline-flex h-[33px] shrink-0 rounded-control border",
-        disabled
-          ? "pointer-events-none border-line-tool-disabled"
-          : "border-line-tool hover:border-line-tool-strong has-[[data-state=open]]:border-line-tool-strong",
-        className,
-      )}
-    >
-      <ToolTip text={tooltip}>
-        <button
-          type="button"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <div
           className={cn(
-            part,
-            "toolbar-file gap-[5px] rounded-l-control pl-2.5 pr-0.5 text-[12px] leading-4 max-[849px]:pr-1",
+            "toolbar-split inline-flex h-[33px] shrink-0 rounded-control border",
+            disabled
+              ? "pointer-events-none border-line-tool-disabled"
+              : cn(
+                  "border-line-tool hover:border-line-tool-strong hover:bg-hover",
+                  "has-[:active]:bg-pressed has-[[data-state=open]]:border-line-tool-strong has-[[data-state=open]]:bg-pressed",
+                ),
+            className,
           )}
-          disabled={disabled}
-          onClick={onClick}
         >
-          <Icon aria-hidden="true" className="size-5" {...ICON_STROKE} />
-          {/* Narrow windows keep the icon and drop the label before anything clips. */}
-          <span className="toolbar-file-label max-[849px]:hidden">{label}</span>
-        </button>
-      </ToolTip>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className={cn(part, "toolbar-caret w-[18px] justify-center rounded-r-control")}
-            aria-label={menuLabel}
-            disabled={disabled}
-          >
-            <ChevronDown aria-hidden="true" className="size-[13px]" absoluteStrokeWidth strokeWidth={1.25} />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="end"
-          sideOffset={3}
-          className={cn("z-[100]", menuSurfaceClassName)}
-          role="menu"
-          aria-label={menuLabel}
-          onKeyDown={onMenuKeyDown}
-          onOpenAutoFocus={focusFirstMenuRow}
-        >
-          <MenuRows
-            items={items}
-            onActivate={(item) => {
-              setOpen(false);
-              void item.run();
-            }}
-          />
-        </PopoverContent>
-      </Popover>
-    </div>
+          <TooltipLabel text={tooltip}>
+            <button
+              type="button"
+              className={cn(
+                part,
+                "toolbar-file gap-[3px] rounded-l-control pr-px pl-2.5 text-[12px] leading-4 max-[849px]:pr-1",
+              )}
+              disabled={disabled}
+              onClick={onClick}
+            >
+              <Icon aria-hidden="true" {...TOOL_ICON} />
+              {/* Narrow windows keep the icon and drop the label before anything clips. */}
+              <span className="toolbar-file-label max-[849px]:hidden">{label}</span>
+            </button>
+          </TooltipLabel>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={cn(part, "toolbar-caret w-[18px] justify-center rounded-r-control")}
+              aria-label={menuLabel}
+              aria-haspopup="menu"
+              disabled={disabled}
+            >
+              <ChevronDown aria-hidden="true" size={13} absoluteStrokeWidth strokeWidth={1.1} />
+            </button>
+          </PopoverTrigger>
+        </div>
+      </PopoverAnchor>
+      {/* Toolbar menus drop from the button's left edge, directly below it. */}
+      <PopoverContent
+        align="start"
+        sideOffset={0}
+        className={cn("z-[100]", menuSurfaceClassName)}
+        role="menu"
+        aria-label={menuLabel}
+        onKeyDown={onMenuKeyDown}
+        onOpenAutoFocus={focusFirstMenuRow}
+      >
+        <MenuRows
+          items={items}
+          onActivate={(item) => {
+            setOpen(false);
+            void item.run();
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -518,33 +518,35 @@ function TextSizeControl({
   const current = Math.round(scale * 100);
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <ToolTip text="Document text size">
+      <TooltipLabel text="Document text size">
         <PopoverTrigger asChild>
           <button
             type="button"
             className={cn(
               "zoom-readout relative flex h-[29px] w-24 shrink-0 cursor-pointer items-center justify-center rounded-control border border-line bg-well pr-5 pl-2 text-[12px] text-ink-primary outline-none",
-              "hover:border-line-strong focus-visible:border-accent data-[state=open]:border-accent",
+              "hover:border-line-strong focus-visible:border-accent aria-expanded:border-accent",
               "disabled:cursor-default disabled:border-line-disabled disabled:text-ink-disabled",
               className,
             )}
             aria-label={`Document text size, ${current}%`}
+            aria-haspopup="menu"
             disabled={disabled}
           >
             {current}%
             <ChevronDown
               aria-hidden="true"
-              className="absolute right-2 size-3 text-ink-body [button:disabled_&]:text-ink-disabled"
+              className="absolute right-2 text-ink-body [button:disabled_&]:text-ink-disabled"
+              size={12}
               absoluteStrokeWidth
-              strokeWidth={1.25}
+              strokeWidth={1.1}
             />
           </button>
         </PopoverTrigger>
-      </ToolTip>
+      </TooltipLabel>
       <PopoverContent
         align="start"
-        sideOffset={2}
-        className={cn(menuSurfaceClassName, "z-[100] min-w-[110px]")}
+        sideOffset={0}
+        className={cn(menuSurfaceClassName, "z-[100] w-[var(--radix-popover-trigger-width)] min-w-0")}
         role="menu"
         aria-label="Document text size"
         onKeyDown={onMenuKeyDown}
@@ -554,6 +556,7 @@ function TextSizeControl({
           items={TEXT_SIZES.map((size) => ({
             label: `${Math.round(size * 100)}%`,
             checked: Math.round(size * 100) === current,
+            radio: true,
             run: () => runtime?.zoomDocument(size - scale),
           }))}
           onActivate={(item) => {
@@ -570,6 +573,14 @@ function TabStrip() {
   const runtime = useAppRuntime();
   const { tabs, activeTabId, view } = useAppState((state) => state);
   const recentActive = view === "recent";
+  const tablistRef = useRef<HTMLDivElement>(null);
+
+  // Keep the active tab in view when tabs overflow the strip.
+  useEffect(() => {
+    if (!activeTabId) return;
+    // Optional call: test DOMs (jsdom) have no scrollIntoView.
+    document.getElementById(`document-tab-${activeTabId}`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [activeTabId, tabs.length]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target;
@@ -604,8 +615,8 @@ function TabStrip() {
       <button
         type="button"
         className={cn(
-          "toolbar-recent grid h-[29px] shrink-0 cursor-pointer rounded-[6px] border border-line-push bg-transparent px-3 text-[12px] leading-4 text-ink-body outline-none",
-          "hover:border-line-strong hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-accent",
+          "toolbar-recent grid h-[29px] shrink-0 cursor-pointer place-items-center rounded-[6px] border border-line-push bg-transparent px-3 text-[12px] leading-4 text-ink-body outline-none",
+          "hover:border-line-strong hover:bg-hover focus-ring",
           recentActive &&
             "active border-accent bg-fill font-semibold text-accent hover:border-accent hover:bg-fill dark:font-normal dark:text-ink-primary",
         )}
@@ -617,11 +628,19 @@ function TabStrip() {
         </span>
         <span className="col-start-1 row-start-1">Recent</span>
       </button>
+      {/* Tabs shrink to a floor, then the strip scrolls. Its scroll bar stays
+          hidden as in Mervin, so the mouse wheel scrolls it sideways. */}
       <div
+        ref={tablistRef}
         className="flex h-full min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden pb-[5px] [&::-webkit-scrollbar]:h-0"
         role="tablist"
         aria-label="Open documents"
         onKeyDown={onKeyDown}
+        onWheel={(event) => {
+          const strip = tablistRef.current;
+          if (!strip || event.deltaX !== 0 || strip.scrollWidth <= strip.clientWidth) return;
+          strip.scrollLeft += event.deltaY;
+        }}
       >
         {tabs.map((tab) => (
           <DocumentTab
@@ -633,19 +652,19 @@ function TabStrip() {
           />
         ))}
       </div>
-      <ToolTip text="New tab (Ctrl+N)">
+      <TooltipLabel text="New tab (Ctrl+N)">
         <button
           type="button"
           className={cn(
-            "tab-new flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent p-0 text-ink-soft outline-none",
-            "hover:bg-hover hover:text-ink-body focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-accent",
+            "tab-new mb-[5px] flex size-7 shrink-0 cursor-pointer items-center justify-center self-end rounded-control border-0 bg-transparent p-0 text-ink-body outline-none",
+            "hover:bg-hover focus-ring",
           )}
           aria-label="New tab"
           onClick={() => runtime?.newDocument()}
         >
-          <Plus aria-hidden="true" className="size-4" {...ICON_STROKE} />
+          <Plus aria-hidden="true" {...SMALL_ICON} />
         </button>
-      </ToolTip>
+      </TooltipLabel>
     </nav>
   );
 }
@@ -683,10 +702,10 @@ function DocumentTab({
       tabIndex={focusable ? 0 : -1}
       data-tab-id={tab.id}
       className={cn(
-        "tab group flex h-7 min-w-0 max-w-[260px] shrink-0 cursor-pointer select-none items-center gap-2.5",
+        "tab group flex h-7 min-w-[96px] max-w-[260px] cursor-pointer select-none items-center gap-2.5",
         "whitespace-nowrap rounded-t-control border border-b-0 border-transparent bg-transparent",
         "pr-[3px] pl-3 text-[12px] leading-4 text-ink-body outline-none",
-        "hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent",
+        "hover:bg-hover focus-ring-inset",
         active &&
           "active border-line bg-fill font-semibold text-accent hover:bg-fill dark:border-line-disabled dark:font-normal dark:text-ink-primary",
       )}
@@ -726,8 +745,8 @@ function DocumentTab({
     >
       <File
         aria-hidden="true"
-        className={cn("size-4 shrink-0", active ? "text-accent" : "text-ink-body")}
-        {...ICON_STROKE}
+        className={cn("shrink-0", active ? "text-accent" : "text-ink-body")}
+        {...SMALL_ICON}
       />
       <span className="tab-select flex min-w-0 flex-auto items-center gap-1.5">
         {tab.doc.isDirty && (
@@ -743,7 +762,6 @@ function DocumentTab({
           "tab-close ml-3 flex size-4 shrink-0 cursor-pointer items-center justify-center",
           "rounded-[4px] text-ink-faint hover:bg-pressed hover:text-ink-body",
         )}
-        title="Close tab"
       >
         <X aria-hidden="true" className="size-3.5" strokeWidth={2} />
       </span>
@@ -771,7 +789,7 @@ function Banner() {
       aria-live={error ? "assertive" : "polite"}
       aria-atomic="true"
     >
-      {error && <TriangleAlert aria-hidden="true" className="size-4 shrink-0 text-ink-danger" {...ICON_STROKE} />}
+      {error && <TriangleAlert aria-hidden="true" className="shrink-0 text-ink-danger" {...SMALL_ICON} />}
       <AlertDescription className="banner-message flex-1 text-[12px] leading-4 text-inherit">
         {banner.message}
       </AlertDescription>
@@ -788,17 +806,18 @@ function Banner() {
           </Button>
         ))}
       </div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="banner-dismiss text-ink-soft"
-        title="Dismiss"
-        aria-label="Dismiss notification"
-        onClick={() => runtime?.dismissBanner()}
-      >
-        <X aria-hidden="true" className="size-4" {...ICON_STROKE} />
-      </Button>
+      <TooltipLabel text="Dismiss">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="banner-dismiss text-ink-soft"
+          aria-label="Dismiss notification"
+          onClick={() => runtime?.dismissBanner()}
+        >
+          <X aria-hidden="true" {...SMALL_ICON} />
+        </Button>
+      </TooltipLabel>
     </Alert>
   );
 }

@@ -3,13 +3,14 @@ import { Star } from "lucide-react";
 import type { FileStat } from "@/ipc/contracts";
 import { cn } from "@/lib/utils";
 import { DocumentArtwork } from "@/components/icons";
-import { fileName, formatDate, formatSize } from "./recentFormat";
+import { fileName, formatDate, formatSize, plainSnippet } from "./recentFormat";
 import type { RecentRowModel } from "./recentListing";
 
 // Mervin's brand colours, the same in both themes.
 const STAR_FILL = "#f5c400";
 const STAR_EDGE = "#d4a500";
-const STAR_EMPTY_EDGE = "#b8b8b8";
+/** The empty star's grey edge (#b8b8b8), or the selection ink on a selected row. */
+const STAR_EMPTY_CLASS = "text-[#b8b8b8] group-has-[:focus-visible]/row:text-accent-fg/80";
 
 /** A row is selected while it, or its star, has keyboard focus. Selected text uses
  * the accent's own ink for contrast, where Mervin keeps the rest inks. */
@@ -88,7 +89,7 @@ export function RecentRow({
           </span>
           {hit && (
             <span className={cn("recent-snippet leading-[23px]", SMALL_TEXT, strongInk, SELECTED_INK)}>
-              <Highlighted text={hit.snippet} query={snippetQuery} />
+              <Highlighted text={plainSnippet(hit.snippet)} query={snippetQuery} />
             </span>
           )}
           {/* Right-to-left with a leading LRM puts the ellipsis on the left, so the
@@ -134,12 +135,15 @@ export function RecentRow({
           onToggleStar();
         }}
       >
+        {/* On a selected row the empty star takes the selection ink, since its grey
+            outline vanishes on the accent fill. */}
         <Star
           aria-hidden="true"
           focusable="false"
           size={20}
           strokeWidth={2}
-          color={entry.favorite ? STAR_EDGE : STAR_EMPTY_EDGE}
+          className={entry.favorite ? undefined : STAR_EMPTY_CLASS}
+          color={entry.favorite ? STAR_EDGE : "currentColor"}
           fill={entry.favorite ? STAR_FILL : "none"}
         />
       </button>
@@ -176,7 +180,7 @@ function Highlighted({ text, query }: { text: string; query: string }) {
     nodes.push(
       <span
         key={`${start}-${end}`}
-        className="recent-match -mx-px rounded-[3px] bg-[rgb(255_230_0/0.588)] px-px py-px group-has-[:focus-visible]/row:text-[#1a1f24]"
+        className="recent-match -mx-px rounded-[3px] bg-[rgb(255_230_0/0.588)] px-px py-px text-[#1a1f24]"
       >
         {text.slice(start, end)}
       </span>,

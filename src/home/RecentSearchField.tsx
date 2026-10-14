@@ -1,6 +1,7 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TooltipLabel } from "@/components/ui/tooltip";
 import type { SearchScope } from "./recentListing";
 
 /** Placeholder and accessible name of the field for each scope. */
@@ -59,9 +60,10 @@ export function RecentSearchField({
       )}
     >
       <Search
-        className="recent-search-icon ml-[5px] size-4 shrink-0 text-ink-faint"
+        className="recent-search-icon ml-[5px] shrink-0 text-ink-faint"
         aria-hidden="true"
         focusable="false"
+        size={16}
         absoluteStrokeWidth
         strokeWidth={1}
       />
@@ -79,10 +81,10 @@ export function RecentSearchField({
         spellCheck={false}
         onKeyDown={onKeyDown}
       />
+      <TooltipLabel text="Clear">
       <button
         type="button"
         className="recent-search-clear grid size-[22px] shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0 text-ink-soft outline-none hover:bg-hover"
-        title="Clear"
         aria-label="Clear"
         tabIndex={-1}
         // Hidden while empty, but it keeps its slot so the toggles never move.
@@ -92,6 +94,7 @@ export function RecentSearchField({
       >
         <X aria-hidden="true" focusable="false" size={14} absoluteStrokeWidth strokeWidth={1} />
       </button>
+      </TooltipLabel>
       <span className="ml-[2px] mr-1 h-4 w-px shrink-0 bg-line-strong" aria-hidden="true" />
       <div className="recent-scope mr-[5px] flex shrink-0" role="group" aria-label="Search scope">
         {SCOPES.map((value) => (

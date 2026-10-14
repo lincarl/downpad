@@ -86,3 +86,26 @@ export function filterByName(entries: RecentEntry[], query: string): RecentEntry
   if (!q) return entries;
   return entries.filter((e) => fileName(e.path).toLowerCase().includes(q));
 }
+
+/**
+ * A content-search snippet as readable text: the line's Markdown markers go
+ * (heading, quote, list and task markers, emphasis and code ticks), and table
+ * cells read as "a · b · c" instead of pipes.
+ */
+export function plainSnippet(line: string): string {
+  let text = line.trim();
+  if (/^\|.*\|$/.test(text)) {
+    text = text
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter((cell) => cell !== "" && !/^:?-+:?$/.test(cell))
+      .join(" · ");
+  }
+  return text
+    .replace(/^(?:#{1,6}|>+)\s+/, "")
+    .replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "")
+    .replace(/(?<![\w*`])(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1(?![\w*`])/g, "$2")
+    .replace(/\s+/g, " ")
+    .trim();
+}

@@ -40,7 +40,9 @@ describe("RecoveryDialog", () => {
     const user = userEvent.setup();
 
     expect(names()).toEqual(["Untitled document", "plan.md"]);
-    expect(document.querySelector(".recovery-item-path")?.textContent).toBe("/notes/plan.md");
+    const path = document.querySelector(".recovery-item-path");
+    expect(path?.getAttribute("title")).toBe("/notes/plan.md");
+    expect(path?.textContent).toContain("/notes/plan.md");
     const previews = Array.from(document.querySelectorAll(".recovery-item-preview"), (node) => node.textContent);
     expect(previews).toEqual(["Meeting summary", "Project plan Ship it"]);
 
