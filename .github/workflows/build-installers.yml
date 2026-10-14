@@ -239,6 +239,11 @@ jobs:
         if: steps.existing.outputs.reused != 'true'
         run: pnpm install --frozen-lockfile
 
+      # Electron 44 downloads lazily. Install before configuring its sandbox.
+      - name: Install Electron runtime
+        if: steps.existing.outputs.reused != 'true'
+        run: pnpm exec install-electron
+
       - name: Check app
         if: steps.existing.outputs.reused != 'true'
         run: pnpm check
