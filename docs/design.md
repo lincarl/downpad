@@ -26,6 +26,15 @@ Each tab owns its own document state, including its path, content, save status, 
 
 Milkdown and CodeMirror manage their own editor DOM and lifecycles. React owns the surrounding application interface, including tabs, toolbars, dialogs, settings, recent files, and print views.
 
+## Interface design
+
+The interface follows the look of [Mervin PDF](https://github.com/lincarl/mervin-pdf). Dark mode uses Mervin's "Nord" chrome and light mode its "Cool slate" chrome.
+
+- `src/styles/app.css` defines the chrome tokens (surfaces from the input well to the floating popover, inks, translucent edges and washes, the accent) for both themes and exposes them to Tailwind as colors such as `bg-well`, `text-ink-soft` and `border-line-push`.
+- The primitives in `src/components/ui` (buttons, fields, check boxes, dialogs, menus, tooltips) carry Mervin's control styles, so surfaces compose them instead of restyling controls.
+- Chrome icons are Lucide icons drawn at a 1px line weight.
+- The document surface has its own light and dark palette, independent of the chrome theme.
+
 ## Application structure
 
 The frontend is organized around a small observable application store and service modules for the major responsibilities:
