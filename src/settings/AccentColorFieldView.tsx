@@ -9,22 +9,29 @@ import {
   PopoverPortal,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { DEFAULT_ACCENT, normalizeHex } from "@/shell/accent";
 import { cn } from "@/lib/utils";
+import { normalizeHex } from "@/shell/accent";
 
 export interface AccentColorFieldViewProps {
-  initial: string;
+  /** The accent the swatch shows now: the staged custom colour, the system
+   *  accent, or the theme's default. The picker opens on it. */
+  value: string;
+  /** The current UI theme's default accent, which the picker's Default button
+   *  restores. */
+  defaultColor: string;
+  /** Disabled while the system accent is in use. */
+  disabled?: boolean;
   onCommit: (color: string) => void;
 }
 
 /**
- * A staged custom-accent picker. Its OK button commits only to the surrounding
- * Settings form; the form's Save button is still what applies the setting.
+ * Mervin's accent swatch: a 48x24 button filled with the accent that opens a
+ * staged picker. Its OK button commits only to the surrounding Settings form;
+ * the form's Save button is still what applies the setting.
  */
-export function AccentColorFieldView({ initial, onCommit }: AccentColorFieldViewProps) {
-  const [committed, setCommitted] = useState(() => normalizeHex(initial) ?? DEFAULT_ACCENT);
-  const [draft, setDraft] = useState(committed);
-  const [hexText, setHexText] = useState(committed);
+export function AccentColorFieldView({ value, defaultColor, disabled, onCommit }: AccentColorFieldViewProps) {
+  const [draft, setDraft] = useState(value);
+  const [hexText, setHexText] = useState(value);
   const [open, setOpen] = useState(false);
   const hexRef = useRef<HTMLInputElement>(null);
   const restoreFocus = useRef(false);
@@ -38,8 +45,8 @@ export function AccentColorFieldView({ initial, onCommit }: AccentColorFieldView
 
   const setPopoverOpen = (next: boolean): void => {
     if (next) {
-      setDraft(committed);
-      setHexText(committed);
+      setDraft(value);
+      setHexText(value);
       restoreFocus.current = false;
     }
     setOpen(next);
@@ -55,15 +62,16 @@ export function AccentColorFieldView({ initial, onCommit }: AccentColorFieldView
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="accent-swatch h-7 w-12 cursor-pointer rounded-[5px] border border-border p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          disabled={disabled}
+          className="accent-swatch h-6 w-12 shrink-0 cursor-pointer rounded-[4px] border border-black/35 p-0 outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:cursor-default"
           aria-label="Choose custom accent color"
           title="Choose accent color"
-          style={{ background: committed }}
+          style={{ background: value }}
         />
       </PopoverTrigger>
       <PopoverPortal>
         <PopoverContent
-          className="accent-popover relative z-[1100] flex flex-col gap-2.5 rounded-lg border border-border bg-background p-3 text-foreground shadow-[0_8px_32px_rgba(0,0,0,0.3)] outline-none"
+          className="accent-popover relative z-[1100] flex flex-col gap-2.5 rounded-[10px] border border-line-popover bg-popover p-3 font-[var(--font-ui)] text-[13px] text-ink shadow-[0_10px_28px_rgb(0_0_0/0.22)] outline-none dark:border-line-strong"
           align="start"
           side="bottom"
           sideOffset={6}
@@ -95,14 +103,15 @@ export function AccentColorFieldView({ initial, onCommit }: AccentColorFieldView
           <div className="accent-picker-row flex items-center gap-2">
             <input
               type="color"
-              className="accent-picker-input h-[30px] w-11 cursor-pointer rounded-[5px] border border-border bg-background p-0.5"
+              aria-label="Accent color"
+              className="accent-picker-input h-[29px] w-12 cursor-pointer rounded-control border border-line-popover-control bg-well p-[3px] [&::-webkit-color-swatch]:rounded-[3px] [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
               value={draft}
               onChange={(event) => setCanonicalDraft(event.currentTarget.value)}
             />
             <Input
               ref={hexRef}
               type="text"
-              className="accent-hex w-24 min-w-0"
+              className="accent-hex w-24 min-w-0 border-line-popover-control"
               spellCheck={false}
               aria-label="Accent color hex"
               value={hexText}
@@ -114,12 +123,12 @@ export function AccentColorFieldView({ initial, onCommit }: AccentColorFieldView
               onBlur={() => setHexText(draft)}
             />
           </div>
-          <div className="accent-popover-footer flex justify-end gap-2">
+          <div className="accent-popover-footer flex justify-end gap-1.5">
             <Button
               type="button"
               variant="outline"
               className={cn("dialog-btn", dialogButtonClassName)}
-              onClick={() => setCanonicalDraft(DEFAULT_ACCENT)}
+              onClick={() => setCanonicalDraft(defaultColor)}
             >
               Default
             </Button>
@@ -135,7 +144,6 @@ export function AccentColorFieldView({ initial, onCommit }: AccentColorFieldView
               type="button"
               className={cn("dialog-btn primary", dialogButtonClassName)}
               onClick={() => {
-                setCommitted(draft);
                 onCommit(draft);
                 close(true);
               }}

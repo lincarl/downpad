@@ -24,9 +24,12 @@ const valueFor = (page: Page, key: string) =>
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) })
     .locator(".frontmatter-value-edit");
 
-async function openSettings(page: Page): Promise<void> {
+// Opens Settings on the given page. The dialog keeps one page visible at a time
+// (General first), so a field must be reached through its nav row.
+async function openSettings(page: Page, section = "General"): Promise<void> {
   await page.getByRole("button", { name: "Application menu" }).click();
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator(".dialog").getByRole("tab", { name: section, exact: true }).click();
 }
 
 test("frontmatter renders as an editable key/value table by default", async ({ page }) => {
@@ -259,7 +262,7 @@ test("editing a table value patches the YAML while preserving the other fields",
 });
 
 test("turning off 'Show frontmatter table' hides it but keeps the YAML", async ({ page }) => {
-  await openSettings(page);
+  await openSettings(page, "Editor");
   const dialog = page.locator(".dialog");
   const toggle = dialog
     .locator(".dialog-row", { hasText: "Show frontmatter table" })
@@ -280,7 +283,7 @@ test("turning off 'Show frontmatter table' hides it but keeps the YAML", async (
 });
 
 test("settings dialog opens, edits a value, saves, and applies it", async ({ page }) => {
-  await openSettings(page);
+  await openSettings(page, "Appearance");
   const dialog = page.locator(".dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".dialog-title")).toHaveText("Settings");
@@ -300,7 +303,7 @@ test("settings dialog opens, edits a value, saves, and applies it", async ({ pag
 });
 
 test("changing the bullet style re-mounts WYSIWYG without losing content", async ({ page }) => {
-  await openSettings(page);
+  await openSettings(page, "Markdown");
   const dialog = page.locator(".dialog");
   const bullet = dialog.locator(".dialog-row", { hasText: "Bullet" }).locator("select");
   await bullet.selectOption("*");
