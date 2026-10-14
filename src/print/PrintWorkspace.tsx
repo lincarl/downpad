@@ -706,7 +706,7 @@ function PrintWorkspaceView({
     >
       <div className="flex min-h-0 flex-1 px-[11px] pb-2.5 pt-[11px]">
         {/* Settings column: fixed width, scrolls on its own. */}
-        <div className="print-ws-settings flex w-[390px] shrink-0 flex-col gap-1.5 overflow-y-auto leading-[19px] [scrollbar-gutter:stable]">
+        <div className="print-ws-settings flex w-[390px] shrink-0 flex-col gap-1.5 overflow-y-auto leading-[18px] [scrollbar-gutter:stable]">
           <div className="mb-1 pt-1">
             <h2 className="print-ws-title m-0 text-[15px] font-semibold leading-5 text-ink-primary">
               Print
@@ -872,7 +872,7 @@ function PrintWorkspaceView({
         <div aria-hidden="true" className="mx-[7px] w-px shrink-0 bg-line" />
 
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <h3 className="m-0 px-2 py-1 text-[13px] font-bold leading-[19px] text-ink">Preview</h3>
+          <h3 className="m-0 px-2 py-1 text-[12px] font-bold leading-[18px] text-ink">Preview</h3>
           {/* The sheets keep the body's inherited type, so nothing here sets a
               font or line height. Sized and scaled by PrintWorkspace.fitPreview. */}
           <div
@@ -889,11 +889,11 @@ function PrintWorkspaceView({
               className="print-ws-scaler m-auto flex-none overflow-clip [overflow-clip-margin:2px]"
             />
           </div>
-          <p className="print-ws-paper m-0 leading-[19px] text-ink">{describePaper(s)}</p>
+          <p className="print-ws-paper m-0 leading-[18px] text-ink">{describePaper(s)}</p>
         </div>
       </div>
 
-      <div className="print-ws-footer flex items-center gap-1.5 border-t border-separator px-[11px] py-2.5 leading-[19px]">
+      <div className="print-ws-footer flex items-center gap-1.5 border-t border-separator px-[11px] py-2.5 leading-[18px]">
         <Button type="button" variant="outline" className="dialog-btn" onClick={onSaveAsPdf}>
           Save as PDF
         </Button>

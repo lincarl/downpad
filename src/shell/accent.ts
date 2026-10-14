@@ -1,13 +1,14 @@
 // Accent (highlight) color resolution (spec §6.2). The accent drives the active
 // segmented-button background, the primary dialog button, selection highlights,
-// etc. (CSS var `--accent`). It comes from one of three sources — the built-in
-// blue, the Windows system accent, or a user-picked custom color — and we also
-// derive a readable foreground (`--accent-fg`) so text stays legible on light or
-// dark custom accents. These helpers are pure so they can be unit-tested; the
+// etc. (CSS var `--accent`). It comes from one of three sources: the theme's
+// design accent, the operating system accent, or a user-picked custom color. We
+// also derive a readable foreground (`--accent-fg`) so text stays legible on
+// light or dark custom accents. These helpers are pure so they can be unit-tested; the
 // store/IPC wiring lives in SettingsModel.
 
-/** The built-in default accent — the blue md-easy shipped with. */
-export const DEFAULT_ACCENT = "#0067c0";
+/** The starting custom accent, and the fallback for an invalid custom color: the
+ *  light theme's design blue. The "default" accent mode uses each theme's own. */
+export const DEFAULT_ACCENT = "#0969da";
 
 /**
  * Normalize a color string to lowercase `#rrggbb`, accepting `#rgb`, `rgb`,

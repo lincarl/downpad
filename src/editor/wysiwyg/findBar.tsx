@@ -124,7 +124,7 @@ const DEFAULT_OPTIONS: FindOptions = {
 /** The card's 28px icon buttons: transparent until hovered, glyph in the toolbar ink. */
 const ICON_BUTTON_CLASS = cn(
   "find-btn size-7 border-transparent p-0 text-ink-body",
-  "focus-visible:outline-1 focus-visible:-outline-offset-1 [&_svg]:size-4",
+  "focus-visible:outline-1 focus-visible:outline-solid focus-visible:-outline-offset-1 [&_svg]:size-4",
 );
 
 /** The card's text buttons in the replace row. */
@@ -207,7 +207,7 @@ const FindBarView = forwardRef<
   return (
     <div
       className={cn(
-        "find-bar pointer-events-auto flex flex-col gap-1.5 rounded-[10px] border bg-popover py-[7px] pr-[5px] pl-[7px] text-[13px] text-ink",
+        "find-bar pointer-events-auto flex flex-col gap-1.5 rounded-[10px] border bg-popover py-[7px] pr-[5px] pl-[7px] text-[12px] text-ink",
         "border-line-popover dark:border-line-strong",
       )}
       role="search"
@@ -221,7 +221,7 @@ const FindBarView = forwardRef<
             fieldClassName,
             "find-field relative flex w-[236px] min-w-0 shrink-0 cursor-text items-center gap-0 border-line-popover-control px-0",
             // A 2px accent ring while focused, drawn outside so the text never moves.
-            "focus-within:border-accent focus-within:outline-1 focus-within:outline-accent",
+            "focus-within:border-accent focus-within:outline-1 focus-within:outline-solid focus-within:outline-accent",
           )}
         >
           <Search
@@ -233,7 +233,7 @@ const FindBarView = forwardRef<
           <input
             ref={inputRef}
             type="text"
-            className="find-input h-full min-w-0 flex-1 border-0 bg-transparent pr-2 pl-[30px] text-[13px] text-ink-primary outline-none placeholder:text-ink-faint"
+            className="find-input h-full min-w-0 flex-1 border-0 bg-transparent pr-2 pl-[30px] text-[12px] text-ink-primary outline-none placeholder:text-ink-faint"
             placeholder="Find in document"
             aria-label="Find in document"
             value={query}

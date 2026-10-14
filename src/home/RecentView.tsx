@@ -412,7 +412,7 @@ export class RecentView {
             />
             <div
               className={cn(
-                "recent-progress ml-4 text-[13px] whitespace-nowrap",
+                "recent-progress ml-4 text-[12px] whitespace-nowrap",
                 status?.running ? "text-ink" : "text-ink-soft",
               )}
               role="status"
@@ -458,7 +458,7 @@ export class RecentView {
             )}
             {renderRows(recent)}
             {empty && (
-              <div className="recent-empty flex h-9 shrink-0 items-center px-4 text-[13px] text-ink-disabled">
+              <div className="recent-empty flex h-9 shrink-0 items-center px-4 text-[12px] text-ink-disabled">
                 {empty}
               </div>
             )}

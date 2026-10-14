@@ -21,7 +21,7 @@ export interface MenuItem {
 /** The floating surface every menu shares: popover fill, hairline rim, 10px corners. */
 export const menuSurfaceClassName = cn(
   "min-w-[180px] rounded-[10px] border border-line-menu bg-popover p-1.5",
-  "font-[var(--font-ui)] text-[13px] leading-[18px] text-ink",
+  "font-[var(--font-ui)] text-[12px] leading-4 text-ink",
   "shadow-[0_10px_28px_rgb(0_0_0/0.22)]",
   // Separators carry no classes of their own so their markup stays minimal.
   "[&_.md-context-menu-sep]:mx-1 [&_.md-context-menu-sep]:my-1.5 [&_.md-context-menu-sep]:h-px [&_.md-context-menu-sep]:bg-separator",
@@ -70,7 +70,7 @@ function MenuRow({
       {item.section && (
         <div
           className={cn(
-            "md-menu-section select-none px-2 pb-[3px] text-[11px] font-semibold tracking-[0.02em] text-ink-menu-header",
+            "md-menu-section select-none px-2 pb-[3px] text-[10px] font-semibold tracking-[0.02em] text-ink-menu-header",
             first || item.separatorBefore ? "pt-1" : "pt-[7px]",
           )}
           role="presentation"
@@ -103,7 +103,7 @@ function MenuRow({
         )}
         <span className="md-context-menu-label flex-1 whitespace-nowrap pr-2">{item.label}</span>
         {item.shortcut && (
-          <span className="md-context-menu-key whitespace-nowrap pl-3 text-[12px] text-ink-faint">
+          <span className="md-context-menu-key whitespace-nowrap pl-3 text-[11px] text-ink-faint">
             {item.shortcut}
           </span>
         )}

@@ -60,7 +60,7 @@ export function SettingsBox({ title, children }: { title?: string; children: Rea
       {title && (
         <h3
           id={titleId}
-          className="absolute -top-[11px] left-[9px] m-0 bg-window px-1 text-[13px] font-normal leading-[18px] text-ink-soft"
+          className="absolute -top-[11px] left-[9px] m-0 bg-window px-1 text-[12px] font-normal leading-4 text-ink-soft"
         >
           {title}
         </h3>

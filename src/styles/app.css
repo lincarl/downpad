@@ -393,7 +393,7 @@ body {
 
 body {
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--ink);
   background: var(--window);
 }

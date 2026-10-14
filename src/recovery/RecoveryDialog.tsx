@@ -164,14 +164,14 @@ function RecoveryItem({
           {snapshot.filePath ? baseName(snapshot.filePath) : "Untitled document"}
         </span>
         <span
-          className="recovery-item-time shrink-0 whitespace-nowrap text-[12px] text-ink-faint"
+          className="recovery-item-time shrink-0 whitespace-nowrap text-[11px] text-ink-faint"
           title={absoluteTime(snapshot.savedAt)}
         >
           {relativeTime(snapshot.savedAt)}
         </span>
       </div>
       {snapshot.filePath && (
-        <div className="recovery-item-path mt-0.5 text-[12px] leading-4 text-ink-soft [overflow-wrap:anywhere]">
+        <div className="recovery-item-path mt-0.5 text-[11px] leading-4 text-ink-soft [overflow-wrap:anywhere]">
           {snapshot.filePath}
         </div>
       )}

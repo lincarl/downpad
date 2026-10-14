@@ -255,7 +255,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
           className={cn(
             "dialog settings-dialog",
             dialogContentClassName,
-            "h-[min(760px,90vh)] max-h-none w-[min(820px,94vw)] overflow-hidden leading-[18px]",
+            "h-[min(760px,90vh)] max-h-none w-[min(820px,94vw)] overflow-hidden leading-4",
           )}
         >
           <DialogDescription className="sr-only">

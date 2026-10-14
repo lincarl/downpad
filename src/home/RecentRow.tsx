@@ -15,7 +15,7 @@ const STAR_EMPTY_EDGE = "#b8b8b8";
  * the accent's own ink for contrast, where Mervin keeps the rest inks. */
 const SELECTED_INK = "group-has-[:focus-visible]/row:text-accent-fg";
 const SELECTED_SOFT_INK = "group-has-[:focus-visible]/row:text-accent-fg/80";
-const SMALL_TEXT = "block truncate text-[11px] text-ink-soft";
+const SMALL_TEXT = "block truncate text-[10px] text-ink-soft";
 
 export interface RecentRowProps {
   row: RecentRowModel;
@@ -83,7 +83,7 @@ export function RecentRow({
       >
         <DocumentArtwork size={34} className="recent-icon shrink-0" />
         <span className="recent-mid mr-3 ml-[11px] flex min-w-0 flex-1 flex-col self-stretch pt-[9px]">
-          <span className={cn("recent-name block truncate text-[13px] leading-[23px] font-semibold", strongInk, SELECTED_INK)}>
+          <span className={cn("recent-name block truncate text-[12px] leading-[23px] font-semibold", strongInk, SELECTED_INK)}>
             <Highlighted text={name} query={nameQuery} />
           </span>
           {hit && (
@@ -107,7 +107,7 @@ export function RecentRow({
         <span className="recent-right flex max-w-[40%] min-w-[180px] shrink-0 flex-col self-stretch pt-[9px] text-right">
           <span
             className={cn(
-              "recent-date block truncate text-[13px]",
+              "recent-date block truncate text-[12px]",
               hit ? "leading-[35px]" : "leading-[23px]",
               strongInk,
               SELECTED_INK,
@@ -124,7 +124,7 @@ export function RecentRow({
         type="button"
         className={cn(
           "recent-star mr-4 ml-[9px] grid size-5 shrink-0 cursor-pointer place-items-center rounded-[4px] border-0 bg-transparent p-0",
-          "outline-none focus-visible:outline-1 focus-visible:outline-accent-fg focus-visible:outline-solid",
+          "outline-none focus-visible:outline-1 focus-visible:outline-solid focus-visible:outline-accent-fg",
           entry.favorite && "on",
         )}
         aria-label={entry.favorite ? "Remove from favorites" : "Add to favorites"}
@@ -152,7 +152,7 @@ export function RecentCaption({ first, children }: { first: boolean; children: s
   return (
     <div
       className={cn(
-        "recent-caption flex shrink-0 items-end px-4 pb-[5px] text-[11px] leading-[15px] font-semibold text-ink-soft select-none",
+        "recent-caption flex shrink-0 items-end px-4 pb-[5px] text-[10px] leading-[15px] font-semibold text-ink-soft select-none",
         first ? "h-[26px]" : "h-9",
       )}
     >

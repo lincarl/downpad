@@ -26,7 +26,7 @@ export const ToggleGroupItem = forwardRef<
     <ToggleGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center text-sm font-medium transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center outline-none disabled:pointer-events-none",
         context.itemClassName,
         className,
       )}

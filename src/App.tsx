@@ -226,9 +226,9 @@ function Toolbar() {
               key={value}
               value={value}
               className={cn(
-                "toolbar-seg h-[29px] cursor-pointer border border-l-0 border-line bg-fill px-3.5 text-[13px] font-normal leading-[18px] text-ink",
+                "toolbar-seg h-[29px] cursor-pointer border border-l-0 border-line bg-fill px-3.5 text-[12px] font-normal leading-4 text-ink",
                 "first:rounded-l-control first:border-l last:rounded-r-control",
-                "hover:bg-[color-mix(in_srgb,var(--fill),var(--ink)_8%)] focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+                "hover:bg-[color-mix(in_srgb,var(--fill),var(--ink)_8%)] focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-accent",
                 "disabled:cursor-default disabled:bg-transparent disabled:text-ink-disabled disabled:opacity-100",
                 active && "active border-accent bg-accent text-accent-fg hover:bg-accent-hover",
               )}
@@ -441,7 +441,7 @@ function SplitButton({
   const [open, setOpen] = useState(false);
   const part = cn(
     "flex h-full cursor-pointer items-center text-ink-body outline-none",
-    "focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent",
+    "focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-1 focus-visible:outline-accent",
     "group-hover/split:bg-hover active:bg-pressed data-[state=open]:bg-pressed",
     "disabled:cursor-default disabled:bg-transparent disabled:text-ink-disabled",
   );
@@ -460,7 +460,7 @@ function SplitButton({
           type="button"
           className={cn(
             part,
-            "toolbar-file gap-[5px] rounded-l-control pl-2.5 pr-0.5 text-[13px] leading-[18px] max-[849px]:pr-1",
+            "toolbar-file gap-[5px] rounded-l-control pl-2.5 pr-0.5 text-[12px] leading-4 max-[849px]:pr-1",
           )}
           disabled={disabled}
           onClick={onClick}
@@ -523,7 +523,7 @@ function TextSizeControl({
           <button
             type="button"
             className={cn(
-              "zoom-readout relative flex h-[29px] w-24 shrink-0 cursor-pointer items-center justify-center rounded-control border border-line bg-well pr-5 pl-2 text-[13px] text-ink-primary outline-none",
+              "zoom-readout relative flex h-[29px] w-24 shrink-0 cursor-pointer items-center justify-center rounded-control border border-line bg-well pr-5 pl-2 text-[12px] text-ink-primary outline-none",
               "hover:border-line-strong focus-visible:border-accent data-[state=open]:border-accent",
               "disabled:cursor-default disabled:border-line-disabled disabled:text-ink-disabled",
               className,
@@ -604,8 +604,8 @@ function TabStrip() {
       <button
         type="button"
         className={cn(
-          "toolbar-recent grid h-[29px] shrink-0 cursor-pointer rounded-[6px] border border-line-push bg-transparent px-3 text-[13px] leading-[18px] text-ink-body outline-none",
-          "hover:border-line-strong hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+          "toolbar-recent grid h-[29px] shrink-0 cursor-pointer rounded-[6px] border border-line-push bg-transparent px-3 text-[12px] leading-4 text-ink-body outline-none",
+          "hover:border-line-strong hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-accent",
           recentActive &&
             "active border-accent bg-fill font-semibold text-accent hover:border-accent hover:bg-fill dark:font-normal dark:text-ink-primary",
         )}
@@ -638,7 +638,7 @@ function TabStrip() {
           type="button"
           className={cn(
             "tab-new flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-control border-0 bg-transparent p-0 text-ink-soft outline-none",
-            "hover:bg-hover hover:text-ink-body focus-visible:outline-2 focus-visible:outline-accent",
+            "hover:bg-hover hover:text-ink-body focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-accent",
           )}
           aria-label="New tab"
           onClick={() => runtime?.newDocument()}
@@ -685,8 +685,8 @@ function DocumentTab({
       className={cn(
         "tab group flex h-7 min-w-0 max-w-[260px] shrink-0 cursor-pointer select-none items-center gap-2.5",
         "whitespace-nowrap rounded-t-control border border-b-0 border-transparent bg-transparent",
-        "pr-[3px] pl-3 text-[13px] leading-[18px] text-ink-body outline-none",
-        "hover:bg-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+        "pr-[3px] pl-3 text-[12px] leading-4 text-ink-body outline-none",
+        "hover:bg-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-accent",
         active &&
           "active border-line bg-fill font-semibold text-accent hover:bg-fill dark:border-line-disabled dark:font-normal dark:text-ink-primary",
       )}
@@ -763,7 +763,7 @@ function Banner() {
   return (
     <Alert
       className={cn(
-        "banner row-start-3 flex min-h-[43px] w-auto items-center gap-3.5 rounded-none border-0 border-b border-line-notice bg-notice px-4 py-1.5 text-[13px] text-ink-primary",
+        "banner row-start-3 flex min-h-[43px] w-auto items-center gap-3.5 rounded-none border-0 border-b border-line-notice bg-notice px-4 py-1.5 text-[12px] text-ink-primary",
         error && "border-ink-danger/60 bg-[color-mix(in_srgb,var(--ink-danger)_14%,var(--window))]",
       )}
       data-kind={banner.kind}
@@ -772,7 +772,7 @@ function Banner() {
       aria-atomic="true"
     >
       {error && <TriangleAlert aria-hidden="true" className="size-4 shrink-0 text-ink-danger" {...ICON_STROKE} />}
-      <AlertDescription className="banner-message flex-1 text-[13px] leading-[18px] text-inherit">
+      <AlertDescription className="banner-message flex-1 text-[12px] leading-4 text-inherit">
         {banner.message}
       </AlertDescription>
       <div className="flex shrink-0 items-center gap-1.5">

@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   editorTheme: "light",
   accentMode: "default",
-  accentColor: "#0067c0",
+  accentColor: "#0969da",
   editorWidthMode: "fixed",
   editorWidthPx: 1188,
   fontFamily: "Segoe UI",

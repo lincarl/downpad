@@ -121,7 +121,7 @@ export interface Settings {
   /** Document/text theme (spec §6.2): follow the UI theme, or pin light/dark so a
    *  dark-UI user can still read documents on a light page (and vice versa). */
   editorTheme: "follow-ui" | "light" | "dark";
-  /** Accent (highlight) color source (spec §6.2): "default" = the built-in blue,
+  /** Accent (highlight) color source (spec §6.2): "default" = the theme's design accent,
    *  "system" = the Windows accent color, "custom" = `accentColor`. */
   accentMode: "default" | "system" | "custom";
   /** Custom accent color as a #rrggbb hex string; used when accentMode = "custom". */
