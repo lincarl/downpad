@@ -229,10 +229,13 @@ function RecoveryItem({
 
 /** Plain-text preview: no frontmatter, heading or quote markers, whitespace collapsed. */
 function snippet(markdown: string): string {
+  // Blocks (a heading, then its paragraph) join with " · " so they don't run together.
   const text = markdown
     .replace(/^---[\s\S]*?---\s*/, "")
     .replace(/^ {0,3}(?:#{1,6}|>)\s+/gm, "")
-    .replace(/\s+/g, " ")
-    .trim();
+    .split(/\n\s*\n/)
+    .map((block) => block.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" · ");
   return text.length > 140 ? `${text.slice(0, 140).trimEnd()}…` : text || "(empty document)";
 }

@@ -44,7 +44,7 @@ describe("RecoveryDialog", () => {
     expect(path?.getAttribute("title")).toBe("/notes/plan.md");
     expect(path?.textContent).toContain("/notes/plan.md");
     const previews = Array.from(document.querySelectorAll(".recovery-item-preview"), (node) => node.textContent);
-    expect(previews).toEqual(["Meeting summary", "Project plan Ship it"]);
+    expect(previews).toEqual(["Meeting summary", "Project plan · Ship it"]);
 
     await user.keyboard("{Escape}");
     expect(document.querySelector(".recovery-dialog")).not.toBeNull();

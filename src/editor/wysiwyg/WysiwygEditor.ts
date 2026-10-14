@@ -129,6 +129,8 @@ export class WysiwygEditor {
         [Crepe.Feature.CodeMirror]: { renderPreview: renderMermaidPreview },
         // Display linked images + missing-image placeholder/relocate (§5.5).
         [Crepe.Feature.ImageBlock]: imageBlockFeatureConfig(viewRef, context),
+        // Crepe's default empty-line hint is "Please enter...".
+        [Crepe.Feature.Placeholder]: { text: "Type / for blocks" },
       },
     });
     // Apply serialization style (bullets/emphasis/heading style, etc.).

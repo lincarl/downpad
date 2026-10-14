@@ -864,7 +864,7 @@ function PrintWorkspaceView({
         <div aria-hidden="true" className="mx-[7px] w-px shrink-0 bg-line" />
 
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <h3 className="m-0 px-2 py-1 text-[12px] font-bold leading-[18px] text-ink">Preview</h3>
+          <h3 className="m-0 px-2 pt-[7px] pb-1 text-[12px] font-bold leading-[18px] text-ink">Preview</h3>
           {/* The sheets keep the body's inherited type, so nothing here sets a
               font or line height. Sized and scaled by PrintWorkspace.fitPreview. */}
           <div

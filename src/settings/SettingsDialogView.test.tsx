@@ -123,6 +123,16 @@ describe("SettingsDialogView pages", () => {
     expect(onSave.mock.calls[0][0].autosaveIntervalSeconds).toBe(5);
   });
 
+  it("saves a decimal number as a whole number, as settings.toml requires", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, mdHardWrap: 80 });
+    await user.click(screen.getByRole("tab", { name: "Markdown" }));
+    const column = document.querySelector<HTMLInputElement>('input[name="hardWrapCol"]')!;
+    await user.clear(column);
+    await user.type(column, "72.6");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave.mock.calls[0][0].mdHardWrap).toBe(73);
+  });
+
   it("disables the fields that depend on an unchecked box", async () => {
     const { user } = renderDialog({ ...DEFAULT_SETTINGS, autosaveEnabled: false });
     const interval = document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!;

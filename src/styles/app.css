@@ -419,6 +419,12 @@ body {
   background: transparent;
 }
 
+/* The tab strip scrolls without a bar, as in Mervin: tabs shrink first and the
+   wheel scrolls the strip sideways (App.tsx). */
+.tab-list::-webkit-scrollbar {
+  display: none;
+}
+
 #app {
   height: 100vh;
 }
@@ -523,6 +529,14 @@ body {
    (which crossed the pane under the last line) gives way to the caret. */
 .editor-pane-raw .cm-editor {
   min-height: 100%;
+}
+
+/* The source gutter shares the page's fill and has no edge, so it does not
+   stop visibly under the last line. */
+.editor-pane-raw .cm-editor .cm-gutters {
+  border-right: none;
+  background: transparent;
+  color: var(--doc-muted);
 }
 
 .editor-host .cm-editor.cm-focused {
@@ -1223,6 +1237,13 @@ body {
 .print-page-body img {
   max-height: 100%;
   object-fit: contain;
+}
+
+/* Printed paper is always light, so printed code uses the light document's
+   single high-contrast ink rather than the editor's dark syntax palette. */
+.print-doc .cm-content,
+.print-doc .cm-content * {
+  color: #24292f !important;
 }
 /* stylelint-enable no-descending-specificity */
 

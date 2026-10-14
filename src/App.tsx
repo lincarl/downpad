@@ -458,7 +458,7 @@ function SplitButton({
               type="button"
               className={cn(
                 part,
-                "toolbar-file gap-[3px] rounded-l-control pr-px pl-2.5 text-[12px] leading-4 max-[849px]:pr-1",
+                "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[849px]:pr-1",
               )}
               disabled={disabled}
               onClick={onClick}
@@ -471,7 +471,7 @@ function SplitButton({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className={cn(part, "toolbar-caret w-[18px] justify-center rounded-r-control")}
+              className={cn(part, "toolbar-caret w-[17px] justify-center rounded-r-control")}
               aria-label={menuLabel}
               aria-haspopup="menu"
               disabled={disabled}
@@ -632,7 +632,7 @@ function TabStrip() {
           hidden as in Mervin, so the mouse wheel scrolls it sideways. */}
       <div
         ref={tablistRef}
-        className="flex h-full min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden pb-[5px] [&::-webkit-scrollbar]:h-0"
+        className="tab-list flex h-full min-w-0 items-end gap-1 overflow-x-auto overflow-y-hidden pb-[5px]"
         role="tablist"
         aria-label="Open documents"
         onKeyDown={onKeyDown}

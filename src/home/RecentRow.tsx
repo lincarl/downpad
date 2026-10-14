@@ -89,7 +89,7 @@ export function RecentRow({
           </span>
           {hit && (
             <span className={cn("recent-snippet leading-[23px]", SMALL_TEXT, strongInk, SELECTED_INK)}>
-              <Highlighted text={plainSnippet(hit.snippet)} query={snippetQuery} />
+              <Highlighted text={snippetText(hit.snippet, snippetQuery)} query={snippetQuery} />
             </span>
           )}
           {/* Right-to-left with a leading LRM puts the ellipsis on the left, so the
@@ -149,6 +149,13 @@ export function RecentRow({
       </button>
     </div>
   );
+}
+
+/** The snippet as plain text, unless the query itself contains Markdown markup
+ *  (the match would then vanish with it) or nothing readable would remain. */
+function snippetText(snippet: string, query: string): string {
+  if (/[|#*_`>[\]]/.test(query)) return snippet;
+  return plainSnippet(snippet) || snippet;
 }
 
 /** A section caption: "Favorites" on top, "Recent" between the sections. */

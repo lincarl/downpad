@@ -762,9 +762,11 @@ function NumberInput({
   );
 }
 
+/** A number field's value as a whole number within its range, or the fallback.
+ *  Every numeric setting is an integer, and the form skips native validation. */
 function numVal(input: HTMLInputElement, fallback: number): number {
   if (input.value.trim() === "") return fallback;
-  const value = Number(input.value);
+  const value = Math.round(Number(input.value));
   if (!Number.isFinite(value)) return fallback;
   const min = input.min !== "" ? Number(input.min) : -Infinity;
   const max = input.max !== "" ? Number(input.max) : Infinity;

@@ -113,7 +113,9 @@ export class SettingsModel {
     // the max-width, so it adapts on resize with no JS); "fixed" caps it at
     // --editor-width. Fall back to "fill" for settings files predating the field.
     root.setAttribute("data-width-mode", s.editorWidthMode === "fixed" ? "fixed" : "fill");
-    root.style.setProperty("--editor-font", s.fontFamily);
+    // Keep a fallback stack: a bare family missing on this system (Segoe UI on
+    // Linux) would otherwise fall back to the browser's serif default.
+    root.style.setProperty("--editor-font", `${s.fontFamily}, system-ui, sans-serif`);
     // Document text size (spec §5.20): a multiplier applied to the editor's base
     // font size in both views. Fall back to 1 for settings files predating it.
     root.style.setProperty("--editor-font-scale", String(s.editorFontScale ?? 1));
