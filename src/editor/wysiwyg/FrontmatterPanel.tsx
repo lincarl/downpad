@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Plus, X, type LucideIcon } from "lucide-react";
 
 import {
   addTopLevelField,
@@ -165,7 +166,8 @@ export function FrontmatterPanel({ block, focus, onBlockChange }: FrontmatterPan
         </table>
       )}
       <button ref={addButton} type="button" className="frontmatter-add" onClick={addTopLevel}>
-        + Add field
+        <ControlIcon icon={Plus} />
+        Add field
       </button>
     </>
   );
@@ -206,7 +208,9 @@ function InserterRow({
 
   return (
     <tr className={first ? "frontmatter-inserter frontmatter-inserter-first" : "frontmatter-inserter"}>
-      <td colSpan={3} className="frontmatter-inserter-cell">
+      {/* Spans the key and value columns only, so the line stops at the grid's
+          edge instead of running under the actions gutter. */}
+      <td colSpan={2} className="frontmatter-inserter-cell">
         <div className="frontmatter-inserter-line" />
         <button
           type="button"
@@ -215,7 +219,7 @@ function InserterRow({
           aria-label={label}
           onClick={insert}
         >
-          +
+          <ControlIcon icon={Plus} />
         </button>
       </td>
     </tr>
@@ -400,7 +404,7 @@ function AddToGroupButton({ table, group, onBlockChange }: GroupButtonProps) {
     );
     onBlockChange(block, { kind: "line", lineIndex });
   };
-  return <IconButton glyph="+" label="Add field to this group" onClick={add} />;
+  return <IconButton icon={Plus} label="Add field to this group" onClick={add} />;
 }
 
 interface DeleteButtonProps extends RowProps {
@@ -410,7 +414,7 @@ interface DeleteButtonProps extends RowProps {
 function DeleteButton({ table, field, onBlockChange }: DeleteButtonProps) {
   return (
     <IconButton
-      glyph="×"
+      icon={X}
       label="Delete"
       onClick={() => onBlockChange(deleteField(table, field), { kind: "add" })}
     />
@@ -421,7 +425,7 @@ function Actions({ children }: { children: ReactNode }) {
   return <td className="frontmatter-actions">{children}</td>;
 }
 
-function IconButton({ glyph, label, onClick }: { glyph: string; label: string; onClick: () => void }) {
+function IconButton({ icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -430,9 +434,15 @@ function IconButton({ glyph, label, onClick }: { glyph: string; label: string; o
       aria-label={label}
       onClick={onClick}
     >
-      {glyph}
+      <ControlIcon icon={icon} />
     </button>
   );
+}
+
+/** A 14px glyph for the panel's controls, in Mervin's 1px line weight. The
+ *  button owns the accessible name, so the glyph is hidden from assistive tech. */
+function ControlIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return <Icon aria-hidden="true" focusable="false" size={14} absoluteStrokeWidth strokeWidth={1} />;
 }
 
 function FrontmatterTab() {

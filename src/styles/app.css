@@ -670,18 +670,45 @@ body {
   border-left-color: var(--editor-surface-fg);
 }
 
+/* Document-surface details: the frontmatter panel, the link URL suffix, the
+   Mermaid states and the missing-image placeholder sit on the DOCUMENT page,
+   whose theme can differ from the chrome (§6.2). Their lines, fills and muted
+   ink are tints of the document's own ink over its page, so they read on a light
+   or a dark document whatever the UI theme. Only focus and the inserter use the
+   accent (--doc-accent). */
+.frontmatter-table-wrap,
+.editor-host .md-link-url,
+.editor-host .mermaid-loading,
+.editor-host .md-image-missing {
+  --doc-line: color-mix(in srgb, var(--editor-surface-fg) 17%, var(--editor-surface-bg));
+  --doc-line-strong: color-mix(in srgb, var(--editor-surface-fg) 30%, var(--editor-surface-bg));
+  --doc-fill: color-mix(in srgb, var(--editor-surface-fg) 5%, var(--editor-surface-bg));
+  --doc-hover: color-mix(in srgb, var(--editor-surface-fg) 10%, var(--editor-surface-bg));
+  --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
+  --doc-accent: var(--accent);
+}
+
 /* Frontmatter table (§5.17): a VS Code-style key/value view of a leading `---`
    block, pinned above the editor. One row per key; nested mappings show as an
    indented group of sub-rows. Keys and scalar values are editable; add/delete
    controls appear on row hover. Lists / deeper nesting stay read-only code. */
 .frontmatter-table-wrap {
   margin-bottom: 16px;
+  font-family: var(--font-ui);
+}
+
+/* When the document theme differs from the chrome, the chrome's accent can lack
+   contrast on the page (Nord frost on white is 2:1). Like Mervin's legible
+   accent, focus and the inserter then pull the accent toward the document ink. */
+:root[data-theme="dark"][data-editor-theme="light"] .frontmatter-table-wrap,
+:root[data-theme="light"][data-editor-theme="dark"] .frontmatter-table-wrap {
+  --doc-accent: color-mix(in srgb, var(--accent) 75%, var(--editor-surface-fg));
 }
 
 /* width: max-content shrinks the table to its content; max-width caps it at the
    editor column so a long value wraps instead of overflowing; margin auto centers
-   the (narrower) table. (auto/fit-content wrongly fill the column on display:table
-   in Chromium — max-content is the one that shrinks reliably.) */
+   the (narrower) table. Chromium stretches display:table with auto or fit-content
+   across the column; max-content is the one that shrinks reliably. */
 .frontmatter-table {
   width: max-content;
   max-width: 100%;
@@ -701,28 +728,21 @@ body {
 
 /* A spreadsheet-style tab labelling the block as YAML frontmatter (§5.17), so it's
    not mistaken for an editable Markdown table. Its borderless bottom edge overlaps
-   the table's top border (margin-bottom: -1px) so tab and table read as one shape.
-   Fill/text derive from the DOCUMENT-surface palette (like the table's own cells),
-   not the chrome palette, so the tab matches the surface it sits on even when the
-   document theme differs from the UI theme (§6.2). The border keeps --chrome-border
-   to line up with the table's cell borders. color-mix gives a subtle tint that
-   adapts to a light or dark surface; the plain declarations above it are fallbacks. */
+   the table's top border (margin-bottom: -1px) so tab and table read as one shape. */
 .frontmatter-tab {
   display: inline-block;
   position: relative;
   z-index: 1;
   margin-bottom: -1px;
-  padding: 2px 12px;
-  border: 1px solid var(--chrome-border);
+  padding: 2px 10px 3px;
+  border: 1px solid var(--doc-line);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  background: var(--editor-surface-bg);
-  background: color-mix(in srgb, var(--editor-surface-fg) 8%, var(--editor-surface-bg));
-  color: var(--editor-surface-fg);
-  color: color-mix(in srgb, var(--editor-surface-fg) 65%, var(--editor-surface-bg));
-  font-size: 0.78em;
+  background: var(--doc-fill);
+  color: var(--doc-muted);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  line-height: 14px;
 }
 
 /* Read-only fallback (top-level list / deep nesting): the tab sits above the code
@@ -733,12 +753,20 @@ body {
   margin: 0 auto;
 }
 
+/* Every pair of data rows has a zero-height inserter row between them, so a top
+   border on each cell would double every grid line. Cells draw their sides and
+   bottom; only the first data row draws the grid's top edge. */
 .frontmatter-table th,
 .frontmatter-table td {
-  border: 1px solid var(--chrome-border);
+  border: 1px solid var(--doc-line);
+  border-top: none;
   padding: 6px 10px;
   text-align: left;
   vertical-align: top;
+}
+
+.frontmatter-inserter-first + .frontmatter-row > :not(.frontmatter-actions) {
+  border-top: 1px solid var(--doc-line);
 }
 
 /* Key column hugs its (short) text. */
@@ -761,13 +789,15 @@ body {
 }
 
 /* Editable cell: the key/value element is itself contenteditable, so the table's
-   auto-layout measures the real text and the column hugs it. */
+   auto-layout measures the real text and the column hugs it. The cell being
+   edited carries an accent frame inside its grid lines. */
 .frontmatter-edit {
   cursor: text;
 }
 
 .frontmatter-edit:focus {
-  outline: none;
+  outline: 2px solid var(--doc-accent);
+  outline-offset: -2px;
 }
 
 /* pre-wrap keeps typed spacing faithful while still wrapping a long value
@@ -784,77 +814,91 @@ body {
   margin: 0;
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--chrome-bg);
-  color: var(--muted-fg);
+  background: var(--doc-fill);
+  color: var(--doc-muted);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 0.92em;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Actions gutter (delete / add-to-group), revealed on row hover or focus. */
-.frontmatter-actions {
+/* Actions gutter (delete / add-to-group) outside the grid, revealed on row hover
+   or focus. Scoped under the table to outrank the cell border rule above. */
+.frontmatter-table td.frontmatter-actions {
   border: none;
   width: 1%;
   white-space: nowrap;
-  padding: 4px 2px 4px 6px;
+  padding: 0 0 0 6px;
   vertical-align: middle;
   opacity: 0;
   transition: opacity 0.1s ease;
 }
 
-.frontmatter-actions:focus-within {
-  opacity: 1;
-}
-
-.frontmatter-row:hover .frontmatter-actions {
+.frontmatter-table td.frontmatter-actions:focus-within,
+.frontmatter-row:hover td.frontmatter-actions {
   opacity: 1;
 }
 
 .frontmatter-icon-btn {
-  width: 20px;
-  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   padding: 0;
   margin-left: 2px;
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--muted-fg);
-  font-size: 15px;
-  line-height: 1;
+  color: var(--doc-muted);
+  vertical-align: middle;
   cursor: pointer;
 }
 
 .frontmatter-icon-btn:hover {
-  background: var(--chrome-bg);
+  background: var(--doc-hover);
   color: var(--editor-surface-fg);
 }
 
-/* "+ Add field" under the table, aligned with the centered table. */
+.frontmatter-icon-btn:focus-visible {
+  outline: 2px solid var(--doc-accent);
+  outline-offset: -1px;
+}
+
+/* "Add field" under the table, aligned with the centered table. */
 .frontmatter-add {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
   margin: 8px auto 0;
-  padding: 3px 10px;
-  border: 1px solid var(--chrome-border);
+  padding: 3px 10px 3px 7px;
+  border: 1px solid var(--doc-line);
   border-radius: 6px;
   background: transparent;
-  color: var(--muted-fg);
+  color: var(--doc-muted);
   font: inherit;
-  font-size: 0.85em;
+  font-size: 12px;
+  line-height: 16px;
   cursor: pointer;
 }
 
 .frontmatter-add:hover {
-  background: var(--chrome-bg);
+  border-color: var(--doc-line-strong);
+  background: var(--doc-hover);
   color: var(--editor-surface-fg);
+}
+
+.frontmatter-add:focus-visible {
+  outline: 2px solid var(--doc-accent);
+  outline-offset: 1px;
 }
 
 /* Between-row insert controls (§5.17). A thin, border-/padding-less row sits in
    every gap (before each row + after the last). Its children are absolutely
    positioned out of flow, so the row collapses to a ~0-height line and the connected
-   grid is visually undisturbed. Hovering the adjacent data row (or the "+" itself)
-   reveals a full-width accent line plus a round "+", making it obvious exactly where
-   the new field will land. The "+" lives in the table's LEFT MARGIN (right edge flush
+   grid is visually undisturbed. Hovering the gap (the "+" itself) reveals a
+   full-width accent line plus a round "+", making it obvious exactly where the
+   new field will land. The "+" lives in the table's LEFT MARGIN (right edge flush
    with the table border), so it never overlaps an editable cell and so can't swallow
    a click meant to place the caret. */
 .frontmatter-table td.frontmatter-inserter-cell {
@@ -871,7 +915,7 @@ body {
   top: -1px;
   height: 2px;
   z-index: 1;
-  background: var(--accent);
+  background: var(--doc-accent);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.1s ease;
@@ -894,12 +938,10 @@ body {
   width: 18px;
   height: 18px;
   padding: 0;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--doc-accent);
   border-radius: 50%;
   background: var(--editor-surface-bg);
-  color: var(--accent);
-  font-size: 14px;
-  line-height: 1;
+  color: var(--doc-accent);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.1s ease;
@@ -907,26 +949,28 @@ body {
 
 /* Reveal a gap's line + "+" only when THAT gap is hovered (the "+" sits in the left
    margin at the row boundary, so hovering the edge between two rows reveals exactly
-   one "+"), or when the "+" is keyboard-focused. Hovering a data row does NOT reveal
-   its adjacent gaps — only the gutter actions appear on row hover. `.frontmatter-
+   one "+"), or when the "+" has keyboard focus. Hovering a data row does not reveal
+   its adjacent gaps; only the gutter actions appear on row hover. `.frontmatter-
    inserter:hover` fires when the button (the row's only hittable element) is hovered,
    which also reveals the sibling line. */
 .frontmatter-inserter-btn:hover,
 .frontmatter-inserter-btn:focus-visible {
-  background: var(--accent);
+  background: var(--doc-accent);
   color: var(--accent-fg);
+  outline: none;
 }
 
 .frontmatter-inserter-btn:focus-visible,
 .frontmatter-inserter:hover .frontmatter-inserter-line,
-.frontmatter-inserter:hover .frontmatter-inserter-btn {
+.frontmatter-inserter:hover .frontmatter-inserter-btn,
+.frontmatter-inserter:has(.frontmatter-inserter-btn:focus-visible) .frontmatter-inserter-line {
   opacity: 1;
 }
 
 /* Link rendering (§5.6): muted URL suffix after a link in text-and-url mode.
    Non-interactive and click-through so editing the link text is unaffected. */
 .editor-host .md-link-url {
-  color: var(--muted-fg);
+  color: var(--doc-muted);
   font-size: 0.9em;
   margin-left: 0.15em;
   white-space: nowrap;
@@ -948,41 +992,46 @@ body {
 }
 
 .editor-host .mermaid-loading {
-  color: var(--muted-fg);
+  color: var(--doc-muted);
+  font-family: var(--font-ui);
   font-size: 12px;
   justify-content: flex-start;
 }
 
+/* Crepe's error ink follows the document theme (frame light or the dark
+   document palette above). */
 .editor-host .mermaid-error {
-  color: #b00020;
+  padding: 8px;
+  color: var(--crepe-color-error, #ba1a1a);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 12px;
   white-space: pre-wrap;
-  padding: 8px;
-}
-
-:root[data-theme="dark"] .editor-host .mermaid-error {
-  color: #ff6b6b;
 }
 
 /* Missing image (§5.5): when an image fails to load, its block is marked and
-   styled as a click-to-relocate placeholder showing the broken icon + path. */
+   styled as a click-to-relocate placeholder showing the broken icon + path.
+   Crepe's image wrapper (broken <img>, caption toggle, resize handle) is hidden
+   so the icon and the text are the placeholder's only content. */
 .editor-host .milkdown-image-block.md-image-missing,
 .editor-host img.md-image-missing {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-height: 64px;
   padding: 12px 14px;
-  border: 1px dashed var(--chrome-border);
+  border: 1px dashed var(--doc-line-strong);
   border-radius: 6px;
-  background: var(--chrome-bg);
-  color: var(--muted-fg);
+  background: var(--doc-fill);
+  color: var(--doc-muted);
   cursor: pointer;
 }
 
-.editor-host .md-image-missing img {
+.editor-host .milkdown-image-block.md-image-missing:hover {
+  color: var(--editor-surface-fg);
+}
+
+.editor-host .milkdown-image-block.md-image-missing > .image-wrapper {
   display: none;
 }
 
@@ -997,10 +1046,13 @@ body {
 }
 
 .editor-host .md-image-missing::after {
-  content: "Missing image — click to relocate · " attr(data-md-path);
+  content: "Missing image. Click to locate it.\A" attr(data-md-path);
+  min-width: 0;
+  font-family: var(--font-ui);
   font-size: 12px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  word-break: break-all;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* PrintWorkspace still uses these established structural selectors. Keep them
