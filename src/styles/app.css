@@ -1003,51 +1003,6 @@ body {
   word-break: break-all;
 }
 
-/* PrintWorkspace still uses these established structural selectors. Keep them
-   scoped to print so React overlays can own their presentation with utilities. */
-.print-workspace .dialog-section {
-  padding: 10px 0;
-  border-top: 1px solid var(--chrome-border);
-}
-
-.print-workspace .dialog-section:first-child {
-  border-top: none;
-}
-
-.print-workspace .dialog-section-title {
-  margin: 4px 0 8px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted-fg);
-}
-
-.print-workspace .dialog-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 0;
-  font-size: 13px;
-}
-
-.print-workspace .dialog-btn {
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 16px;
-  border: 1px solid var(--chrome-border);
-  border-radius: 6px;
-  background: var(--editor-bg);
-  color: var(--chrome-fg);
-  cursor: pointer;
-}
-
-.print-workspace .dialog-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
-}
-
 /* ── Print workspace + printed sheets (spec §5.21) ───────────────────────
    md-easy lays its own pages out: `printRender.ts` builds one fixed-size
    `.print-page` per sheet — margins, running header/footer and any scaling
@@ -1171,141 +1126,12 @@ body {
 }
 
 /* ── The print workspace itself ──────────────────────────────────────────
-   A full-window print mode (not a modal): preview on the left, options on the
-   right. Opened from Ctrl+P, the toolbar Print button and the right-click menu. */
-.print-workspace {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
-  background: var(--editor-bg);
-  color: var(--chrome-fg);
-  display: grid;
-  grid-template-columns: 1fr 312px;
-  grid-template-rows: auto 1fr;
-  font-family: var(--font-ui);
-}
-
-.print-ws-top {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: var(--chrome-bg);
-  border-bottom: 1px solid var(--chrome-border);
-}
-
-.print-ws-title {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.print-ws-summary {
-  font-size: 12.5px;
-  color: var(--muted-fg);
-}
-
-.print-ws-status {
-  font-size: 12.5px;
-  color: var(--muted-fg);
-}
-
-.print-ws-spacer {
-  margin-left: auto;
-}
-
-.print-ws-canvas {
-  overflow: auto;
-  padding: 24px;
-  background: color-mix(in srgb, var(--chrome-fg) 12%, var(--editor-bg));
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-}
-
-/* Sized in JS to the scaled sheet stack, since the transform that scales the
-   preview doesn't affect layout (PrintWorkspace.fitPreview). */
-.print-ws-scaler {
-  flex: none;
-}
-
+   PrintWorkspace.tsx styles its chrome with utilities. The one rule here
+   reaches the sheets the renderer builds: a 1px edge instead of a drop shadow,
+   divided by the preview scale (set by fitPreview) so it stays one screen
+   pixel wide after the stack is scaled down. */
 .print-workspace .print-page {
-  box-shadow: 0 3px 14px rgb(0 0 0 / 35%);
-}
-
-.print-ws-rail {
-  border-left: 1px solid var(--chrome-border);
-  overflow: auto;
-  padding: 4px 16px 16px;
-}
-
-.print-ws-rail .dialog-row input[type="text"],
-.print-ws-rail .dialog-row input[type="number"],
-.print-ws-rail .dialog-row select {
-  font: inherit;
-  font-size: 13px;
-  padding: 4px 8px;
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  background: var(--editor-bg);
-  color: var(--chrome-fg);
-  min-width: 150px;
-}
-
-.print-ws-rail .dialog-row input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-}
-
-.print-ws-hint {
-  margin: 2px 0 0;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--muted-fg);
-}
-
-.print-ws-note {
-  font-size: 12.5px;
-  color: var(--muted-fg);
-}
-
-.print-ws-pages {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-/* stylelint-disable-next-line no-descending-specificity -- Separate preview and settings-rail scopes. */
-.print-ws-pages select {
-  min-width: 0 !important;
-}
-
-.print-ws-range {
-  width: 92px;
-  min-width: 0 !important;
-}
-
-/* Document | Markdown version chooser. */
-.print-ws-segmented {
-  display: flex;
-  border: 1px solid var(--chrome-border);
-  border-radius: 7px;
-  overflow: hidden;
-}
-
-.print-ws-segmented > button {
-  font: inherit;
-  font-size: 13px;
-  padding: 5px 16px;
-  border: none;
-  background: transparent;
-  color: var(--chrome-fg);
-  cursor: pointer;
-}
-
-.print-ws-segmented > button.active {
-  background: var(--accent);
-  color: var(--accent-fg);
+  box-shadow: 0 0 0 calc(1px / var(--print-preview-scale, 1)) rgb(0 0 0 / 28%);
 }
 
 /* ── Compact Slate shell ───────────────────────────────────────────────────
