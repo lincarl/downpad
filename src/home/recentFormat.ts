@@ -86,10 +86,3 @@ export function filterByName(entries: RecentEntry[], query: string): RecentEntry
   if (!q) return entries;
   return entries.filter((e) => fileName(e.path).toLowerCase().includes(q));
 }
-
-/** Favorites sorted alphabetically by filename, case-insensitive (spec §5.8). */
-export function favoritesSorted(entries: RecentEntry[]): RecentEntry[] {
-  return entries
-    .filter((e) => e.favorite)
-    .sort((a, b) => fileName(a.path).toLowerCase().localeCompare(fileName(b.path).toLowerCase()));
-}
