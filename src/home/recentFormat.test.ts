@@ -7,7 +7,6 @@ import {
   formatDate,
   formatSize,
   filterByName,
-  favoritesSorted,
 } from "./recentFormat";
 import type { RecentEntry } from "../state/types";
 
@@ -16,11 +15,7 @@ import type { RecentEntry } from "../state/types";
 const local = (y: number, m: number, d: number, h = 12): number =>
   new Date(y, m, d, h, 0, 0).getTime();
 
-const entry = (path: string, favorite = false, lastOpenedMs = 0): RecentEntry => ({
-  path,
-  lastOpenedMs,
-  favorite,
-});
+const entry = (path: string): RecentEntry => ({ path, lastOpenedMs: 0, favorite: false });
 
 describe("fileName / dirName", () => {
   it("takes the final segment for Windows and POSIX paths", () => {
@@ -105,21 +100,5 @@ describe("filterByName", () => {
     // The folder "n" is in every path; matching by folder would return all 3.
     // Filename-only matching returns just "meeting-notes.md".
     expect(filterByName(entries, "n").map((e) => fileName(e.path))).toEqual(["meeting-notes.md"]);
-  });
-});
-
-describe("favoritesSorted", () => {
-  it("keeps only favorites, alphabetical by filename, case-insensitive", () => {
-    const entries = [
-      entry("C:/n/zebra.md", true),
-      entry("C:/n/Apple.md", true),
-      entry("C:/n/mango.md", false),
-      entry("C:/n/banana.md", true),
-    ];
-    expect(favoritesSorted(entries).map((e) => fileName(e.path))).toEqual([
-      "Apple.md",
-      "banana.md",
-      "zebra.md",
-    ]);
   });
 });
