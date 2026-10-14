@@ -165,15 +165,15 @@
   --editor-surface-bg: #fff;
   --editor-surface-fg: #1a1a1a;
 
-  /* Document-surface details derived from the surface itself, so they follow
-     the document theme rather than the chrome theme. */
-  --editor-surface-line: color-mix(in srgb, var(--editor-surface-fg) 16%, transparent);
-  --editor-surface-raised: color-mix(in srgb, var(--editor-surface-fg) 6%, var(--editor-surface-bg));
-  --editor-surface-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
-
-  /* Marks drawn on the page use the design accent of a theme with the page's
-     lightness, so a pale dark-chrome accent never lands on white paper. */
-  --editor-surface-accent: #0969da;
+  /* Document-surface details: lines, fills and muted ink are tints of the
+     document's own ink over its page, so they follow the document theme rather
+     than the chrome theme. */
+  --doc-line: color-mix(in srgb, var(--editor-surface-fg) 17%, var(--editor-surface-bg));
+  --doc-line-strong: color-mix(in srgb, var(--editor-surface-fg) 30%, var(--editor-surface-bg));
+  --doc-fill: color-mix(in srgb, var(--editor-surface-fg) 5%, var(--editor-surface-bg));
+  --doc-hover: color-mix(in srgb, var(--editor-surface-fg) 10%, var(--editor-surface-bg));
+  --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
+  --doc-accent: var(--accent);
 
   /* Legacy chrome names still used by the editor, print and frontmatter styles.
      They resolve to the tokens above. */
@@ -262,7 +262,14 @@
 :root[data-editor-theme="dark"] {
   --editor-surface-bg: #1e1e1e;
   --editor-surface-fg: #d4d4d4;
-  --editor-surface-accent: #88c0d0;
+}
+
+/* When the document theme differs from the chrome, the chrome's accent can lack
+   contrast on the page (Nord frost on white is 2:1). Like Mervin's page accent,
+   marks on the page then pull the accent toward the document ink. */
+:root[data-theme="dark"][data-editor-theme="light"],
+:root[data-theme="light"][data-editor-theme="dark"] {
+  --doc-accent: color-mix(in srgb, var(--accent) 75%, var(--editor-surface-fg));
 }
 
 /* Form controls shared by every surface. They sit in the components layer so
@@ -515,9 +522,9 @@ body {
 
 /* Collapsed base64 data URI in raw view (§5.3). */
 .cm-base64-collapsed {
-  color: var(--editor-surface-accent);
-  background: var(--editor-surface-raised);
-  border: 1px solid var(--editor-surface-line);
+  color: var(--doc-accent);
+  background: var(--doc-fill);
+  border: 1px solid var(--doc-line);
   border-radius: 4px;
   padding: 0 5px;
   margin: 0 1px;
@@ -677,9 +684,9 @@ body {
 }
 
 :root[data-editor-theme="dark"] .editor-host .cm-editor .cm-gutters {
-  background: var(--editor-surface-raised);
-  color: var(--editor-surface-muted);
-  border-right-color: var(--editor-surface-line);
+  background: var(--doc-fill);
+  color: var(--doc-muted);
+  border-right-color: var(--doc-line);
 }
 
 :root[data-editor-theme="dark"] .editor-host .cm-editor .cm-activeLine,
@@ -691,24 +698,6 @@ body {
   border-left-color: var(--editor-surface-fg);
 }
 
-/* Document-surface details: the frontmatter panel, the link URL suffix, the
-   Mermaid states and the missing-image placeholder sit on the DOCUMENT page,
-   whose theme can differ from the chrome (§6.2). Their lines, fills and muted
-   ink are tints of the document's own ink over its page, so they read on a light
-   or a dark document whatever the UI theme. Only focus and the inserter use the
-   accent (--doc-accent). */
-.frontmatter-table-wrap,
-.editor-host .md-link-url,
-.editor-host .mermaid-loading,
-.editor-host .md-image-missing {
-  --doc-line: color-mix(in srgb, var(--editor-surface-fg) 17%, var(--editor-surface-bg));
-  --doc-line-strong: color-mix(in srgb, var(--editor-surface-fg) 30%, var(--editor-surface-bg));
-  --doc-fill: color-mix(in srgb, var(--editor-surface-fg) 5%, var(--editor-surface-bg));
-  --doc-hover: color-mix(in srgb, var(--editor-surface-fg) 10%, var(--editor-surface-bg));
-  --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
-  --doc-accent: var(--accent);
-}
-
 /* Frontmatter table (§5.17): a VS Code-style key/value view of a leading `---`
    block, pinned above the editor. One row per key; nested mappings show as an
    indented group of sub-rows. Keys and scalar values are editable; add/delete
@@ -716,14 +705,6 @@ body {
 .frontmatter-table-wrap {
   margin-bottom: 16px;
   font-family: var(--font-ui);
-}
-
-/* When the document theme differs from the chrome, the chrome's accent can lack
-   contrast on the page (Nord frost on white is 2:1). Like Mervin's legible
-   accent, focus and the inserter then pull the accent toward the document ink. */
-:root[data-theme="dark"][data-editor-theme="light"] .frontmatter-table-wrap,
-:root[data-theme="light"][data-editor-theme="dark"] .frontmatter-table-wrap {
-  --doc-accent: color-mix(in srgb, var(--accent) 75%, var(--editor-surface-fg));
 }
 
 /* width: max-content shrinks the table to its content; max-width caps it at the
