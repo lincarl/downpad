@@ -30,8 +30,8 @@ vi.mock("@milkdown/crepe", () => ({
     static Feature = { CodeMirror: "code-mirror", ImageBlock: "image-block" };
 
     editor = {
-      config: (configure: (ctx: { get(): object; set(): void }) => void) => {
-        configure({ get: () => ({}), set: () => {} });
+      config: (configure: (ctx: { get(): object; set(): void; update(): void }) => void) => {
+        configure({ get: () => ({}), set: () => {}, update: () => {} });
       },
       use: () => {},
       action: () => undefined,

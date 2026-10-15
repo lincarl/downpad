@@ -22,7 +22,7 @@ import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
 
 import type { SerializerStyle } from "../../state/types";
-import { toRemarkStringifyOptions } from "./serializer";
+import { stringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
 import { linkViewPlugin } from "./linkView";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
@@ -149,15 +149,10 @@ export class WysiwygEditor {
         [Crepe.Feature.Placeholder]: { text: "Type / for blocks" },
       },
     });
-    // Apply serialization style (bullets/emphasis/heading style, etc.).
+    // Apply serialization style (bullets/emphasis/heading style, etc.) and
+    // md-easy's text escaping.
     this.crepe.editor.config((ctx) => {
-      let prev: Record<string, unknown> = {};
-      try {
-        prev = (ctx.get(remarkStringifyOptionsCtx) as Record<string, unknown>) ?? {};
-      } catch {
-        prev = {};
-      }
-      ctx.set(remarkStringifyOptionsCtx, { ...prev, ...toRemarkStringifyOptions(style) });
+      ctx.update(remarkStringifyOptionsCtx, (prev) => stringifyOptions(prev, style));
     });
     // Keep standalone images' alt text, which Crepe overwrites with its resize
     // ratio. Must follow the ImageBlock feature so this node spec replaces Crepe's.
