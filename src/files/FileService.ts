@@ -26,6 +26,9 @@ const MD_FILTERS = [
 export interface EditorPresenter {
   /** Write the active editor's current content into the canonical doc. */
   flush(): void;
+  /** Report edits the visible editor has not announced yet, keeping the editors
+   *  in place. Use before reading the active doc, for example to save it. */
+  commitPendingEdits(): void;
   /** Show the active tab's document, revealing its cached editor when possible
    *  (preserves undo). Use after a pure tab switch / focusing an open file. */
   showActiveDoc(): Promise<void>;
@@ -148,6 +151,9 @@ export class FileService {
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
   private queueSave(saveAs: boolean): Promise<boolean> {
+    // The document view reports typing after a short delay. Collect it first so
+    // a save right after typing writes the latest text.
+    this.present.commitPendingEdits();
     const { doc, activeTabId } = this.store.get();
     if (!activeTabId) return Promise.resolve(false);
     const request = { tabId: activeTabId, snapshot: doc, expectedPath: doc.filePath, saveAs };

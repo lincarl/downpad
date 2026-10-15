@@ -24,18 +24,37 @@ const fakeEditors = vi.hoisted(() => ({
   mountCalls: 0,
   destroyCalls: 0,
   markdown: "settled markdown",
+  reportCalls: 0,
+  /** The document pane's change callback, to simulate its delayed report. */
+  wysiwygChange: null as ((markdown: string) => void) | null,
+  /** The Markdown pane's change callback, to simulate typing in it. */
+  rawChange: null as ((text: string) => void) | null,
+  /** The Markdown pane's current text. */
+  rawText: null as string | null,
 }));
 
 vi.mock("./wysiwyg/WysiwygEditor", () => ({
   WysiwygEditor: class {
-    async mount(): Promise<void> {
+    private onChange: ((markdown: string) => void) | null = null;
+
+    async mount(_root: HTMLElement, _markdown: string, cb: { onChange(markdown: string): void }): Promise<void> {
       fakeEditors.mountCalls += 1;
+      this.onChange = cb.onChange;
+      fakeEditors.wysiwygChange = cb.onChange;
       await fakeEditors.mountPromise;
     }
 
     getMarkdown(): string {
       return fakeEditors.markdown;
     }
+
+    /** Like the real editor, report the current text through `onChange`. */
+    reportPendingChange(): void {
+      fakeEditors.reportCalls += 1;
+      this.onChange?.(fakeEditors.markdown);
+    }
+
+    setMarkdown(): void {}
 
     async destroy(): Promise<void> {
       fakeEditors.destroyCalls += 1;
@@ -48,7 +67,19 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
 vi.mock("./raw/RawEditor", () => ({
   RawEditor: class {
-    mount(): void {}
+    mount(_root: HTMLElement, text: string, cb: { onChange(text: string): void }): void {
+      fakeEditors.rawText = text;
+      fakeEditors.rawChange = cb.onChange;
+    }
+
+    getText(): string {
+      return fakeEditors.rawText ?? "";
+    }
+
+    setText(text: string): void {
+      fakeEditors.rawText = text;
+    }
+
     destroy(): void {}
     onShow(): void {}
   },
@@ -98,6 +129,10 @@ beforeEach(() => {
   fakeEditors.mountCalls = 0;
   fakeEditors.destroyCalls = 0;
   fakeEditors.markdown = "settled markdown";
+  fakeEditors.reportCalls = 0;
+  fakeEditors.wysiwygChange = null;
+  fakeEditors.rawChange = null;
+  fakeEditors.rawText = null;
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -243,6 +278,70 @@ describe("EditorHost split divider", () => {
     expect(divider.getAttribute("aria-valuenow")).toBe("52");
     expect(root.style.getPropertyValue("--split-left")).toBe("52.000%");
 
+    await host.dispose();
+  });
+});
+
+describe("EditorHost pending document edits", () => {
+  it("reports typing the visible document pane has not announced yet", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    await host.reloadActiveDoc();
+    fakeEditors.markdown = "settled markdown, typed just now";
+
+    host.commitPendingEdits();
+
+    expect(store.get().doc).toMatchObject({ markdown: "settled markdown, typed just now", isDirty: true });
+    await host.dispose();
+  });
+
+  it("keeps the split's Markdown pane in step with the reported edit", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    vi.useFakeTimers();
+    try {
+      fakeEditors.markdown = "settled markdown, typed just now";
+      host.commitPendingEdits();
+      vi.advanceTimersByTime(500);
+      expect(fakeEditors.rawText).toBe("settled markdown, typed just now");
+    } finally {
+      vi.useRealTimers();
+    }
+    await host.dispose();
+  });
+
+  it("leaves a hidden or stale document pane alone so newer Markdown edits survive", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    await host.reloadActiveDoc();
+    await host.setLayout("markdown");
+    fakeEditors.markdown = "older document text";
+    host.commitPendingEdits();
+    expect(fakeEditors.reportCalls).toBe(0);
+
+    // In the split, a Markdown edit makes the document pane stale until the
+    // mirror sync catches it up.
+    await host.setLayout("split");
+    fakeEditors.rawChange!("newer Markdown text");
+    host.commitPendingEdits();
+    expect(fakeEditors.reportCalls).toBe(0);
+    expect(store.get().doc.markdown).toBe("newer Markdown text");
+    await host.dispose();
+  });
+
+  it("drops a delayed document report made stale by a newer Markdown edit", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    fakeEditors.rawChange!("newer Markdown text");
+
+    // The document pane's report for typing from before that edit lands late.
+    fakeEditors.wysiwygChange!("older document text");
+
+    expect(store.get().doc.markdown).toBe("newer Markdown text");
     await host.dispose();
   });
 });

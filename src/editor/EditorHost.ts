@@ -246,6 +246,25 @@ export class EditorHost implements FindController {
   }
 
   /**
+   * Report typing the visible document pane has not announced yet, so the active
+   * tab's canonical string is current before Save, tab close, or Copy as Markdown
+   * reads it. The document editor reports edits after a ~200ms pause. The edit
+   * takes the pane's normal change path: it
+   * dirties the tab, bumps its rev and, in the split, mirrors into the Markdown
+   * pane. Unlike `flush`, this keeps a pending mirror sync, so a visible
+   * Markdown pane still catches up.
+   */
+  commitPendingEdits(): void {
+    if (this.disposed || !this.activeTabId) return;
+    const pane = this.panes.get(paneKey(this.activeTabId, "wysiwyg"));
+    // Only a visible pane can hold unreported typing. A stale one holds text
+    // older than the canonical string, and reporting it would overwrite newer
+    // edits from the Markdown pane.
+    if (!pane || pane.el.hidden || this.isStale(pane)) return;
+    pane.wysiwyg?.reportPendingChange();
+  }
+
+  /**
    * Show the active tab's document (tab switch / close→neighbour / return from
    * Recent). Reveals cached panes when in sync (undo preserved); rebuilds only
    * stale ones. Honours the current split state.
@@ -572,6 +591,10 @@ export class EditorHost implements FindController {
       if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
         return;
       }
+      // The document pane reports after typing pauses. If the Markdown pane has
+      // changed the tab since, this pane lags it, and its report would overwrite
+      // that newer edit. The pending mirror sync then brings this pane up to date.
+      if (view === "wysiwyg" && pane.syncedRev !== this.revOf(tabId)) return;
       if (applyEditorMarkdownForTab(this.store, tabId, m)) {
         this.bumpRev(tabId, pane);
         this.lastEditedView = pane.view;

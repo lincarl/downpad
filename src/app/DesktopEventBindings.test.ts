@@ -51,6 +51,7 @@ describe("native close decisions", () => {
     const store = createAppStore();
     files = new FileService(store, {
       flush: () => {},
+      commitPendingEdits: () => {},
       showActiveDoc: async () => {},
       reloadActiveDoc: async () => {},
     });
