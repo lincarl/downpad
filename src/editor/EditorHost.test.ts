@@ -431,18 +431,33 @@ describe("EditorHost split catch-up", () => {
     await host.dispose();
   });
 
+  it("catches up before a control in the pane stops the click", async () => {
+    const { root, host } = await openSplit();
+    fakeEditors.rawChange!("newer Markdown text");
+    // Like a task checkbox or table button that acts on pointerdown.
+    const control = document.createElement("button");
+    control.addEventListener("pointerdown", (event) => event.stopPropagation());
+    root.querySelector(".editor-pane-wysiwyg")!.appendChild(control);
+
+    control.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+
+    expect(fakeEditors.mirrored).toBe("newer Markdown text");
+    await host.dispose();
+  });
+
   it("leaves a saved document saved when the panes take a click or focus", async () => {
     const { root, store, host } = await openSplit();
+    const before = { markdown: store.get().doc.markdown, raw: fakeEditors.rawText };
     // The document pane serializes differently now, with no edit to report.
-    fakeEditors.markdown = "settled markdown, written another way";
+    fakeEditors.markdown = `${before.markdown}, written another way`;
 
     for (const pane of root.querySelectorAll(".editor-pane")) {
       pane.dispatchEvent(new Event("pointerdown"));
       pane.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     }
 
-    expect(store.get().doc).toMatchObject({ markdown: "settled markdown", isDirty: false });
-    expect(fakeEditors.rawText).toBe("settled markdown");
+    expect(store.get().doc).toMatchObject({ markdown: before.markdown, isDirty: false });
+    expect(fakeEditors.rawText).toBe(before.raw);
     await host.dispose();
   });
 });

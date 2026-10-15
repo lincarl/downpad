@@ -548,8 +548,10 @@ export class EditorHost implements FindController {
 
     /** Bring a split pane up to date before it takes input. A pane's edit
      *  replaces the tab's whole text, so it must already hold the other pane's
-     *  latest edit. Runs on a click, in the capture phase so the editor places
-     *  the caret in the updated text, and when the keyboard moves focus in. */
+     *  latest edit. Runs on pointerdown in the capture phase, so it also runs
+     *  before Crepe controls in the pane that act on pointerdown or stop it,
+     *  such as task checkboxes and table buttons, and before the editors place
+     *  the caret on mousedown. Also runs when the keyboard moves focus in. */
     const catchUp = (): void => {
       if (this.layout === "split" && tabId === this.activeTabId) this.flush();
     };
