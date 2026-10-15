@@ -1,9 +1,8 @@
-// Raw view: CodeMirror 6 with markdown syntax highlighting. A *view* over the
+// Raw view: CodeMirror 6 with VS Code's Markdown colours. A *view* over the
 // canonical markdown string; raw edits are written back verbatim (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
-import { markdown } from "@codemirror/lang-markdown";
 import {
   SearchQuery,
   findNext as findNextMatch,
@@ -16,6 +15,7 @@ import {
 } from "@codemirror/search";
 import { base64Collapse } from "./base64Collapse";
 import { specialDashHighlight } from "./specialDash";
+import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
 
 export interface RawCallbacks {
@@ -44,12 +44,13 @@ export class RawEditor {
         doc: initial,
         extensions: [
           basicSetup,
-          markdown(),
+          markdownSource(),
+          markdownSourceStyle(),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({ "aria-label": "Markdown source editor" }),
           // Install CodeMirror's search state without exposing its own panel.
           // The app-level capture handler owns Ctrl+F/Ctrl+H and drives this
-          // state through the find card.
+          // state through the find card; markdownSourceStyle paints the matches.
           search({ top: true }),
           ...(opts.collapseBase64 ? [base64Collapse()] : []),
           // Make non-hyphen dashes (em/en dash, …) unmistakable in the source: a
