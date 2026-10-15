@@ -115,8 +115,11 @@ export async function searchRecentContents(
     if (received < summary.matched) {
       expected = summary.matched;
       await new Promise<void>((resolve) => {
-        allReceived = resolve;
-        setTimeout(resolve, SEARCH_RESULT_GRACE_MS);
+        const timer = setTimeout(resolve, SEARCH_RESULT_GRACE_MS);
+        allReceived = () => {
+          clearTimeout(timer);
+          resolve();
+        };
       });
     }
     return summary;

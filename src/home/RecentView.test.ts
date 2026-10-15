@@ -256,6 +256,19 @@ describe("RecentView — content search", () => {
     expect($(rv, ".recent-search-stop")).toBeNull();
   });
 
+  it("reports a scan the main process ends early as stopped", async () => {
+    const data = makeData(fresh(ALPHA, BRAVO, CHARLIE));
+    data.searchContents = async (_id, _query, cb) => {
+      cb.onHit(ALPHA.path, 1, CONTENT[ALPHA.path]!);
+      return { matched: 1, scanned: 1, cancelled: true };
+    };
+    const rv = await mount(data);
+    clickScope(rv, "Contents");
+    await search(rv, "quick");
+    expect(names(rv)).toEqual(["alpha.md"]);
+    expect(progress(rv)).toBe("Stopped, 1 file found");
+  });
+
   it("drops the stale count and scans again when refresh() reloads entries", async () => {
     const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
     clickScope(rv, "Contents");

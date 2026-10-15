@@ -344,7 +344,9 @@ export class RecentView {
       });
       if (!current()) return;
       this.prevSearchId = null;
-      this.phase = summary.cancelled ? "idle" : "done";
+      // The main process ended the scan early: report it as stopped, so the
+      // hits it found so far are not listed without a status.
+      this.phase = summary.cancelled ? "stopped" : "done";
       this.render();
     } catch {
       if (!current()) return;
