@@ -192,6 +192,26 @@
   --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
   --doc-accent: var(--accent);
 
+  /* Markdown view token colours: VS Code's Light+ Markdown and YAML colours,
+     with its light editor selection colours. */
+  --md-src-heading: #800000;
+  --md-src-strong: #000080;
+  --md-src-emphasis: #800080;
+  --md-src-string: #a31515;
+  --md-src-code: #800000;
+  --md-src-list: #0451a5;
+  --md-src-quote: #0451a5;
+  --md-src-escape: #e00;
+  --md-src-comment: #008000;
+  --md-src-tag: #800000;
+  --md-src-tag-punctuation: #800000;
+  --md-src-attribute: #e50000;
+  --md-src-attribute-value: #00f;
+  --md-src-yaml-key: #800000;
+  --md-src-yaml-value: #00f;
+  --md-src-selection: #add6ff;
+  --md-src-selection-inactive: #e5ebf1;
+  --md-src-selection-match: rgb(173 214 255 / 50%);
 }
 
 :root[data-theme="dark"] {
@@ -258,6 +278,26 @@
 :root[data-editor-theme="dark"] {
   --editor-surface-bg: #1e1e1e;
   --editor-surface-fg: #d4d4d4;
+
+  /* VS Code's Dark+ Markdown and YAML colours and dark selection colours. */
+  --md-src-heading: #569cd6;
+  --md-src-strong: #569cd6;
+  --md-src-emphasis: #c586c0;
+  --md-src-string: #ce9178;
+  --md-src-code: #ce9178;
+  --md-src-list: #6796e6;
+  --md-src-quote: #6a9955;
+  --md-src-escape: #d7ba7d;
+  --md-src-comment: #6a9955;
+  --md-src-tag: #569cd6;
+  --md-src-tag-punctuation: #808080;
+  --md-src-attribute: #9cdcfe;
+  --md-src-attribute-value: #ce9178;
+  --md-src-yaml-key: #569cd6;
+  --md-src-yaml-value: #ce9178;
+  --md-src-selection: #264f78;
+  --md-src-selection-inactive: #3a3d41;
+  --md-src-selection-match: rgb(173 214 255 / 15%);
 }
 
 /* When the document theme differs from the chrome, the chrome's accent can lack
@@ -429,7 +469,7 @@ body {
   height: 100vh;
 }
 
-/* Match highlights painted by the find plugin's decorations. */
+/* Match highlights painted by the find card's decorations, in both views. */
 .editor-host .md-find-match {
   background: rgb(255 213 0 / 45%);
   border-radius: 2px;
@@ -437,6 +477,22 @@ body {
 
 .editor-host .md-find-current {
   background: rgb(255 145 0 / 70%);
+}
+
+/* On a dark page, other matches use VS Code's dark find highlight, which keeps
+   light and coloured text readable. The current match is solid amber with dark
+   ink, including syntax-coloured text inside it. */
+:root[data-editor-theme="dark"] .editor-host .md-find-match {
+  background: rgb(234 92 0 / 33%);
+}
+
+:root[data-editor-theme="dark"] .editor-host .md-find-current {
+  background: #e9a23b;
+}
+
+:root[data-editor-theme="dark"] .editor-host .md-find-current,
+:root[data-editor-theme="dark"] .editor-host .md-find-current * {
+  color: #1e1e1e;
 }
 
 /* The fixed width lives on React's editor-column utilities. SettingsModel changes

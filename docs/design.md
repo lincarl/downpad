@@ -19,7 +19,7 @@ Electron packages Chromium and Node.js with the app. This gives development and 
 Each open document has one canonical Markdown string. The document and source editors are two views of that same content:
 
 - Document view renders and edits formatted Markdown.
-- Markdown view exposes the source directly.
+- Markdown view exposes the source directly. It parses GitHub Flavored Markdown with a leading YAML frontmatter block, and colors it with VS Code's default Markdown and YAML token colors (Light+ and Dark+).
 - Split view shows both and synchronizes changes between them.
 
 Each tab owns its own document state, including its path, content, save status, and line-ending style. The active tab is bound to the visible editor views.
@@ -33,7 +33,7 @@ The interface follows the look of [Mervin PDF](https://github.com/lincarl/mervin
 - `src/styles/app.css` defines the chrome tokens (surfaces from the input well to the floating popover, inks, translucent edges and washes, the accent) for both themes and exposes them to Tailwind as colors such as `bg-well`, `text-ink-soft` and `border-line-push`.
 - The primitives in `src/components/ui` (buttons, fields, check boxes, dialogs, menus, tooltips) carry Mervin's control styles, so surfaces compose them instead of restyling controls.
 - Chrome icons are Lucide icons drawn at a 1px line weight.
-- The document surface has its own light and dark palette, independent of the chrome theme.
+- The document surface has its own light and dark palette, independent of the chrome theme. Find highlights use the same classes in the Document and Markdown views.
 
 ## Application structure
 
