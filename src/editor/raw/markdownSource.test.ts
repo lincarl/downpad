@@ -70,6 +70,12 @@ describe("Markdown view colours", () => {
     expect(map.get("Notes")).not.toContain(cls(t.heading));
   });
 
+  it("reads an unclosed leading --- block as Markdown, like the document view", () => {
+    const map = tokens("---\ntitle: Notes\n# Heading\n");
+    expect(map.get("title: Notes")).toBe("");
+    expect(map.get("Heading")).toContain(cls(t.heading));
+  });
+
   it("keeps a later --- as a horizontal rule", () => {
     const map = tokens("Intro\n\n---\ntitle: Notes\n");
     expect(map.get("title: Notes")).toBe("");

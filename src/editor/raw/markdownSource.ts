@@ -31,7 +31,8 @@ const md = {
 };
 
 const FRONTMATTER_DELIMITER = /^---[ \t]*$/;
-const FRONTMATTER_CLOSE = /^(---|\.\.\.)[ \t]*$/;
+/** A closing `---` or `...` line. Multiline so it also finds one in later text. */
+const FRONTMATTER_CLOSE = /^(---|\.\.\.)[ \t]*$/m;
 /** `key: value` or `- key: value`; the key may not start with `#` or `:`. */
 const YAML_KEY = /^([ \t]*(?:-[ \t]+)?)([^\s#:][^:]*?):(?=[ \t]|$)/;
 const YAML_LIST_ITEM = /^([ \t]*-[ \t]+)/;
@@ -55,10 +56,24 @@ function frontmatterLine(cx: BlockContext, start: number, text: string): Element
 }
 
 /**
+ * Whether a closing `---` or `...` line follows `from`. Without one,
+ * `splitFrontmatter` finds no frontmatter and the document view reads the text
+ * as Markdown. Lezer keeps the parse input on the context but leaves it out of
+ * its types. If a later version drops it, an unclosed block reads as
+ * frontmatter again.
+ */
+function frontmatterCloses(cx: BlockContext, from: number): boolean {
+  const { input } = cx as BlockContext & {
+    readonly input?: { readonly length: number; read(from: number, to: number): string };
+  };
+  return input ? FRONTMATTER_CLOSE.test(input.read(from, input.length)) : true;
+}
+
+/**
  * A leading `---` block parsed as YAML frontmatter (spec §5.17), so its keys
  * and values get VS Code's YAML colours instead of reading as a horizontal rule
- * and a Setext heading. The block ends at the first `---` or `...` line, as in
- * `splitFrontmatter`.
+ * and a Setext heading. As in `splitFrontmatter`, the block ends at the first
+ * `---` or `...` line and needs one to count as frontmatter.
  */
 const frontmatter: MarkdownConfig = {
   defineNodes: [
@@ -74,6 +89,7 @@ const frontmatter: MarkdownConfig = {
       before: "HorizontalRule",
       parse(cx, line) {
         if (cx.lineStart !== 0 || !FRONTMATTER_DELIMITER.test(line.text)) return false;
+        if (!frontmatterCloses(cx, line.text.length)) return false;
         const children = [cx.elt("FrontmatterMark", 0, 3)];
         let end = line.text.length;
         while (cx.nextLine()) {
