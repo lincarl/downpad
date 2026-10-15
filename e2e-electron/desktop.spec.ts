@@ -111,6 +111,18 @@ test("the packaged app ignores a remote development URL override", async () => {
   expect(await app!.evaluate(({ app }) => app.isPackaged)).toBe(true);
 });
 
+test("a toolbar tooltip lets a click through to Recent", async () => {
+  const file = path.join(directory, "tooltip.md");
+  await writeFile(file, "# Tooltip\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Tooltip");
+  // Keyboard focus opens the menu button's tooltip over Recent, and it stays open.
+  await page.getByRole("button", { name: "Application menu", exact: true }).focus();
+  await expect(page.getByRole("tooltip", { name: "Menu", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Recent", exact: true }).click({ timeout: 2_000 });
+  await expect(page.locator(".recent-host")).toBeVisible();
+});
+
 test("native Open, edit, Save, and external file reload use actual files", async () => {
   const file = path.join(directory, "opened.md");
   await writeFile(file, "# Opened from dialog\r\n\r\nOriginal text.\r\n");
