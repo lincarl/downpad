@@ -49,9 +49,10 @@ const isDigit = (code: Code): boolean => code !== null && code >= 48 && code <= 
 
 /** Matches a `$` that opens single-dollar math Pandoc reads as text. That is one
  *  with a space or line ending right after it, or one whose closing `$`, found
- *  the way remark-math finds it, has a space right before it or a digit right
- *  after it. A space escaped as `\ ` may come before the closing `$`. Used as a
- *  check, so it reads nothing. */
+ *  the way remark-math finds it, has a space right before it, a digit right
+ *  after it, or is escaped as `\$`, which never closes math in Pandoc. A space
+ *  escaped as `\ ` may come before the closing `$`. Used as a check, so it
+ *  reads nothing. */
 const textDollarPair: Construct = {
   partial: true,
   tokenize(effects, ok, nok) {
@@ -59,6 +60,8 @@ const textDollarPair: Construct = {
     let backslashes = 0;
     /** Whether the character before the current run of dollars is an unescaped space. */
     let spaceBefore = false;
+    /** Whether a backslash escapes the current run of dollars. */
+    let escaped = false;
     /** Dollars in the current run. */
     let run = 0;
     return start;
@@ -82,6 +85,7 @@ const textDollarPair: Construct = {
       if (code === null) return finish(code, false);
       if (code === DOLLAR) {
         run = 0;
+        escaped = backslashes % 2 === 1;
         return dollars(code);
       }
       spaceBefore = isSpace(code) && backslashes % 2 === 0;
@@ -101,7 +105,7 @@ const textDollarPair: Construct = {
         backslashes = 0;
         return inside(code);
       }
-      return finish(code, spaceBefore || isDigit(code));
+      return finish(code, spaceBefore || escaped || isDigit(code));
     }
 
     /** End the check, matching when the pair is text. */
@@ -144,10 +148,14 @@ function trimMath(value: string): string {
 }
 
 /** Whether `$inner$` followed by `after` reads as math by Pandoc's rules, with
- *  no space just inside either `$`, unless escaped as `\ `, and no digit right
- *  after. */
+ *  no space just inside either `$`, unless escaped as `\ `, no backslash
+ *  escaping the closing `$`, and no digit right after. */
 function readsAsMath(inner: string, after: string): boolean {
-  return !/^[ \t\r\n]/.test(inner) && !/(^|[^\\])(\\\\)*[ \t\r\n]$/.test(inner) && !/^\d/.test(after);
+  return (
+    !/^[ \t\r\n]/.test(inner) &&
+    !/(^|[^\\])(\\\\)*([ \t\r\n]|\\)$/.test(inner) &&
+    !/^\d/.test(after)
+  );
 }
 
 /** Wraps remark-math's inline math writer so every formula reads back as the

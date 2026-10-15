@@ -91,16 +91,18 @@ describe("math and strikethrough delimiters", () => {
         "Spaced $ x $ is text.",
         "Pay $5-$10 today.",
         "Odd $$5$ is text.",
+        "Type $USD or \\$ for dollars.",
         "> Pay $5 for kids\n> and $10 for adults.",
         "The formula $E = mc^2$ stays math.",
       ].join("\n\n") + "\n",
     );
     expect(formulas(root)).toEqual(["E = mc^2"]);
-    expect([...root.querySelectorAll(".ProseMirror > p")].map((p) => p.textContent).slice(1, 5)).toEqual([
+    expect([...root.querySelectorAll(".ProseMirror > p")].map((p) => p.textContent).slice(1, 6)).toEqual([
       "Tickets cost $5 for kids and $10 for adults.",
       "Spaced $ x $ is text.",
       "Pay $5-$10 today.",
       "Odd $$5$ is text.",
+      "Type $USD or $ for dollars.",
     ]);
     edit(editor);
     // The dollar signs are escaped once saved, which every reader shows as `$`.
@@ -111,6 +113,7 @@ describe("math and strikethrough delimiters", () => {
         "Spaced \\$ x \\$ is text.",
         "Pay \\$5-\\$10 today.",
         "Odd \\$\\$5\\$ is text.",
+        "Type \\$USD or \\$ for dollars.",
         "> Pay \\$5 for kids\n> and \\$10 for adults.",
         "The formula $E = mc^2$ stays math.",
       ].join("\n\n") + "\n",
@@ -174,6 +177,8 @@ describe("math and strikethrough delimiters", () => {
     [" x ", "Math $x$ here.\n", ["x"]],
     // `\ ` is a space in TeX, which may come before the closing `$`.
     ["a\\ ", "Math $a\\ $ here.\n", ["a\\ "]],
+    // `\$` does not close single-dollar math.
+    ["a\\", "Math $$a\\$$ here.\n", ["a\\"]],
     // An empty formula shows nothing, and `$$` would read as text.
     ["", "Math  here.\n", []],
   ])("saves the formula %j so it opens the same way", { timeout: 60_000 }, async (value, markdown, math) => {
