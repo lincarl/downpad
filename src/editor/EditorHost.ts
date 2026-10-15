@@ -591,6 +591,10 @@ export class EditorHost implements FindController {
       if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
         return;
       }
+      // The document pane reports after typing pauses. If the Markdown pane has
+      // changed the tab since, this pane lags it, and its report would overwrite
+      // that newer edit. The pending mirror sync then brings this pane up to date.
+      if (view === "wysiwyg" && pane.syncedRev !== this.revOf(tabId)) return;
       if (applyEditorMarkdownForTab(this.store, tabId, m)) {
         this.bumpRev(tabId, pane);
         this.lastEditedView = pane.view;
