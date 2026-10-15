@@ -81,6 +81,8 @@ export class PrintWorkspace {
   private settings: Settings | null = null;
   private printRoot: HTMLElement | null = null;
   private printers: PrinterInfo[] = [];
+  /** Pages: All, or Custom with the range in `pageRange` (empty while cleared). */
+  private pageMode: PageMode = "all";
   private pageRange = "";
   /** Sheets in the current layout; 0 until the first layout. */
   private pages = 0;
@@ -114,6 +116,7 @@ export class PrintWorkspace {
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.job = job;
     this.settings = { ...this.cb.getSettings() };
+    this.pageMode = "all";
     this.pageRange = "";
     this.dirty = false;
     this.summaryText = "";
@@ -296,6 +299,7 @@ export class PrintWorkspace {
     this.snapshot = {
       settings: this.settings,
       printers: this.printers,
+      pageMode: this.pageMode,
       pageRange: this.pageRange,
       rangeError: this.rangeError(),
       summary: this.summaryText,
@@ -315,7 +319,8 @@ export class PrintWorkspace {
 
   /** All / a custom "1-3,5" range. The range never re-paginates — it only narrows
    *  which of the rendered sheets the printer is asked for. */
-  private readonly setPageMode = (mode: "all" | "custom"): void => {
+  private readonly setPageMode = (mode: PageMode): void => {
+    this.pageMode = mode;
     this.pageRange = mode === "custom" ? this.pageRange || "1" : "";
     this.publish();
   };
@@ -406,9 +411,10 @@ export class PrintWorkspace {
     this.publish();
   }
 
-  /** Why the custom page range cannot print, or null for All or a valid range. */
+  /** Why the custom page range cannot print, or null for All or a valid range.
+   *  A cleared Custom range stays Custom and invalid, so it never prints everything. */
   private rangeError(): string | null {
-    return this.pageRange ? pageRangeError(this.pageRange, this.pages) : null;
+    return this.pageMode === "custom" ? pageRangeError(this.pageRange, this.pages) : null;
   }
 
   // ── Printing ────────────────────────────────────────────────────────────
@@ -422,7 +428,7 @@ export class PrintWorkspace {
       orientation: s.printOrientation,
       pageWidthIn: geometry.widthIn,
       pageHeightIn: geometry.heightIn,
-      pageRanges: this.pageRange,
+      pageRanges: this.pageMode === "custom" ? this.pageRange : "",
     };
   }
 
@@ -644,9 +650,12 @@ function createBrowserPrintWaiter(): BrowserPrintWaiter {
 
 // ── React workspace view ──────────────────────────────────────────────────
 
+type PageMode = "all" | "custom";
+
 interface PrintWorkspaceSnapshot {
   settings: Settings;
   printers: readonly PrinterInfo[];
+  pageMode: PageMode;
   pageRange: string;
   /** Why the custom page range cannot print; Print and Save as PDF wait for a fix. */
   rangeError: string | null;
@@ -664,7 +673,7 @@ interface PrintWorkspaceViewProps {
   onSaveAsPdf(): void;
   onPrint(): void;
   onUpdate(patch: Partial<Settings>, repaginate?: boolean): void;
-  onPageModeChange(mode: "all" | "custom"): void;
+  onPageModeChange(mode: PageMode): void;
   onPageRangeChange(range: string): void;
 }
 
@@ -774,8 +783,8 @@ function PrintWorkspaceView({
                   <Select
                     id={`${ids}pages`}
                     aria-label="Pages"
-                    className={cn("min-w-0", view.pageRange ? "w-[104px]" : "w-full")}
-                    value={view.pageRange ? "custom" : "all"}
+                    className={cn("min-w-0", view.pageMode === "custom" ? "w-[104px]" : "w-full")}
+                    value={view.pageMode}
                     onChange={(event) =>
                       onPageModeChange(event.currentTarget.value === "custom" ? "custom" : "all")
                     }
@@ -783,7 +792,7 @@ function PrintWorkspaceView({
                     <option value="all">All</option>
                     <option value="custom">Custom</option>
                   </Select>
-                  {view.pageRange && (
+                  {view.pageMode === "custom" && (
                     <PageRangeField
                       value={view.pageRange}
                       error={view.rangeError ? `${ids}range-error` : undefined}

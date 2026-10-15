@@ -364,6 +364,14 @@ describe("PrintWorkspace React view", () => {
     expect(range.hasAttribute("aria-invalid")).toBe(false);
     expect(button("Print").disabled).toBe(false);
     expect(button("Save as PDF").disabled).toBe(false);
+
+    // A cleared range stays Custom and blocks printing instead of printing everything.
+    commit("");
+    expect(document.querySelector<HTMLSelectElement>('select[aria-label="Pages"]')?.value).toBe("custom");
+    expect(document.querySelector(".print-ws-range-error")?.textContent).toBe(
+      "Use page numbers and ranges, such as 1-3, 5.",
+    );
+    expect(button("Print").disabled).toBe(true);
   });
 
   it("cancels the browser afterprint waiter when the workspace closes", async () => {
