@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { Editor, defaultValueCtx, editorViewCtx, schemaCtx } from "@milkdown/kit/core";
+import { Editor, defaultValueCtx, editorViewCtx, rootCtx, schemaCtx } from "@milkdown/kit/core";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
-import { imageBlockSchema, remarkImageBlockPlugin } from "@milkdown/kit/component/image-block";
+import { imageBlockComponent, imageBlockSchema, remarkImageBlockPlugin } from "@milkdown/kit/component/image-block";
 import { DOMParser, type Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { getMarkdown } from "@milkdown/kit/utils";
-import { imageBlockAltSchema } from "./imageBlockAlt";
+import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
 import { imageAttrs } from "./imageView";
 
 let editor: Editor | null = null;
 afterEach(async () => {
   await editor?.destroy();
   editor = null;
+  document.body.replaceChildren();
 });
 
 /** An editor with Crepe's image block, then md-easy's schema on top, as in WysiwygEditor. */
@@ -74,5 +75,55 @@ describe("standalone image alt text", () => {
     html.innerHTML = '<img data-type="image-block" src="b.png" alt="Pasted diagram" caption="" ratio="1">';
     const pasted = DOMParser.fromSchema(ed.ctx.get(schemaCtx)).parse(html);
     expect(pasted.firstChild?.attrs.alt).toBe("Pasted diagram");
+  });
+});
+
+/** An editor that draws images with Crepe's image view, as in the app. */
+async function render(markdown: string): Promise<Editor> {
+  const root = document.createElement("div");
+  document.body.append(root);
+  editor = await Editor.make()
+    .config((ctx) => {
+      ctx.set(rootCtx, root);
+      ctx.set(defaultValueCtx, markdown);
+    })
+    .use(commonmark)
+    .use(imageBlockComponent)
+    .use(imageBlockAltSchema)
+    .use(imageBlockAltView)
+    .create();
+  return editor;
+}
+
+/** The alt attribute of every drawn standalone image, once Crepe's view and the
+ *  plugin have finished updating the page. */
+async function drawnAlts(): Promise<(string | null)[]> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return [...document.querySelectorAll(".milkdown-image-block img")].map((img) => img.getAttribute("alt"));
+}
+
+describe("standalone image alt text for screen readers", () => {
+  it("labels each image with its alt text, or its caption when it has none", async () => {
+    await render('![Diagram](a.png "Notes flow")\n\n![](b.png "Only a caption")\n\n![Plain](c.png)\n');
+    expect(await drawnAlts()).toEqual(["Diagram", "Only a caption", "Plain"]);
+  });
+
+  it("keeps the alt text when the caption changes", async () => {
+    const ed = await render('![Diagram](a.png "Old caption")\n');
+    const { view, pos } = firstImageBlock(ed);
+    view.dispatch(view.state.tr.setNodeAttribute(pos, "caption", "New caption"));
+    expect(await drawnAlts()).toEqual(["Diagram"]);
+  });
+
+  it("follows an edited alt text and an image that gets its source later", async () => {
+    const ed = await render("![Diagram](a.png)\n");
+    const { view, pos } = firstImageBlock(ed);
+    view.dispatch(view.state.tr.setNodeAttribute(pos, "alt", "Renamed"));
+    expect(await drawnAlts()).toEqual(["Renamed"]);
+
+    view.dispatch(view.state.tr.setNodeAttribute(pos, "src", ""));
+    expect(await drawnAlts()).toEqual([]);
+    view.dispatch(view.state.tr.setNodeAttribute(pos, "src", "b.png"));
+    expect(await drawnAlts()).toEqual(["Renamed"]);
   });
 });

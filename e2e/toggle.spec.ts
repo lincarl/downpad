@@ -62,6 +62,21 @@ test("an edit in the document keeps a standalone image's alt text", async ({ pag
   await expect(page.locator(rawContent)).toContainText("![A tiny square](data:image/png;base64,");
 });
 
+test("a standalone image is announced by its alt text, or its caption without one", async ({ page }) => {
+  // Crepe's image view used the caption as the alt, so the alt text went unread.
+  const square =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFElEQVR4nGNkYGD4z0AEYBxVSF+FAP5FBQXxiME7AAAAAElFTkSuQmCC";
+  await page.locator(markdownSeg).click();
+  await page.locator(rawContent).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText(`![A tiny square](${square} "Square caption")\n\n![](${square} "Only a caption")\n`);
+  await page.locator(documentSeg).click();
+  const document = page.locator(wysiwyg);
+  await expect(document.getByRole("img", { name: "A tiny square", exact: true })).toBeVisible();
+  await expect(document.getByRole("img", { name: "Only a caption", exact: true })).toBeVisible();
+  await expect(document.getByRole("img", { name: "Square caption", exact: true })).toHaveCount(0);
+});
+
 test("'Markdown' shows only the raw source (the document is hidden)", async ({ page }) => {
   await page.locator(markdownSeg).click();
 
