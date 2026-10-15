@@ -1343,6 +1343,8 @@ body {
    status bar. These rules cover the document canvas, which the editor panes
    and EditorHost share. */
 .editor-area:not(.split, .markdown-only) .editor-column {
+  /* The area is a flex row. Stretched, the page would stop at one window height. */
+  align-self: flex-start;
   min-height: 100%;
   background: var(--editor-surface-bg);
   box-shadow: 0 0 0 1px rgb(0 0 0 / 45%);
