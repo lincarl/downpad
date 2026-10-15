@@ -43,7 +43,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { MenuRows, menuSurfaceClassName, onMenuKeyDown, type MenuItem } from "@/components/ui/menu";
+import { MenuRows, focusBeside, menuSurfaceClassName, onMenuKeyDown, type MenuItem } from "@/components/ui/menu";
 import { FileCopyIcon, FolderCopyIcon } from "@/components/icons";
 import {
   Popover,
@@ -313,23 +313,45 @@ function focusCheckedMenuRow(event: Event): void {
  * returns focus to its button and then runs the item. Radix returns focus on
  * Escape but not when an item closes the menu, and a dialog the item opens
  * needs that focus to know where to return.
+ *
+ * `menuProps` go on the menu's PopoverContent: arrow keys move between rows,
+ * and Tab or Shift+Tab closes the menu and moves focus to the control after or
+ * before its button, instead of cycling through the rows.
  */
 function useToolbarMenu() {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const tabbing = useRef<"forward" | "backward" | null>(null);
   const activate = (item: MenuItem): void => {
     setOpen(false);
     triggerRef.current?.focus();
     setTimeout(() => void item.run(), 0);
   };
-  return { open, setOpen, triggerRef, activate };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (event.key !== "Tab") {
+      onMenuKeyDown(event);
+      return;
+    }
+    event.preventDefault();
+    tabbing.current = event.shiftKey ? "backward" : "forward";
+    setOpen(false);
+  };
+  // Radix focuses the button after the menu closes; a Tab moves on from it.
+  const onCloseAutoFocus = (event: Event): void => {
+    const direction = tabbing.current;
+    tabbing.current = null;
+    if (!direction || !triggerRef.current) return;
+    event.preventDefault();
+    focusBeside(triggerRef.current, direction === "backward");
+  };
+  return { open, setOpen, triggerRef, activate, menuProps: { onKeyDown, onCloseAutoFocus } };
 }
 
 /** The hamburger menu: file actions, document actions, view choices and Settings. */
 function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDark: boolean }) {
   const runtime = useAppRuntime();
   const editorLayout = useAppState((state) => state.editorLayout);
-  const { open, setOpen, triggerRef, activate } = useToolbarMenu();
+  const { open, setOpen, triggerRef, activate, menuProps } = useToolbarMenu();
   const layout = (value: EditorLayout, label: string, icon: LucideIcon): MenuItem => ({
     label,
     icon,
@@ -381,7 +403,7 @@ function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDa
         className={cn("app-menu z-[100] min-w-[210px]", menuSurfaceClassName)}
         role="menu"
         aria-label="Application menu"
-        onKeyDown={onMenuKeyDown}
+        {...menuProps}
         onOpenAutoFocus={focusFirstMenuRow}
       >
         <MenuRows
@@ -452,7 +474,7 @@ function SplitButton({
   onClick(): void;
   items: MenuItem[];
 }) {
-  const { open, setOpen, triggerRef, activate } = useToolbarMenu();
+  const { open, setOpen, triggerRef, activate, menuProps } = useToolbarMenu();
   // Hover, pressed and open washes belong to the whole box, as in Mervin; the
   // two parts only carry their own keyboard focus outline.
   const part = cn(
@@ -513,7 +535,7 @@ function SplitButton({
         className={cn("z-[100]", menuSurfaceClassName)}
         role="menu"
         aria-label={menuLabel}
-        onKeyDown={onMenuKeyDown}
+        {...menuProps}
         onOpenAutoFocus={focusFirstMenuRow}
       >
         <MenuRows
@@ -536,7 +558,7 @@ function TextSizeControl({
   scale: number;
 }) {
   const runtime = useAppRuntime();
-  const { open, setOpen, triggerRef, activate } = useToolbarMenu();
+  const { open, setOpen, triggerRef, activate, menuProps } = useToolbarMenu();
   const current = Math.round(scale * 100);
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -572,7 +594,7 @@ function TextSizeControl({
         className={cn(menuSurfaceClassName, "z-[100] w-[var(--radix-popover-trigger-width)] min-w-0")}
         role="menu"
         aria-label="Document text size"
-        onKeyDown={onMenuKeyDown}
+        {...menuProps}
         onOpenAutoFocus={focusCheckedMenuRow}
       >
         <MenuRows

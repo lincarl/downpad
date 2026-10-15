@@ -143,3 +143,22 @@ export function moveMenuFocus(menu: HTMLElement, key: string): boolean {
 export function onMenuKeyDown(event: KeyboardEvent<HTMLElement>): void {
   if (moveMenuFocus(event.currentTarget, event.key)) event.preventDefault();
 }
+
+const TABBABLE =
+  'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex], [contenteditable="true"]';
+
+/**
+ * Focus the control after `from` in the page's tab order, or the one before it
+ * when `backward`. Focus stays on `from` at either end. Used when Tab closes a
+ * menu: focus moves on from the menu's button, as the WAI-ARIA menu button
+ * pattern describes.
+ */
+export function focusBeside(from: HTMLElement, backward: boolean): void {
+  const order = Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    (el) =>
+      el === from ||
+      (el.tabIndex >= 0 && !el.closest("[hidden], [inert]") && (el.checkVisibility?.() ?? true)),
+  );
+  const at = order.indexOf(from);
+  (order[at + (backward ? -1 : 1)] ?? from).focus();
+}

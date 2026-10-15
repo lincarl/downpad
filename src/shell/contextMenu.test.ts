@@ -72,6 +72,21 @@ describe("showContextMenu", () => {
     expect(menu().children[1].className).toBe("md-context-menu-sep");
   });
 
+  it("closes on Tab and returns focus to where it was opened", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    showContextMenu(0, 0, [{ label: "Copy", run: () => {} }]);
+    expect(document.activeElement).toBe(rows()[0]);
+
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    rows()[0].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(isContextMenuOpen()).toBe(false);
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it("replaces an already-open menu instead of stacking a second one", () => {
     showContextMenu(0, 0, [{ label: "First", run: () => {} }]);
     showContextMenu(0, 0, [{ label: "Second", run: () => {} }]);
