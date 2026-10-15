@@ -31,6 +31,7 @@ import {
 import type { WysiwygContext } from "./context";
 import { openTextPrompt } from "../../components/TextPromptDialog";
 import { MENU_ICONS } from "../../shell/menuIcons";
+import { mdImage } from "../../paste/mdLink";
 
 export const imageContextMenuKey = new PluginKey("md-easy-image-context-menu");
 
@@ -91,7 +92,7 @@ function buildItems(
   pos: number,
   ctx: WysiwygContext,
 ): MenuItem[] {
-  const { src, alt, altKey } = imageAttrs(node);
+  const { src, alt, title } = imageAttrs(node);
   return [
     { label: "Copy image", icon: MENU_ICONS.copy, run: () => copyImage(src, ctx).catch(() => {}) },
     {
@@ -102,7 +103,7 @@ function buildItems(
     {
       label: "Copy as Markdown",
       icon: MENU_ICONS.markdown,
-      run: () => void navigator.clipboard.writeText(`![${alt}](${src})`).catch(() => {}),
+      run: () => void navigator.clipboard.writeText(mdImage(alt, src, title)).catch(() => {}),
     },
     {
       label: "Replace image…",
@@ -120,7 +121,7 @@ function buildItems(
           initialValue: alt,
           confirmLabel: "Save",
         });
-        if (next !== null) setImageAttrs(view, pos, node, { [altKey]: next });
+        if (next !== null) setImageAttrs(view, pos, node, { alt: next });
       },
     },
     {

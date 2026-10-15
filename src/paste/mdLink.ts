@@ -24,6 +24,8 @@ export function mdLink(text: string, url: string): string {
   return `[${escapeLinkText(text)}](${encodeLinkUrl(url)})`;
 }
 
-export function mdImage(alt: string, url: string): string {
-  return `![${escapeLinkText(alt)}](${encodeLinkUrl(url)})`;
+/** An image, with a double-quoted title when `title` is set. */
+export function mdImage(alt: string, url: string, title = ""): string {
+  const quoted = title ? ` "${title.replace(/["\\]/g, (c) => `\\${c}`)}"` : "";
+  return `![${escapeLinkText(alt)}](${encodeLinkUrl(url)}${quoted})`;
 }
