@@ -136,6 +136,8 @@ test("a toolbar tooltip stays open while the pointer is over it", async () => {
   const box = await page.locator("[data-radix-popper-content-wrapper]").boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2, { steps: 8 });
   await page.mouse.move(box!.x + box!.width - 4, box!.y + box!.height / 2, { steps: 8 });
+  // Rest on the tooltip a while, so a delayed close would have happened.
+  await page.waitForTimeout(800);
   await expect(tooltip).toBeVisible();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height + 150, { steps: 8 });
   await expect(tooltip).toBeHidden();
