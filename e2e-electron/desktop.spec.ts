@@ -243,6 +243,40 @@ test("launching with a file builds its document editor once", async () => {
   expect(await page.evaluate(() => Reflect.get(window, "editorBuilds"))).toBe(2);
 });
 
+test("Open recovered shows a snapshot's exact text as unsaved", async () => {
+  const file = path.join(directory, "recovered.md");
+  await writeFile(file, "# Before the crash\n");
+  // The document view writes this as "# Title\n\nLine\\\nnext\n\nSee [docs](https://x.y).\n".
+  const markdown = "Title\n=====\n\nLine  \nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n";
+  const recovery = path.join(directory, "profile", "recovery");
+  await mkdir(recovery);
+  const snapshot = { sessionId: "earlier-session", savedAt: new Date().toISOString(), filePath: file, markdown, isDirty: true };
+  await writeFile(path.join(recovery, "earlier-session.json"), JSON.stringify(snapshot));
+  await launch();
+  // Startup only fills the tab, so the editor must still be built for it.
+  await page.getByRole("button", { name: "Open recovered", exact: true }).click();
+  await expect(page.locator(heading)).toHaveText("Title");
+  await expect(page).toHaveTitle("● recovered.md — md-easy");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
+  await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(markdown);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(markdown);
+  await expect(page).toHaveTitle("recovered.md — md-easy");
+});
+
+test("the first-run welcome document opens as saved with its exact text", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = false\nhasCheckedDefaultHandler = true\n");
+  // The renderer reads the copy that the build puts next to index.html.
+  const welcome = await readFile(path.join(projectRoot, "dist", "welcome.md"), "utf8");
+  await launch();
+  await expect(page.locator(heading)).toContainText("Welcome to md-easy");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
+  await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(welcome);
+  await expect(page).toHaveTitle("Untitled — md-easy");
+});
+
 test("an undo right after Save marks the document unsaved again", async () => {
   const file = path.join(directory, "undo.md");
   // No heading: the heading-id plugin's first update would hide the case.

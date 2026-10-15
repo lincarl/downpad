@@ -21,17 +21,24 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** Mount the document editor on `markdown`, recording its change reports. */
-async function open(markdown: string): Promise<{ editor: WysiwygEditor; onChange: ReturnType<typeof vi.fn> }> {
+/** Start mounting the document editor on `markdown`, recording its change reports. */
+function start(markdown: string): { editor: WysiwygEditor; onChange: ReturnType<typeof vi.fn>; root: HTMLElement; mounting: Promise<void> } {
   const root = document.createElement("div");
   document.body.append(root);
   const onChange = vi.fn();
   editor = new WysiwygEditor();
-  await editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  const mounting = editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => null,
     requestSave: async () => false,
   });
+  return { editor, onChange, root, mounting };
+}
+
+/** Mount the document editor on `markdown`, recording its change reports. */
+async function open(markdown: string): Promise<{ editor: WysiwygEditor; onChange: ReturnType<typeof vi.fn> }> {
+  const { editor, onChange, mounting } = start(markdown);
+  await mounting;
   return { editor, onChange };
 }
 
@@ -67,8 +74,12 @@ describe("the document view's Markdown", () => {
     const { editor, onChange } = await open(SOURCE);
     expect(editor.getMarkdown()).toBe(SOURCE);
     await settle();
-    editor.clearSearch();
+    // Two edits that cancel out change the document but not its Markdown.
+    replace(editor, "docs", "Docs");
+    replace(editor, "Docs", "docs");
     await settle();
+    expect(onChange).toHaveBeenCalled();
+    expect(lastReport(onChange)).toBe(SOURCE);
     expect(editor.getMarkdown()).toBe(SOURCE);
     expect(differing(onChange, SOURCE)).toEqual([]);
   });
@@ -101,5 +112,19 @@ describe("the document view's Markdown", () => {
     replace(editor, "Line", "First line");
     await settle();
     expect(lastReport(onChange)).toBe("# Title\n\nFirst line\\\nnext\n\nSee [docs](https://x.y).\n");
+  });
+
+  it("is the exact text the split mirror set while the editor was opening", { timeout: 60_000 }, async () => {
+    const { editor, root, mounting } = start("Start.\n");
+    let mounted = false;
+    void mounting.then(() => (mounted = true));
+    // Mirror into the editor once its document exists, before mount returns.
+    for (let step = 0; step < 1_000 && !root.querySelector(".ProseMirror"); step++) await Promise.resolve();
+    expect(root.querySelector(".ProseMirror")).not.toBeNull();
+    expect(mounted).toBe(false);
+    editor.setMarkdown(SOURCE);
+    await mounting;
+    expect(root.querySelector(".ProseMirror h1")?.textContent).toBe("Title");
+    expect(editor.getMarkdown()).toBe(SOURCE);
   });
 });

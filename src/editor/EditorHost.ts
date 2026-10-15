@@ -82,8 +82,12 @@ export class EditorHost implements FindController {
   /** Which editor panes are shown — document only, the split, or Markdown only
    *  (§6.1). Mirrors `AppState.editorLayout`. */
   private layout: EditorLayout = "document";
-  /** Set while a mirror sync writes into a pane, so that pane's resulting change
-   *  callback is ignored (it would otherwise echo back and clobber the author). */
+  /** Set while a mirror sync writes into a pane, so a change report made during
+   *  the write is ignored (the Markdown pane also suppresses its own). The
+   *  document pane reports a sync about 200ms later, after this is reset. That
+   *  report carries the exact mirrored text (`WysiwygEditor.getMarkdown`), so it
+   *  changes nothing, and `onChange` drops it if a newer Markdown edit landed
+   *  first. */
   private applyingSync = false;
   /** Pending debounced mirror sync and the pane whose edit it mirrors. */
   private pendingSync: { timer: ReturnType<typeof setTimeout>; source: Pane } | null = null;
@@ -232,8 +236,8 @@ export class EditorHost implements FindController {
    * show it. Markdown pane edits are reported as they happen.
    *
    * Edits only ever arrive through a pane's change report, which the host
-   * drops when the pane lags the tab. Never read a pane's text here, which
-   * would skip that check and could write older text over a newer edit.
+   * drops when the document pane lags the tab. Never read a pane's text here,
+   * which would skip that check and could write older text over a newer edit.
    */
   flush(): void {
     if (this.disposed || !this.activeTabId) return;
@@ -542,9 +546,10 @@ export class EditorHost implements FindController {
     this.panes.set(paneKey(tabId, view), pane);
 
     // Bound to this tab id so a background pane writes to its own tab, never the
-    // active doc; a real change advances the tab's rev (staling its other view)
-    // and — in split — mirrors into the other visible pane. Changes caused by our
-    // own mirror sync are ignored (applyingSync) so they can't echo back.
+    // active doc. A real change advances the tab's rev (staling its other view)
+    // and, in the split, mirrors into the other visible pane. A report made
+    // during our own mirror sync is ignored (applyingSync). The document pane's
+    // later report of a sync carries the mirrored text, so it changes nothing.
     const onChange = (m: string): void => {
       if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
         return;
@@ -633,8 +638,11 @@ export class EditorHost implements FindController {
   }
 
   /** Push the current canonical into the sibling (non-authoring) pane so the split
-   *  stays in sync. `applyingSync` makes the sibling's resulting change callback a
-   *  no-op, so this can never loop or clobber the author. */
+   *  stays in sync. `applyingSync` ignores any report made while the panes are
+   *  written. The document pane reports about 200ms later with the exact
+   *  canonical text, which changes nothing, and `onChange` drops that report if
+   *  a newer Markdown edit landed first. So a sync never loops or clobbers the
+   *  author. */
   private runSync(source: Pane): void {
     if (this.disposed || this.layout !== "split" || source.tabId !== this.activeTabId) return;
     const otherView: View = source.view === "wysiwyg" ? "raw" : "wysiwyg";

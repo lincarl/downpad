@@ -209,7 +209,9 @@ export class WysiwygEditor {
     // asynchronous Crepe create is in flight. Never arm callbacks for that dead
     // instance; destroy() already owns/awaits its terminal cleanup.
     if (this.destroyed || this.crepe !== crepe) return;
-    this.rememberSource(split.body);
+    // A split mirror sync that landed while Crepe was creating has already
+    // replaced the body and recorded its own source. Keep that one.
+    if (!this.baseline) this.rememberSource(split.body);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
     this.enableUpdatesTimer = setTimeout(() => {
       this.enableUpdatesTimer = null;
@@ -430,6 +432,8 @@ export class WysiwygEditor {
     }, CHANGE_DEBOUNCE_MS);
   }
 
+  /** Report the current Markdown (the exact source while the body is unchanged)
+   *  through onChange. */
   private emitChange(): void {
     this.onChange?.(this.getMarkdown());
   }
