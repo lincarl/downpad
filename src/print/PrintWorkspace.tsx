@@ -31,6 +31,7 @@ import { onPrintCompleted } from "../ipc/events";
 import type { NativePrintOptions, PrinterInfo } from "../ipc/contracts";
 import type { Settings } from "../state/types";
 import { pageCount, renderPrintPages } from "./printRender";
+import { pageRangeError } from "./pageRange";
 import {
   MARGIN_PRESETS,
   PAPER_SIZES,
@@ -81,6 +82,8 @@ export class PrintWorkspace {
   private printRoot: HTMLElement | null = null;
   private printers: PrinterInfo[] = [];
   private pageRange = "";
+  /** Sheets in the current layout; 0 until the first layout. */
+  private pages = 0;
   private busy = false;
   /** Set once the user changes an option, so closing an untouched workspace
    *  doesn't rewrite settings.toml (and the auto-detected default printer isn't
@@ -294,6 +297,7 @@ export class PrintWorkspace {
       settings: this.settings,
       printers: this.printers,
       pageRange: this.pageRange,
+      rangeError: this.rangeError(),
       summary: this.summaryText,
       status: this.statusText,
       electron: isElectron(),
@@ -393,11 +397,18 @@ export class PrintWorkspace {
     scaler.style.setProperty("--print-preview-scale", String(scale));
   }
 
-  /** The page count shown at the end of the paper line under the preview. */
+  /** The page count shown at the end of the paper line under the preview. A new
+   *  count also rechecks a custom page range against it. */
   private updateSummary(): void {
     const pages = this.printRoot ? pageCount(this.printRoot) : 0;
+    this.pages = pages;
     this.summaryText = `${pages} ${pages === 1 ? "page" : "pages"}`;
     this.publish();
+  }
+
+  /** Why the custom page range cannot print, or null for All or a valid range. */
+  private rangeError(): string | null {
+    return this.pageRange ? pageRangeError(this.pageRange, this.pages) : null;
   }
 
   // ── Printing ────────────────────────────────────────────────────────────
@@ -416,6 +427,7 @@ export class PrintWorkspace {
   }
 
   private async print(): Promise<void> {
+    if (this.rangeError()) return;
     await this.withPrintDom(async () => {
       if (!isElectron()) {
         // Browser dev builds have no backend: fall back to the browser dialog.
@@ -434,6 +446,7 @@ export class PrintWorkspace {
   }
 
   private async saveAsPdf(): Promise<void> {
+    if (this.rangeError()) return;
     if (!isElectron()) {
       this.flash("Save as PDF needs the installed app.");
       return;
@@ -635,6 +648,8 @@ interface PrintWorkspaceSnapshot {
   settings: Settings;
   printers: readonly PrinterInfo[];
   pageRange: string;
+  /** Why the custom page range cannot print; Print and Save as PDF wait for a fix. */
+  rangeError: string | null;
   summary: string;
   status: string;
   electron: boolean;
@@ -769,10 +784,19 @@ function PrintWorkspaceView({
                     <option value="custom">Custom</option>
                   </Select>
                   {view.pageRange && (
-                    <PageRangeField value={view.pageRange} onChange={onPageRangeChange} />
+                    <PageRangeField
+                      value={view.pageRange}
+                      error={view.rangeError ? `${ids}range-error` : undefined}
+                      onChange={onPageRangeChange}
+                    />
                   )}
                 </div>
               </FormRow>
+              {view.rangeError && (
+                <p id={`${ids}range-error`} role="alert" className="print-ws-range-error col-start-2 m-0 text-ink-danger">
+                  {view.rangeError}
+                </p>
+              )}
             </FormGrid>
           </PrintGroup>
 
@@ -889,7 +913,13 @@ function PrintWorkspaceView({
       </div>
 
       <div className="print-ws-footer flex items-center gap-1.5 border-t border-separator px-[11px] py-2.5 leading-[18px]">
-        <Button type="button" variant="outline" className="dialog-btn" onClick={onSaveAsPdf}>
+        <Button
+          type="button"
+          variant="outline"
+          className="dialog-btn"
+          disabled={Boolean(view.rangeError)}
+          onClick={onSaveAsPdf}
+        >
           Save as PDF
         </Button>
         <span className="print-ws-status ml-2 min-w-0 truncate text-ink-soft" aria-live="polite">
@@ -903,7 +933,12 @@ function PrintWorkspaceView({
         >
           Cancel
         </Button>
-        <Button type="button" className="dialog-btn primary" onClick={onPrint}>
+        <Button
+          type="button"
+          className="dialog-btn primary"
+          disabled={Boolean(view.rangeError)}
+          onClick={onPrint}
+        >
           Print
         </Button>
       </div>
@@ -1135,12 +1170,15 @@ function NumberField({
   );
 }
 
-/** The custom page range ("1-3, 5"), shown next to Pages once Custom is chosen. */
+/** The custom page range ("1-3, 5"), shown next to Pages once Custom is chosen.
+ *  `error` is the id of the message explaining why the range cannot print. */
 function PageRangeField({
   value,
+  error,
   onChange,
 }: {
   value: string;
+  error?: string;
   onChange(value: string): void;
 }) {
   const [draft, setDraft] = useState(value);
@@ -1149,7 +1187,13 @@ function PageRangeField({
     <input
       type="text"
       aria-label="Page range"
-      className={cn(fieldClassName, "print-ws-range w-auto min-w-0 flex-1")}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error}
+      className={cn(
+        fieldClassName,
+        "print-ws-range w-auto min-w-0 flex-1",
+        error && "border-ink-danger focus:border-ink-danger",
+      )}
       value={draft}
       placeholder="1-3, 5"
       onChange={(event) => setDraft(event.currentTarget.value)}

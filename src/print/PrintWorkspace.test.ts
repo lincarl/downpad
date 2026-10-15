@@ -307,7 +307,7 @@ describe("PrintWorkspace React view", () => {
     changeSelect("Pages", "custom");
     const range = document.querySelector<HTMLInputElement>(".print-ws-range")!;
     act(() => {
-      range.value = "2-4";
+      range.value = "1-2";
       range.dispatchEvent(new Event("input", { bubbles: true }));
       range.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     });
@@ -329,7 +329,7 @@ describe("PrintWorkspace React view", () => {
         printerName: "Office",
         copies: 3,
         orientation: "portrait",
-        pageRanges: "2-4",
+        pageRanges: "1-2",
       }),
     );
     expect(workspace!.isOpen()).toBe(false);
@@ -338,6 +338,32 @@ describe("PrintWorkspace React view", () => {
     );
     expect(document.documentElement.classList.contains("printing")).toBe(false);
     expect(document.querySelector("body > .print-root")).toBeNull();
+  });
+
+  it("holds Print and Save as PDF until the custom range names existing pages", async () => {
+    act(() => workspace!.open(JOB));
+    await flush();
+    changeSelect("Pages", "custom");
+    const range = document.querySelector<HTMLInputElement>(".print-ws-range")!;
+    const commit = (value: string): void =>
+      act(() => {
+        range.value = value;
+        range.dispatchEvent(new Event("input", { bubbles: true }));
+        range.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      });
+
+    // The mocked layout has two pages.
+    commit("1-3");
+    expect(document.querySelector(".print-ws-range-error")?.textContent).toBe("This document has 2 pages.");
+    expect(range.getAttribute("aria-invalid")).toBe("true");
+    expect(button("Print").disabled).toBe(true);
+    expect(button("Save as PDF").disabled).toBe(true);
+
+    commit("1-2");
+    expect(document.querySelector(".print-ws-range-error")).toBeNull();
+    expect(range.hasAttribute("aria-invalid")).toBe(false);
+    expect(button("Print").disabled).toBe(false);
+    expect(button("Save as PDF").disabled).toBe(false);
   });
 
   it("cancels the browser afterprint waiter when the workspace closes", async () => {
