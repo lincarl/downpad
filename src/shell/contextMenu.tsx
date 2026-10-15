@@ -44,7 +44,9 @@ function onPointerDown(event: Event): void {
 
 function onKeyDown(event: KeyboardEvent): void {
   if (!active) return;
-  if (event.key === "Escape") {
+  // Escape closes the menu. So does Tab: a context menu has no button in the
+  // tab order, so focus returns to where the menu was opened.
+  if (event.key === "Escape" || event.key === "Tab") {
     event.preventDefault();
     event.stopPropagation();
     closeContextMenu();

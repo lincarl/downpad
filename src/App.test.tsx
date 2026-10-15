@@ -123,6 +123,23 @@ describe("App shell", () => {
     await waitFor(() => expect(runtime.openSettings).toHaveBeenCalledOnce());
   });
 
+  it("closes a toolbar menu on Tab and moves on from its button", async () => {
+    render(<App store={makeStore()} />);
+    const user = userEvent.setup();
+    const menuButton = screen.getByRole("button", { name: "Application menu" });
+
+    await user.click(menuButton);
+    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+    await user.tab();
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Open"));
+
+    await user.click(screen.getByRole("button", { name: "Save options" }));
+    await user.tab({ shift: true });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Save"));
+  });
+
   it("shows the sun action for a dark document surface", () => {
     const store = makeStore();
     store.set({
