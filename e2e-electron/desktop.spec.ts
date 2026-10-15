@@ -330,6 +330,18 @@ test("the document page runs to the end of a long document", async () => {
   expect(Math.round(bottoms.page)).toBe(Math.round(bottoms.view));
 });
 
+test("the document page fills the window for a short document", async () => {
+  const file = path.join(directory, "short.md");
+  await writeFile(file, "# Short document\n\nOne paragraph.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Short document");
+  const bottoms = await page.locator(".editor-area").evaluate((area) => ({
+    view: area.getBoundingClientRect().bottom,
+    page: area.querySelector(".editor-column")!.getBoundingClientRect().bottom,
+  }));
+  expect(Math.round(bottoms.page)).toBe(Math.round(bottoms.view));
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
