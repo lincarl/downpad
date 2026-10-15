@@ -21,7 +21,7 @@ import type { SerializerStyle } from "../../state/types";
 import { toRemarkStringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
 import { linkViewPlugin } from "./linkView";
-import { renderMermaidPreview } from "./mermaid";
+import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import {
@@ -354,6 +354,8 @@ export class WysiwygEditor {
       // abandoned mount's concern; cleanup still gets a chance to run.
       if (creating) await creating.catch(() => {});
       if (crepe) await crepe.destroy();
+      // Release the closed document's diagrams from the theme watcher.
+      pruneMermaidPreviews();
     })();
     return this.destroyPromise;
   }

@@ -62,9 +62,10 @@ function onPage(preview: LivePreview): boolean {
   return document.querySelector(`[data-mermaid-preview="${preview.id}"]`) !== null;
 }
 
-/** Forget diagrams whose preview has left the page (edited, replaced or closed).
- *  Runs on a later task, once Crepe has shown the previews of the current one. */
-function schedulePrune(): void {
+/** Forget diagrams whose preview has left the page (edited, replaced or closed),
+ *  releasing their source and Crepe's callback. Runs on a later task, once Crepe
+ *  has shown the previews of the current one. Call it after an editor closes. */
+export function pruneMermaidPreviews(): void {
   if (pruneTimer) return;
   pruneTimer = setTimeout(() => {
     pruneTimer = null;
@@ -95,6 +96,8 @@ function show(preview: LivePreview, element: HTMLElement): void {
   element.dataset.mermaidPreview = String(preview.id);
   preview.settled = true;
   preview.apply(element);
+  // A render that finishes after its editor closed is released here.
+  pruneMermaidPreviews();
 }
 
 let renderQueue: Promise<unknown> = Promise.resolve();
@@ -158,7 +161,7 @@ export function renderMermaidPreview(
     generation: 0,
   };
   livePreviews.add(preview);
-  schedulePrune();
+  pruneMermaidPreviews();
   watchDocumentTheme();
   const loading = loadingElement();
   loading.dataset.mermaidPreview = String(preview.id);
