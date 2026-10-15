@@ -42,13 +42,15 @@ test("preserves regular default-branch and tag dispatches while requiring inputs
 
 function fixture() {
   return {
-    pr: { state: "open", draft: false, head: { sha }, reviewDecision: null },
+    pr: { state: "open", draft: false, head: { sha, ref: "feature/x", repo: { full_name: "example/app" } }, reviewDecision: null },
     reviews: REVIEW_BOTS.map((login, index) => ({ id: index + 1, user: { login, type: "Bot" }, commit_id: sha, state: "COMMENTED", submitted_at: "2026-10-13T12:00:00Z", body: "Review completed. No actionable findings." })),
     threads: [],
   };
 }
+// The fixture's head was pushed an hour before its reviews.
+const pushedAt = "2026-10-13T11:00:00Z";
 function problems(data, signals) {
-  return validateReviewGate(data.pr, data.reviews, data.threads, sha, REVIEW_BOTS, signals);
+  return validateReviewGate(data.pr, data.reviews, data.threads, sha, REVIEW_BOTS, { headPushedAt: pushedAt, ...signals });
 }
 
 test("accepts a completed exact-head CodeRabbit review when no approval policy requires APPROVED", () => {
@@ -169,6 +171,21 @@ test("rejects later unsuccessful bot checks and comments even after a completed 
   }), []);
 });
 
+test("counts a review of the head only when it was submitted after the head was pushed", () => {
+  // GitHub moves an approval onto a new head when the push keeps the changes.
+  const moved = fixture();
+  moved.reviews[0] = { ...moved.reviews[0], state: "APPROVED", body: "" };
+  for (const headPushedAt of ["2026-10-13T12:30:00Z", "2026-10-13T12:00:00Z"]) {
+    assert.match(problems(moved, { headPushedAt }).join("\n"), /submitted before that commit was pushed/);
+  }
+  assert.deepEqual(problems(moved, { headPushedAt: "2026-10-13T11:59:59Z" }), []);
+  assert.match(problems(moved, { headPushedAt: undefined }).join("\n"), /not reported when the head was pushed/);
+
+  const reviewedAgain = fixture();
+  reviewedAgain.reviews.push({ ...reviewedAgain.reviews[0], id: 10, submitted_at: "2026-10-13T13:00:00Z" });
+  assert.deepEqual(problems(reviewedAgain, { headPushedAt: "2026-10-13T12:30:00Z" }), []);
+});
+
 test("waiting statuses do not erase failure and retry history", () => {
   const failure = { context: "reviewed-ci", creator: { login: "github-actions[bot]" }, state: "failure" };
   const waiting = { ...failure, state: "pending", description: "Waiting for CodeRabbit review" };
@@ -183,7 +200,8 @@ function collectionClient(heads) {
     routes,
     request: async (route) => {
       routes.push(route);
-      if (route === "/repos/example/app/pulls/1") return { ...fixture().pr, head: { sha: heads[headRead++] } };
+      if (route === "/repos/example/app/pulls/1") return { ...fixture().pr, head: { ...fixture().pr.head, sha: heads[headRead++] } };
+      if (route.includes("/activity?")) return [{ activity_type: "push", after: sha, timestamp: pushedAt }];
       if (route === "/graphql") return { data: { repository: { pullRequest: { headRefOid: sha, reviewDecision: null, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } };
       if (route.includes("/reviews?")) return fixture().reviews;
       if (route.includes("/check-runs?")) return { check_runs: [] };
@@ -245,4 +263,28 @@ test("rejects a changed GraphQL head even if the next REST snapshot would return
     return client.request(route, options);
   };
   await assert.rejects(readPullRequest("example/app", "1", sha, request), /head changed/);
+});
+
+
+test("reads the head's push time from its branch activity and fails closed without it", async () => {
+  const read = (activity, head = fixture().pr.head) => {
+    const client = collectionClient([sha, sha]);
+    const routes = [];
+    const request = async (route, options) => {
+      routes.push(route);
+      if (route.includes("/activity?")) return activity;
+      if (route === "/repos/example/app/pulls/1") return { ...(await client.request(route, options)), head };
+      return client.request(route, options);
+    };
+    return { routes, data: readPullRequest("example/app", "1", sha, request) };
+  };
+  const newest = { activity_type: "force_push", after: sha, timestamp: "2026-10-13T12:30:00Z" };
+  const older = { activity_type: "push", after: sha, timestamp: "2026-10-13T10:00:00Z" };
+  const fork = { sha, ref: "fix#1", repo: { full_name: "someone/app" } };
+  const { routes, data } = read([newest, { activity_type: "push", after: "b".repeat(40), timestamp: "2026-10-13T12:00:00Z" }, older], fork);
+  assert.equal((await data).signals.headPushedAt, "2026-10-13T12:30:00Z");
+  assert.ok(routes.includes("/repos/someone/app/activity?ref=refs%2Fheads%2Ffix%231&per_page=100"));
+  assert.match(problems(await data, (await data).signals).join("\n"), /submitted before that commit was pushed/);
+  await assert.rejects(read([{ ...newest, after: "b".repeat(40) }]).data, /no record of the push/);
+  await assert.rejects(read([newest], { sha, ref: "x", repo: null }).data, /head repository is unavailable/);
 });

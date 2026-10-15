@@ -12,8 +12,11 @@ function newest(entries) {
     || (b.updated_at ?? b.submitted_at ?? b.created_at ?? "").localeCompare(a.updated_at ?? a.submitted_at ?? a.created_at ?? ""))[0];
 }
 
-// Submitted reviews carry GitHub's immutable commit_id. A score or passing
-// status by itself does not establish that a bot reviewed the requested head.
+// Only a submitted review shows that a bot reviewed the requested head. A score
+// or passing status by itself does not. GitHub rewrites an approval's commit_id
+// to the new head when a push keeps the pull request's changes the same, such as
+// a rebase or a merge from the base branch. A review of the head therefore counts
+// only when it was submitted after that head was pushed (`signals.headPushedAt`).
 export function validateReviewGate(pr, reviews, threads, expectedSha, bots = REVIEW_BOTS, signals = {}) {
   const problems = [];
   if (pr.state !== "open") problems.push("The pull request must be open.");
@@ -27,13 +30,20 @@ export function validateReviewGate(pr, reviews, threads, expectedSha, bots = REV
   }
   if ([...decisions.values()].includes("CHANGES_REQUESTED")) problems.push("An active review requests changes.");
   if (threads.some((thread) => !thread.isResolved)) problems.push("Resolve every review thread before requesting CI.");
+  const pushedAt = Date.parse(signals.headPushedAt ?? "");
+  if (Number.isNaN(pushedAt)) problems.push("GitHub has not reported when the head was pushed.");
   for (const login of bots) {
     // CodeRabbit creates blank COMMENTED reviews when replying to inline chat.
-    const review = newest(reviews.filter((entry) => entry.user?.login === login && entry.user.type === "Bot" && entry.commit_id === expectedSha
-      && !(entry.state === "COMMENTED" && entry.submitted_at && !entry.body?.trim())));
+    const onHead = reviews.filter((entry) => entry.user?.login === login && entry.user.type === "Bot" && entry.commit_id === expectedSha
+      && !(entry.state === "COMMENTED" && entry.submitted_at && !entry.body?.trim()));
+    // Unsubmitted reviews stay, so a pending review still blocks.
+    const beforePush = (entry) => entry.submitted_at && Date.parse(entry.submitted_at) <= pushedAt;
+    const review = newest(onHead.filter((entry) => !beforePush(entry)));
     if (!review || !review.submitted_at || !["COMMENTED", "APPROVED"].includes(review.state) ||
       (review.state === "COMMENTED" && !review.body?.trim())) {
-      problems.push(`${login} has not submitted a completed review of ${expectedSha}.`);
+      problems.push(!review && onHead.some(beforePush)
+        ? `${login}'s review of ${expectedSha} was submitted before that commit was pushed, so it describes an earlier revision. Dismiss it and ask for a full review (docs/ci.md).`
+        : `${login} has not submitted a completed review of ${expectedSha}.`);
     } else if (review.body && incompleteReview.test(review.body)) {
       problems.push(`${login} reported an incomplete, paused, failed, skipped, or rate-limited review.`);
     }
@@ -101,16 +111,23 @@ async function paginate(route, key, request = github) {
 }
 
 // Pin commit evidence to the requested revision, then refresh mutable review
-// decisions and threads after collection. Every graph page checks the head.
+// decisions and threads after collection. Every graph page checks the head. The
+// head branch's activity, newest first, gives GitHub's time for the push that
+// made the requested SHA its head.
 export async function readPullRequest(repository, number, expectedSha, request = github) {
   const pr = await request(`/repos/${repository}/pulls/${number}`);
   if (pr.head.sha !== expectedSha) throw new Error("The pull request head changed. Request CI for its new SHA.");
-  const [reviews, checkRuns, statuses, comments] = await Promise.all([
+  if (!pr.head.repo?.full_name) throw new Error("The pull request's head repository is unavailable. No review decision was made.");
+  const branch = encodeURIComponent(`refs/heads/${pr.head.ref}`);
+  const [reviews, checkRuns, statuses, comments, activity] = await Promise.all([
     paginate(`/repos/${repository}/pulls/${number}/reviews`, undefined, request),
     paginate(`/repos/${repository}/commits/${expectedSha}/check-runs?filter=latest`, "check_runs", request),
     paginate(`/repos/${repository}/commits/${expectedSha}/statuses`, undefined, request),
     paginate(`/repos/${repository}/issues/${number}/comments`, undefined, request),
+    request(`/repos/${pr.head.repo.full_name}/activity?ref=${branch}&per_page=100`),
   ]);
+  const headPush = activity.find((entry) => entry.after === expectedSha && ["push", "force_push", "branch_creation"].includes(entry.activity_type));
+  if (!headPush?.timestamp) throw new Error("GitHub has no record of the push that made the requested SHA the head. No review decision was made.");
   const [owner, name] = repository.split("/");
   const threads = [];
   let cursor = null;
@@ -141,7 +158,7 @@ export async function readPullRequest(repository, number, expectedSha, request =
     threads.push(...data.reviewThreads.nodes);
     if (!data.reviewThreads.pageInfo.hasNextPage) {
       const latest = await request(`/repos/${repository}/pulls/${number}`);
-      return { pr: { ...latest, reviewDecision: pr.reviewDecision }, threads, reviews, signals: { checkRuns, statuses, comments } };
+      return { pr: { ...latest, reviewDecision: pr.reviewDecision }, threads, reviews, signals: { checkRuns, statuses, comments, headPushedAt: headPush.timestamp } };
     }
     cursor = data.reviewThreads.pageInfo.endCursor;
   }
