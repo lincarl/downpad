@@ -1,5 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import type { WebPreferences } from "electron";
 import type {} from "../src/ipc/bridge";
@@ -122,6 +123,60 @@ test("a missing local image shows its placeholder without handler errors or fail
   await expect(printed).toHaveCount(1);
   await expect.poll(() => printed.evaluateAll((images) => images.every((image) => image instanceof HTMLImageElement && image.complete))).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test("the renderer's Content Security Policy allows md-easy's content and blocks inline scripts and eval", async () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
+  const server = createServer((_request, response) => response.writeHead(200, { "Content-Type": "image/png" }).end(png));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("The image server has no port.");
+    const file = path.join(directory, "policy.md");
+    await writeFile(path.join(directory, "image.png"), png);
+    await writeFile(file, [
+      "# Policy", "",
+      "![Local](image.png)", "",
+      `![Web](http://127.0.0.1:${address.port}/web.png)`, "",
+      `![Embedded](data:image/png;base64,${png.toString("base64")})`, "",
+      "Inline $a^2$ and block math.", "",
+      "$$", "\\frac{1}{2}", "$$", "",
+      "```mermaid", "graph LR", "  A --> B", "```", "",
+    ].join("\n"));
+    // The welcome document is read from md-easy's own files.
+    await writeFile(path.join(directory, "profile", "settings.toml"), "hasCheckedDefaultHandler = true\n");
+    await launch();
+    await expect(page.locator(heading)).toHaveText("Welcome to md-easy 👋");
+    await page.evaluate(() => {
+      const violations: string[] = [];
+      Reflect.set(window, "violations", violations);
+      document.addEventListener("securitypolicyviolation", (event) => violations.push(`${event.effectiveDirective} ${event.blockedURI}`));
+    });
+
+    await chooseOpen(file);
+    const pane = page.locator(".editor-pane:not([hidden])");
+    await expect(pane.locator(".mermaid-preview svg")).toBeVisible();
+    await expect(pane.locator(".katex")).toHaveCount(2);
+    await expect.poll(() => pane.locator(".ProseMirror img").evaluateAll((images) => images.map((image) => image instanceof HTMLImageElement && image.naturalWidth > 0))).toEqual([true, true, true]);
+    expect(await page.evaluate(() => ({
+      violations: Reflect.get(window, "violations"),
+      failedFonts: [...document.fonts].filter((font) => font.status === "error").map((font) => font.family),
+    }))).toEqual({ violations: [], failedFonts: [] });
+
+    expect(await page.evaluate(() => new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.textContent = "document.body.dataset.inlineScript = 'ran'";
+      document.head.append(script);
+      // Test evaluation lifts the eval block for its own call, so check from a timer.
+      setTimeout(() => {
+        let evaluated = true;
+        try { new Function(""); } catch { evaluated = false; }
+        resolve({ inlineScript: document.body.dataset.inlineScript ?? "blocked", evaluated });
+      });
+    }))).toEqual({ inlineScript: "blocked", evaluated: false });
+  } finally {
+    server.close();
+  }
 });
 
 test("the packaged app ignores a remote development URL override", async () => {
