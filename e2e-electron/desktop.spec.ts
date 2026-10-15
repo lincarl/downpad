@@ -421,6 +421,33 @@ test("cancelling a window close right after typing in the split keeps both panes
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. Document. Markdown.\n");
 });
 
+test("typing in the split's Markdown pane right after the document pane keeps both edits", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("document-first.md");
+  const box = (await markdownLine.boundingBox())!;
+  await typeAtEnd(documentLine, " Document.");
+  // Click the Markdown line's right edge at once, before the document pane
+  // reports its typing. No End key, so the typing goes where the click put the
+  // caret.
+  await page.mouse.click(box.x + box.width - 2, box.y + box.height / 2);
+  await page.keyboard.type(" Markdown.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Document. Markdown.\n");
+  await expect(documentLine).toHaveText("First line. Document. Markdown.");
+});
+
+test("typing in the split's document pane right after the Markdown pane keeps both edits", async () => {
+  const { file, markdownLine } = await openSplit("markdown-first.md");
+  await typeAtEnd(markdownLine, " Markdown.");
+  // Shift+Tab moves focus straight into the document pane, before the Markdown
+  // edit reaches it.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type(" Document.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Markdown. Document.\n");
+  await expect(markdownLine).toHaveText("First line. Markdown. Document.");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

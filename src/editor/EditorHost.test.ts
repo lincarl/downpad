@@ -394,3 +394,55 @@ describe("EditorHost flush", () => {
     await host.dispose();
   });
 });
+
+describe("EditorHost split catch-up", () => {
+  /** Open the store's document in the split, keeping the root to find its panes. */
+  async function openSplit(): Promise<{ root: HTMLElement; store: Store; host: EditorHost }> {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    return { root, store, host };
+  }
+
+  it("gives a clicked Markdown pane the document pane's held-back typing first", async () => {
+    const { root, store, host } = await openSplit();
+    fakeEditors.markdown = "settled markdown, typed in the document";
+    fakeEditors.pending = true;
+
+    root.querySelector(".editor-pane-raw")!.dispatchEvent(new Event("pointerdown"));
+
+    expect(fakeEditors.rawText).toBe("settled markdown, typed in the document");
+    fakeEditors.rawChange!("settled markdown, typed in the document, then Markdown");
+    expect(store.get().doc.markdown).toBe("settled markdown, typed in the document, then Markdown");
+    await host.dispose();
+  });
+
+  it("gives the document pane a Markdown edit when focus moves into it", async () => {
+    const { root, store, host } = await openSplit();
+    fakeEditors.rawChange!("newer Markdown text");
+
+    root.querySelector(".editor-pane-wysiwyg")!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+
+    expect(fakeEditors.mirrored).toBe("newer Markdown text");
+    fakeEditors.wysiwygChange!("newer Markdown text, then the document");
+    expect(store.get().doc.markdown).toBe("newer Markdown text, then the document");
+    await host.dispose();
+  });
+
+  it("leaves a saved document saved when the panes take a click or focus", async () => {
+    const { root, store, host } = await openSplit();
+    // The document pane serializes differently now, with no edit to report.
+    fakeEditors.markdown = "settled markdown, written another way";
+
+    for (const pane of root.querySelectorAll(".editor-pane")) {
+      pane.dispatchEvent(new Event("pointerdown"));
+      pane.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    }
+
+    expect(store.get().doc).toMatchObject({ markdown: "settled markdown", isDirty: false });
+    expect(fakeEditors.rawText).toBe("settled markdown");
+    await host.dispose();
+  });
+});

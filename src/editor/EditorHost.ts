@@ -228,8 +228,9 @@ export class EditorHost implements FindController {
   }
 
   /**
-   * Bring the active tab up to date before something reads it or leaves it:
-   * Save, Print, Copy as Markdown, a close prompt, or a tab or layout switch.
+   * Bring the active tab up to date before something reads it, leaves it, or
+   * types into it: Save, Print, Copy as Markdown, a close prompt, a tab or
+   * layout switch, or a click or focus moving into a split pane.
    * The document editor reports typing after a ~200ms pause, and the split
    * mirrors each edit into its other pane after a further delay. This does both
    * now, so the tab's canonical string holds every edit and both visible panes
@@ -544,6 +545,16 @@ export class EditorHost implements FindController {
       raw: null,
     };
     this.panes.set(paneKey(tabId, view), pane);
+
+    /** Bring a split pane up to date before it takes input. A pane's edit
+     *  replaces the tab's whole text, so it must already hold the other pane's
+     *  latest edit. Runs on a click, in the capture phase so the editor places
+     *  the caret in the updated text, and when the keyboard moves focus in. */
+    const catchUp = (): void => {
+      if (this.layout === "split" && tabId === this.activeTabId) this.flush();
+    };
+    el.addEventListener("pointerdown", catchUp, true);
+    el.addEventListener("focusin", catchUp);
 
     // Bound to this tab id so a background pane writes to its own tab, never the
     // active doc. A real change advances the tab's rev (staling its other view)
