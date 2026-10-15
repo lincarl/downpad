@@ -6,6 +6,7 @@
 
 import { ViewPlugin, Decoration, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { StateEffect, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { formatSize } from "../../document/docSize";
 
 // data: URI with a base64 payload long enough to be worth collapsing.
 const DATA_URI = /data:[\w.+-]*\/?[\w.+-]*;base64,([A-Za-z0-9+/=]{64,})/g;
@@ -14,19 +15,19 @@ const expandEffect = StateEffect.define<number>();
 
 class CollapsedWidget extends WidgetType {
   constructor(
-    private readonly kb: number,
+    private readonly size: string,
     private readonly onExpand: () => void,
   ) {
     super();
   }
   eq(other: CollapsedWidget): boolean {
-    return other.kb === this.kb;
+    return other.size === this.size;
   }
   toDOM(): HTMLElement {
     const span = document.createElement("span");
     span.className = "cm-base64-collapsed";
-    span.textContent = `…[${this.kb} KB]`;
-    span.title = "Base64 image data — click to expand";
+    span.textContent = `…[${this.size}]`;
+    span.title = "Base64 image data. Click to show it.";
     span.addEventListener("mousedown", (e) => {
       e.preventDefault();
       this.onExpand();
@@ -84,12 +85,12 @@ export function base64Collapse(): Extension {
             const payloadEnd = from + m.index + m[0].length;
             if (this.expanded.has(payloadStart)) continue;
             if (sel.from <= payloadEnd && sel.to >= payloadStart) continue; // editing it
-            const kb = Math.max(1, Math.round((payload.length * 3) / 4 / 1024));
+            const size = formatSize((payload.length * 3) / 4);
             builder.add(
               payloadStart,
               payloadEnd,
               Decoration.replace({
-                widget: new CollapsedWidget(kb, () => view.dispatch({ effects: expandEffect.of(payloadStart) })),
+                widget: new CollapsedWidget(size, () => view.dispatch({ effects: expandEffect.of(payloadStart) })),
               }),
             );
           }

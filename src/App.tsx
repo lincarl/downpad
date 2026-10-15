@@ -54,7 +54,7 @@ import {
 import { TooltipLabel, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { countWords } from "@/document/wordcount";
-import { byteLength, formatKB } from "@/document/docSize";
+import { byteLength, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
 import { showContextMenu } from "@/shell/contextMenu";
 import { EditorIsland } from "@/editor/EditorIsland";
@@ -694,14 +694,14 @@ function TabStrip() {
           />
         ))}
       </div>
-      <TooltipLabel text="New tab (Ctrl+N)">
+      <TooltipLabel text="New document (Ctrl+N)">
         <button
           type="button"
           className={cn(
             "tab-new mb-[5px] flex size-7 shrink-0 cursor-pointer items-center justify-center self-end rounded-control border-0 bg-transparent p-0 text-ink-body outline-none",
             "hover:bg-hover focus-ring",
           )}
-          aria-label="New tab"
+          aria-label="New document"
           onClick={() => runtime?.newDocument()}
         >
           <Plus aria-hidden="true" {...SMALL_ICON} />
@@ -897,7 +897,7 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
         {path}
       </span>
       <span className="status-right shrink-0 whitespace-nowrap">
-        {words.toLocaleString()} {words === 1 ? "word" : "words"} · {formatKB(byteLength(doc.markdown))}
+        {words.toLocaleString()} {words === 1 ? "word" : "words"} · {formatSize(byteLength(doc.markdown))}
       </span>
     </footer>
   );

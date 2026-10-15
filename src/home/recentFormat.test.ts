@@ -5,7 +5,6 @@ import {
   relativeDate,
   absoluteDate,
   formatDate,
-  formatSize,
   filterByName,
   plainSnippet,
 } from "./recentFormat";
@@ -70,20 +69,6 @@ describe("absoluteDate / formatDate", () => {
   });
 });
 
-describe("formatSize", () => {
-  it("formats bytes, KB, MB", () => {
-    expect(formatSize(0)).toBe("0 B");
-    expect(formatSize(512)).toBe("512 B");
-    expect(formatSize(2048)).toBe("2 KB");
-    expect(formatSize(12 * 1024)).toBe("12 KB");
-    expect(formatSize(1.5 * 1024 * 1024)).toBe("1.5 MB");
-  });
-
-  it("returns empty for invalid sizes", () => {
-    expect(formatSize(-1)).toBe("");
-    expect(formatSize(NaN)).toBe("");
-  });
-});
 
 describe("filterByName", () => {
   const entries = [entry("C:/n/draft.md"), entry("C:/n/meeting-notes.md"), entry("C:/n/README.md")];
