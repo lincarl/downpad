@@ -24,6 +24,7 @@ import "@milkdown/crepe/theme/frame.css";
 import type { SerializerStyle } from "../../state/types";
 import { stringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
+import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
@@ -166,6 +167,8 @@ export class WysiwygEditor {
     this.crepe.editor.config(tightListItemJoin);
     // Smart paste (§5.4): images, HTML→markdown, markdown-looking text.
     this.crepe.editor.use(smartPastePlugin(context));
+    // Copy and drag without the empty line Crepe keeps after a final block.
+    this.crepe.editor.use(copyWithoutTrailingLine);
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.
     this.crepe.editor.use(linkViewPlugin(context));
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
