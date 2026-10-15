@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { splitFrontmatter, joinFrontmatter, frontmatterInnerYaml } from "./frontmatter";
 
+/** Expect joining the split of `md` to give `md` back. */
 const roundTrips = (md: string) => {
   expect(joinFrontmatter(splitFrontmatter(md))).toBe(md);
 };
