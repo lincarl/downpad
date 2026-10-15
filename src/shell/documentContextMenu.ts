@@ -135,7 +135,7 @@ async function promptForLink(target: EditableTarget, actions: DocumentMenuAction
   const selected = selectedText(target).trim();
   const href = await openTextPrompt({
     title: "Insert link",
-    label: selected ? `Link URL for “${selected}”` : "Link URL",
+    label: selected ? `Link URL for "${selected}"` : "Link URL",
     initialValue: "https://",
     confirmLabel: "Insert",
   });

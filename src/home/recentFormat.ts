@@ -68,18 +68,6 @@ export function formatDate(ms: number, now: number = Date.now()): string {
   return `${relativeDate(ms, now)} · ${absoluteDate(ms)}`;
 }
 
-/** Human file size like "512 B", "12 KB", "1.2 MB". */
-export function formatSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${Math.round(kb)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
-  const gb = mb / 1024;
-  return `${gb < 10 ? gb.toFixed(1) : Math.round(gb)} GB`;
-}
-
 /** Case-insensitive substring match against the filename only (spec §5.8). */
 export function filterByName(entries: RecentEntry[], query: string): RecentEntry[] {
   const q = query.trim().toLowerCase();

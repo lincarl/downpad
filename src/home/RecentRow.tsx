@@ -3,7 +3,8 @@ import { Star } from "lucide-react";
 import type { FileStat } from "@/ipc/contracts";
 import { cn } from "@/lib/utils";
 import { DocumentArtwork } from "@/components/icons";
-import { fileName, formatDate, formatSize, plainSnippet } from "./recentFormat";
+import { formatSize } from "@/document/docSize";
+import { fileName, formatDate, plainSnippet } from "./recentFormat";
 import type { RecentRowModel } from "./recentListing";
 
 // Mervin's brand colours, the same in both themes.
