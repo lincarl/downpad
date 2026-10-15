@@ -82,6 +82,36 @@ describe("saving document snapshots", () => {
     expect(store.get().doc.isDirty).toBe(false);
   });
 
+  it("keeps an edit back to the old saved text unsaved while the save is written", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "# Edited\n");
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saving = files.save();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledWith(filePath, "# Edited\n", "lf"));
+    // The file may already hold the edit, so undoing it must not read as saved.
+    applyEditorMarkdownForTab(store, tabId, "# Original content\n");
+    expect(store.get().doc.isDirty).toBe(true);
+    expect(files.anyDirty()).toBe(true);
+    write.resolve({ modifiedMs: 200 });
+
+    expect(await saving).toBe(true);
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Edited\n", isDirty: true });
+  });
+
+  it("restores the saved text when the write fails", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "# Edited\n");
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+
+    await expect(files.save()).rejects.toThrow("Disk unavailable");
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Original content\n", isDirty: true });
+    applyEditorMarkdownForTab(store, tabId, "# Original content\n");
+    expect(store.get().doc.isDirty).toBe(false);
+  });
+
   it("keeps edits made while a save is pending dirty", async () => {
     const { store, files } = setup(true);
     const write = deferred<FileMeta>();

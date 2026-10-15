@@ -63,9 +63,12 @@ export class DesktopEventBindings {
     if (id === "reload" && path) {
       run(() => files.openPath(path, { reload: true }));
     } else if (id === "keep") {
-      // The open text now differs from the file, so it counts as unsaved.
+      // The file holds the changed text, so the open text is unsaved unless it
+      // matches it. A Save or a later change on disk since then is newer, and
+      // already recorded what the file holds.
       const change = this.pendingChange;
-      if (change) {
+      this.pendingChange = null;
+      if (change && change.modifiedMs > store.get().doc.modifiedMs) {
         store.patchDoc({
           modifiedMs: change.modifiedMs,
           savedMarkdown: change.markdown,
@@ -100,7 +103,11 @@ export class DesktopEventBindings {
     if (!current.filePath || !sameFilePath(payload.path, current.filePath)) return;
     if (payload.modifiedMs <= current.modifiedMs) return;
     if (onDisk === current.markdown) {
+      // The file holds the open text, so an earlier change has nothing left to
+      // reload or keep.
       store.patchDoc({ modifiedMs: payload.modifiedMs, savedMarkdown: onDisk, isDirty: false });
+      this.pendingChange = null;
+      if (store.get().banner?.kind === "file-changed") store.set({ banner: null });
       return;
     }
 

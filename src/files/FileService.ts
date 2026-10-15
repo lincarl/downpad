@@ -176,7 +176,14 @@ export class FileService {
       if (!path || !afterDialog || afterDialog.filePath !== originalPath) return false;
     }
     if (!path) return false;
-    const meta = await writeFile(path, snapshot.markdown, snapshot.eol);
+    // Until the write settles, the file may hold the old saved text or the new
+    // one, so an edit back to either still counts as unsaved.
+    const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
+    this.store.patchDocById(tabId, { savedMarkdown: null });
+    const meta = await writeFile(path, snapshot.markdown, snapshot.eol).catch((error: unknown) => {
+      this.restoreSavedMarkdown(tabId, originalPath, previous);
+      throw error;
+    });
     this.markSaved(tabId, snapshot, originalPath, path, meta.modifiedMs);
     if (choosePath) this.recordOpened(path);
     return true;
@@ -201,6 +208,14 @@ export class FileService {
       this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
       if (path !== originalPath) this.watch(path);
     }
+  }
+
+  /** After a failed write, give the tab back the saved text it had before,
+   *  unless something else has recorded the file's text since. */
+  private restoreSavedMarkdown(tabId: string, originalPath: string | null, previous: string | null): void {
+    const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!current || current.filePath !== originalPath || current.savedMarkdown !== null) return;
+    this.store.patchDocById(tabId, { savedMarkdown: previous, isDirty: current.markdown !== previous });
   }
 
   /** Whether any open tab has unsaved changes (window-close guard, §5.19). */

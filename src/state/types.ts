@@ -36,10 +36,12 @@ export interface DocumentState {
   markdown: string;
   /** Absolute path, or null for an untitled buffer. */
   filePath: string | null;
-  /** Whether `markdown` differs from `savedMarkdown`, or that text is unknown. */
+  /** Whether `markdown` differs from `savedMarkdown`. While that text is
+   *  unknown, any edit counts as unsaved. */
   isDirty: boolean;
-  /** The text last read from or written to the file ("" for a new document), or
-   *  null when it is unknown, as for a recovered snapshot. */
+  /** The text last read from or written to the file, or the starting text of a
+   *  document with no file ("" for a new one). Null when unknown, as for a
+   *  recovered snapshot or while a save is being written. */
   savedMarkdown: string | null;
   /** Detected on open, re-applied on write (spec §5.18). */
   eol: Eol;

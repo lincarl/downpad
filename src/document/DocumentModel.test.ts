@@ -115,7 +115,7 @@ describe("applyEditorMarkdownForTab", () => {
   });
 
   it("keeps a document unsaved while its saved text is unknown", () => {
-    // A recovered snapshot: the file may hold anything.
+    // Like a recovered snapshot, whose file may hold anything.
     const store = makeStore("recovered");
     store.patchDoc({ isDirty: true, savedMarkdown: null });
     const tabId = store.get().activeTabId!;

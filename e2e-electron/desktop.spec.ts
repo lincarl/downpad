@@ -311,11 +311,8 @@ test("undoing every edit marks the document saved again", async () => {
   await page.keyboard.press("End");
   await page.keyboard.type(" Typed.");
   await expect(page).toHaveTitle("● undo-all.md — md-easy");
-  // Undo until the typing is gone, allowing for an extra first step.
-  await expect(async () => {
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect(paragraph).toHaveText("First line.", { timeout: 1_000 });
-  }).toPass();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(paragraph).toHaveText("First line.");
   await expect(page).toHaveTitle("undo-all.md — md-easy");
 });
 
