@@ -467,6 +467,14 @@ body {
   display: none;
 }
 
+/* A tooltip only labels a control. One left open by keyboard focus or a closed
+   menu sits over the tab row and would take the click meant for Recent or a
+   tab. Radix wraps each tooltip in a popper div, and the tooltip inherits
+   pointer-events from it. */
+[data-radix-popper-content-wrapper]:has(> [role="tooltip"]) {
+  pointer-events: none;
+}
+
 #app {
   height: 100vh;
 }

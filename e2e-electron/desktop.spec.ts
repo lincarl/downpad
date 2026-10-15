@@ -111,6 +111,38 @@ test("the packaged app ignores a remote development URL override", async () => {
   expect(await app!.evaluate(({ app }) => app.isPackaged)).toBe(true);
 });
 
+test("a toolbar tooltip lets a click through to Recent", async () => {
+  const file = path.join(directory, "tooltip.md");
+  await writeFile(file, "# Tooltip\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Tooltip");
+  // Keyboard focus opens the menu button's tooltip over Recent, and it stays open.
+  await page.getByRole("button", { name: "Application menu", exact: true }).focus();
+  await expect(page.getByRole("tooltip", { name: "Menu", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Recent", exact: true }).click({ timeout: 2_000 });
+  await expect(page.locator(".recent-host")).toBeVisible();
+});
+
+test("a toolbar tooltip stays open while the pointer is over it", async () => {
+  const file = path.join(directory, "hover.md");
+  await writeFile(file, "# Hover\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Hover");
+  const button = await page.getByRole("button", { name: "Print", exact: true }).boundingBox();
+  await page.mouse.move(button!.x + button!.width / 2, button!.y + button!.height / 2);
+  const tooltip = page.getByRole("tooltip", { name: /^Print/ });
+  await expect(tooltip).toBeVisible();
+  // Clicks pass through the tooltip, but moving onto it must not close it.
+  const box = await page.locator("[data-radix-popper-content-wrapper]").boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2, { steps: 8 });
+  await page.mouse.move(box!.x + box!.width - 4, box!.y + box!.height / 2, { steps: 8 });
+  // Rest on the tooltip a while, so a delayed close would have happened.
+  await page.waitForTimeout(800);
+  await expect(tooltip).toBeVisible();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height + 150, { steps: 8 });
+  await expect(tooltip).toBeHidden();
+});
+
 test("native Open, edit, Save, and external file reload use actual files", async () => {
   const file = path.join(directory, "opened.md");
   await writeFile(file, "# Opened from dialog\r\n\r\nOriginal text.\r\n");
