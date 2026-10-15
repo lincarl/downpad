@@ -52,6 +52,12 @@ describe("Markdown view colours", () => {
     expect(map.get("Cell")).toContain(cls(t.strikethrough));
   });
 
+  it("colours HTML entities apart from strings", () => {
+    const map = tokens('A &amp; B [link](u "Title")\n');
+    expect(map.get("&amp;")).toContain(cls(t.character));
+    expect(map.get("&amp;")).not.toBe(map.get("Title"));
+  });
+
   it("leaves fenced code in the body colour", () => {
     expect(tokens("```\nplain code\n```\n").get("plain code")).toBe("");
   });

@@ -202,6 +202,7 @@
   --md-src-list: #0451a5;
   --md-src-quote: #0451a5;
   --md-src-escape: #e00;
+  --md-src-entity: #00f;
   --md-src-comment: #008000;
   --md-src-tag: #800000;
   --md-src-tag-punctuation: #800000;
@@ -288,6 +289,7 @@
   --md-src-list: #6796e6;
   --md-src-quote: #6a9955;
   --md-src-escape: #d7ba7d;
+  --md-src-entity: #569cd6;
   --md-src-comment: #6a9955;
   --md-src-tag: #569cd6;
   --md-src-tag-punctuation: #808080;

@@ -126,6 +126,9 @@ export const sourceHighlightStyle = HighlightStyle.define([
   { tag: t.emphasis, fontStyle: "italic", color: color("emphasis") },
   { tag: t.strikethrough, textDecoration: "line-through" },
   { tag: [t.link, t.string], color: color("string") },
+  // Lezer tags HTML entities (&amp;) as a kind of string; VS Code colours them
+  // as character constants.
+  { tag: t.character, color: color("entity") },
   { tag: t.url, textDecoration: "underline" },
   { tag: md.inlineCode, color: color("code") },
   { tag: md.listMark, color: color("list") },
