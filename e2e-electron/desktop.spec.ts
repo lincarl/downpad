@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WebPreferences } from "electron";
@@ -197,6 +197,92 @@ test("closing a tab right after typing asks before discarding the edit", async (
     '"closing.md" has unsaved changes. Discard them?',
   ]);
   await expect(paragraph).toHaveText("First line. Not lost.");
+});
+
+/** Open a one-line file in the split, returning each pane's first line. */
+async function openSplit(name: string): Promise<{ file: string; documentLine: Locator; markdownLine: Locator }> {
+  const file = path.join(directory, name);
+  await writeFile(file, "First line.\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  return {
+    file,
+    documentLine: page.locator(".editor-pane-wysiwyg .ProseMirror p").first(),
+    markdownLine: page.locator(".editor-pane-raw .cm-line").first(),
+  };
+}
+
+/** Click a line, move to its end, and type there. */
+async function typeAtEnd(line: Locator, text: string): Promise<void> {
+  await line.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(text);
+}
+
+test("Print right after typing in the split's document pane keeps the Markdown pane in step", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("print-document.md");
+  // Open Print before the edit reaches the Markdown pane.
+  await typeAtEnd(documentLine, " Document.");
+  await page.keyboard.press("ControlOrMeta+p");
+  await expect(page.locator(".print-workspace")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".print-workspace")).toBeHidden();
+  // A Markdown pane left behind would write its old text over the document edit.
+  await typeAtEnd(markdownLine, " Markdown.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Document. Markdown.\n");
+  await expect(documentLine).toHaveText("First line. Document. Markdown.");
+});
+
+test("Print right after typing in the split's Markdown pane prints it and keeps the document pane in step", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("print-markdown.md");
+  await typeAtEnd(markdownLine, " Markdown.");
+  await page.keyboard.press("ControlOrMeta+p");
+  // The printed document is a copy of the document pane, so it needs the edit.
+  await expect(page.locator(".print-page").first()).toContainText("First line. Markdown.");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".print-workspace")).toBeHidden();
+  // A document pane left behind would ignore this typing.
+  await typeAtEnd(documentLine, " Document.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Markdown. Document.\n");
+  await expect(markdownLine).toHaveText("First line. Markdown. Document.");
+});
+
+test("cancelling a window close right after typing in the split keeps both panes in step", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("close-split.md");
+  await typeAtEnd(documentLine, " Document.");
+  // Close the window and answer Cancel to the unsaved-changes prompt.
+  await app!.evaluate(({ BrowserWindow, dialog }) => new Promise<void>((resolve) => {
+    dialog.showMessageBox = async () => {
+      resolve();
+      return { response: 0, checkboxChecked: false };
+    };
+    BrowserWindow.getAllWindows()[0]!.close();
+  }));
+  await typeAtEnd(markdownLine, " Markdown.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Document. Markdown.\n");
+});
+
+test("Print keeps a saved Markdown edit as typed", async () => {
+  const { file, markdownLine } = await openSplit("bullets.md");
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText("\n\n* Star bullet");
+  await expect(page.locator(".editor-pane-wysiwyg .ProseMirror li")).toHaveText("Star bullet");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n* Star bullet\n");
+  // The document view writes bullets as "-". Printing from it must not put that
+  // form in place of the saved text or mark the file unsaved.
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await page.keyboard.press("ControlOrMeta+p");
+  await expect(page.locator(".print-workspace")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".print-workspace")).toBeHidden();
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("* Star bullet");
+  await expect(page).toHaveTitle("bullets.md — md-easy");
 });
 
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {

@@ -102,7 +102,7 @@ describe("reconcileEditorMarkdownForTab", () => {
   it("adopts the settled serialization WITHOUT marking dirty (the bugfix)", () => {
     // Simulates a freshly-loaded file (M) whose WYSIWYG round-trip adds a trailing
     // newline (M'). Reconciling must update the canonical but leave isDirty false,
-    // so the close-guard flush won't raise a false unsaved-changes warning.
+    // so a change report with no Markdown edit won't raise a false unsaved-changes warning.
     const store = makeStore("# Title\nbody");
     const tabId = store.get().activeTabId!;
     expect(reconcileEditorMarkdownForTab(store, tabId, "# Title\nbody\n")).toBe(true);

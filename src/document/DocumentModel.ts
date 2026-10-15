@@ -40,9 +40,9 @@ export function applyEditorMarkdownForTab(
  * emits a single trailing newline, and may re-style bullet markers, escaping,
  * blank lines, etc.), so a freshly-mounted pane's getMarkdown() differs from the
  * on-disk string even when the user has typed nothing. Reconciling the canonical
- * to that settled form means a later flush (the window-close guard, a view switch,
- * tab activation, LRU eviction) re-serializes to the same string and sees no
- * change — so it can't raise a false "unsaved changes" warning. Preserves the
+ * to that settled form means a later change report that leaves the Markdown as
+ * it was (an image resize, for example) matches it, so it can't raise a false
+ * "unsaved changes" warning. Preserves the
  * existing isDirty flag (a recovered/edited tab stays dirty). No-op (false) when
  * unchanged or the tab is gone.
  */
