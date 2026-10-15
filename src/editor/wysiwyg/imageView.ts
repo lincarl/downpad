@@ -4,7 +4,8 @@
 //   1. proxyDomURL — map a markdown `src` to something the WebView can load:
 //      data:/http: pass through; a relative/absolute file path is resolved
 //      against the document dir and turned into an Electron asset URL so linked
-//      images render inline.
+//      images render inline. A local image that cannot be loaded gets an empty
+//      data: URL, which fails to load and so shows the placeholder.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
 //      relocate via a file dialog (updates the node's src).
@@ -119,6 +120,12 @@ function markMissing(event: Event, viewRef: ViewRef): void {
   }
 }
 
+/** The src shown for a local image md-easy cannot load. It fails at once without a
+ *  request or a console message and shows the missing-image placeholder. The raw
+ *  path would be looked up next to md-easy's own page, again by every copy of the
+ *  document such as the print preview. */
+const UNAVAILABLE_IMAGE = "data:,";
+
 /** Crepe ImageBlock feature config: render linked images + missing-image UX. */
 export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
   return {
@@ -135,13 +142,12 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
       return src ?? "";
     },
     proxyDomURL: async (url: string): Promise<string> => {
-      try {
-        if (!isElectron() || isRemoteOrData(url)) return url;
-        const abs = resolveImagePath(url, ctx.getFilePath());
-        return abs ? await convertFileSrc(abs) : url;
-      } catch {
-        return url;
-      }
+      // An empty src shows Crepe's upload input, so it passes through as is.
+      if (!url || !isElectron() || isRemoteOrData(url)) return url;
+      const abs = resolveImagePath(url, ctx.getFilePath());
+      // A path that is not an image or cannot be read shows as missing too.
+      const authorized = abs ? await convertFileSrc(abs).catch(() => null) : null;
+      return authorized ?? UNAVAILABLE_IMAGE;
     },
     onImageLoadError: (event: Event): void => markMissing(event, viewRef),
   };

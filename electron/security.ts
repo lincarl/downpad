@@ -34,13 +34,26 @@ export function clipboardPermission(permission: string, requestingUrl: string, e
   return isMainFrame && (permission === "clipboard-read" || permission === "clipboard-sanitized-write") && trustedPage(requestingUrl, entryUrl);
 }
 
+/** realpath() codes for a path that does not lead to a file. */
+const MISSING_PATH_ERRORS = new Set(["ENOENT", "ENOTDIR"]);
+
 /** Local image URLs grant access to one image explicitly requested by the trusted renderer. */
 export class ImageAccess {
   private readonly pathsByToken = new Map<string, string>();
   private readonly tokensByPath = new Map<string, string>();
 
-  async imageUrl(value: unknown): Promise<string> {
-    const path = await realpath(absolutePath(value));
+  /** Authorize one local image and return its URL, or null when the file does not exist.
+   *  A missing image is a normal document state that the renderer shows as a placeholder,
+   *  so it must not reject and make Electron log a handler error. */
+  async imageUrl(value: unknown): Promise<string | null> {
+    let path: string;
+    try {
+      path = await realpath(absolutePath(value));
+    } catch (error) {
+      if (error instanceof Error && "code" in error && typeof error.code === "string"
+        && MISSING_PATH_ERRORS.has(error.code)) return null;
+      throw error;
+    }
     if (!imageMime(path)) throw new Error("Only local images can be loaded.");
     let token = this.tokensByPath.get(path);
     if (!token) {

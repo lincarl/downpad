@@ -130,7 +130,7 @@ export interface ElectronBridge {
   revealItemInFolder(path: string): Promise<void>;
   setTheme(theme: "light" | "dark" | "system"): Promise<void>;
   getPathForFile(file: File): string;
-  convertFileSrc(path: string): Promise<string>;
+  convertFileSrc(path: string): Promise<string | null>;
   closeWindow(): Promise<void>;
   cancelWindowClose(): Promise<void>;
 }
@@ -159,7 +159,8 @@ export function invoke<K extends keyof DesktopCommandArgs>(
   }
 }
 
-/** Return a URL for a local image without exposing filesystem APIs to the page. */
-export function convertFileSrc(path: string): Promise<string> {
+/** Return a URL for a local image without exposing filesystem APIs to the page,
+ *  or null when the image file does not exist. */
+export function convertFileSrc(path: string): Promise<string | null> {
   return desktopBridge().convertFileSrc(path);
 }
