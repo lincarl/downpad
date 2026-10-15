@@ -68,7 +68,8 @@ const FOCUS_CLASSES = [
   "cm-activeLineGutter",
 ];
 
-/** Strip editor-only artifacts that shouldn't appear in a printout. */
+/** Strip editor-only artifacts that shouldn't appear in a printout, including
+ *  the empty line Crepe keeps at the end of the document. */
 export function sanitize(el: Element): Element {
   el.removeAttribute("contenteditable");
   el.querySelectorAll("[contenteditable]").forEach((n) => n.removeAttribute("contenteditable"));
@@ -77,7 +78,23 @@ export function sanitize(el: Element): Element {
   for (const cls of FOCUS_CLASSES) {
     el.querySelectorAll(`.${cls}`).forEach((n) => n.classList.remove(cls));
   }
+  dropTrailingEmptyLines(el);
   return el;
+}
+
+/**
+ * Remove the empty paragraphs at the end of a document. Crepe keeps one after a
+ * final list, code block, quote, table, rule or image so there is a line to type
+ * on. Saved Markdown leaves it out, and on paper it prints nothing but can push
+ * a blank last sheet. Removing all of them, not only the last, gives the same
+ * result when a print job's node is sanitized again for each render. Runs after
+ * the chrome is gone, so ProseMirror's placeholder <br> no longer counts as
+ * content.
+ */
+function dropTrailingEmptyLines(doc: Element): void {
+  for (let last = doc.lastElementChild; last?.tagName === "P" && !last.hasChildNodes(); last = doc.lastElementChild) {
+    last.remove();
+  }
 }
 
 /**
