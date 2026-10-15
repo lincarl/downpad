@@ -154,13 +154,21 @@ const selectionTheme = EditorView.theme({
 const matchMark = Decoration.mark({ class: "md-find-match" });
 const currentMark = Decoration.mark({ class: "md-find-match md-find-current" });
 
-/** Mark every match of the find card's query in the visible part of the source. */
+/** How far past the rendered range to search, so a match that crosses its edge
+ *  is still found and painted. CodeMirror's own highlighter uses the same margin. */
+const MATCH_MARGIN = 250;
+
+/** Mark every match of the find card's query in the rendered part of the source. */
 function paintMatches(view: EditorView): DecorationSet {
   const query = getSearchQuery(view.state);
   if (!query.search || !query.valid) return Decoration.none;
   const { from: selectedFrom, to: selectedTo } = view.state.selection.main;
   const builder = new RangeSetBuilder<Decoration>();
-  const cursor = query.getCursor(view.state, view.viewport.from, view.viewport.to);
+  const cursor = query.getCursor(
+    view.state,
+    Math.max(0, view.viewport.from - MATCH_MARGIN),
+    Math.min(view.state.doc.length, view.viewport.to + MATCH_MARGIN),
+  );
   for (let match = cursor.next(); !match.done; match = cursor.next()) {
     const { from, to } = match.value;
     if (from === to) continue;

@@ -96,4 +96,19 @@ describe("Markdown view find highlights", () => {
     view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "" })) });
     expect(view.dom.querySelectorAll(".md-find-match")).toHaveLength(0);
   });
+
+  it("marks a match that runs past the end of the rendered lines", () => {
+    view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({ doc: "line\n".repeat(5000), extensions: [search(), markdownSourceStyle()] }),
+    });
+    // Each match spans a line break, so the last rendered line's match ends
+    // in the first line that is not rendered.
+    view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "e\\nl" })) });
+    const lines = view.dom.querySelectorAll(".cm-line");
+    const lastMark = lines[lines.length - 1].lastElementChild;
+    expect(view.viewport.to).toBeLessThan(view.state.doc.length);
+    expect(lastMark?.classList.contains("md-find-match")).toBe(true);
+    expect(lastMark?.textContent).toBe("e");
+  });
 });
