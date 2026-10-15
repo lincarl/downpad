@@ -1,16 +1,34 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mermaid = vi.hoisted(() => ({
-  initialize: vi.fn(),
-  parse: vi.fn(async () => true),
-  render: vi.fn(async (id: string) => ({ svg: `<svg id="${id}"></svg>` })),
-}));
+// Like Mermaid, the mock keeps the theme as global configuration and bakes it
+// into each SVG.
+const mermaid = vi.hoisted(() => {
+  let theme = "";
+  return {
+    initialize: vi.fn((config: { theme: string }) => {
+      theme = config.theme;
+    }),
+    parse: vi.fn(async (_code: string): Promise<boolean> => true),
+    render: vi.fn(async (id: string) => ({ svg: `<svg id="${id}" data-theme="${theme}"></svg>` })),
+  };
+});
 vi.mock("mermaid", () => ({ default: mermaid }));
 
 import { renderMermaidPreview } from "./mermaid";
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** A code block's preview panel. Like Crepe, it shows a copy of each preview
+ *  element's HTML, never the element itself. */
+function previewPanel() {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const apply = vi.fn((value: null | string | HTMLElement) => {
+    host.innerHTML = value instanceof HTMLElement ? value.outerHTML : (value ?? "");
+  });
+  return { host, apply };
+}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -25,27 +43,39 @@ describe("renderMermaidPreview", () => {
 
   it("draws in the document theme and redraws when it changes", async () => {
     document.documentElement.dataset.editorTheme = "light";
-    const host = document.createElement("div");
-    document.body.append(host);
-    const apply = vi.fn((value: null | string | HTMLElement) => {
-      host.replaceChildren(...(value instanceof HTMLElement ? [value] : []));
-    });
+    const { host, apply } = previewPanel();
 
-    const loading = renderMermaidPreview("mermaid", "graph LR\n  A --> B", apply);
-    host.append(loading!);
+    apply(renderMermaidPreview("mermaid", "graph LR\n  A --> B", apply));
     await settle();
-    expect(mermaid.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "default" }));
-    expect(apply).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("svg")?.dataset.theme).toBe("default");
 
     document.documentElement.dataset.editorTheme = "dark";
     await settle();
-    expect(mermaid.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "dark" }));
-    expect(apply).toHaveBeenCalledTimes(2);
+    expect(host.querySelector("svg")?.dataset.theme).toBe("dark");
+    expect(apply).toHaveBeenCalledTimes(3);
 
     // A diagram that has left the page is not drawn again.
     host.remove();
     document.documentElement.dataset.editorTheme = "light";
     await settle();
+    expect(apply).toHaveBeenCalledTimes(3);
+  });
+
+  it("shows only the newest render when the theme changes mid-render", async () => {
+    document.documentElement.dataset.editorTheme = "light";
+    const { host, apply } = previewPanel();
+    let finishParse!: (ok: boolean) => void;
+    mermaid.parse.mockImplementationOnce(() => new Promise((resolve) => (finishParse = resolve)));
+
+    apply(renderMermaidPreview("mermaid", "graph LR\n  A --> B", apply));
+    await settle();
+    // The light render is still parsing when the document turns dark.
+    document.documentElement.dataset.editorTheme = "dark";
+    await settle();
+    finishParse(true);
+    await settle();
+
     expect(apply).toHaveBeenCalledTimes(2);
+    expect(host.querySelector("svg")?.dataset.theme).toBe("dark");
   });
 });
