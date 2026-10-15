@@ -316,6 +316,21 @@ test("undoing every edit marks the document saved again", async () => {
   await expect(page).toHaveTitle("undo-all.md — md-easy");
 });
 
+test("the first Ctrl+Z after opening a file that ends in a list leaves the caret in place", async () => {
+  const file = path.join(directory, "undo-list.md");
+  await writeFile(file, "First line.\n\n- Last item\n");
+  await launch(file);
+  // The document view adds an empty line after a final list, for typing below it.
+  await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
+  const paragraph = page.locator(".milkdown .ProseMirror > p").first();
+  await paragraph.click();
+  await page.keyboard.press("End");
+  // There is nothing to undo yet, so the caret stays at the end of the line.
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.type("!");
+  await expect(paragraph).toHaveText("First line.!");
+});
+
 test("closing a tab right after typing asks before discarding the edit", async () => {
   const file = path.join(directory, "closing.md");
   await writeFile(file, "# Closing\n\nFirst line.\n");
@@ -443,7 +458,8 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n");
   await launch(file);
   const paragraph = page.locator(".milkdown .ProseMirror > p").first();
-  // The click adds an empty line after the code block, for typing below it.
+  // The document view adds an empty line after a final code block, for typing
+  // below it. Neither that line nor a click marks the file unsaved.
   await paragraph.click();
   await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
