@@ -132,6 +132,73 @@ test("native Open, edit, Save, and external file reload use actual files", async
   await expect(page.locator(heading)).toHaveText("Updated outside Electron");
 });
 
+test("Save right after typing writes the last edit in the document and split views", async () => {
+  const file = path.join(directory, "typed.md");
+  await writeFile(file, "# Typed\n\nFirst line.\n");
+  await launch(file);
+  // The document view reports typing after a short delay. Save at once, without
+  // waiting for it, and the file must still get the last word.
+  await page.locator(".milkdown .ProseMirror p").first().click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Saved at once.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Typed\n\nFirst line. Saved at once.\n");
+  await expect(page).toHaveTitle("typed.md — md-easy");
+
+  // In the split, the Markdown pane still catches up after the save.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await page.locator(".editor-pane-wysiwyg .ProseMirror p").first().click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Split too.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Typed\n\nFirst line. Saved at once. Split too.\n");
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("First line. Saved at once. Split too.");
+  await expect(page).toHaveTitle("typed.md — md-easy");
+});
+
+test("an undo right after Save marks the document unsaved again", async () => {
+  const file = path.join(directory, "undo.md");
+  // No heading: the heading-id plugin's first update would hide the case.
+  await writeFile(file, "First line.\n");
+  await launch(file);
+  const paragraph = page.locator(".milkdown .ProseMirror p").first();
+  await paragraph.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Undone.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(paragraph).toHaveText("First line.");
+  // The file has the typed words but the document no longer does.
+  await expect(page).toHaveTitle("● undo.md — md-easy");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
+  await expect(page).toHaveTitle("undo.md — md-easy");
+});
+
+test("closing a tab right after typing asks before discarding the edit", async () => {
+  const file = path.join(directory, "closing.md");
+  await writeFile(file, "# Closing\n\nFirst line.\n");
+  await launch(file);
+  // Record the unsaved-changes prompt and answer Cancel.
+  await app!.evaluate(({ dialog }) => {
+    const prompts: string[] = [];
+    Object.assign(globalThis, { prompts });
+    dialog.showMessageBox = async (...args: unknown[]) => {
+      prompts.push(String((args.at(-1) as { message?: unknown }).message));
+      return { response: 0, checkboxChecked: false };
+    };
+  });
+  const paragraph = page.locator(".milkdown .ProseMirror p").first();
+  await paragraph.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Not lost.");
+  await page.getByRole("tab", { name: /closing\.md/ }).click({ button: "middle" });
+  await expect.poll(() => app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([
+    '"closing.md" has unsaved changes. Discard them?',
+  ]);
+  await expect(paragraph).toHaveText("First line. Not lost.");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);

@@ -9,7 +9,8 @@
 
 import { Crepe } from "@milkdown/crepe";
 import { remarkStringifyOptionsCtx, editorViewCtx } from "@milkdown/kit/core";
-import { insert, replaceAll as replaceAllMarkdown } from "@milkdown/kit/utils";
+import { $prose, insert, replaceAll as replaceAllMarkdown } from "@milkdown/kit/utils";
+import { Plugin } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -40,6 +41,8 @@ import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { installEditorAccessibility } from "./editorAccessibility";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
+/** How long typing must pause before an edit is reported (`onChange`). */
+const CHANGE_DEBOUNCE_MS = 200;
 import { splitFrontmatter, joinFrontmatter } from "../../document/frontmatter";
 
 export interface WysiwygCallbacks {
@@ -75,9 +78,11 @@ export class WysiwygEditor {
    *  setting, captured at mount). */
   private showFmPanel = false;
   /** The settled markdown last pushed in by `setMarkdown` (split mirror sync). The
-   *  debounced `markdownUpdated` echo is dropped while the content still equals it,
-   *  so mirroring never re-serializes the author's exact text (§6.1). */
+   *  delayed change report it causes is dropped while the content still equals
+   *  it, so mirroring never re-serializes the author's exact text (§6.1). */
   private syncedMarkdown: string | null = null;
+  /** Pending report of document edits, set while typing has not paused yet. */
+  private changeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Attributes/semantics applied to DOM owned by Crepe and embedded CodeMirror. */
   private accessibilityCleanup: (() => void) | null = null;
 
@@ -155,12 +160,26 @@ export class WysiwygEditor {
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
     // WYSIWYG find/replace search state + decorations (§5.13).
     this.crepe.editor.use(searchMilkdownPlugin());
-    this.crepe.on((listener) => {
-      listener.markdownUpdated(() => {
-        if (this.ignoreUpdates) return;
-        this.emitChange();
-      });
-    });
+    // Report document edits once typing pauses. md-easy keeps its own timer
+    // rather than Milkdown's listener plugin, which compares against the
+    // document it last reported itself. After `reportPendingChange`, an undo back
+    // to that document would never be reported.
+    this.crepe.editor.use(
+      $prose(
+        () =>
+          new Plugin({
+            state: {
+              init: () => null,
+              apply: (tr) => {
+                // Like the listener plugin, skip changes kept out of undo history
+                // (heading ids, list labels). They do not change the Markdown.
+                if (tr.docChanged && tr.getMeta("addToHistory") !== false) this.scheduleChange();
+                return null;
+              },
+            },
+          }),
+      ),
+    );
     const crepe = this.crepe;
     let createPromise: Promise<void> | null = null;
     try {
@@ -198,6 +217,16 @@ export class WysiwygEditor {
     return joinFrontmatter(this.frontmatterBlock, body);
   }
 
+  /** Report an edit now instead of waiting for typing to pause. A caller that
+   *  reads the document right away (Save) calls this first. The edit takes the
+   *  usual `onChange` path, and the pending report is cancelled. */
+  reportPendingChange(): void {
+    if (this.changeTimer == null || this.ignoreUpdates) return;
+    clearTimeout(this.changeTimer);
+    this.changeTimer = null;
+    this.emitChange();
+  }
+
   /** Insert markdown at the current selection (used by drag-and-drop, §5.4). */
   insertMarkdown(markdown: string): void {
     if (!this.crepe || !markdown) return;
@@ -215,9 +244,9 @@ export class WysiwygEditor {
    * to Crepe via `replaceAll`. This pane is the unfocused mirror, so the reset
    * selection/scroll is acceptable.
    *
-   * Crepe's `markdownUpdated` is DEBOUNCED (~200ms via @milkdown/plugin-listener),
-   * so it fires well after this returns — a short `ignoreUpdates` window can't
-   * suppress it. Instead we record the editor's *settled* serialization of what we
+   * Edits are reported only after a ~200ms pause (`scheduleChange`), so the
+   * report for this replacement fires well after this returns — a short
+   * `ignoreUpdates` window can't suppress it. Instead we record the editor's *settled* serialization of what we
    * just set as `syncedMarkdown`; `emitChange` drops the eventual echo when the
    * content still equals it. That keeps the mirror from writing its normalized
    * re-serialization back over the author's exact text (which would clobber the
@@ -231,7 +260,7 @@ export class WysiwygEditor {
     try {
       this.crepe.editor.action(replaceAllMarkdown(split.body));
       // The doc updates synchronously with the dispatch, so getMarkdown() now
-      // reflects the settled form the debounced markdownUpdated will emit.
+      // reflects the settled form the delayed change report will emit.
       this.syncedMarkdown = this.getMarkdown();
     } catch {
       // Editor torn down mid-sync; ignore.
@@ -340,6 +369,10 @@ export class WysiwygEditor {
       clearTimeout(this.enableUpdatesTimer);
       this.enableUpdatesTimer = null;
     }
+    if (this.changeTimer != null) {
+      clearTimeout(this.changeTimer);
+      this.changeTimer = null;
+    }
     this.fmPanelRoot?.unmount();
     this.fmPanelRoot = null;
     this.fmPanel = null;
@@ -371,6 +404,15 @@ export class WysiwygEditor {
     } catch {
       return "";
     }
+  }
+
+  /** Restart the wait for typing to pause before reporting the edit. */
+  private scheduleChange(): void {
+    if (this.changeTimer != null) clearTimeout(this.changeTimer);
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = null;
+      if (!this.ignoreUpdates) this.emitChange();
+    }, CHANGE_DEBOUNCE_MS);
   }
 
   private emitChange(): void {
