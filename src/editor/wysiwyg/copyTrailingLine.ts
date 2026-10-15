@@ -5,21 +5,30 @@
 // copy of the whole document into md-easy therefore added an empty paragraph,
 // saved as a `<br />` line, and other apps that read the HTML can show it as an
 // extra empty line.
+//
+// Only that last line of the document is left out. A copy that ends at the start
+// of any other line, such as a whole line selected with Shift+Down, ends in an
+// empty paragraph too, but there it carries the copied line break.
 
 import { Slice } from "@milkdown/kit/prose/model";
 import { Plugin } from "@milkdown/kit/prose/state";
 import { $prose } from "@milkdown/kit/utils";
 
-/** Leaves an empty last paragraph out of a copied or dragged slice when other
- *  blocks precede it, as Milkdown does for the slice's plain text. */
+/** Leaves the document's empty last paragraph out of a copied or dragged slice
+ *  that reaches it, when other blocks precede it in the slice. */
 export const copyWithoutTrailingLine = $prose(
   () =>
     new Plugin({
       props: {
-        transformCopied: (slice) => {
+        transformCopied: (slice, view) => {
+          const { doc, selection } = view.state;
           const { content } = slice;
           const last = content.lastChild;
-          if (content.childCount < 2 || last?.type.name !== "paragraph" || last.content.size > 0) return slice;
+          // Positions from here on are inside the document's last block or after it.
+          const reachesLastBlock = selection.to >= doc.content.size - 1;
+          if (!reachesLastBlock || content.childCount < 2 || last?.type.name !== "paragraph" || last.content.size > 0) {
+            return slice;
+          }
           return new Slice(content.cut(0, content.size - last.nodeSize), slice.openStart, 0);
         },
       },
