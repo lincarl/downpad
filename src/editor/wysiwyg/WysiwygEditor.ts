@@ -8,9 +8,8 @@
 //     body, and the block is re-joined losslessly on serialize.
 
 import { Crepe } from "@milkdown/crepe";
-import { remarkStringifyOptionsCtx, editorViewCtx, serializerCtx } from "@milkdown/kit/core";
+import { remarkStringifyOptionsCtx, editorViewCtx } from "@milkdown/kit/core";
 import { $prose, insert, replaceAll as replaceAllMarkdown } from "@milkdown/kit/utils";
-import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { Plugin } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
@@ -45,23 +44,6 @@ const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
 const CHANGE_DEBOUNCE_MS = 200;
 import { splitFrontmatter, joinFrontmatter } from "../../document/frontmatter";
-
-/**
- * The document without an empty last paragraph, which Markdown has no form for.
- * Crepe keeps one after a final list, code block, quote, table, rule or image,
- * so there is a line to type on below it. Milkdown writes an empty last
- * paragraph as an extra blank line, which marked such files unsaved and saved
- * them with that line. One typed after a final paragraph, or read from a final
- * `<br />`, goes too, because a blank line there is lost on reopening anyway.
- * Earlier empty paragraphs keep their `<br />` form. A document that is only an
- * empty paragraph stays as it is, because Milkdown cannot write a document with
- * no blocks.
- */
-function withoutTrailingLine(doc: ProseNode): ProseNode {
-  const last = doc.lastChild;
-  if (doc.childCount < 2 || last?.type.name !== "paragraph" || last.content.size > 0) return doc;
-  return doc.copy(doc.content.cut(0, doc.content.size - last.nodeSize));
-}
 
 export interface WysiwygCallbacks {
   onChange: (markdown: string) => void;
@@ -231,8 +213,9 @@ export class WysiwygEditor {
     }, 0);
   }
 
-  /** Canonical markdown: frontmatter block (if any) + Crepe's serialized body,
-   *  without an empty last line (`withoutTrailingLine`). */
+  /** Canonical markdown: frontmatter block (if any) + Crepe's serialized body.
+   *  Milkdown leaves out the empty line Crepe keeps after a final list, code
+   *  block, quote, table, rule or image. */
   getMarkdown(): string {
     const body = this.bodyMarkdown();
     return joinFrontmatter(this.frontmatterBlock, body);
@@ -418,13 +401,11 @@ export class WysiwygEditor {
     return this.destroyPromise;
   }
 
-  /** Crepe's document as Markdown, without its empty last line. */
+  /** Crepe's document as Markdown. */
   private bodyMarkdown(): string {
     if (!this.crepe) return "";
     try {
-      return this.crepe.editor.action((ctx) =>
-        ctx.get(serializerCtx)(withoutTrailingLine(ctx.get(editorViewCtx).state.doc)),
-      );
+      return this.crepe.getMarkdown();
     } catch {
       return "";
     }
