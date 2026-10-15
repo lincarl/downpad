@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppStore } from "../app/createAppStore";
+import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import type { FileMeta, FilePayload } from "../ipc/contracts";
 import { blankDoc, type Eol } from "../state/types";
 import { FileService } from "./FileService";
@@ -33,6 +34,7 @@ function setup(dirty = false) {
     filePath,
     modifiedMs: 100,
     isDirty: dirty,
+    savedMarkdown: dirty ? "# Saved before\n" : "# Original content\n",
     frontmatterCollapsed: true,
   });
   const presenter = {
@@ -66,6 +68,18 @@ describe("saving document snapshots", () => {
     expect(await files.save()).toBe(true);
     expect(native.writeFile).toHaveBeenCalledWith(filePath, "# Typed just now\n", "lf");
     expect(store.get().doc).toMatchObject({ markdown: "# Typed just now\n", isDirty: false });
+  });
+
+  it("records the saved text, so an edit back to it is saved again", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+
+    expect(await files.save()).toBe(true);
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Original content\n", isDirty: false });
+    applyEditorMarkdownForTab(store, tabId, "# Edited\n");
+    expect(store.get().doc.isDirty).toBe(true);
+    applyEditorMarkdownForTab(store, tabId, "# Original content\n");
+    expect(store.get().doc.isDirty).toBe(false);
   });
 
   it("keeps edits made while a save is pending dirty", async () => {
@@ -137,7 +151,7 @@ describe("saving document snapshots", () => {
     expect(native.writeFile).toHaveBeenNthCalledWith(1, "/docs/selected.md", "# Original content\n", "lf");
     first.resolve({ modifiedMs: 200 });
     await saveAs;
-    expect(store.get().doc).toMatchObject({ filePath: "/docs/selected.md", isDirty: true });
+    expect(store.get().doc).toMatchObject({ filePath: "/docs/selected.md", isDirty: true, savedMarkdown: "# Original content\n" });
     await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
     expect(native.writeFile).toHaveBeenNthCalledWith(2, "/docs/selected.md", "# Edited during dialog\n", "lf");
     second.resolve({ modifiedMs: 300 });
@@ -220,6 +234,7 @@ describe("reloading an open file", () => {
       eol: "crlf",
       modifiedMs: 200,
       isDirty: false,
+      savedMarkdown: onDisk.content,
       frontmatterCollapsed: true,
     });
     expect(presenter.reloadActiveDoc).toHaveBeenCalledOnce();

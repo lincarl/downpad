@@ -22,7 +22,8 @@ export interface DesktopEventDependencies {
 }
 
 export class DesktopEventBindings {
-  private pendingChangeMs = 0;
+  /** The file's changed text and mtime while the banner offers to reload it. */
+  private pendingChange: { markdown: string; modifiedMs: number } | null = null;
   private started = false;
   private disposed = false;
   private closing = false;
@@ -52,7 +53,7 @@ export class DesktopEventBindings {
 
   /** Clear watcher state after the active document changes. */
   resetPendingChange(): void {
-    this.pendingChangeMs = 0;
+    this.pendingChange = null;
   }
 
   /** Apply the action exposed by React's external-change banner. */
@@ -62,7 +63,15 @@ export class DesktopEventBindings {
     if (id === "reload" && path) {
       run(() => files.openPath(path, { reload: true }));
     } else if (id === "keep") {
-      store.patchDoc({ modifiedMs: this.pendingChangeMs });
+      // The open text now differs from the file, so it counts as unsaved.
+      const change = this.pendingChange;
+      if (change) {
+        store.patchDoc({
+          modifiedMs: change.modifiedMs,
+          savedMarkdown: change.markdown,
+          isDirty: store.get().doc.markdown !== change.markdown,
+        });
+      }
       store.set({ banner: null });
     }
   }
@@ -91,11 +100,11 @@ export class DesktopEventBindings {
     if (!current.filePath || !sameFilePath(payload.path, current.filePath)) return;
     if (payload.modifiedMs <= current.modifiedMs) return;
     if (onDisk === current.markdown) {
-      store.patchDoc({ modifiedMs: payload.modifiedMs });
+      store.patchDoc({ modifiedMs: payload.modifiedMs, savedMarkdown: onDisk, isDirty: false });
       return;
     }
 
-    this.pendingChangeMs = payload.modifiedMs;
+    this.pendingChange = { markdown: onDisk, modifiedMs: payload.modifiedMs };
     store.set({
       banner: {
         kind: "file-changed",

@@ -89,6 +89,7 @@ export class FileService {
       hadBom: payload.hadBom,
       modifiedMs: payload.modifiedMs,
       isDirty: false,
+      savedMarkdown: payload.content,
       frontmatterCollapsed: existing?.doc.frontmatterCollapsed ?? false,
     };
     if (existing) {
@@ -188,6 +189,7 @@ export class FileService {
     this.store.patchDocById(tabId, {
       filePath: path,
       isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
+      savedMarkdown: snapshot.markdown,
       modifiedMs,
     });
     // Requests queued during Save As follow the owner's new path, retaining

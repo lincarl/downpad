@@ -4,14 +4,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorHost } from "../editor/EditorHost";
 import { FileService } from "../files/FileService";
 import type { ElectronBridge } from "../ipc/bridge";
+import type { FilePayload } from "../ipc/contracts";
+import type { FileChangedPayload } from "../ipc/events";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import { createAppStore } from "./createAppStore";
 import { DesktopEventBindings } from "./DesktopEventBindings";
 
-const events = vi.hoisted(() => ({ closeRequested: null as (() => void) | null }));
+const events = vi.hoisted(() => ({
+  closeRequested: null as (() => void) | null,
+  fileChanged: null as ((payload: FileChangedPayload) => void) | null,
+}));
+const disk = vi.hoisted(() => ({ readFile: vi.fn<(path: string) => Promise<FilePayload>>() }));
+
+vi.mock("../ipc/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/commands")>()),
+  readFile: disk.readFile,
+}));
 
 vi.mock("../ipc/events", () => ({
-  onFileChanged: async () => () => {},
+  onFileChanged: async (handler: (payload: FileChangedPayload) => void) => {
+    events.fileChanged = handler;
+    return () => { events.fileChanged = null; };
+  },
   onOpenFileRequested: async () => () => {},
   onCloseRequested: async (handler: () => void) => {
     events.closeRequested = handler;
@@ -119,5 +133,67 @@ describe("native close decisions", () => {
     await expect(current).rejects.toThrow("Recovery cleanup failed");
     expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
     expect(bridge.closeWindow).not.toHaveBeenCalled();
+  });
+});
+
+describe("a file that changed on disk", () => {
+  const filePath = "/docs/notes.md";
+  let store: ReturnType<typeof createAppStore>;
+  let bindings: DesktopEventBindings;
+  let host: EditorHost;
+
+  beforeEach(() => {
+    window.mdEasy = createTestBridge();
+    store = createAppStore();
+    store.patchDoc({ filePath, markdown: "# Mine\n", savedMarkdown: "# Mine\n", isDirty: false, modifiedMs: 100 });
+    const files = new FileService(store, {
+      flush: () => {},
+      showActiveDoc: async () => {},
+      reloadActiveDoc: async () => {},
+    });
+    host = new EditorHost(document.createElement("div"), store);
+    bindings = new DesktopEventBindings({
+      store,
+      files,
+      editorHost: host,
+      scheduler: new SnapshotScheduler(store, files),
+      handleDrop: async () => {},
+      run: () => {},
+    });
+    bindings.start();
+  });
+
+  afterEach(async () => {
+    bindings.dispose();
+    await host.dispose();
+    delete window.mdEasy;
+    vi.restoreAllMocks();
+  });
+
+  /** Report that the open file now holds `content`. */
+  async function changeOnDisk(content: string): Promise<void> {
+    disk.readFile.mockResolvedValueOnce({ content, eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: content.length });
+    await vi.waitFor(() => expect(events.fileChanged).not.toBeNull());
+    events.fileChanged!({ path: filePath, modifiedMs: 200 });
+    await vi.waitFor(() => expect(store.get().doc.modifiedMs === 200 || store.get().banner !== null).toBe(true));
+  }
+
+  it("counts the open text as unsaved once the user keeps it", async () => {
+    await changeOnDisk("# Theirs\n");
+    expect(store.get().doc.isDirty).toBe(false);
+
+    bindings.handleBannerAction("keep");
+
+    expect(store.get().banner).toBeNull();
+    expect(store.get().doc).toMatchObject({ modifiedMs: 200, savedMarkdown: "# Theirs\n", isDirty: true });
+  });
+
+  it("counts unsaved text as saved when the file now holds it", async () => {
+    store.patchDoc({ savedMarkdown: "# Older\n", isDirty: true });
+
+    await changeOnDisk("# Mine\n");
+
+    expect(store.get().banner).toBeNull();
+    expect(store.get().doc).toMatchObject({ modifiedMs: 200, savedMarkdown: "# Mine\n", isDirty: false });
   });
 });

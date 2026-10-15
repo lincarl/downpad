@@ -36,7 +36,11 @@ export interface DocumentState {
   markdown: string;
   /** Absolute path, or null for an untitled buffer. */
   filePath: string | null;
+  /** Whether `markdown` differs from `savedMarkdown`, or that text is unknown. */
   isDirty: boolean;
+  /** The text last read from or written to the file ("" for a new document), or
+   *  null when it is unknown, as for a recovered snapshot. */
+  savedMarkdown: string | null;
   /** Detected on open, re-applied on write (spec §5.18). */
   eol: Eol;
   /** Whether the opened file had a BOM (stripped on save). */
@@ -64,6 +68,7 @@ export function blankDoc(): DocumentState {
     markdown: "",
     filePath: null,
     isDirty: false,
+    savedMarkdown: "",
     eol: "lf",
     hadBom: false,
     modifiedMs: 0,

@@ -41,6 +41,7 @@ export function createAppStore(): Store {
     markdown: SEED,
     filePath: null,
     isDirty: false,
+    savedMarkdown: SEED,
     eol: "lf" as const,
     hadBom: false,
     modifiedMs: 0,

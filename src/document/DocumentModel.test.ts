@@ -14,6 +14,7 @@ function makeStore(markdown = "hello world"): Store {
     markdown,
     filePath: null,
     isDirty: false,
+    savedMarkdown: markdown,
     eol: "lf" as const,
     hadBom: false,
     modifiedMs: 0,
@@ -56,6 +57,13 @@ describe("applyEditorMarkdown", () => {
     expect(store.get().doc.markdown).toBe("after");
     expect(store.get().doc.isDirty).toBe(true);
   });
+
+  it("marks an edit back to the saved text saved again", () => {
+    const store = makeStore("saved");
+    applyEditorMarkdown(store, "edited");
+    applyEditorMarkdown(store, "saved");
+    expect(store.get().doc).toMatchObject({ markdown: "saved", isDirty: false });
+  });
 });
 
 describe("applyEditorMarkdownForTab", () => {
@@ -81,6 +89,7 @@ describe("applyEditorMarkdownForTab", () => {
       markdown: "second",
       filePath: null,
       isDirty: false,
+      savedMarkdown: "second",
       eol: "lf",
       hadBom: false,
       modifiedMs: 0,
@@ -94,6 +103,25 @@ describe("applyEditorMarkdownForTab", () => {
   it("returns false for an unknown tab id", () => {
     const store = makeStore("x");
     expect(applyEditorMarkdownForTab(store, "nope", "y")).toBe(false);
+  });
+
+  it("marks an edit back to the saved text saved again", () => {
+    const store = makeStore("saved");
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "edited");
+    expect(store.get().doc.isDirty).toBe(true);
+    expect(applyEditorMarkdownForTab(store, tabId, "saved")).toBe(true);
+    expect(store.get().doc).toMatchObject({ markdown: "saved", isDirty: false });
+  });
+
+  it("keeps a document unsaved while its saved text is unknown", () => {
+    // A recovered snapshot: the file may hold anything.
+    const store = makeStore("recovered");
+    store.patchDoc({ isDirty: true, savedMarkdown: null });
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "edited");
+    applyEditorMarkdownForTab(store, tabId, "recovered");
+    expect(store.get().doc.isDirty).toBe(true);
   });
 });
 
@@ -109,6 +137,7 @@ describe("loadDocument", () => {
     const { doc } = store.get();
     expect(doc.markdown).toBe("new content");
     expect(doc.isDirty).toBe(false);
+    expect(doc.savedMarkdown).toBe("new content");
     expect(doc.filePath).toBe("C:/notes/a.md");
     expect(doc.eol).toBe("crlf");
     expect(doc.hadBom).toBe(true);

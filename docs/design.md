@@ -24,7 +24,7 @@ Each open document has one canonical Markdown string. The document and source ed
 
 Opening a document never changes its text. The document view reports the exact source it was given until the user edits the body there, and an edit there writes the body in Milkdown's Markdown style.
 
-Each tab owns its own document state, including its path, content, save status, and line-ending style. The active tab is bound to the visible editor views.
+Each tab owns its own document state, including its path, content, save status, and line-ending style. The save status compares the content with the text last read from or written to the file. A recovered snapshot counts as unsaved until it is saved, because the file may have changed since. The active tab is bound to the visible editor views.
 
 Milkdown and CodeMirror manage their own editor DOM and lifecycles. React owns the surrounding application interface, including tabs, toolbars, dialogs, settings, recent files, and print views.
 

@@ -1,6 +1,7 @@
 // Coordinates edits to the canonical markdown string (the single source of
 // truth). Editors call applyEditorMarkdown on every change; loading replaces
-// the document wholesale. See docs/design.md §4.
+// the document wholesale. A document is unsaved while its text differs from the
+// text last read from or written to its file. See docs/design.md §4.
 
 import type { Store } from "../state/store";
 import type { Eol } from "../state/types";
@@ -8,11 +9,13 @@ import type { Eol } from "../state/types";
 /**
  * Apply markdown produced by an active editor. No-op if unchanged (this guards
  * against editors emitting their initial/normalized content on mount, which
- * would otherwise mark a freshly-loaded document dirty).
+ * would otherwise mark a freshly-loaded document dirty). An edit back to the
+ * saved text leaves the document saved.
  */
 export function applyEditorMarkdown(store: Store, markdown: string): void {
-  if (store.get().doc.markdown === markdown) return;
-  store.patchDoc({ markdown, isDirty: true });
+  const { doc } = store.get();
+  if (doc.markdown === markdown) return;
+  store.patchDoc({ markdown, isDirty: markdown !== doc.savedMarkdown });
 }
 
 /**
@@ -30,7 +33,7 @@ export function applyEditorMarkdownForTab(
 ): boolean {
   const tab = store.get().tabs.find((t) => t.id === tabId);
   if (!tab || tab.doc.markdown === markdown) return false;
-  store.patchDocById(tabId, { markdown, isDirty: true });
+  store.patchDocById(tabId, { markdown, isDirty: markdown !== tab.doc.savedMarkdown });
   return true;
 }
 
@@ -51,6 +54,7 @@ export function loadDocument(
     hadBom: meta.hadBom,
     modifiedMs: meta.modifiedMs ?? 0,
     isDirty: false,
+    savedMarkdown: markdown,
     frontmatterCollapsed: false,
   });
 }
