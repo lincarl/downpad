@@ -344,6 +344,26 @@ test("the print workspace exports a real PDF and preserves landscape and page ra
   }).toBe("%PDF-");
 });
 
+test("the empty line after a final list adds no blank sheet to the print", async () => {
+  const file = path.join(directory, "full-sheet.md");
+  const paragraphs = Array.from({ length: 28 }, (_, index) => `Paragraph ${index + 1}.`);
+  await writeFile(file, [...paragraphs, "---", "- Last item"].join("\n\n") + "\n");
+  await launch(file);
+  // The document view adds an empty line after a final list, for typing below it.
+  await expect(page.locator(".milkdown .ProseMirror > p").last()).toHaveText("");
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  const firstSheet = page.locator(".print-page").first();
+  await expect(firstSheet).toContainText("Last item");
+  // The list ends closer to the bottom of the sheet than that empty line is tall.
+  const roomBelowList = await firstSheet.evaluate((sheet) => {
+    const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+    const list = sheet.querySelector<HTMLElement>(".print-flow > ul")!;
+    return body.offsetHeight - (list.offsetTop + list.offsetHeight);
+  });
+  expect(roomBelowList).toBeLessThan(8);
+  await expect(page.locator(".print-page")).toHaveCount(1);
+});
+
 test("Print submits the document to an installed test printer", async () => {
   const printer = process.env.MD_EASY_TEST_PRINTER;
   test.skip(!printer, "Set MD_EASY_TEST_PRINTER to a disposable virtual printer for native spool verification.");
