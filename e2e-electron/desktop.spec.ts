@@ -127,6 +127,8 @@ test("a missing local image shows its placeholder without handler errors or fail
 
 test("the renderer's Content Security Policy allows md-easy's content and blocks inline scripts and eval", async () => {
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
+  // Copy image converts a GIF to PNG through a blob: URL.
+  const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
   const server = createServer((_request, response) => response.writeHead(200, { "Content-Type": "image/png" }).end(png));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -138,7 +140,7 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
       "# Policy", "",
       "![Local](image.png)", "",
       `![Web](http://127.0.0.1:${address.port}/web.png)`, "",
-      `![Embedded](data:image/png;base64,${png.toString("base64")})`, "",
+      `![Embedded](data:image/gif;base64,${gif})`, "",
       "Inline $a^2$ and block math.", "",
       "$$", "\\frac{1}{2}", "$$", "",
       "```mermaid", "graph LR", "  A --> B", "```", "",
@@ -147,10 +149,15 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
     await writeFile(path.join(directory, "profile", "settings.toml"), "hasCheckedDefaultHandler = true\n");
     await launch();
     await expect(page.locator(heading)).toHaveText("Welcome to md-easy 👋");
-    await page.evaluate(() => {
+    const log = await page.evaluateHandle(() => {
       const violations: string[] = [];
-      Reflect.set(window, "violations", violations);
+      const copies: string[] = [];
       document.addEventListener("securitypolicyviolation", (event) => violations.push(`${event.effectiveDirective} ${event.blockedURI}`));
+      // Record what Copy image writes instead of using the system clipboard.
+      navigator.clipboard.write = async (items) => {
+        for (const item of items) for (const type of item.types) copies.push((await item.getType(type)).type);
+      };
+      return { violations, copies };
     });
 
     await chooseOpen(file);
@@ -158,8 +165,23 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
     await expect(pane.locator(".mermaid-preview svg")).toBeVisible();
     await expect(pane.locator(".katex")).toHaveCount(2);
     await expect.poll(() => pane.locator(".ProseMirror img").evaluateAll((images) => images.map((image) => image instanceof HTMLImageElement && image.naturalWidth > 0))).toEqual([true, true, true]);
-    expect(await page.evaluate(() => ({
-      violations: Reflect.get(window, "violations"),
+    // Copy image fetches the embedded image's data: URL and converts it to PNG.
+    await pane.getByRole("img", { name: "Embedded", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy image", exact: true }).click();
+    await expect.poll(() => log.evaluate(({ copies }) => copies)).toEqual(["image/png"]);
+    // Vite inlines KaTeX_Size3 as a data: URL. A blocked inlined font falls back to
+    // its font file without a violation event, so load each inlined source directly.
+    const inlinedFonts = await page.evaluate(() => {
+      const faces = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]).filter((rule) => rule instanceof CSSFontFaceRule);
+      return Promise.all(faces.flatMap((face) => {
+        const family = face.style.getPropertyValue("font-family");
+        return [...face.style.getPropertyValue("src").matchAll(/url\("?(data:[^")]+)"?\)/g)]
+          .map(([, source]) => new FontFace(family, `url(${source})`).load().then(() => `${family} loaded`, () => `${family} blocked`));
+      }));
+    });
+    expect(inlinedFonts).toEqual(["KaTeX_Size3 loaded"]);
+    expect(await log.evaluate(({ violations }) => ({
+      violations,
       failedFonts: [...document.fonts].filter((font) => font.status === "error").map((font) => font.family),
     }))).toEqual({ violations: [], failedFonts: [] });
 
