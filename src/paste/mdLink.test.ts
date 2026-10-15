@@ -31,4 +31,10 @@ describe("mdLink / mdImage", () => {
   it("produces a bare image for a simple relative path", () => {
     expect(mdImage("", "attachments/a.png")).toBe("![](attachments/a.png)");
   });
+
+  it("adds a quoted title and escapes the alt text and title", () => {
+    expect(mdImage("a ] b", "my image.png", 'Say "hi"')).toBe(
+      '![a \\] b](<my image.png> "Say \\"hi\\"")',
+    );
+  });
 });

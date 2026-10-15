@@ -31,16 +31,14 @@ export function isImageNode(node: ProseNode): boolean {
   return IMAGE_NODE_NAMES.has(node.type.name);
 }
 
-/** Read an image node's src + user-facing alt text + which attr holds the alt.
- *  Crepe's image-block keeps the caption in `caption` (the markdown alt slot is
- *  repurposed for the resize ratio), so the user-facing "alt" is `caption`. */
-export function imageAttrs(node: ProseNode): { src: string; alt: string; altKey: "caption" | "alt" } {
-  const isBlock = node.type.name === "image-block";
-  const altKey = isBlock ? "caption" : "alt";
+/** Read an image node's src, Markdown alt text and title. Every image node keeps
+ *  its alt text in `alt` (see imageBlockAlt.ts). A standalone image keeps its title
+ *  in `caption`, which Crepe shows under the image. */
+export function imageAttrs(node: ProseNode): { src: string; alt: string; title: string } {
   return {
     src: (node.attrs.src as string | undefined) ?? "",
-    alt: (node.attrs[altKey] as string | undefined) ?? "",
-    altKey,
+    alt: (node.attrs.alt as string | undefined) ?? "",
+    title: (node.attrs.caption as string | undefined) ?? (node.attrs.title as string | null | undefined) ?? "",
   };
 }
 

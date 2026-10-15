@@ -23,6 +23,7 @@ import { smartPastePlugin } from "./pasteHandler";
 import { linkViewPlugin } from "./linkView";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
+import { imageBlockAltSchema } from "./imageBlockAlt";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import {
   searchMilkdownPlugin,
@@ -143,6 +144,9 @@ export class WysiwygEditor {
       }
       ctx.set(remarkStringifyOptionsCtx, { ...prev, ...toRemarkStringifyOptions(style) });
     });
+    // Keep standalone images' alt text, which Crepe overwrites with its resize
+    // ratio. Must follow the ImageBlock feature so this node spec replaces Crepe's.
+    this.crepe.editor.use(imageBlockAltSchema);
     // Smart paste (§5.4): images, HTML→markdown, markdown-looking text.
     this.crepe.editor.use(smartPastePlugin(context));
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.

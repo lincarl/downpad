@@ -44,6 +44,24 @@ test("'Split' shows the Markdown source beside the document", async ({ page }) =
   await expect(page.locator(documentSeg)).toHaveAttribute("aria-checked", "false");
 });
 
+test("an edit in the document keeps a standalone image's alt text", async ({ page }) => {
+  // Crepe stores its resize ratio in an image block's alt text, so an edit in the
+  // document used to write this image back as ![1.00](…).
+  const square =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFElEQVR4nGNkYGD4z0AEYBxVSF+FAP5FBQXxiME7AAAAAElFTkSuQmCC";
+  await page.locator(markdownSeg).click();
+  await page.locator(rawContent).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText(`![A tiny square](${square})\n\nText\n`);
+  await page.locator(documentSeg).click();
+  await page.locator(`${wysiwyg} p`).last().click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" here");
+  await page.locator(markdownSeg).click();
+  // The source view shows the base64 data collapsed, so match up to it.
+  await expect(page.locator(rawContent)).toContainText("![A tiny square](data:image/png;base64,");
+});
+
 test("'Markdown' shows only the raw source (the document is hidden)", async ({ page }) => {
   await page.locator(markdownSeg).click();
 

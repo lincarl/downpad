@@ -29,6 +29,8 @@ Markdown files can be opened through the file picker, recent-files view, drag an
 
 Images can be pasted or dropped into a document. They may be embedded as base64 data or stored in an attachments folder beside the Markdown file. Other dropped files are copied to the attachments folder and inserted as links.
 
+An image keeps its alt text and title when the document is saved. An image on its own line can be resized in the document view, but plain Markdown has no place for the size, so the size is not saved.
+
 Local Markdown links can open their targets in another tab. External links open in the default browser.
 
 ## Paste behavior
