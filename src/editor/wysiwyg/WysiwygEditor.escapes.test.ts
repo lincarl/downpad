@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Text is saved with the escapes it needs to read back the same, and spaces at
-// its end stay plain spaces. These tests use the real editor to check md-easy's
-// text handler (serializer.ts).
+// its end stay plain spaces that never make a hard line break. These tests use
+// the real editor to check md-easy's text handler (serializer.ts).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -49,20 +49,32 @@ describe("escapes in text that ends in a space", () => {
       "| a            |\n| ------------ |\n| x \\| y **z** |\n",
     ],
   ])("keeps %s before bold text", { timeout: 60_000 }, async (_name, markdown, expected) => {
-    const editor = await open(markdown);
-    expect(editor.getMarkdown()).toBe(expected);
+    // An opened file can be reported as its exact text until it changes, so
+    // edit the first line to make the editor write the whole body.
+    const editor = await open(`Edit.\n\n${markdown}`);
+    editor.search("Edit.", PLAIN_TEXT);
+    editor.replaceAll("Edited.", "Edit.", PLAIN_TEXT);
+    expect(editor.getMarkdown()).toBe(`Edited.\n\n${expected}`);
   });
 
   it.each([
     // Not `word&#x20;`, which is why Milkdown has its own text handler.
-    ["writes a space added at the end as a plain space", "word\n", "word", "word \n"],
+    ["writes a space added at the end as a plain space", "word\n", "word", "word ", "word \n"],
     // The space is dropped when the file is read, so the `#` then ends the
     // heading and would be read as a closing marker.
-    ["escapes a # before a space added at the end of a heading", "# Ticket \\#\n", "#", "# Ticket \\# \n"],
-  ])("%s", { timeout: 60_000 }, async (_name, markdown, query, expected) => {
+    ["escapes a # before a space added at the end of a heading", "# Ticket \\#\n", "#", "# ", "# Ticket \\# \n"],
+    // Two spaces before a line ending would be read as a hard line break.
+    [
+      "keeps a soft line break after two spaces added before it",
+      "Line a*b\nline two\n",
+      "a*b",
+      "a*b  ",
+      "Line a\\*b \nline two\n",
+    ],
+  ])("%s", { timeout: 60_000 }, async (_name, markdown, query, replacement, expected) => {
     const editor = await open(markdown);
     editor.search(query, PLAIN_TEXT);
-    editor.replaceAll(`${query} `, query, PLAIN_TEXT);
+    editor.replaceAll(replacement, query, PLAIN_TEXT);
     expect(editor.getMarkdown()).toBe(expected);
   });
 });

@@ -40,18 +40,22 @@ export function toRemarkStringifyOptions(style: SerializerStyle): RemarkStringif
 
 /**
  * Escapes text as remark-stringify does, but writes the spaces and tabs at its
- * end as they are, so a space just typed is not saved as `&#x20;`. Milkdown's
- * own text handler keeps them by skipping all escaping for text that ends in a
- * space, so it saved `&amp;copy; **b**` as `&copy; **b**`, read back as `© b`.
+ * end as plain characters, so a space just typed is not saved as `&#x20;`. At
+ * the end of a line it writes only the first of them. Milkdown's own text
+ * handler keeps them by skipping all escaping for text that ends in a space and
+ * has no `*`, `_` or `\`, so it saved `&amp;copy; **b**` as `&copy; **b**`, read
+ * back as `© b`.
  */
 const escapeText: TextHandler = (node: { value: string }, _parent, state, info) => {
   const body = node.value.replace(/[ \t]+$/, "");
   const trailing = node.value.slice(body.length);
+  if (!/^[\r\n]/.test(info.after)) {
+    return state.safe(body, { ...info, after: trailing.charAt(0) || info.after }) + trailing;
+  }
   // A reader drops spaces at the end of a line, so the text before them is
-  // escaped as the end of the line. Otherwise a ` #` there would be read as the
-  // closing marker of a heading.
-  const after = trailing && !/^[\r\n]/.test(info.after) ? trailing.charAt(0) : info.after;
-  return state.safe(body, { ...info, after }) + trailing;
+  // escaped as the end of the line, or a ` #` there would close a heading. Only
+  // the first space or tab is kept, because two spaces make a hard line break.
+  return state.safe(body, info) + trailing.slice(0, 1);
 };
 
 /** Milkdown's remark-stringify options with the user's style and md-easy's
