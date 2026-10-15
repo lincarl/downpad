@@ -24,7 +24,7 @@
 import type { Store } from "../state/store";
 import { serializerStyleFromSettings } from "../state/types";
 import type { EditorLayout } from "../state/types";
-import { applyEditorMarkdownForTab, reconcileEditorMarkdownForTab } from "../document/DocumentModel";
+import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
@@ -231,10 +231,9 @@ export class EditorHost implements FindController {
    * now, so the tab's canonical string holds every edit and both visible panes
    * show it. Markdown pane edits are reported as they happen.
    *
-   * Edits only ever arrive through a pane's change report. Never read a pane's
-   * text here: a pane the split has mirrored into holds its own normalized form
-   * of the canonical string, and writing that back would rewrite the user's
-   * Markdown and mark the tab unsaved.
+   * Edits only ever arrive through a pane's change report, which the host
+   * drops when the pane lags the tab. Never read a pane's text here, which
+   * would skip that check and could write older text over a newer edit.
    */
   flush(): void {
     if (this.disposed || !this.activeTabId) return;
@@ -263,7 +262,7 @@ export class EditorHost implements FindController {
 
   /**
    * Show the active tab's document after its canonical string was replaced from
-   * outside the editors (open / new / disk-reload / recovery). Forces a fresh
+   * outside the editors (open / new / disk-reload). Forces a fresh
    * rebuild (undo resets) and invalidates the tab's panes.
    */
   async reloadActiveDoc(): Promise<void> {
@@ -373,7 +372,7 @@ export class EditorHost implements FindController {
    *   synchronously before the returned promise waits for Crepe destruction;
    * - repeated calls return the same cleanup promise;
    * - an in-flight `buildPane` observes `disposed` after its await and cannot
-   *   reconcile markdown or reattach itself.
+   *   reattach itself.
    *
    * The host removes only DOM it owns. It deliberately does not call
    * `root.replaceChildren()`, so an old Strict-Mode cleanup cannot erase a newer
@@ -453,11 +452,9 @@ export class EditorHost implements FindController {
     const showWysiwyg = this.layout !== "markdown";
     const showRaw = this.layout !== "document";
 
-    // Build the document (WYSIWYG) pane first when it's shown: a fresh build
-    // reconciles the canonical to its settled serialization (and bumps the rev),
-    // so a Markdown pane built next mirrors that settled form rather than
-    // diverging. In the Markdown-only view the document pane isn't built at all,
-    // so the raw source shows the canonical (the file's exact bytes) untouched.
+    // Building a pane never changes the tab's text, because the document pane
+    // reports its exact source until the user edits it. In the Markdown-only
+    // view the document pane isn't built at all.
     const wysiwygPane = showWysiwyg ? await this.ensurePane(id, "wysiwyg", rebuild) : null;
     if (this.disposed || this.store.get().activeTabId !== id || (showWysiwyg && !wysiwygPane)) {
       return;
@@ -581,23 +578,11 @@ export class EditorHost implements FindController {
         throw err;
       }
       // Disposal or another rebuild may have removed this pane while Crepe was
-      // creating. Its teardown has already been initiated; most importantly, do
-      // not reconcile its now-abandoned serialization into the canonical store.
+      // creating. Its teardown has already been initiated; never show it.
       if (this.disposed || this.panes.get(paneKey(tabId, view)) !== pane) return null;
       if (!this.hasTab(tabId)) {
         await this.destroyPane(pane).catch(() => {});
         return null;
-      }
-      // A WYSIWYG round-trip normalizes markdown, so the editor's serialization of
-      // freshly-loaded content differs from the on-disk canonical even with no
-      // edits (the trailing newline alone trips it for most files). Adopt that
-      // settled form as the canonical baseline now, WITHOUT dirtying, so a later
-      // report that changes nothing in the Markdown (an image resize, say)
-      // matches it and never raises a false unsaved-changes warning. Bumping the rev
-      // (this pane as author) keeps it in sync and stales the tab's other view so
-      // that view rebuilds from the settled form rather than diverging.
-      if (reconcileEditorMarkdownForTab(this.store, tabId, editor.getMarkdown())) {
-        this.bumpRev(tabId, pane);
       }
     } else {
       const editor = new RawEditor();

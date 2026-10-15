@@ -248,7 +248,9 @@ export class AppRuntime {
     if (this.disposed) return;
     if (landOnEditor && this.store.get().activeTabId) {
       this.store.set({ view: "wysiwyg" });
-      await this.editorHost.reloadActiveDoc();
+      // Opening a launch argument already showed it. Recovery, the welcome
+      // document and the browser seed only filled the tab, so this builds it.
+      await this.editorHost.showActiveDoc();
       this.files.watchActive();
     } else {
       // Returning user (or nothing to open) → Recent view, no tabs, no editor.

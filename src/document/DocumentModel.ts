@@ -35,29 +35,6 @@ export function applyEditorMarkdownForTab(
 }
 
 /**
- * Adopt an editor's *settled* serialization as the canonical baseline WITHOUT
- * marking the document dirty. A WYSIWYG round-trip normalizes markdown (it always
- * emits a single trailing newline, and may re-style bullet markers, escaping,
- * blank lines, etc.), so a freshly-mounted pane's getMarkdown() differs from the
- * on-disk string even when the user has typed nothing. Reconciling the canonical
- * to that settled form means a later change report that leaves the Markdown as
- * it was (an image resize, for example) matches it, so it can't raise a false
- * "unsaved changes" warning. Preserves the
- * existing isDirty flag (a recovered/edited tab stays dirty). No-op (false) when
- * unchanged or the tab is gone.
- */
-export function reconcileEditorMarkdownForTab(
-  store: Store,
-  tabId: string,
-  markdown: string,
-): boolean {
-  const tab = store.get().tabs.find((t) => t.id === tabId);
-  if (!tab || tab.doc.markdown === markdown) return false;
-  store.patchDocById(tabId, { markdown });
-  return true;
-}
-
-/**
  * Load fresh document content into the active tab (replacing whatever it held),
  * creating a tab if none is open. Resets dirty state and records the
  * path/encoding metadata. Markdown is the canonical LF-normalized form.

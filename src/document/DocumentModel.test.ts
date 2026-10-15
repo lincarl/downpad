@@ -5,7 +5,6 @@ import { DEFAULT_SETTINGS } from "../settings/defaults";
 import {
   applyEditorMarkdown,
   applyEditorMarkdownForTab,
-  reconcileEditorMarkdownForTab,
   loadDocument,
 } from "./DocumentModel";
 import { countWords } from "./wordcount";
@@ -95,37 +94,6 @@ describe("applyEditorMarkdownForTab", () => {
   it("returns false for an unknown tab id", () => {
     const store = makeStore("x");
     expect(applyEditorMarkdownForTab(store, "nope", "y")).toBe(false);
-  });
-});
-
-describe("reconcileEditorMarkdownForTab", () => {
-  it("adopts the settled serialization WITHOUT marking dirty (the bugfix)", () => {
-    // Simulates a freshly-loaded file (M) whose WYSIWYG round-trip adds a trailing
-    // newline (M'). Reconciling must update the canonical but leave isDirty false,
-    // so a change report with no Markdown edit won't raise a false unsaved-changes warning.
-    const store = makeStore("# Title\nbody");
-    const tabId = store.get().activeTabId!;
-    expect(reconcileEditorMarkdownForTab(store, tabId, "# Title\nbody\n")).toBe(true);
-    expect(store.get().doc.markdown).toBe("# Title\nbody\n");
-    expect(store.get().doc.isDirty).toBe(false);
-  });
-
-  it("preserves an existing dirty flag (recovered/edited tab stays dirty)", () => {
-    const store = makeStore("edited");
-    store.patchDoc({ isDirty: true });
-    expect(reconcileEditorMarkdownForTab(store, store.get().activeTabId!, "edited\n")).toBe(true);
-    expect(store.get().doc.isDirty).toBe(true);
-  });
-
-  it("is a no-op when the settled form already matches (idempotent rebuild)", () => {
-    const store = makeStore("already\n");
-    expect(reconcileEditorMarkdownForTab(store, store.get().activeTabId!, "already\n")).toBe(false);
-    expect(store.get().doc.isDirty).toBe(false);
-  });
-
-  it("returns false for an unknown tab id", () => {
-    const store = makeStore("x");
-    expect(reconcileEditorMarkdownForTab(store, "nope", "y")).toBe(false);
   });
 });
 

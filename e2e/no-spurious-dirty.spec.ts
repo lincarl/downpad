@@ -3,9 +3,9 @@ import { test, expect } from "@playwright/test";
 // Regression test for the spurious "unsaved changes" bug: opening a document and
 // merely opening/closing the Markdown split must NOT mark a never-edited document
 // dirty. Opening the split builds the raw pane and the toggle flushes the document
-// through WysiwygEditor.getMarkdown() — a markdown round-trip that normalizes the
-// text (trailing newline, list markers, table padding, …). The build reconciles
-// the canonical to that settled form WITHOUT dirtying, so the flush is a no-op.
+// view. Milkdown would write the text another way (list markers, table padding,
+// …), but the document view reports the exact source until the user edits it, so
+// the flush is a no-op.
 //
 // Dirty state surfaces two ways: a leading "● " in the window title (TitleBar) and
 // a `.tab-dot` in the tab strip (TabStrip). We assert neither appears.
