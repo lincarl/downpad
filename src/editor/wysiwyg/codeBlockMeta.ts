@@ -2,7 +2,10 @@
 // read the rest of a fence's info line for file titles, highlighted lines and
 // options, as in ```js title="server.js"```. Milkdown's code block keeps only the
 // language, so any save dropped the rest. This schema keeps it in a `meta`
-// attribute and writes it back after the language.
+// attribute and writes it back after the language. remark gives the info as
+// CommonMark reads it, so backslash escapes and character references in it may
+// be written back spelled differently, as in `title="a\"b"` saved as
+// `title="a"b"`. Keeping the exact bytes would need the source text of the line.
 
 import { codeBlockSchema } from "@milkdown/kit/preset/commonmark";
 
