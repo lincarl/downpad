@@ -24,11 +24,9 @@ const MD_FILTERS = [
  * the active tab changes, then re-mount from the new active document, §5.19).
  */
 export interface EditorPresenter {
-  /** Write the active editor's current content into the canonical doc. */
+  /** Bring the active doc up to date with its editors, keeping them in place.
+   *  Use before reading the active doc, for example to save it, or leaving it. */
   flush(): void;
-  /** Report edits the visible editor has not announced yet, keeping the editors
-   *  in place. Use before reading the active doc, for example to save it. */
-  commitPendingEdits(): void;
   /** Show the active tab's document, revealing its cached editor when possible
    *  (preserves undo). Use after a pure tab switch / focusing an open file. */
   showActiveDoc(): Promise<void>;
@@ -153,7 +151,7 @@ export class FileService {
   private queueSave(saveAs: boolean): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
-    this.present.commitPendingEdits();
+    this.present.flush();
     const { doc, activeTabId } = this.store.get();
     if (!activeTabId) return Promise.resolve(false);
     const request = { tabId: activeTabId, snapshot: doc, expectedPath: doc.filePath, saveAs };

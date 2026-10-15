@@ -85,12 +85,8 @@ export class EditorHost implements FindController {
   /** Set while a mirror sync writes into a pane, so that pane's resulting change
    *  callback is ignored (it would otherwise echo back and clobber the author). */
   private applyingSync = false;
-  /** Pending debounced mirror-sync timer (the source pane drives it). */
-  private syncTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Which split pane the user last edited — flushed on tab switch so the freshest
-   *  exact text (== canonical) is captured rather than the other pane's stale or
-   *  re-normalized serialization. */
-  private lastEditedView: View | null = null;
+  /** Pending debounced mirror sync and the pane whose edit it mirrors. */
+  private pendingSync: { timer: ReturnType<typeof setTimeout>; source: Pane } | null = null;
   /** The draggable divider between the two split panes (lazily created). */
   private divider: HTMLElement | null = null;
   /** Best-effort fractional scroll-position sync between the two split panes
@@ -228,40 +224,26 @@ export class EditorHost implements FindController {
   }
 
   /**
-   * Flush the visible editor's current content into its tab WITHOUT tearing it
-   * down. Call before `store.activateTab(...)` so the outgoing tab keeps its
-   * in-progress edits (spec §5.19). Bumps the tab's rev iff the content actually
-   * changed (so the tab's other view becomes stale), keeping this pane in sync.
-   * Also cancels any pending mirror sync (it's about to be superseded).
+   * Bring the active tab up to date before something reads it or leaves it:
+   * Save, Print, Copy as Markdown, a close prompt, or a tab or layout switch.
+   * The document editor reports typing after a ~200ms pause, and the split
+   * mirrors each edit into its other pane after a further delay. This does both
+   * now, so the tab's canonical string holds every edit and both visible panes
+   * show it. Markdown pane edits are reported as they happen.
+   *
+   * Edits only ever arrive through a pane's change report. Never read a pane's
+   * text here: a pane the split has mirrored into holds its own normalized form
+   * of the canonical string, and writing that back would rewrite the user's
+   * Markdown and mark the tab unsaved.
    */
   flush(): void {
-    if (this.disposed) return;
-    this.cancelSync();
-    const pane = this.flushTarget();
-    if (!pane) return;
-    const md = this.paneMarkdown(pane);
-    if (md !== null && applyEditorMarkdownForTab(this.store, pane.tabId, md)) {
-      this.bumpRev(pane.tabId, pane);
-    }
-  }
-
-  /**
-   * Report typing the visible document pane has not announced yet, so the active
-   * tab's canonical string is current before Save, tab close, or Copy as Markdown
-   * reads it. The document editor reports edits after a ~200ms pause. The edit
-   * takes the pane's normal change path: it
-   * dirties the tab, bumps its rev and, in the split, mirrors into the Markdown
-   * pane. Unlike `flush`, this keeps a pending mirror sync, so a visible
-   * Markdown pane still catches up.
-   */
-  commitPendingEdits(): void {
     if (this.disposed || !this.activeTabId) return;
     const pane = this.panes.get(paneKey(this.activeTabId, "wysiwyg"));
     // Only a visible pane can hold unreported typing. A stale one holds text
     // older than the canonical string, and reporting it would overwrite newer
-    // edits from the Markdown pane.
-    if (!pane || pane.el.hidden || this.isStale(pane)) return;
-    pane.wysiwyg?.reportPendingChange();
+    // edits from the Markdown pane. The mirror below replaces it instead.
+    if (pane && !pane.el.hidden && !this.isStale(pane)) pane.wysiwyg?.reportPendingChange();
+    this.runPendingSync();
   }
 
   /**
@@ -408,7 +390,6 @@ export class EditorHost implements FindController {
     this.scrollSync.disconnect();
     this.endDrag();
     this.applyingSync = false;
-    this.lastEditedView = null;
     this.currentView = null;
     this.root.classList.remove("split");
     this.root.style.removeProperty("--split-left");
@@ -447,17 +428,6 @@ export class EditorHost implements FindController {
     return this.active()?.raw ?? null;
   }
 
-  /** The pane whose content `flush` should capture. In split, that's the pane the
-   *  user last edited (its serialization already equals canonical, so the flush is
-   *  a no-op and can't clobber the other pane); otherwise the visible document. */
-  private flushTarget(): Pane | null {
-    if (this.layout === "split" && this.lastEditedView && this.activeTabId) {
-      const p = this.panes.get(paneKey(this.activeTabId, this.lastEditedView));
-      if (p) return p;
-    }
-    return this.active();
-  }
-
   private revOf(tabId: string): number {
     return this.rev.get(tabId) ?? 0;
   }
@@ -470,12 +440,6 @@ export class EditorHost implements FindController {
 
   private touchTab(tabId: string): void {
     this.tabMru = [tabId, ...this.tabMru.filter((t) => t !== tabId)];
-  }
-
-  private paneMarkdown(pane: Pane): string | null {
-    if (pane.wysiwyg) return pane.wysiwyg.getMarkdown();
-    if (pane.raw) return pane.raw.getText();
-    return null;
   }
 
   /** Reveal the active tab's panes for the current layout: the document, the
@@ -505,9 +469,6 @@ export class EditorHost implements FindController {
       pane.el.hidden = pane !== wysiwygPane && pane !== rawPane;
     }
 
-    // A different tab is now active, so "which pane was last edited" no longer
-    // applies — clear it so the next flush targets this tab's visible document.
-    if (id !== this.activeTabId) this.lastEditedView = null;
     this.activeTabId = id;
     // The "active" pane (find / print / focus target) is the document when it's
     // shown, otherwise the Markdown source (Markdown-only view).
@@ -597,7 +558,6 @@ export class EditorHost implements FindController {
       if (view === "wysiwyg" && pane.syncedRev !== this.revOf(tabId)) return;
       if (applyEditorMarkdownForTab(this.store, tabId, m)) {
         this.bumpRev(tabId, pane);
-        this.lastEditedView = pane.view;
         if (this.layout === "split" && tabId === this.activeTabId) this.scheduleSync(pane);
       }
     };
@@ -631,9 +591,9 @@ export class EditorHost implements FindController {
       // A WYSIWYG round-trip normalizes markdown, so the editor's serialization of
       // freshly-loaded content differs from the on-disk canonical even with no
       // edits (the trailing newline alone trips it for most files). Adopt that
-      // settled form as the canonical baseline now — WITHOUT dirtying — so the
-      // close guard / view-switch / eviction flushes re-serialize to the same
-      // string and never raise a false unsaved-changes warning. Bumping the rev
+      // settled form as the canonical baseline now, WITHOUT dirtying, so a later
+      // report that changes nothing in the Markdown (an image resize, say)
+      // matches it and never raises a false unsaved-changes warning. Bumping the rev
       // (this pane as author) keeps it in sync and stales the tab's other view so
       // that view rebuilds from the settled form rather than diverging.
       if (reconcileEditorMarkdownForTab(this.store, tabId, editor.getMarkdown())) {
@@ -664,16 +624,25 @@ export class EditorHost implements FindController {
   private scheduleSync(source: Pane): void {
     if (this.disposed) return;
     this.cancelSync();
-    this.syncTimer = setTimeout(() => {
-      this.syncTimer = null;
+    const timer = setTimeout(() => {
+      this.pendingSync = null;
       this.runSync(source);
     }, SYNC_DEBOUNCE_MS);
+    this.pendingSync = { timer, source };
+  }
+
+  /** Run a scheduled mirror sync now rather than after the debounce. */
+  private runPendingSync(): void {
+    const pending = this.pendingSync;
+    if (!pending) return;
+    this.cancelSync();
+    this.runSync(pending.source);
   }
 
   private cancelSync(): void {
-    if (this.syncTimer != null) {
-      clearTimeout(this.syncTimer);
-      this.syncTimer = null;
+    if (this.pendingSync) {
+      clearTimeout(this.pendingSync.timer);
+      this.pendingSync = null;
     }
   }
 
@@ -885,14 +854,9 @@ export class EditorHost implements FindController {
       if (this.disposed) return;
       const pane = this.panes.get(paneKey(tabId, view));
       if (!pane) continue;
-      // Capture any not-yet-flushed edits before discarding — but only from a
-      // pane that is in sync. A stale pane (the other view advanced the canonical)
-      // holds outdated text and must NOT be written back, or it would clobber the
-      // newer content. (Edits flush eagerly via onChange, so this is belt-and-braces.)
-      if (!this.isStale(pane)) {
-        const md = this.paneMarkdown(pane);
-        if (md !== null) applyEditorMarkdownForTab(this.store, tabId, md);
-      }
+      // A tab switch already reported this tab's typing (`flush`), so this is a
+      // safeguard. A stale pane's report is dropped by its change callback.
+      pane.wysiwyg?.reportPendingChange();
       await this.destroyPane(pane);
     }
     this.rev.delete(tabId);

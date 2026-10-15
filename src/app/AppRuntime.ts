@@ -64,7 +64,6 @@ export class AppRuntime {
     // after the active tab changes, without owning the editor or view state.
     const presenter: EditorPresenter = {
       flush: () => this.editorHost.flush(),
-      commitPendingEdits: () => this.editorHost.commitPendingEdits(),
       showActiveDoc: () => this.showActiveDoc(),
       reloadActiveDoc: () => this.reloadActiveDoc(),
     };
@@ -363,7 +362,7 @@ export class AppRuntime {
   private async closeTab(id: string): Promise<void> {
     // Collect typing the document view has not reported yet, so the unsaved
     // check below sees it.
-    this.editorHost.commitPendingEdits();
+    this.editorHost.flush();
     const tab = this.store.get().tabs.find((t) => t.id === id);
     if (!tab) return;
     if (tab.doc.isDirty && !(await this.files.confirmCloseTab(tabLabel(tab)))) return;
@@ -447,7 +446,7 @@ export class AppRuntime {
   }
 
   private async copyMarkdown(): Promise<void> {
-    this.editorHost.commitPendingEdits(); // include the latest typing
+    this.editorHost.flush(); // include the latest typing
     try {
       await navigator.clipboard.writeText(this.store.get().doc.markdown);
     } catch {

@@ -24,7 +24,11 @@ const fakeEditors = vi.hoisted(() => ({
   mountCalls: 0,
   destroyCalls: 0,
   markdown: "settled markdown",
+  /** Whether the document pane holds typing it has not reported yet. */
+  pending: false,
   reportCalls: 0,
+  /** The text the split last mirrored into the document pane. */
+  mirrored: null as string | null,
   /** The document pane's change callback, to simulate its delayed report. */
   wysiwygChange: null as ((markdown: string) => void) | null,
   /** The Markdown pane's change callback, to simulate typing in it. */
@@ -48,13 +52,17 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       return fakeEditors.markdown;
     }
 
-    /** Like the real editor, report the current text through `onChange`. */
+    /** Like the real editor, report held-back typing through `onChange`. */
     reportPendingChange(): void {
       fakeEditors.reportCalls += 1;
+      if (!fakeEditors.pending) return;
+      fakeEditors.pending = false;
       this.onChange?.(fakeEditors.markdown);
     }
 
-    setMarkdown(): void {}
+    setMarkdown(markdown: string): void {
+      fakeEditors.mirrored = markdown;
+    }
 
     async destroy(): Promise<void> {
       fakeEditors.destroyCalls += 1;
@@ -129,7 +137,9 @@ beforeEach(() => {
   fakeEditors.mountCalls = 0;
   fakeEditors.destroyCalls = 0;
   fakeEditors.markdown = "settled markdown";
+  fakeEditors.pending = false;
   fakeEditors.reportCalls = 0;
+  fakeEditors.mirrored = null;
   fakeEditors.wysiwygChange = null;
   fakeEditors.rawChange = null;
   fakeEditors.rawText = null;
@@ -282,52 +292,76 @@ describe("EditorHost split divider", () => {
   });
 });
 
-describe("EditorHost pending document edits", () => {
+describe("EditorHost flush", () => {
   it("reports typing the visible document pane has not announced yet", async () => {
     const store = makeStore();
     const host = new EditorHost(document.createElement("div"), store);
     await host.reloadActiveDoc();
     fakeEditors.markdown = "settled markdown, typed just now";
+    fakeEditors.pending = true;
 
-    host.commitPendingEdits();
+    host.flush();
 
     expect(store.get().doc).toMatchObject({ markdown: "settled markdown, typed just now", isDirty: true });
     await host.dispose();
   });
 
-  it("keeps the split's Markdown pane in step with the reported edit", async () => {
+  it("mirrors a document edit into the split's Markdown pane at once", async () => {
     const store = makeStore();
     const host = new EditorHost(document.createElement("div"), store);
     host.initLayout("split");
     await host.reloadActiveDoc();
-    vi.useFakeTimers();
-    try {
-      fakeEditors.markdown = "settled markdown, typed just now";
-      host.commitPendingEdits();
-      vi.advanceTimersByTime(500);
-      expect(fakeEditors.rawText).toBe("settled markdown, typed just now");
-    } finally {
-      vi.useRealTimers();
-    }
+    fakeEditors.markdown = "settled markdown, typed just now";
+    fakeEditors.pending = true;
+
+    host.flush();
+
+    expect(fakeEditors.rawText).toBe("settled markdown, typed just now");
     await host.dispose();
   });
 
-  it("leaves a hidden or stale document pane alone so newer Markdown edits survive", async () => {
+  it("mirrors a Markdown edit into the split's document pane at once, so its next edit counts", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    fakeEditors.rawChange!("newer Markdown text");
+
+    host.flush();
+
+    // The document pane is behind, so it must not report; the mirror updates it.
+    expect(fakeEditors.reportCalls).toBe(0);
+    expect(fakeEditors.mirrored).toBe("newer Markdown text");
+    fakeEditors.wysiwygChange!("newer Markdown text, then the document");
+    expect(store.get().doc.markdown).toBe("newer Markdown text, then the document");
+    await host.dispose();
+  });
+
+  it("never writes a pane's own form of the text back", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    await host.reloadActiveDoc();
+    // The document pane serializes differently now, with no edit to report.
+    fakeEditors.markdown = "settled markdown, written another way";
+
+    host.flush();
+
+    expect(store.get().doc).toMatchObject({ markdown: "settled markdown", isDirty: false });
+    await host.dispose();
+  });
+
+  it("leaves a hidden document pane alone", async () => {
     const store = makeStore();
     const host = new EditorHost(document.createElement("div"), store);
     await host.reloadActiveDoc();
     await host.setLayout("markdown");
     fakeEditors.markdown = "older document text";
-    host.commitPendingEdits();
-    expect(fakeEditors.reportCalls).toBe(0);
+    fakeEditors.pending = true;
 
-    // In the split, a Markdown edit makes the document pane stale until the
-    // mirror sync catches it up.
-    await host.setLayout("split");
-    fakeEditors.rawChange!("newer Markdown text");
-    host.commitPendingEdits();
-    expect(fakeEditors.reportCalls).toBe(0);
-    expect(store.get().doc.markdown).toBe("newer Markdown text");
+    host.flush();
+
+    expect(fakeEditors.pending).toBe(true);
+    expect(store.get().doc.markdown).toBe("settled markdown");
     await host.dispose();
   });
 

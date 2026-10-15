@@ -37,7 +37,6 @@ function setup(dirty = false) {
   });
   const presenter = {
     flush: vi.fn(),
-    commitPendingEdits: vi.fn(),
     showActiveDoc: vi.fn(async () => {}),
     reloadActiveDoc: vi.fn(async () => {}),
   };
@@ -62,7 +61,7 @@ function deferred<T>() {
 describe("saving document snapshots", () => {
   it("collects edits the editor has not reported before taking the snapshot", async () => {
     const { store, presenter, files } = setup();
-    presenter.commitPendingEdits.mockImplementation(() => store.patchDoc({ markdown: "# Typed just now\n", isDirty: true }));
+    presenter.flush.mockImplementation(() => store.patchDoc({ markdown: "# Typed just now\n", isDirty: true }));
 
     expect(await files.save()).toBe(true);
     expect(native.writeFile).toHaveBeenCalledWith(filePath, "# Typed just now\n", "lf");
