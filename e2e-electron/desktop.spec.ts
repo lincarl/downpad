@@ -313,6 +313,23 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n```js\nlet x = 1;\n```\n");
 });
 
+test("the document page runs to the end of a long document", async () => {
+  const file = path.join(directory, "long.md");
+  const paragraphs = Array.from({ length: 120 }, (_, index) => `Paragraph ${index + 1}.`);
+  await writeFile(file, ["# Long document", ...paragraphs].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Long document");
+  const bottoms = await page.locator(".editor-area").evaluate((area) => {
+    area.scrollTop = area.scrollHeight;
+    const bottom = (selector: string) => area.querySelector(selector)!.getBoundingClientRect().bottom;
+    return { scrolled: area.scrollTop > 0, view: area.getBoundingClientRect().bottom, page: bottom(".editor-column"), text: bottom(".milkdown") };
+  });
+  expect(bottoms.scrolled).toBe(true);
+  // Scrolled to the end, the page holds all of the text and ends with the view.
+  expect(bottoms.page).toBeGreaterThan(bottoms.text);
+  expect(Math.round(bottoms.page)).toBe(Math.round(bottoms.view));
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
