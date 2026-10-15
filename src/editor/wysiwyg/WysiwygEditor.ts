@@ -28,7 +28,7 @@ import { linkViewPlugin } from "./linkView";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
-import { tightListItemSchema } from "./tightListItems";
+import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import {
   searchMilkdownPlugin,
@@ -162,6 +162,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(imageBlockAltView);
     // Keep typed lists tight when an item gets a nested list.
     this.crepe.editor.use(tightListItemSchema);
+    // Keep a blank line where a tight item's blocks would read back as something else.
+    this.crepe.editor.config(tightListItemJoin);
     // Smart paste (§5.4): images, HTML→markdown, markdown-looking text.
     this.crepe.editor.use(smartPastePlugin(context));
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.

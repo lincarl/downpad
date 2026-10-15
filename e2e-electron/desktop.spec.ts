@@ -529,6 +529,25 @@ test("lists typed in the document view save an item nested by Tab without a blan
   await expect.poll(() => readFile(file, "utf8")).toBe("Start.\n\n- A\n  - B\n\nMiddle.\n\n- [ ] C\n  - [ ] D\n");
 });
 
+test("a rule typed under a list item's text saves with a blank line before it", async () => {
+  const file = path.join(directory, "rule-in-item.md");
+  await writeFile(file, "Start.\n");
+  await launch(file);
+  // Wait for Crepe to put the cursor back into each new item, as above.
+  const nextFrame = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").filter({ hasText: "Start." }), "\n- ");
+  await nextFrame();
+  await page.keyboard.type("A");
+  await page.keyboard.press("Enter");
+  await nextFrame();
+  // Backspace makes the new item a second line of the first, where "---" adds a rule.
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("---");
+  await page.keyboard.press("ControlOrMeta+s");
+  // Without the blank line, the file would read back with "A" as a heading and no rule.
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start.\n\n- A\n\n  ---\n");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
