@@ -285,6 +285,34 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await expect(page).toHaveTitle("bullets.md — md-easy");
 });
 
+test("a file that ends in a list opens as saved", async () => {
+  const file = path.join(directory, "list-end.md");
+  await writeFile(file, "First line.\n\n- Last item\n");
+  await launch(file);
+  // The document view adds an empty line after a final list, for typing below it.
+  await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
+  // Switching views reports any document change at once.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("- Last item");
+  await expect(page).toHaveTitle("list-end.md — md-easy");
+});
+
+test("an edit to a file that ends in a code block saves no extra blank line", async () => {
+  const file = path.join(directory, "code-end.md");
+  await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n");
+  await launch(file);
+  const paragraph = page.locator(".milkdown .ProseMirror > p").first();
+  // The click adds an empty line after the code block, for typing below it.
+  await paragraph.click();
+  await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page).toHaveTitle("code-end.md — md-easy");
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await typeAtEnd(paragraph, " Edited.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n```js\nlet x = 1;\n```\n");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
