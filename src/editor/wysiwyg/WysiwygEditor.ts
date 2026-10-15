@@ -183,12 +183,14 @@ export class WysiwygEditor {
             state: {
               init: () => null,
               apply: (tr) => {
-                // Like the listener plugin, skip changes kept out of undo history
-                // (heading ids, list labels, the empty last line). They do not
-                // change the Markdown. A plugin's follow-up to such a change is
-                // skipped too. It carries that change as "appendedTransaction".
-                const root = (tr.getMeta("appendedTransaction") as Transaction | undefined) ?? tr;
-                if (tr.docChanged && root.getMeta("addToHistory") !== false) this.scheduleChange();
+                // Skip the changes undo history leaves out, by the rule it uses.
+                // That is a change kept out of history (heading ids, list labels,
+                // the empty last line) or a plugin's follow-up to one, which
+                // carries it as "appendedTransaction". They do not change the
+                // Markdown.
+                const root = tr.getMeta("appendedTransaction") as Transaction | undefined;
+                const recorded = tr.getMeta("addToHistory") !== false && root?.getMeta("addToHistory") !== false;
+                if (tr.docChanged && recorded) this.scheduleChange();
                 return null;
               },
             },

@@ -121,3 +121,23 @@ describe("undo right after opening", () => {
     expect(undoDepth(view.state)).toBe(0);
   });
 });
+
+describe("change reports", () => {
+  it("skip a list label fix that follows a selection change", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open("1. a\n2. b\n\nEnd.\n");
+    const view = viewOf(editor);
+    await settle();
+    // A paste can leave a stale label. The label sync skips the paste and
+    // fixes the label in the next plain transaction.
+    view.dispatch(view.state.tr.setNodeAttribute(1, "label", "7.").setMeta("uiEvent", "paste"));
+    await settle();
+    expect(view.state.doc.nodeAt(1)?.attrs.label).toBe("7.");
+    onChange.mockClear();
+
+    // An arrow key gets the label fix, which is kept out of undo history.
+    view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+    await settle();
+    expect(view.state.doc.nodeAt(1)?.attrs.label).toBe("1.");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
