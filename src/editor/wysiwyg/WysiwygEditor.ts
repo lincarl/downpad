@@ -67,6 +67,9 @@ export class WysiwygEditor {
   private ignoreUpdates = true;
   /** Full frontmatter block (incl. delimiters + trailing newline), or null. */
   private frontmatterBlock: string | null = null;
+  /** The blank lines between the frontmatter block and the body. Crepe never
+   *  sees them, so they are kept here and written back as they were. */
+  private frontmatterSeparator = "";
   /** Stable host element for the React-owned frontmatter table. */
   private fmPanel: HTMLElement | null = null;
   /** React root that owns all content inside `fmPanel`. */
@@ -113,6 +116,7 @@ export class WysiwygEditor {
     // still preserved and editable in the Markdown view.
     const split = splitFrontmatter(initial);
     this.frontmatterBlock = split.frontmatter;
+    this.frontmatterSeparator = split.separator;
     if (split.frontmatter && this.showFmPanel) {
       this.fmPanel = document.createElement("div");
       this.fmPanel.className = "frontmatter-table-wrap";
@@ -219,15 +223,20 @@ export class WysiwygEditor {
     }, 0);
   }
 
-  /** Canonical markdown: frontmatter block (if any) + Crepe's serialized body.
-   *  Milkdown leaves out the empty line Crepe keeps after a final list, code
-   *  block, quote, table, rule or image. A body that still serializes as it did
-   *  right after Crepe parsed it is reported as that exact source, so opening,
-   *  mirroring or undoing back never rewrites text the user has not changed. */
+  /** Canonical markdown: frontmatter block and the blank lines after it (if any)
+   *  + Crepe's serialized body. Milkdown leaves out the empty line Crepe keeps
+   *  after a final list, code block, quote, table, rule or image. A body that
+   *  still serializes as it did right after Crepe parsed it is reported as that
+   *  exact source, so opening, mirroring or undoing back never rewrites text the
+   *  user has not changed. */
   getMarkdown(): string {
     const body = this.bodyMarkdown();
     const baseline = this.baseline;
-    return joinFrontmatter(this.frontmatterBlock, baseline && body === baseline.settled ? baseline.source : body);
+    return joinFrontmatter({
+      frontmatter: this.frontmatterBlock,
+      separator: this.frontmatterSeparator,
+      body: baseline && body === baseline.settled ? baseline.source : body,
+    });
   }
 
   /** Report an edit now instead of waiting for typing to pause. A caller that
@@ -267,6 +276,7 @@ export class WysiwygEditor {
     if (!this.crepe) return;
     const split = splitFrontmatter(markdown);
     this.frontmatterBlock = split.frontmatter;
+    this.frontmatterSeparator = split.separator;
     this.syncFrontmatterPanel();
     try {
       this.crepe.editor.action(replaceAllMarkdown(split.body));
@@ -387,6 +397,7 @@ export class WysiwygEditor {
     this.fmPanelRoot = null;
     this.fmPanel = null;
     this.frontmatterBlock = null;
+    this.frontmatterSeparator = "";
     this.root = null;
     this.crepeRoot = null;
     this.baseline = null;
