@@ -445,6 +445,7 @@ export class AppRuntime {
     await this.settingsModel.save({ ...s, editorFontScale: next });
   }
 
+  /** Copy the active document's Markdown, including its latest edits. */
   private async copyMarkdown(): Promise<void> {
     this.editorHost.flush(); // include the latest typing
     try {

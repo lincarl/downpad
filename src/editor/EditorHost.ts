@@ -639,6 +639,7 @@ export class EditorHost implements FindController {
     this.runSync(pending.source);
   }
 
+  /** Drop a scheduled mirror sync without running it. */
   private cancelSync(): void {
     if (this.pendingSync) {
       clearTimeout(this.pendingSync.timer);
