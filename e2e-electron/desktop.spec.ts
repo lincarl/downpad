@@ -718,6 +718,21 @@ test("native Open, edit, Save, and external file reload use actual files", async
   await expect(page.locator(heading)).toHaveText("Updated outside Electron");
 });
 
+test("typed dollar amounts and tildes stay text while a typed formula becomes math", async () => {
+  const file = path.join(directory, "prices.md");
+  await writeFile(file, "Start.\n");
+  await launch(file);
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Tickets cost $5 for kids and $10. Expect ~5 to ~10 minutes.");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Inline $E=mc^2$ math.");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("Start. Tickets cost \\$5 for kids and \\$10. Expect \\~5 to \\~10 minutes.\n\nInline $E=mc^2$ math.\n");
+});
+
 test("Save right after typing writes the last edit in the document and split views", async () => {
   const file = path.join(directory, "typed.md");
   await writeFile(file, "# Typed\n\nFirst line.\n");

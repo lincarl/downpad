@@ -19,7 +19,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 - Ordered, unordered, and task lists.
 - Tables, horizontal rules, inline code, and fenced code blocks. A fence keeps the options after its language, such as `title="server.js"`, and a `latex` fence stays a fence rather than becoming a math block.
 - Syntax highlighting for code blocks, and VS Code's Markdown colors in the Markdown view.
-- Inline and block math rendered with KaTeX.
+- Inline and block math rendered with KaTeX. Dollar signs follow Pandoc's rules, so prices such as `$5` and `$10` stay text, and a paragraph that is only `$$...$$` is a math block.
 - Mermaid diagrams rendered from fenced `mermaid` blocks.
 - YAML frontmatter, editable from the document view or as source. In the document view, edits in the frontmatter table and in the document share one undo history, so undo and redo go through them in the order they were made.
 

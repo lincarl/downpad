@@ -55,6 +55,7 @@ import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } f
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
+import { mathDelimiters } from "./mathDelimiters";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -261,6 +262,9 @@ export class WysiwygEditor {
     this.crepe.editor.use(tabExit);
     // Focus that leaves the document closes the slash menu.
     this.crepe.editor.use(slashMenuBlur);
+    // Read `$` and `~` as math and strikethrough only where Markdown tools do,
+    // so prices stay text. Must follow the LaTeX feature.
+    this.crepe.editor.use(mathDelimiters);
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
