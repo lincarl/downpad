@@ -1,8 +1,9 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,14 @@ import {
   DialogPortal,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  dialogBodyClassName,
+  dialogContentClassName,
+  dialogFooterClassName,
+  dialogOverlayClassName,
+  dialogTitleClassName,
+} from "@/components/ui/dialog-layout";
+import { cn } from "@/lib/utils";
 
 export interface TextPromptOptions {
   title: string;
@@ -45,6 +54,8 @@ export function openTextPrompt(options: TextPromptOptions): Promise<string | nul
   });
 }
 
+/** The prompt itself: title, optional description, a labelled field, then
+ *  Cancel and the confirm button. */
 function TextPromptDialog({
   options,
   finish,
@@ -54,6 +65,7 @@ function TextPromptDialog({
 }) {
   const [value, setValue] = useState(options.initialValue ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
@@ -63,38 +75,35 @@ function TextPromptDialog({
   return (
     <Dialog open onOpenChange={(open) => { if (!open) finish(null); }}>
       <DialogPortal>
-        <DialogOverlay className="fixed inset-0 z-1000 bg-black/35" />
+        <DialogOverlay className={cn("dialog-overlay", dialogOverlayClassName)} />
         <DialogContent
-          className="fixed left-1/2 top-1/2 z-1001 flex w-[min(440px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[10px] border border-[var(--chrome-border)] bg-[var(--editor-bg)] text-[var(--chrome-fg)] shadow-[0_12px_48px_rgba(0,0,0,0.3)]"
+          className={cn("text-prompt-dialog", dialogContentClassName, "w-[min(440px,92vw)]")}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             inputRef.current?.focus();
             inputRef.current?.select();
           }}
         >
-          <DialogTitle className="m-0 px-5 pb-2 pt-4 text-lg font-semibold">
-            {options.title}
-          </DialogTitle>
+          <DialogTitle className={dialogTitleClassName}>{options.title}</DialogTitle>
           <DialogDescription
-            className={options.description
-              ? "px-5 pb-2 text-[13px] text-[var(--muted-fg)]"
-              : "sr-only"}
+            className={options.description ? "m-0 px-[22px] pb-2 text-ink-soft" : "sr-only"}
           >
             {options.description ?? options.label}
           </DialogDescription>
-          <form onSubmit={submit}>
-            <div className="px-5 py-2">
-              <label className="flex flex-col gap-1.5 text-[13px]">
-                <span>{options.label}</span>
-                <input
-                  ref={inputRef}
-                  value={value}
-                  onChange={(event) => setValue(event.currentTarget.value)}
-                  className="w-full rounded-[5px] border border-[var(--chrome-border)] bg-[var(--editor-bg)] px-2 py-1.5 font-[inherit] text-[var(--chrome-fg)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
-                />
+          <form onSubmit={submit} className="flex min-h-0 flex-col">
+            <div className={cn(dialogBodyClassName, "pt-1")}>
+              <label htmlFor={inputId} className="mb-1.5 block text-ink">
+                {options.label}
               </label>
+              <Input
+                ref={inputRef}
+                id={inputId}
+                value={value}
+                onChange={(event) => setValue(event.currentTarget.value)}
+                className="w-full min-w-0"
+              />
             </div>
-            <div className="mt-2 flex justify-end gap-2 border-t border-[var(--chrome-border)] px-5 pb-4 pt-3">
+            <div className={dialogFooterClassName}>
               <Button type="button" variant="outline" onClick={() => finish(null)}>
                 Cancel
               </Button>

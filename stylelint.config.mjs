@@ -25,5 +25,7 @@ export default {
     ],
     // WebKit masks still need the prefixed declaration in Safari.
     "property-no-vendor-prefix": [true, { ignoreProperties: ["-webkit-mask"] }],
+    // Tailwind's @utility blocks scope `&` to the utility class they generate.
+    "nesting-selector-no-missing-scoping-root": [true, { ignoreAtRules: ["utility"] }],
   },
 };

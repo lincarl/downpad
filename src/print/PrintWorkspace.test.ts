@@ -80,6 +80,31 @@ function changeSelect(name: string, value: string): void {
   });
 }
 
+/** The radio whose label reads `label`. */
+function radio(label: string): HTMLInputElement {
+  const input = Array.from(
+    document.querySelectorAll<HTMLInputElement>('.print-workspace input[type="radio"]'),
+  ).find((candidate) => candidate.closest("label")?.textContent === label);
+  if (!input) throw new Error(`Missing ${label} radio`);
+  return input;
+}
+
+function button(text: string): HTMLButtonElement {
+  const match = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  if (!match) throw new Error(`Missing ${text} button`);
+  return match;
+}
+
+function pressTab(shiftKey = false): void {
+  act(() => {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }),
+    );
+  });
+}
+
 function editInput(name: string, value: string): void {
   const input = document.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`);
   if (!input) throw new Error(`Missing ${name} input`);
@@ -131,18 +156,16 @@ describe("PrintWorkspace React view", () => {
     act(() => workspace!.open(JOB));
 
     const dialog = document.querySelector<HTMLElement>('.print-workspace[role="dialog"]')!;
-    const back = Array.from(dialog.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Back"),
-    );
+    const cancel = button("Cancel");
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(app.inert).toBe(true);
     expect(app.getAttribute("aria-hidden")).toBe("true");
-    expect(document.activeElement).toBe(back);
+    expect(document.activeElement).toBe(cancel);
 
     // Programmatic focus cannot escape the workspace even in DOM environments
     // that do not implement native inert focus suppression.
     act(() => trigger.focus());
-    expect(document.activeElement).toBe(back);
+    expect(document.activeElement).toBe(cancel);
 
     act(() => workspace!.close());
     await flush();
@@ -157,17 +180,16 @@ describe("PrintWorkspace React view", () => {
     const dialog = document.querySelector<HTMLElement>('.print-workspace[role="dialog"]');
     expect(dialog?.getAttribute("aria-label")).toBe("Print");
     expect(dialog?.querySelector(".print-ws-title")?.textContent).toBe("Print");
-    expect(dialog?.querySelector(".print-ws-summary")?.textContent).toContain(
-      "notes.md · 2 pages",
+    expect(dialog?.querySelector(".print-ws-paper")?.textContent).toBe(
+      "A4 · Portrait · 210 × 297 mm · 2 pages",
     );
     expect(dialog?.querySelector(".print-ws-note")?.textContent).toBe("System dialog");
     expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
     expect(printRenderMocks.renderPrintPages).toHaveBeenCalledTimes(1);
 
-    const markdown = Array.from(
-      dialog!.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="Version"] button'),
-    ).find((button) => button.textContent === "Markdown");
-    act(() => markdown!.click());
+    expect(radio("Document").checked).toBe(true);
+    act(() => radio("Markdown").click());
+    expect(radio("Markdown").checked).toBe(true);
 
     expect(printRenderMocks.renderPrintPages).toHaveBeenCalledTimes(2);
     expect(printRenderMocks.renderPrintPages.mock.calls[1]?.[0]).toMatchObject({
@@ -181,6 +203,42 @@ describe("PrintWorkspace React view", () => {
     // React owns the surrounding preview while the pagination renderer owns the
     // page nodes within its dedicated slot; re-rendering must keep that boundary.
     expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
+  });
+
+  it("switches orientation with radios and describes the paper under the preview", () => {
+    act(() => workspace!.open(JOB));
+    const paper = document.querySelector(".print-ws-paper");
+    expect(paper?.textContent).toContain("A4 · Portrait · 210 × 297 mm");
+    expect(document.querySelector('[role="radiogroup"][aria-label="Orientation"]')).not.toBeNull();
+
+    act(() => radio("Landscape").click());
+
+    expect(printRenderMocks.renderPrintPages).toHaveBeenCalledTimes(2);
+    const geometry = (
+      printRenderMocks.renderPrintPages.mock.calls[1]?.[0] as {
+        geometry: { widthPx: number; heightPx: number };
+      }
+    ).geometry;
+    expect(geometry.widthPx).toBeGreaterThan(geometry.heightPx);
+    expect(paper?.textContent).toContain("A4 · Landscape · 297 × 210 mm");
+
+    changeSelect("Paper size", "letter");
+    expect(paper?.textContent).toContain("Letter · Landscape · 279.4 × 215.9 mm");
+  });
+
+  it("traps Tab through the checked radio of each group and wraps at both ends", () => {
+    act(() => workspace!.open(JOB));
+    const print = button("Print");
+
+    act(() => print.focus());
+    pressTab();
+    // The first stop is the checked Version radio, not every radio in DOM order.
+    expect(document.activeElement).toBe(radio("Document"));
+
+    act(() => radio("Markdown").click());
+    act(() => radio("Markdown").focus());
+    pressTab(true);
+    expect(document.activeElement).toBe(print);
   });
 
   it("does not persist an untouched workspace and closes it with Escape", () => {
@@ -212,6 +270,24 @@ describe("PrintWorkspace React view", () => {
     expect(saveSettings.mock.calls[0]?.[0]).toMatchObject({ printScalePercent: 200 });
   });
 
+  it("steps number fields with the stepper and stops at the range ends", () => {
+    act(() => workspace!.open(JOB));
+    const copies = document.querySelector<HTMLInputElement>('input[aria-label="Copies"]')!;
+    const [up, down] = Array.from(
+      copies.parentElement!.querySelectorAll<HTMLButtonElement>("button"),
+    );
+    // At the minimum the down stepper is off, and neither stepper is a tab stop.
+    expect(down!.disabled).toBe(true);
+    expect(up!.tabIndex).toBe(-1);
+
+    act(() => up!.click());
+    expect(copies.value).toBe("2");
+    expect(down!.disabled).toBe(false);
+    act(() => workspace!.close());
+
+    expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ printCopies: 2 }));
+  });
+
   it("keeps native PDF options and default-printer persistence semantics", async () => {
     enableElectron();
     nativeMocks.listPrinters.mockResolvedValueOnce([
@@ -224,7 +300,6 @@ describe("PrintWorkspace React view", () => {
 
     const printer = document.querySelector<HTMLSelectElement>('select[aria-label="Printer"]');
     expect(printer?.value).toBe("Office");
-    expect(document.querySelector(".print-ws-summary")?.textContent).toContain("Office");
     // Auto-detecting the default alone must not make the working copy dirty.
     expect(saveSettings).not.toHaveBeenCalled();
 
@@ -272,10 +347,7 @@ describe("PrintWorkspace React view", () => {
     const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
 
     act(() => workspace!.open(JOB));
-    const printButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Print",
-    );
-    act(() => printButton!.click());
+    act(() => button("Print").click());
 
     expect(print).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -294,10 +366,7 @@ describe("PrintWorkspace React view", () => {
     nativeMocks.onPrintCompleted.mockImplementationOnce(() => Promise.resolve(unlisten));
 
     act(() => workspace!.open(JOB));
-    const printButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Print",
-    );
-    act(() => printButton!.click());
+    act(() => button("Print").click());
     await flush();
 
     act(() => workspace!.close());

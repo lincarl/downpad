@@ -99,15 +99,37 @@ export async function searchRecentContents(
   opts: SearchOpts,
   onResult: (hit: SearchHit) => void,
 ): Promise<SearchSummary> {
+  let received = 0;
+  let expected = Number.POSITIVE_INFINITY;
+  let allReceived = (): void => {};
   const unlisten = desktopBridge().listen("search-result", (result) => {
-    if (result.searchId === searchId) onResult(result.hit);
+    if (result.searchId !== searchId) return;
+    onResult(result.hit);
+    if (result.hit.kind === "content" && ++received >= expected) allReceived();
   });
   try {
-    return await invoke("search_recent_contents", { searchId, query, opts });
+    const summary = await invoke("search_recent_contents", { searchId, query, opts });
+    // Electron delivers the command's reply on another channel than the result
+    // events, so the reply can overtake the last hits. Keep listening until
+    // every hit the main process counted has arrived, for at most a second.
+    if (received < summary.matched) {
+      expected = summary.matched;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, SEARCH_RESULT_GRACE_MS);
+        allReceived = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    }
+    return summary;
   } finally {
     unlisten();
   }
 }
+
+/** How long a finished content search waits for result events still in flight. */
+const SEARCH_RESULT_GRACE_MS = 1000;
 
 export function cancelSearch(searchId: string): Promise<void> {
   return invoke("cancel_search", { searchId });

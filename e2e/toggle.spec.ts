@@ -74,25 +74,30 @@ test("switching Document → Markdown → Document keeps the document intact", a
   await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
 });
 
-test("the permanent find field searches and refocuses in Markdown view", async ({
+test("the find card opens with Ctrl+F, follows the Markdown view and closes on Escape", async ({
   page,
 }) => {
-  // The field is part of the shell before any shortcut is pressed.
+  // Find is a floating card, closed until it is asked for.
   const findBar = page.locator(".find-bar");
   const findInput = page.getByRole("textbox", { name: "Find in document" });
-  await expect(findBar).toBeVisible();
+  await expect(findBar).toBeHidden();
 
   await page.locator(`${wysiwyg} h1`).click();
   await page.keyboard.press("Control+f");
+  await expect(findBar).toBeVisible();
   await expect(findInput).toBeFocused();
+  await expect(page.getByRole("button", { name: "Find", exact: true })).toHaveAttribute("aria-pressed", "true");
 
-  // Markdown-only routes that same field into CodeMirror; no second CM panel is
-  // opened and Ctrl+F simply returns focus to the permanent input.
+  // Markdown-only routes the same card into CodeMirror; no second CodeMirror
+  // panel opens and Ctrl+F returns focus to the card's field.
   await page.locator(markdownSeg).click();
   await page.locator(rawContent).click();
   await page.keyboard.press("Control+f");
   await expect(findInput).toBeFocused();
   await expect(page.locator(".cm-search")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(findBar).toBeHidden();
 });
 
 test("an edit in the Markdown pane is mirrored live into the document (split)", async ({ page }) => {

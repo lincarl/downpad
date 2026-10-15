@@ -7,7 +7,7 @@ import {
   formatDate,
   formatSize,
   filterByName,
-  favoritesSorted,
+  plainSnippet,
 } from "./recentFormat";
 import type { RecentEntry } from "../state/types";
 
@@ -16,11 +16,7 @@ import type { RecentEntry } from "../state/types";
 const local = (y: number, m: number, d: number, h = 12): number =>
   new Date(y, m, d, h, 0, 0).getTime();
 
-const entry = (path: string, favorite = false, lastOpenedMs = 0): RecentEntry => ({
-  path,
-  lastOpenedMs,
-  favorite,
-});
+const entry = (path: string): RecentEntry => ({ path, lastOpenedMs: 0, favorite: false });
 
 describe("fileName / dirName", () => {
   it("takes the final segment for Windows and POSIX paths", () => {
@@ -108,18 +104,18 @@ describe("filterByName", () => {
   });
 });
 
-describe("favoritesSorted", () => {
-  it("keeps only favorites, alphabetical by filename, case-insensitive", () => {
-    const entries = [
-      entry("C:/n/zebra.md", true),
-      entry("C:/n/Apple.md", true),
-      entry("C:/n/mango.md", false),
-      entry("C:/n/banana.md", true),
-    ];
-    expect(favoritesSorted(entries).map((e) => fileName(e.path))).toEqual([
-      "Apple.md",
-      "banana.md",
-      "zebra.md",
-    ]);
+describe("plainSnippet", () => {
+  it("reads table rows, headings, quotes and list items as plain text", () => {
+    expect(plainSnippet("| Print | Grace | Planned |")).toBe("Print · Grace · Planned");
+    expect(plainSnippet("| --- | :---: |")).toBe("");
+    expect(plainSnippet("## Status of the print layout")).toBe("Status of the print layout");
+    expect(plainSnippet("> Keep the document readable")).toBe("Keep the document readable");
+    expect(plainSnippet("- [ ] Review the print layout")).toBe("Review the print layout");
+    expect(plainSnippet("2. Print **twice**, then `ship`")).toBe("Print twice, then ship");
+  });
+
+  it("keeps text that only looks like markup", () => {
+    expect(plainSnippet("Costs 3 * 4 = 12 and a_b_c")).toBe("Costs 3 * 4 = 12 and a_b_c");
+    expect(plainSnippet("…it, for example pnpm start ./notes.md.")).toBe("…it, for example pnpm start ./notes.md.");
   });
 });

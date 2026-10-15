@@ -149,7 +149,7 @@ test("the print workspace exports a real PDF and preserves landscape and page ra
   expect((await readFile(pdf)).subarray(0, 5).toString()).toBe("%PDF-");
 
   await page.getByRole("button", { name: "Print", exact: true }).click();
-  await page.getByLabel("Orientation", { exact: true }).selectOption("landscape");
+  await page.locator(".print-workspace").getByRole("radio", { name: "Landscape", exact: true }).check();
   await page.getByLabel("Pages", { exact: true }).selectOption("custom");
   await page.getByPlaceholder("1-3, 5").fill("1");
   await page.getByPlaceholder("1-3, 5").press("Tab");
@@ -172,7 +172,7 @@ test("Print submits the document to an installed test printer", async () => {
   await expect(page.locator(heading)).toHaveText("Printed by Electron");
   await page.getByRole("button", { name: "Print", exact: true }).click();
   await page.getByLabel("Printer", { exact: true }).selectOption(printer!);
-  await page.locator(".print-ws-top").getByRole("button", { name: "Print", exact: true }).click();
+  await page.locator(".print-ws-footer").getByRole("button", { name: "Print", exact: true }).click();
   await expect(page.locator(".print-workspace")).toBeHidden({ timeout: 30_000 });
 });
 

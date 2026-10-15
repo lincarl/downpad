@@ -43,7 +43,7 @@ test("the Print button opens the workspace with a paginated preview", async ({ p
   );
   // Page numbers stay on by default.
   await expect(page.locator(".print-page .print-page-footer").first()).toHaveText("1 / 1");
-  await expect(page.locator(".print-ws-summary")).toContainText("A4 portrait");
+  await expect(page.locator(".print-ws-paper")).toContainText("A4 · Portrait");
 });
 
 test("the version chooser switches between the document and the Markdown source", async ({
@@ -56,7 +56,7 @@ test("the version chooser switches between the document and the Markdown source"
   );
   await expect(page.locator(".print-source")).toHaveCount(0);
 
-  await page.click('.print-ws-segmented button:has-text("Markdown")');
+  await page.locator(".print-workspace").getByRole("radio", { name: "Markdown", exact: true }).check();
   // Markdown version: the raw source, one block per line, nothing rendered. The
   // source is the canonical markdown, so the YAML frontmatter prints too — it is
   // part of the file, and only the Document version hides it (§5.17).
@@ -72,12 +72,12 @@ test("changing the page setup re-paginates the preview", async ({ page }) => {
     () => (document.querySelector(".print-page") as HTMLElement).offsetWidth,
   );
 
-  await page.selectOption('.print-ws-rail select[aria-label="Orientation"]', "landscape");
+  await page.locator(".print-workspace").getByRole("radio", { name: "Landscape", exact: true }).check();
   const landscapeWidth = await page.evaluate(
     () => (document.querySelector(".print-page") as HTMLElement).offsetWidth,
   );
   expect(landscapeWidth).toBeGreaterThan(portraitWidth);
-  await expect(page.locator(".print-ws-summary")).toContainText("A4 landscape");
+  await expect(page.locator(".print-ws-paper")).toContainText("A4 · Landscape");
 });
 
 test("enabling page numbers reserves the footer band without clipping content", async ({ page }) => {
@@ -101,7 +101,7 @@ test("printing hides the full-height #app so there is no blank leading page", as
     window.print = () => {};
   });
 
-  await page.click('.print-ws-top button:has-text("Print")');
+  await page.locator(".print-ws-footer").getByRole("button", { name: "Print", exact: true }).click();
   await page.waitForFunction(() => document.documentElement.classList.contains("printing"));
   await page.emulateMedia({ media: "print" });
 

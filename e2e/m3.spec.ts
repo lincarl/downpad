@@ -24,9 +24,12 @@ const valueFor = (page: Page, key: string) =>
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) })
     .locator(".frontmatter-value-edit");
 
-async function openSettings(page: Page): Promise<void> {
+// Opens Settings on the given page. The dialog keeps one page visible at a time
+// (General first), so a field must be reached through its nav row.
+async function openSettings(page: Page, section = "General"): Promise<void> {
   await page.getByRole("button", { name: "Application menu" }).click();
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.locator(".dialog").getByRole("tab", { name: section, exact: true }).click();
 }
 
 test("frontmatter renders as an editable key/value table by default", async ({ page }) => {
@@ -75,7 +78,7 @@ test("editing a NESTED value patches its indented YAML line, preserving the rest
 });
 
 test("adding a field appends a new editable key/value to the YAML", async ({ page }) => {
-  await page.getByRole("button", { name: "+ Add field" }).click();
+  await page.getByRole("button", { name: "Add field", exact: true }).click();
   // A new row appears with the placeholder key "key" (focused); set key + value.
   await page.getByRole("rowheader", { name: "key", exact: true }).fill("author");
   await valueFor(page, "author").fill("Example Author");
@@ -217,7 +220,7 @@ test("renaming a key works; an invalid key (with a colon) is rejected", async ({
   await expect(raw).not.toContainText("ta:gs");
 });
 
-test("deleting every field still leaves a working '+ Add field' (no dead end)", async ({ page }) => {
+test("deleting every field still leaves a working 'Add field' (no dead end)", async ({ page }) => {
   for (const key of ["title", "tags", "metadata"]) {
     await page
       .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) })
@@ -226,7 +229,7 @@ test("deleting every field still leaves a working '+ Add field' (no dead end)", 
   }
   await expect(page.locator(".frontmatter-table")).toHaveCount(0);
 
-  const addBtn = page.getByRole("button", { name: "+ Add field" });
+  const addBtn = page.getByRole("button", { name: "Add field", exact: true });
   await expect(addBtn).toBeVisible();
   await addBtn.click();
   await page.getByRole("rowheader", { name: "key", exact: true }).fill("title");
@@ -259,7 +262,7 @@ test("editing a table value patches the YAML while preserving the other fields",
 });
 
 test("turning off 'Show frontmatter table' hides it but keeps the YAML", async ({ page }) => {
-  await openSettings(page);
+  await openSettings(page, "Editor");
   const dialog = page.locator(".dialog");
   const toggle = dialog
     .locator(".dialog-row", { hasText: "Show frontmatter table" })
@@ -280,7 +283,7 @@ test("turning off 'Show frontmatter table' hides it but keeps the YAML", async (
 });
 
 test("settings dialog opens, edits a value, saves, and applies it", async ({ page }) => {
-  await openSettings(page);
+  await openSettings(page, "Appearance");
   const dialog = page.locator(".dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".dialog-title")).toHaveText("Settings");
@@ -300,7 +303,7 @@ test("settings dialog opens, edits a value, saves, and applies it", async ({ pag
 });
 
 test("changing the bullet style re-mounts WYSIWYG without losing content", async ({ page }) => {
-  await openSettings(page);
+  await openSettings(page, "Markdown");
   const dialog = page.locator(".dialog");
   const bullet = dialog.locator(".dialog-row", { hasText: "Bullet" }).locator("select");
   await bullet.selectOption("*");

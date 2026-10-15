@@ -9,7 +9,7 @@ md-easy is a desktop Markdown editor for Windows and Linux. It is designed for p
 - Keep the rendered document and Markdown source synchronized.
 - Work with multiple documents in tabs.
 - Open, create, save, and print Markdown files using familiar desktop controls and shortcuts.
-- Find and replace text within the active document.
+- Find and replace text within the active document from a find card that opens over the page.
 
 ## Markdown support
 
@@ -42,13 +42,13 @@ md-easy adapts pasted content to the document:
 
 ## Recent files and recovery
 
-The Recent view provides quick access to previously opened documents and favorites. It supports filtering by filename and searching within recent documents.
+The Recent view lists previously opened documents, with starred favorites pinned at the top. Its search field finds documents by file name, by content, or both.
 
 The app periodically stores recovery snapshots for unsaved work and offers to restore them after an interrupted session. Optional autosave can save changes to files that already have a path.
 
 ## Appearance and preferences
 
-Users can choose light, dark, or system themes; adjust the accent color, document width, font, and text size; select the default editor view; and configure image storage, Markdown serialization, spell checking, recovery, and autosave behavior.
+The interface shares the look of Mervin PDF. Users can choose light, dark, or system themes; adjust the accent color, document width, font, and text size; select the default editor view; and configure image storage, Markdown serialization, spell checking, recovery, and autosave behavior.
 
 Settings are stored locally in `settings.toml` and can be changed from the app or by editing the settings file.
 

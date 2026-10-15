@@ -4,20 +4,17 @@ import { cn } from "@/lib/utils";
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {}
 
-/** Native input behavior with the shared shadcn/Tailwind field treatment. */
+/** The inset field well every text and number input shares. */
+export const fieldClassName = cn(
+  "h-[29px] min-w-40 rounded-control border border-line bg-well px-2 font-[family-name:var(--font-ui)] text-[12px] text-ink-primary",
+  "outline-none placeholder:text-ink-faint selection:bg-accent selection:text-accent-fg",
+  "focus:border-accent disabled:cursor-default disabled:border-line-disabled disabled:text-ink-disabled",
+);
+
+/** Native input behavior with Mervin's field well. */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { className, type, ...props },
   ref,
 ) {
-  return (
-    <input
-      ref={ref}
-      type={type}
-      className={cn(
-        "min-w-40 rounded-[5px] border border-border bg-background px-2 py-1 font-[var(--font-ui)] text-[13px] text-foreground outline-none transition-[border-color,box-shadow] focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <input ref={ref} type={type} className={cn(fieldClassName, className)} {...props} />;
 });

@@ -1,6 +1,27 @@
 @import "tailwindcss";
 
+/* Keyboard focus for hand-built controls: a 2px accent ring outside the control,
+   or inside it where neighbours would clip it. Tailwind's outline-none sets the
+   outline style to none, so these name the full outline rather than a width. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+
+@utility focus-ring-inset {
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+}
+
+/* `dark:` follows the app's UI theme attribute, not the OS preference. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme inline {
+  /* shadcn/ui semantic names, used by the primitives in src/components/ui. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-primary: var(--primary);
@@ -9,90 +30,343 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
+
+  /* Chrome surfaces, from the deepest well up to floating popovers. */
+  --color-well: var(--well);
+  --color-status: var(--status);
+  --color-bar: var(--bar);
+  --color-window: var(--window);
+  --color-fill: var(--fill);
+  --color-popover: var(--popover);
+  --color-canvas: var(--canvas);
+  --color-notice: var(--notice);
+  --color-push: var(--push-bg);
+
+  /* Ink, brightest first. */
+  --color-ink-primary: var(--ink-primary);
+  --color-ink: var(--ink);
+  --color-ink-body: var(--ink-body);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-ink-disabled: var(--ink-disabled);
+  --color-ink-menu-header: var(--ink-menu-header);
+  --color-ink-danger: var(--ink-danger);
+  --color-ink-link: var(--ink-link);
+  --color-ink-canvas: var(--ink-canvas);
+
+  /* Translucent edges and washes, which read over any surface. */
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-bar: var(--line-bar);
+  --color-line-push: var(--line-push);
+  --color-line-disabled: var(--line-disabled);
+  --color-line-popover: var(--line-popover);
+  --color-line-popover-control: var(--line-popover-control);
+  --color-line-notice: var(--line-notice);
+  --color-line-menu: var(--line-menu);
+  --color-line-toolbar: var(--line-toolbar);
+  --color-line-chrome-row: var(--line-chrome-row);
+  --color-line-tool: var(--line-tool);
+  --color-line-tool-strong: var(--line-tool-strong);
+  --color-line-tool-disabled: var(--line-tool-disabled);
+  --color-hover: var(--hover);
+  --color-pressed: var(--pressed);
+  --color-row-hover: var(--row-hover);
+  --color-separator: var(--separator);
+  --color-hairline: var(--hairline);
+  --color-tool-checked: var(--tool-checked);
+
+  /* One accent carries selection, focus and the primary button. */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-wash: var(--accent-wash);
+
+  /* Buttons, fields, segments and tabs: 8px in light, 6px in dark. */
+  --radius-control: var(--control-radius);
 }
 
-/* App chrome. React/Tailwind own the application layout and shadcn-style
-   controls; this scoped stylesheet preserves the established Win11 appearance
-   and styles complex editor, print, and platform-specific surfaces. */
-
+/* Application chrome tokens, ported from Mervin PDF's theme (ThemeTokens.cpp).
+   Light is "Cool slate": cool blue-grey bands with white controls. Dark is
+   "Nord": lifted blue-grey surfaces with body text at about 9.4:1 and a soft
+   frost accent that carries dark text. Every token is explicit in both themes.
+   Components use them through the Tailwind colors above (bg-well, text-ink-faint,
+   border-line-push, ...). SettingsModel overrides --accent and --accent-fg inline
+   for the system and custom accent modes. */
 :root {
-  --background: var(--editor-bg);
-  --foreground: var(--chrome-fg);
+  color-scheme: light;
+
+  --well: #ebeef2;
+  --status: #dee3e9;
+  --bar: #e8ecf0;
+  --window: #f5f7f9;
+  --fill: #fff;
+  --popover: #f0f3f6;
+  --canvas: #3c3f44;
+  --ink-primary: #1a1f24;
+  --ink: #1f2328;
+  --ink-body: #31373e;
+  --ink-soft: #59636e;
+  --ink-faint: #58616b;
+  --ink-disabled: #a3abb5;
+  --ink-menu-header: #5f6873;
+  --ink-danger: #c4232e;
+  --ink-link: #0969da;
+  --line: rgb(31 42 55 / 16%);
+  --line-strong: rgb(31 42 55 / 30%);
+  --line-bar: rgb(31 42 55 / 12%);
+  --line-push: rgb(31 42 55 / 20%);
+  --line-disabled: rgb(31 42 55 / 8%);
+  --line-popover: rgb(31 42 55 / 35%);
+  --line-popover-control: rgb(31 42 55 / 35%);
+  --line-menu: var(--line-popover);
+
+  /* Chrome row edges: light keeps the toolbar open to the tab row. */
+  --line-toolbar: transparent;
+  --line-chrome-row: var(--line);
+  --hover: rgb(31 42 55 / 7%);
+  --pressed: rgb(31 42 55 / 13%);
+  --row-hover: rgb(31 42 55 / 6%);
+  --separator: rgb(31 42 55 / 12%);
+  --hairline: rgb(31 42 55 / 18%);
+  --scroll-thumb: rgb(31 42 55 / 28%);
+  --scroll-thumb-hover: rgb(31 42 55 / 45%);
+
+  /* Text and buttons drawn on the canvas, which is dark in both themes. */
+  --ink-canvas: #f2f4f7;
+  --canvas-control: #4a505a;
+  --line-canvas-control: #6a717c;
+
+  /* The in-app notice bar (file changed on disk and similar). */
+  --notice: #fdf6dc;
+  --line-notice: #e3d79e;
+
+  /* Light draws outlined white push buttons and outlined toolbar buttons. */
+  --push-bg: var(--fill);
+  --line-tool: var(--line);
+  --line-tool-strong: var(--line-strong);
+  --line-tool-disabled: var(--line-disabled);
+  --tool-checked: var(--pressed);
+  --control-radius: 8px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2331373e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a3abb5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* The design accent. SettingsModel overrides it for system and custom accents. */
+  --accent: #0969da;
+  --accent-fg: #fff;
+  --accent-hover: color-mix(in srgb, var(--accent) 91%, #000);
+  --accent-wash: color-mix(in srgb, var(--accent) 15%, transparent);
+
+  /* shadcn/ui semantic names. */
+  --background: var(--window);
+  --foreground: var(--ink);
   --primary: var(--accent);
   --primary-foreground: var(--accent-fg);
-  --muted: var(--chrome-bg);
-  --muted-foreground: var(--muted-fg);
-  --border: var(--chrome-border);
+  --muted: var(--bar);
+  --muted-foreground: var(--ink-soft);
+  --border: var(--line);
   --ring: var(--accent);
-  --chrome-bg: #fff;
-  --tabstrip-bg: #f3f3f3;
-  --findbar-bg: #fff;
-  --status-bg: #f3f3f3;
-  --control-bg: #f3f3f3;
-  --menu-bg: #fff;
-  --tab-bg: #e9edf2;
-  --active-tab-bg: #fff;
-  --viewer-canvas: #3a3a3c;
-  --toolbar-hover: rgb(0 0 0 / 6%);
-  --toolbar-pressed: rgb(0 0 0 / 11%);
-  --input-border: rgb(0 0 0 / 14%);
-  --checkbox-border: rgb(0 0 0 / 35%);
-  --checkbox-bg: transparent;
-  --bar-border: rgb(0 0 0 / 14%);
-  --chrome-border: rgb(0 0 0 / 14%);
-  --chrome-fg: #1a1a1a;
-  --muted-fg: #6a6a6a;
 
-  /* Accent + a readable foreground for text/icons on top of it (spec §6.2).
-     Both are set live from settings by SettingsModel (default / system / custom). */
-  --accent: #0067c0;
-  --accent-fg: #fff;
-  --editor-bg: #fff;
+  /* The platform UI font, as Mervin uses it. */
   --font-ui: "Segoe UI", system-ui, sans-serif;
 
   /* Set live from settings by SettingsModel. */
   --editor-width: 1188px;
   --editor-font: "Segoe UI", system-ui, sans-serif;
 
-  /* Document text-size multiplier (spec §5.20), driven by the toolbar A-/A+. */
+  /* Document text-size multiplier (spec §5.20), driven by the toolbar zoom. */
   --editor-font-scale: 1;
 
   /* Document surface palette (spec §6.2). Driven by data-editor-theme so the
      document can stay light while the UI (data-theme) is dark, and vice versa. */
   --editor-surface-bg: #fff;
   --editor-surface-fg: #1a1a1a;
+
+  /* Document-surface details: lines, fills and muted ink are tints of the
+     document's own ink over its page, so they follow the document theme rather
+     than the chrome theme. */
+  --doc-line: color-mix(in srgb, var(--editor-surface-fg) 17%, var(--editor-surface-bg));
+  --doc-line-strong: color-mix(in srgb, var(--editor-surface-fg) 30%, var(--editor-surface-bg));
+  --doc-fill: color-mix(in srgb, var(--editor-surface-fg) 5%, var(--editor-surface-bg));
+  --doc-hover: color-mix(in srgb, var(--editor-surface-fg) 10%, var(--editor-surface-bg));
+  --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
+  --doc-accent: var(--accent);
+
 }
 
-/* Dark chrome — the UI (chrome) palette. */
 :root[data-theme="dark"] {
-  --accent: #0067c0;
-  --accent-fg: #fff;
-  --chrome-bg: #1c222e;
-  --tabstrip-bg: #191e27;
-  --findbar-bg: #1c222e;
-  --status-bg: #161a23;
-  --control-bg: #10141d;
-  --menu-bg: #212834;
-  --tab-bg: #202938;
-  --active-tab-bg: #1b2030;
-  --viewer-canvas: #3c3f44;
-  --toolbar-hover: rgb(255 255 255 / 7%);
-  --toolbar-pressed: rgb(255 255 255 / 10%);
-  --input-border: rgb(255 255 255 / 10%);
-  --checkbox-border: #5b626c;
-  --checkbox-bg: transparent;
-  --bar-border: rgb(255 255 255 / 5%);
-  --chrome-border: rgb(255 255 255 / 10%);
-  --chrome-fg: #c2c9d6;
-  --muted-fg: #8b94a5;
-  --editor-bg: #10141d;
+  color-scheme: dark;
+
+  --well: #242933;
+  --status: #272c36;
+  --bar: #2a303b;
+  --window: #2e3440;
+  --fill: #353c4a;
+  --popover: #3b4252;
+  --canvas: #424853;
+  --ink-primary: #e5e9f0;
+  --ink: #dbe0ea;
+  --ink-body: #c5ccd8;
+  --ink-soft: #a5afc1;
+  --ink-faint: #98a2b4;
+  --ink-disabled: #646e81;
+  --ink-menu-header: #a8b2c4;
+  --ink-danger: #ec8f97;
+  --ink-link: #9dbde3;
+  --line: rgb(236 239 244 / 11%);
+  --line-strong: rgb(236 239 244 / 25%);
+  --line-bar: rgb(236 239 244 / 6%);
+  --line-push: rgb(236 239 244 / 15%);
+  --line-disabled: rgb(236 239 244 / 8%);
+  --line-popover: rgb(236 239 244 / 17%);
+  --line-popover-control: rgb(236 239 244 / 24%);
+  --line-menu: var(--line);
+  --line-toolbar: var(--line-bar);
+  --line-chrome-row: var(--line-bar);
+  --hover: rgb(236 239 244 / 8%);
+  --pressed: rgb(236 239 244 / 12%);
+  --row-hover: rgb(236 239 244 / 7%);
+  --separator: rgb(236 239 244 / 8%);
+  --hairline: rgb(236 239 244 / 11%);
+  --scroll-thumb: rgb(236 239 244 / 26%);
+  --scroll-thumb-hover: rgb(236 239 244 / 42%);
+  --ink-canvas: #e5e9f0;
+  --canvas-control: #4c566a;
+  --line-canvas-control: #616e88;
+  --notice: #3b4252;
+  --line-notice: rgb(235 203 139 / 70%);
+
+  /* Dark draws flat borderless toolbar buttons and outlined transparent push
+     buttons, and marks a checked tool with the accent wash. */
+  --push-bg: transparent;
+  --line-tool: transparent;
+  --line-tool-strong: transparent;
+  --line-tool-disabled: transparent;
+  --tool-checked: var(--accent-wash);
+  --control-radius: 6px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c5ccd8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23646e81' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Nord's frost blue, which carries dark text. */
+  --accent: #88c0d0;
+  --accent-fg: #232831;
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, #fff);
 }
 
-/* Dark document surface — independent of the chrome theme (spec §6.2). Matches
+/* Dark document surface, independent of the chrome theme (spec §6.2). Matches
    VS Code's "Dark+" editor: #1e1e1e page, #d4d4d4 text. */
 :root[data-editor-theme="dark"] {
   --editor-surface-bg: #1e1e1e;
   --editor-surface-fg: #d4d4d4;
+}
+
+/* When the document theme differs from the chrome, the chrome's accent can lack
+   contrast on the page (Nord frost on white is 2:1). Like Mervin's page accent,
+   marks on the page then pull the accent toward the document ink. */
+:root[data-theme="dark"][data-editor-theme="light"],
+:root[data-theme="light"][data-editor-theme="dark"] {
+  --doc-accent: color-mix(in srgb, var(--accent) 75%, var(--editor-surface-fg));
+}
+
+/* Form controls shared by every surface. They sit in the components layer so
+   Tailwind utilities on the same element still win. */
+@layer components {
+  /* Native selects keep their behaviour and popup; the chevron advertises them. */
+  .md-select {
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 12px 12px;
+  }
+
+  .md-select:disabled {
+    background-image: var(--select-chevron-disabled);
+  }
+
+  /* Check boxes and radio buttons: a 16px box outlined in the disabled ink that
+     fills with the accent when on, with the mark in the accent's text colour. */
+  .md-check,
+  .md-radio {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-content: center;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 1px solid var(--ink-disabled);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    appearance: none;
+  }
+
+  .md-radio {
+    border-radius: 50%;
+  }
+
+  .md-check::before {
+    content: "";
+    width: 9px;
+    height: 5px;
+    margin-top: -2px;
+    border-bottom: 2px solid var(--accent-fg);
+    border-left: 2px solid var(--accent-fg);
+    transform: rotate(-45deg) scale(0);
+  }
+
+  .md-radio::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-fg);
+    transform: scale(0);
+  }
+
+  .md-check:hover,
+  .md-radio:hover {
+    border-color: var(--ink-soft);
+  }
+
+  .md-check:checked,
+  .md-radio:checked {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .md-check:checked::before,
+  .md-radio:checked::before {
+    transform: rotate(-45deg) scale(1);
+  }
+
+  .md-radio:checked::before {
+    transform: scale(1);
+  }
+
+  .md-check:focus-visible,
+  .md-radio:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .md-check:disabled,
+  .md-radio:disabled {
+    border-color: var(--line-disabled);
+    cursor: default;
+  }
+
+  .md-check:checked:disabled,
+  .md-radio:checked:disabled {
+    background: var(--line-disabled);
+  }
+
+  .md-check:checked:disabled::before {
+    border-color: var(--ink-faint);
+  }
+
+  .md-radio:checked:disabled::before {
+    background: var(--ink-faint);
+  }
 }
 
 * {
@@ -115,22 +389,44 @@ body {
 
 body {
   font-family: var(--font-ui);
-  color: var(--chrome-fg);
-  background: var(--editor-bg);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--window);
+}
+
+/* Scrollbars follow Mervin: a 12px transparent track with a rounded thumb inset
+   2px. Setting scrollbar-color or scrollbar-width on an element switches Chromium
+   back to its native bars, so neither is used. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--scroll-thumb) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scroll-thumb-hover);
+}
+
+::-webkit-scrollbar-corner,
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The tab strip scrolls without a bar, as in Mervin: tabs shrink first and the
+   wheel scrolls the strip sideways (App.tsx). */
+.tab-list::-webkit-scrollbar {
+  display: none;
 }
 
 #app {
   height: 100vh;
-}
-
-:root[data-theme="dark"] .tab-close:hover {
-  background: rgb(255 255 255 / 18%);
-}
-
-:root[data-theme="dark"] .banner:not([data-kind="error"]) {
-  background: #3a3320;
-  color: #f0e6c0;
-  border-bottom-color: #5a4f2a;
 }
 
 /* Match highlights painted by the find plugin's decorations. */
@@ -156,6 +452,9 @@ body {
 .editor-area.split,
 .editor-area.markdown-only {
   overflow: hidden;
+
+  /* Each pane scrolls on its own, so the area reserves no scroll bar gutter. */
+  scrollbar-gutter: auto;
 }
 
 .editor-area.split .editor-column,
@@ -195,7 +494,6 @@ body {
 .editor-host.split .editor-pane-raw {
   flex: 1 1 0;
   order: 2;
-  border-left: 1px solid var(--chrome-border);
 }
 
 /* In the split (and Markdown-only) layouts each pane scrolls independently — the
@@ -205,14 +503,15 @@ body {
   overflow: auto;
 }
 
-/* Draggable divider between the two split panes. A thin bar with a wider,
-   col-resize hit area; hidden (and out of the layout) when the split is closed. */
+/* Draggable divider between the two split panes: a hairline in the document's
+   own line colour, centred in a 6px hit area and accented while hovered or
+   dragged. Hidden (and out of the layout) when the split is closed. */
 .split-divider {
   flex: 0 0 6px;
   order: 1;
   align-self: stretch;
   cursor: col-resize;
-  background: var(--chrome-border);
+  background: linear-gradient(var(--doc-line), var(--doc-line)) center / 1px 100% no-repeat var(--editor-surface-bg);
   position: relative;
 }
 
@@ -226,11 +525,29 @@ body {
   background: var(--accent);
 }
 
+/* The Markdown source fills its pane, and CodeMirror's dotted focus outline
+   (which crossed the pane under the last line) gives way to the caret. */
+.editor-pane-raw .cm-editor {
+  min-height: 100%;
+}
+
+/* The source gutter shares the page's fill and has no edge, so it does not
+   stop visibly under the last line. */
+.editor-pane-raw .cm-editor .cm-gutters {
+  border-right: none;
+  background: transparent;
+  color: var(--doc-muted);
+}
+
+.editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+
 /* Collapsed base64 data URI in raw view (§5.3). */
 .cm-base64-collapsed {
-  color: var(--accent);
-  background: var(--chrome-bg);
-  border: 1px solid var(--chrome-border);
+  color: var(--doc-accent);
+  background: var(--doc-fill);
+  border: 1px solid var(--doc-line);
   border-radius: 4px;
   padding: 0 5px;
   margin: 0 1px;
@@ -317,6 +634,18 @@ body {
   line-height: 1.5;
 }
 
+/* Crepe captions its slash-menu groups and diagram previews in capitals. md-easy
+   writes captions in sentence case, as Mervin's menus do. */
+.editor-host .milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
+  padding: 12px 10px 6px;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.editor-host .milkdown .milkdown-code-block .preview-panel .preview-label {
+  text-transform: none;
+}
+
 /* Markdown tables size to their content (§6.2). prosemirror-tables ships
    `table-layout: fixed; width: 100%`, which stretches every table across the page
    and gives each column an equal share regardless of what is in it — a two-column
@@ -378,9 +707,9 @@ body {
 }
 
 :root[data-editor-theme="dark"] .editor-host .cm-editor .cm-gutters {
-  background: var(--chrome-bg);
-  color: var(--muted-fg);
-  border-right-color: var(--chrome-border);
+  background: var(--doc-fill);
+  color: var(--doc-muted);
+  border-right-color: var(--doc-line);
 }
 
 :root[data-editor-theme="dark"] .editor-host .cm-editor .cm-activeLine,
@@ -398,12 +727,13 @@ body {
    controls appear on row hover. Lists / deeper nesting stay read-only code. */
 .frontmatter-table-wrap {
   margin-bottom: 16px;
+  font-family: var(--font-ui);
 }
 
 /* width: max-content shrinks the table to its content; max-width caps it at the
    editor column so a long value wraps instead of overflowing; margin auto centers
-   the (narrower) table. (auto/fit-content wrongly fill the column on display:table
-   in Chromium — max-content is the one that shrinks reliably.) */
+   the (narrower) table. Chromium stretches display:table with auto or fit-content
+   across the column; max-content is the one that shrinks reliably. */
 .frontmatter-table {
   width: max-content;
   max-width: 100%;
@@ -423,28 +753,21 @@ body {
 
 /* A spreadsheet-style tab labelling the block as YAML frontmatter (§5.17), so it's
    not mistaken for an editable Markdown table. Its borderless bottom edge overlaps
-   the table's top border (margin-bottom: -1px) so tab and table read as one shape.
-   Fill/text derive from the DOCUMENT-surface palette (like the table's own cells),
-   not the chrome palette, so the tab matches the surface it sits on even when the
-   document theme differs from the UI theme (§6.2). The border keeps --chrome-border
-   to line up with the table's cell borders. color-mix gives a subtle tint that
-   adapts to a light or dark surface; the plain declarations above it are fallbacks. */
+   the table's top border (margin-bottom: -1px) so tab and table read as one shape. */
 .frontmatter-tab {
   display: inline-block;
   position: relative;
   z-index: 1;
   margin-bottom: -1px;
-  padding: 2px 12px;
-  border: 1px solid var(--chrome-border);
+  padding: 2px 10px 3px;
+  border: 1px solid var(--doc-line);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  background: var(--editor-surface-bg);
-  background: color-mix(in srgb, var(--editor-surface-fg) 8%, var(--editor-surface-bg));
-  color: var(--editor-surface-fg);
-  color: color-mix(in srgb, var(--editor-surface-fg) 65%, var(--editor-surface-bg));
-  font-size: 0.78em;
+  background: var(--doc-fill);
+  color: var(--doc-muted);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  line-height: 14px;
 }
 
 /* Read-only fallback (top-level list / deep nesting): the tab sits above the code
@@ -455,12 +778,20 @@ body {
   margin: 0 auto;
 }
 
+/* Every pair of data rows has a zero-height inserter row between them, so a top
+   border on each cell would double every grid line. Cells draw their sides and
+   bottom; only the first data row draws the grid's top edge. */
 .frontmatter-table th,
 .frontmatter-table td {
-  border: 1px solid var(--chrome-border);
+  border: 1px solid var(--doc-line);
+  border-top: none;
   padding: 6px 10px;
   text-align: left;
   vertical-align: top;
+}
+
+.frontmatter-inserter-first + .frontmatter-row > :not(.frontmatter-actions) {
+  border-top: 1px solid var(--doc-line);
 }
 
 /* Key column hugs its (short) text. */
@@ -483,13 +814,15 @@ body {
 }
 
 /* Editable cell: the key/value element is itself contenteditable, so the table's
-   auto-layout measures the real text and the column hugs it. */
+   auto-layout measures the real text and the column hugs it. The cell being
+   edited carries an accent frame inside its grid lines. */
 .frontmatter-edit {
   cursor: text;
 }
 
 .frontmatter-edit:focus {
-  outline: none;
+  outline: 2px solid var(--doc-accent);
+  outline-offset: -2px;
 }
 
 /* pre-wrap keeps typed spacing faithful while still wrapping a long value
@@ -506,77 +839,91 @@ body {
   margin: 0;
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--chrome-bg);
-  color: var(--muted-fg);
+  background: var(--doc-fill);
+  color: var(--doc-muted);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 0.92em;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Actions gutter (delete / add-to-group), revealed on row hover or focus. */
-.frontmatter-actions {
+/* Actions gutter (delete / add-to-group) outside the grid, revealed on row hover
+   or focus. Scoped under the table to outrank the cell border rule above. */
+.frontmatter-table td.frontmatter-actions {
   border: none;
   width: 1%;
   white-space: nowrap;
-  padding: 4px 2px 4px 6px;
+  padding: 0 0 0 6px;
   vertical-align: middle;
   opacity: 0;
   transition: opacity 0.1s ease;
 }
 
-.frontmatter-actions:focus-within {
-  opacity: 1;
-}
-
-.frontmatter-row:hover .frontmatter-actions {
+.frontmatter-table td.frontmatter-actions:focus-within,
+.frontmatter-row:hover td.frontmatter-actions {
   opacity: 1;
 }
 
 .frontmatter-icon-btn {
-  width: 20px;
-  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   padding: 0;
   margin-left: 2px;
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--muted-fg);
-  font-size: 15px;
-  line-height: 1;
+  color: var(--doc-muted);
+  vertical-align: middle;
   cursor: pointer;
 }
 
 .frontmatter-icon-btn:hover {
-  background: var(--chrome-bg);
+  background: var(--doc-hover);
   color: var(--editor-surface-fg);
 }
 
-/* "+ Add field" under the table, aligned with the centered table. */
+.frontmatter-icon-btn:focus-visible {
+  outline: 2px solid var(--doc-accent);
+  outline-offset: -1px;
+}
+
+/* "Add field" under the table, aligned with the centered table. */
 .frontmatter-add {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
   margin: 8px auto 0;
-  padding: 3px 10px;
-  border: 1px solid var(--chrome-border);
+  padding: 3px 10px 3px 7px;
+  border: 1px solid var(--doc-line);
   border-radius: 6px;
   background: transparent;
-  color: var(--muted-fg);
+  color: var(--doc-muted);
   font: inherit;
-  font-size: 0.85em;
+  font-size: 12px;
+  line-height: 16px;
   cursor: pointer;
 }
 
 .frontmatter-add:hover {
-  background: var(--chrome-bg);
+  border-color: var(--doc-line-strong);
+  background: var(--doc-hover);
   color: var(--editor-surface-fg);
+}
+
+.frontmatter-add:focus-visible {
+  outline: 2px solid var(--doc-accent);
+  outline-offset: 1px;
 }
 
 /* Between-row insert controls (§5.17). A thin, border-/padding-less row sits in
    every gap (before each row + after the last). Its children are absolutely
    positioned out of flow, so the row collapses to a ~0-height line and the connected
-   grid is visually undisturbed. Hovering the adjacent data row (or the "+" itself)
-   reveals a full-width accent line plus a round "+", making it obvious exactly where
-   the new field will land. The "+" lives in the table's LEFT MARGIN (right edge flush
+   grid is visually undisturbed. Hovering the gap (the "+" itself) reveals a
+   full-width accent line plus a round "+", making it obvious exactly where the
+   new field will land. The "+" lives in the table's LEFT MARGIN (right edge flush
    with the table border), so it never overlaps an editable cell and so can't swallow
    a click meant to place the caret. */
 .frontmatter-table td.frontmatter-inserter-cell {
@@ -593,7 +940,7 @@ body {
   top: -1px;
   height: 2px;
   z-index: 1;
-  background: var(--accent);
+  background: var(--doc-accent);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.1s ease;
@@ -616,12 +963,10 @@ body {
   width: 18px;
   height: 18px;
   padding: 0;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--doc-accent);
   border-radius: 50%;
   background: var(--editor-surface-bg);
-  color: var(--accent);
-  font-size: 14px;
-  line-height: 1;
+  color: var(--doc-accent);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.1s ease;
@@ -629,26 +974,28 @@ body {
 
 /* Reveal a gap's line + "+" only when THAT gap is hovered (the "+" sits in the left
    margin at the row boundary, so hovering the edge between two rows reveals exactly
-   one "+"), or when the "+" is keyboard-focused. Hovering a data row does NOT reveal
-   its adjacent gaps — only the gutter actions appear on row hover. `.frontmatter-
+   one "+"), or when the "+" has keyboard focus. Hovering a data row does not reveal
+   its adjacent gaps; only the gutter actions appear on row hover. `.frontmatter-
    inserter:hover` fires when the button (the row's only hittable element) is hovered,
    which also reveals the sibling line. */
 .frontmatter-inserter-btn:hover,
 .frontmatter-inserter-btn:focus-visible {
-  background: var(--accent);
+  background: var(--doc-accent);
   color: var(--accent-fg);
+  outline: none;
 }
 
 .frontmatter-inserter-btn:focus-visible,
 .frontmatter-inserter:hover .frontmatter-inserter-line,
-.frontmatter-inserter:hover .frontmatter-inserter-btn {
+.frontmatter-inserter:hover .frontmatter-inserter-btn,
+.frontmatter-inserter:has(.frontmatter-inserter-btn:focus-visible) .frontmatter-inserter-line {
   opacity: 1;
 }
 
 /* Link rendering (§5.6): muted URL suffix after a link in text-and-url mode.
    Non-interactive and click-through so editing the link text is unaffected. */
 .editor-host .md-link-url {
-  color: var(--muted-fg);
+  color: var(--doc-muted);
   font-size: 0.9em;
   margin-left: 0.15em;
   white-space: nowrap;
@@ -670,41 +1017,46 @@ body {
 }
 
 .editor-host .mermaid-loading {
-  color: var(--muted-fg);
+  color: var(--doc-muted);
+  font-family: var(--font-ui);
   font-size: 12px;
   justify-content: flex-start;
 }
 
+/* Crepe's error ink follows the document theme (frame light or the dark
+   document palette above). */
 .editor-host .mermaid-error {
-  color: #b00020;
+  padding: 8px;
+  color: var(--crepe-color-error, #ba1a1a);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 12px;
   white-space: pre-wrap;
-  padding: 8px;
-}
-
-:root[data-theme="dark"] .editor-host .mermaid-error {
-  color: #ff6b6b;
 }
 
 /* Missing image (§5.5): when an image fails to load, its block is marked and
-   styled as a click-to-relocate placeholder showing the broken icon + path. */
+   styled as a click-to-relocate placeholder showing the broken icon + path.
+   Crepe's image wrapper (broken <img>, caption toggle, resize handle) is hidden
+   so the icon and the text are the placeholder's only content. */
 .editor-host .milkdown-image-block.md-image-missing,
 .editor-host img.md-image-missing {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-height: 64px;
   padding: 12px 14px;
-  border: 1px dashed var(--chrome-border);
+  border: 1px dashed var(--doc-line-strong);
   border-radius: 6px;
-  background: var(--chrome-bg);
-  color: var(--muted-fg);
+  background: var(--doc-fill);
+  color: var(--doc-muted);
   cursor: pointer;
 }
 
-.editor-host .md-image-missing img {
+.editor-host .milkdown-image-block.md-image-missing:hover {
+  color: var(--editor-surface-fg);
+}
+
+.editor-host .milkdown-image-block.md-image-missing > .image-wrapper {
   display: none;
 }
 
@@ -719,55 +1071,70 @@ body {
 }
 
 .editor-host .md-image-missing::after {
-  content: "Missing image — click to relocate · " attr(data-md-path);
+  content: "Missing image. Click to locate it.\A" attr(data-md-path);
+  min-width: 0;
+  font-family: var(--font-ui);
   font-size: 12px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  word-break: break-all;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-/* PrintWorkspace still uses these established structural selectors. Keep them
-   scoped to print so React overlays can own their presentation with utilities. */
-.print-workspace .dialog-section {
-  padding: 10px 0;
-  border-top: 1px solid var(--chrome-border);
+/* Crepe's selection toolbar floats over the page like Mervin's floating
+   panels: the popover surface, a hairline rim, and icons in the toolbar ink.
+   Crepe tints the icons with its outline colour, which the dark document
+   palette sets to a border tone, so they were nearly invisible there. */
+.editor-host .milkdown .milkdown-toolbar {
+  padding: 3px;
+  border: 1px solid var(--line-popover);
+  border-radius: 10px;
+  background: var(--popover);
+  box-shadow: none;
 }
 
-.print-workspace .dialog-section:first-child {
-  border-top: none;
+:root[data-theme="dark"] .editor-host .milkdown .milkdown-toolbar {
+  border-color: var(--line-strong);
 }
 
-.print-workspace .dialog-section-title {
-  margin: 4px 0 8px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted-fg);
+.editor-host .milkdown .milkdown-toolbar .toolbar-item {
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 5px;
+  border-radius: var(--control-radius);
 }
 
-.print-workspace .dialog-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 0;
-  font-size: 13px;
+.editor-host .milkdown .milkdown-toolbar .toolbar-item:hover {
+  background: var(--hover);
 }
 
-.print-workspace .dialog-btn {
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 16px;
-  border: 1px solid var(--chrome-border);
-  border-radius: 6px;
-  background: var(--editor-bg);
-  color: var(--chrome-fg);
-  cursor: pointer;
+.editor-host .milkdown .milkdown-toolbar .toolbar-item:active {
+  background: var(--pressed);
 }
 
-.print-workspace .dialog-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
+.editor-host .milkdown .milkdown-toolbar .toolbar-item svg {
+  width: 20px;
+  height: 20px;
+  color: var(--ink-body);
+  fill: var(--ink-body);
+}
+
+.editor-host .milkdown .milkdown-toolbar .toolbar-item.active svg {
+  color: var(--accent);
+  fill: var(--accent);
+}
+
+.editor-host .milkdown .milkdown-toolbar .divider {
+  height: 18px;
+  margin: 6px 5px;
+  background: var(--line);
+}
+
+/* Crepe's code blocks keep their dark editor theme's active line number cell,
+   which showed as a near-black block on a light document. */
+:root:not([data-editor-theme="dark"]) .editor-host .milkdown .cm-editor .cm-activeLineGutter {
+  background: transparent;
+  color: var(--doc-muted);
 }
 
 /* ── Print workspace + printed sheets (spec §5.21) ───────────────────────
@@ -871,6 +1238,18 @@ body {
   max-height: 100%;
   object-fit: contain;
 }
+
+/* Printed paper is always light, so printed code uses the light document's
+   single high-contrast ink rather than the editor's dark syntax palette. */
+.print-doc .cm-content,
+.print-doc .cm-content * {
+  color: #24292f !important;
+}
+
+/* The editor's empty-line hint never reaches the page. */
+.print-doc .crepe-placeholder::before {
+  content: none;
+}
 /* stylelint-enable no-descending-specificity */
 
 /* The Markdown version: raw source, one block per line so breaks land between
@@ -893,541 +1272,33 @@ body {
 }
 
 /* ── The print workspace itself ──────────────────────────────────────────
-   A full-window print mode (not a modal): preview on the left, options on the
-   right. Opened from Ctrl+P, the toolbar Print button and the right-click menu. */
-.print-workspace {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
-  background: var(--editor-bg);
-  color: var(--chrome-fg);
-  display: grid;
-  grid-template-columns: 1fr 312px;
-  grid-template-rows: auto 1fr;
-  font-family: var(--font-ui);
-}
-
-.print-ws-top {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: var(--chrome-bg);
-  border-bottom: 1px solid var(--chrome-border);
-}
-
-.print-ws-title {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.print-ws-summary {
-  font-size: 12.5px;
-  color: var(--muted-fg);
-}
-
-.print-ws-status {
-  font-size: 12.5px;
-  color: var(--muted-fg);
-}
-
-.print-ws-spacer {
-  margin-left: auto;
-}
-
-.print-ws-canvas {
-  overflow: auto;
-  padding: 24px;
-  background: color-mix(in srgb, var(--chrome-fg) 12%, var(--editor-bg));
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-}
-
-/* Sized in JS to the scaled sheet stack, since the transform that scales the
-   preview doesn't affect layout (PrintWorkspace.fitPreview). */
-.print-ws-scaler {
-  flex: none;
-}
-
+   PrintWorkspace.tsx styles its chrome with utilities. The one rule here
+   reaches the sheets the renderer builds: a 1px edge instead of a drop shadow,
+   divided by the preview scale (set by fitPreview) so it stays one screen
+   pixel wide after the stack is scaled down. */
 .print-workspace .print-page {
-  box-shadow: 0 3px 14px rgb(0 0 0 / 35%);
+  box-shadow: 0 0 0 calc(1px / var(--print-preview-scale, 1)) rgb(0 0 0 / 28%);
 }
 
-.print-ws-rail {
-  border-left: 1px solid var(--chrome-border);
-  overflow: auto;
-  padding: 4px 16px 16px;
-}
-
-.print-ws-rail .dialog-row input[type="text"],
-.print-ws-rail .dialog-row input[type="number"],
-.print-ws-rail .dialog-row select {
-  font: inherit;
-  font-size: 13px;
-  padding: 4px 8px;
-  border: 1px solid var(--chrome-border);
-  border-radius: 5px;
-  background: var(--editor-bg);
-  color: var(--chrome-fg);
-  min-width: 150px;
-}
-
-.print-ws-rail .dialog-row input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-}
-
-.print-ws-hint {
-  margin: 2px 0 0;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--muted-fg);
-}
-
-.print-ws-note {
-  font-size: 12.5px;
-  color: var(--muted-fg);
-}
-
-.print-ws-pages {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-/* stylelint-disable-next-line no-descending-specificity -- Separate preview and settings-rail scopes. */
-.print-ws-pages select {
-  min-width: 0 !important;
-}
-
-.print-ws-range {
-  width: 92px;
-  min-width: 0 !important;
-}
-
-/* Document | Markdown version chooser. */
-.print-ws-segmented {
-  display: flex;
-  border: 1px solid var(--chrome-border);
-  border-radius: 7px;
-  overflow: hidden;
-}
-
-.print-ws-segmented > button {
-  font: inherit;
-  font-size: 13px;
-  padding: 5px 16px;
-  border: none;
-  background: transparent;
-  color: var(--chrome-fg);
-  cursor: pointer;
-}
-
-.print-ws-segmented > button.active {
-  background: var(--accent);
-  color: var(--accent-fg);
-}
-
-/* ── Compact Slate shell ───────────────────────────────────────────────────
-   The Markdown editor keeps its own document/editor implementations; these
-   rules only reproduce the reference reader's permanent application chrome. */
-.app {
-  color: var(--chrome-fg);
-  background: var(--chrome-bg);
-}
-
-.toolbar {
-  min-height: 38px;
-  border-bottom-color: var(--bar-border) !important;
-  color: var(--chrome-fg);
-}
-
-.toolbar button,
-.tabstrip button,
-.find-bar button,
-.find-bar input {
-  font-family: var(--font-ui);
-}
-
-.toolbar-file {
-  height: 30px;
-  min-width: 0;
-  gap: 5px;
-  padding-inline: 8px !important;
-  border-color: transparent !important;
-  background: transparent !important;
-  color: var(--chrome-fg) !important;
-  box-shadow: none !important;
-}
-
-.toolbar-file > svg:not(.toolbar-caret) {
-  width: 17px;
-  height: 17px;
-  color: var(--muted-fg);
-}
-
-.toolbar-file .toolbar-caret {
-  width: 11px;
-  height: 11px;
-  margin-left: -2px;
-  color: var(--muted-fg);
-}
-
-.toolbar-view {
-  height: 32px;
-  gap: 0;
-}
-
-.toolbar-view .toolbar-seg {
-  height: 30px;
-  min-width: 0;
-  border-color: var(--chrome-border);
-  background: var(--active-tab-bg);
-  padding: 0 10px;
-  color: var(--chrome-fg);
-  font-size: 12px;
-  line-height: 28px;
-  box-shadow: none;
-}
-
-.toolbar-view .toolbar-seg:hover:not(:disabled, .active) {
-  background: var(--toolbar-hover);
-}
-
-.toolbar-view .toolbar-seg.active {
-  border-color: var(--accent) !important;
-  background: var(--accent) !important;
-  color: var(--accent-fg) !important;
-  font-weight: 600;
-}
-
-.toolbar-icon {
-  width: 31px;
-  height: 30px;
-  min-width: 31px;
-  border-color: transparent !important;
-  background: transparent !important;
-  color: var(--muted-fg) !important;
-  box-shadow: none !important;
-}
-
-/* stylelint-disable-next-line no-descending-specificity -- Toolbar icons cannot overlap editor diagram SVGs. */
-.toolbar-icon > svg {
-  width: 24px !important;
-  height: 24px !important;
-  flex: 0 0 24px;
-  stroke-width: 2.2;
-}
-
-.toolbar-icon > .document-theme-glyph {
-  width: 22px !important;
-  height: 22px !important;
-  flex-basis: 22px;
-}
-
-.toolbar-icon:disabled,
-.toolbar-file:disabled {
-  color: #5b626c !important;
-  opacity: 1 !important;
-}
-
-.toolbar-file:hover,
-.toolbar-menu:hover,
-.toolbar-icon:hover:not(:disabled) {
-  background: var(--toolbar-hover) !important;
-}
-
-.toolbar-icon:active:not(:disabled),
-.toolbar-file:active:not(:disabled) {
-  background: var(--toolbar-pressed) !important;
-}
-
-.toolbar-sep {
-  background: var(--bar-border) !important;
-}
-
-.zoom-readout {
-  position: relative;
-  justify-content: center !important;
-  gap: 0 !important;
-  padding: 0 26px 0 8px !important;
-  border-color: var(--input-border) !important;
-  background: var(--control-bg) !important;
-  color: var(--chrome-fg) !important;
-  box-shadow: none !important;
-}
-
-/* stylelint-disable-next-line no-descending-specificity -- Zoom controls cannot overlap editor diagram SVGs. */
-.zoom-readout > svg {
-  position: absolute;
-  right: 7px;
-  width: 12px;
-  height: 12px;
-}
-
-.zoom-readout:hover:not(:disabled) {
-  border-color: var(--chrome-border) !important;
-  background: var(--toolbar-hover) !important;
-}
-
-.tabstrip {
-  min-height: 45px;
-  border-bottom-color: var(--bar-border) !important;
-  color: var(--chrome-fg);
-  scrollbar-color: rgb(139 148 165 / 45%) transparent;
-}
-
-.toolbar-recent {
-  border-color: rgb(255 255 255 / 14%) !important;
-  color: var(--chrome-fg) !important;
-  box-shadow: none !important;
-}
-
-:root:not([data-theme="dark"]) .toolbar-recent {
-  border-color: var(--chrome-border) !important;
-}
-
-.toolbar-recent.active {
-  border-color: var(--accent) !important;
-  background: var(--active-tab-bg) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.tab {
-  border-color: #465469 !important;
-  background: var(--tabstrip-bg) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.tab.active {
-  border-color: #59677a !important;
-  border-bottom-color: var(--active-tab-bg) !important;
-  background: var(--active-tab-bg) !important;
-  color: #e6edf3 !important;
-}
-
-:root:not([data-theme="dark"]) .tab.active {
-  border-color: var(--chrome-border) !important;
-  border-bottom-color: var(--active-tab-bg) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.tab:hover:not(.active),
-.tab-new:hover {
-  background: var(--toolbar-hover) !important;
-}
-
-/* Runtime dark-theme interaction states follow their base rules so their
-   more-specific colors win predictably through the cascade. */
-:root[data-theme="dark"] .toolbar-recent:hover {
-  background: rgb(255 255 255 / 8%);
-}
-
-:root[data-theme="dark"] .toolbar-recent.active {
-  background: rgb(255 255 255 / 12%);
-}
-
-:root[data-theme="dark"] .tab:not(.active):hover {
-  background: rgb(255 255 255 / 6%);
-}
-
-:root[data-theme="dark"] .tab-new:hover {
-  background: rgb(255 255 255 / 8%);
-}
-
-.find-host {
-  min-height: 39px;
-  background: var(--findbar-bg);
-}
-
-.find-host > [data-react-find-bar],
-.find-bar {
-  width: 100%;
-}
-
-.find-bar {
-  border-bottom-color: var(--bar-border) !important;
-  color: var(--muted-fg);
-}
-
-.find-field {
-  border-color: var(--input-border) !important;
-  background: var(--control-bg) !important;
-}
-
-.find-field:focus-within,
-.find-input:focus {
-  border-color: var(--accent) !important;
-}
-
-.find-input::placeholder {
-  color: #7c8494;
-  opacity: 1;
-}
-
-.find-btn {
-  color: var(--muted-fg) !important;
-}
-
-.find-btn:hover:not(:disabled) {
-  background: var(--toolbar-hover) !important;
-  color: var(--chrome-fg) !important;
-}
-
-.find-prev {
-  padding-inline: 14px !important;
-}
-
-.find-toggle {
-  color: var(--muted-fg) !important;
-}
-
-.find-toggle input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  appearance: none;
-  border: 1px solid var(--checkbox-border);
-  border-radius: 4px;
-  background: var(--checkbox-bg);
-  display: grid;
-  place-content: center;
-}
-
-.find-toggle input::before {
-  content: "";
-  width: 8px;
-  height: 5px;
-  margin-top: -1px;
-  border-left: 2px solid var(--accent-fg);
-  border-bottom: 2px solid var(--accent-fg);
-  transform: rotate(-45deg) scale(0);
-}
-
-.find-toggle input:checked {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.find-toggle input:checked::before {
-  transform: rotate(-45deg) scale(1);
-}
-
-.find-toggle input:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: 1px;
-}
-
-.status-bar {
-  border-top-color: var(--bar-border) !important;
-  background: var(--status-bg) !important;
-  color: #7c8494 !important;
-}
-
-.editor-area {
-  background: var(--viewer-canvas) !important;
-  scrollbar-gutter: stable;
-  scrollbar-color: rgb(139 148 165 / 45%) transparent;
-  scrollbar-width: auto;
-}
-
-.editor-area::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-.editor-area::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.editor-area::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 8px;
-  background: rgb(139 148 165 / 48%);
-  background-clip: padding-box;
-}
-
+/* ── Application shell ───────────────────────────────────────────────────
+   React/Tailwind classes in App.tsx own the toolbar, tab row, notice bar and
+   status bar. These rules cover the document canvas, which the editor panes
+   and EditorHost share. */
 .editor-area:not(.split, .markdown-only) .editor-column {
   min-height: 100%;
   background: var(--editor-surface-bg);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 38%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 45%);
+}
+
+/* Mervin paints the viewport's scroll bar column in the window colour, so the
+   thumb reads in both themes instead of sinking into the dark canvas. */
+.editor-area::-webkit-scrollbar-track,
+.editor-area::-webkit-scrollbar-corner {
+  background: var(--window);
 }
 
 :root[data-width-mode="fixed"] .editor-area:not(.split, .markdown-only) .editor-column {
   max-width: min(var(--editor-width), calc(100% - 72px));
-}
-
-.app-menu {
-  border-color: rgb(255 255 255 / 24%) !important;
-  background: var(--menu-bg) !important;
-}
-
-@media (width <= 820px) {
-  .toolbar-view {
-    margin-left: 10px !important;
-  }
-
-  .toolbar-right {
-    margin-left: 4px !important;
-  }
-
-  .toolbar-right .toolbar-sep {
-    margin-inline: 4px !important;
-  }
-}
-
-@media (width <= 620px) {
-  .toolbar-left > .toolbar-sep,
-  .toolbar-right > :first-child,
-  .toolbar-right > :nth-child(5),
-  .toolbar-right > :nth-child(6),
-  .toolbar-right > :nth-child(7) {
-    display: none !important;
-  }
-
-  .toolbar-file {
-    width: 31px;
-    min-width: 31px;
-    justify-content: center;
-    gap: 0;
-    padding-inline: 6px !important;
-  }
-
-  .toolbar-file-label,
-  .toolbar-file .toolbar-caret {
-    display: none;
-  }
-
-  .toolbar-view {
-    margin-left: 6px !important;
-  }
-
-  .toolbar .toolbar-right {
-    margin-left: 0 !important;
-    gap: 2px;
-  }
-
-  .toolbar-view .toolbar-seg {
-    padding-inline: 4px;
-  }
-
-  .zoom-readout {
-    width: 66px;
-  }
-}
-
-@media (width <= 560px) {
-  .find-bar > .find-row:first-child > .find-count,
-  .find-bar > .find-row:first-child > .find-btn,
-  .find-bar > .find-row:first-child > .find-toggle {
-    display: none;
-  }
-
-  .find-replace-row {
-    padding-inline: 6px !important;
-  }
 }
 
 @media print {

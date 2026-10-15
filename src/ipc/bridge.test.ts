@@ -93,6 +93,48 @@ describe("Electron preload integration", () => {
     });
   });
 
+  it("waits for result events that arrive after the search's reply", async () => {
+    const unlisten = vi.fn();
+    bridge.listen.mockReturnValueOnce(unlisten);
+    let finish!: (value: { scanned: number; matched: number; cancelled: boolean }) => void;
+    bridge.invoke.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const onResult = vi.fn();
+    let settled = false;
+    const result = searchRecentContents("late", "needle", { caseSensitive: false }, onResult).then((summary) => {
+      settled = true;
+      return summary;
+    });
+    const listener = bridge.listen.mock.calls[0]![1];
+    const hit = (path: string, matched: number) => ({
+      searchId: "late",
+      hit: { kind: "content" as const, path, line: 1, snippet: "needle", scanned: matched, matched },
+    });
+
+    listener(hit("/docs/a.md", 1));
+    finish({ scanned: 2, matched: 2, cancelled: false });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(unlisten).not.toHaveBeenCalled();
+
+    listener(hit("/docs/b.md", 2));
+    await expect(result).resolves.toEqual({ scanned: 2, matched: 2, cancelled: false });
+    expect(onResult).toHaveBeenCalledTimes(2);
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting for missing result events after a short grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      bridge.invoke.mockResolvedValueOnce({ scanned: 3, matched: 1, cancelled: false });
+      const result = searchRecentContents("lost", "needle", { caseSensitive: false }, vi.fn());
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(result).resolves.toEqual({ scanned: 3, matched: 1, cancelled: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releases content-search listeners when the native command fails", async () => {
     const unlisten = vi.fn();
     bridge.listen.mockReturnValueOnce(unlisten);

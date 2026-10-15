@@ -11,10 +11,12 @@ import type { Settings } from "../state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsDialogView } from "./SettingsDialogView";
 import { disposeReactRoot } from "../app/disposeReactRoot";
+import { captureFocus } from "../app/restoreFocus";
 
 export class SettingsDialog {
   private root: Root | null = null;
   private host: HTMLElement | null = null;
+  private restoreFocus: (() => void) | null = null;
 
   constructor(
     private readonly store: Store,
@@ -31,6 +33,7 @@ export class SettingsDialog {
     // Older settings files may omit newer fields. Merge them over the defaults
     // once per opening so every control has a finite staged value.
     const initial: Settings = { ...DEFAULT_SETTINGS, ...this.store.get().settings };
+    this.restoreFocus = captureFocus();
     const host = document.createElement("div");
     host.className = "settings-dialog-root";
     document.body.appendChild(host);
@@ -61,6 +64,8 @@ export class SettingsDialog {
     this.root = null;
     this.host = null;
     disposeReactRoot(root, host);
+    this.restoreFocus?.();
+    this.restoreFocus = null;
   }
 }
 

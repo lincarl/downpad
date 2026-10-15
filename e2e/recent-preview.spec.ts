@@ -2,11 +2,11 @@ import { test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-// Visual verification of the Recent view (spec §5.8). Mounts the real RecentView
-// component (served by Vite in dev) against an in-page mock data source so we can
-// screenshot fully-populated states without an Electron backend. Screenshots land in
-// e2e/__screens__/ for manual comparison to the spec; this is a screenshot
-// harness, not an assertion test.
+// Visual verification of the Recent view (spec §5.8, after Mervin PDF's Recent
+// page). Mounts the real RecentView component (served by Vite in dev) against an
+// in-page mock data source so we can screenshot fully-populated states without an
+// Electron backend. Screenshots land in e2e/__screens__/ for manual comparison to
+// the spec; this is a screenshot harness, not an assertion test.
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "__screens__");
 
@@ -22,6 +22,9 @@ const ENTRIES = [
   { path: "C:\\Users\\me\\very\\deeply\\nested\\folder\\structure\\that\\overflows\\README.md", days: 64, favorite: true, exists: true, size: 2048, content: "readme overview section", line: 1 },
   { path: "C:\\Users\\me\\notes\\budget-2026.md", days: 370, favorite: false, exists: true, size: 800, content: "quarterly budget totals", line: 9 },
 ];
+
+// The same history with nothing starred, so the list has no section captions.
+const UNSTARRED = ENTRIES.map((e) => ({ ...e, favorite: false }));
 
 async function mount(page: import("@playwright/test").Page, opts: { entries?: typeof ENTRIES; dark?: boolean } = {}): Promise<void> {
   await page.goto("/");
@@ -73,7 +76,7 @@ async function mount(page: import("@playwright/test").Page, opts: { entries?: ty
       app.innerHTML = "";
       app.style.height = "100vh";
       app.style.overflow = "auto";
-      app.style.background = "var(--editor-bg)";
+      app.style.background = "var(--window)";
       const rv = new mod.RecentView(data, () => 100, {
         onOpenFile() {},
         onSummaryChange(t: string) {
@@ -95,47 +98,62 @@ async function mount(page: import("@playwright/test").Page, opts: { entries?: ty
   await page.waitForTimeout(250);
 }
 
-test("recent — All (light)", async ({ page }) => {
+test("recent — favourites pinned (light)", async ({ page }) => {
   await mount(page);
   await page.screenshot({ path: path.join(OUT, "recent-all-light.png"), fullPage: true });
 });
 
-test("recent — Favorites (light)", async ({ page }) => {
-  await mount(page);
-  await page.getByRole("button", { name: "Favorites", exact: true }).click();
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: path.join(OUT, "recent-favorites-light.png"), fullPage: true });
+test("recent — nothing starred (light)", async ({ page }) => {
+  // With no favourites the list is the plain history, without captions.
+  await mount(page, { entries: UNSTARRED });
+  await page.screenshot({ path: path.join(OUT, "recent-unstarred-light.png"), fullPage: true });
 });
 
-test("recent — All (dark)", async ({ page }) => {
+test("recent — favourites pinned (dark)", async ({ page }) => {
   await mount(page, { dark: true });
   await page.screenshot({ path: path.join(OUT, "recent-all-dark.png"), fullPage: true });
 });
 
-test("recent — Name search highlights the match", async ({ page }) => {
+test("recent — Names search highlights the match", async ({ page }) => {
   await mount(page);
-  // Name scope is the default; the matched run of each filename is emboldened.
+  // Names is the default scope; the matched run of each filename is marked.
   await page.locator(".recent-search-input").fill("note");
   await page.waitForTimeout(300); // 200ms name debounce + render
   await page.screenshot({ path: path.join(OUT, "recent-name-search.png"), fullPage: true });
 });
 
-test("recent — Inside search results", async ({ page }) => {
+test("recent — Contents search results", async ({ page }) => {
   await mount(page);
-  await page.getByRole("button", { name: "Inside docs", exact: true }).click();
+  await page.getByRole("button", { name: "Contents", exact: true }).click();
   await page.locator(".recent-search-input").fill("the");
   await page.waitForTimeout(700); // 400ms debounce + render
   // "the" matches the content of several entries, so each result row shows its
-  // own snippet between the filename and the path, with "the" emboldened.
+  // own snippet between the filename and the path, with "the" marked.
   await page.screenshot({ path: path.join(OUT, "recent-inside-search.png"), fullPage: true });
 });
 
-test("recent — Inside search results (dark)", async ({ page }) => {
+test("recent — Contents search results (dark)", async ({ page }) => {
   await mount(page, { dark: true });
-  await page.getByRole("button", { name: "Inside docs", exact: true }).click();
+  await page.getByRole("button", { name: "Contents", exact: true }).click();
   await page.locator(".recent-search-input").fill("the");
   await page.waitForTimeout(700);
   await page.screenshot({ path: path.join(OUT, "recent-inside-search-dark.png"), fullPage: true });
+});
+
+test("recent — All search lists name matches, then content hits", async ({ page }) => {
+  await mount(page);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  await page.locator(".recent-search-input").fill("notes");
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: path.join(OUT, "recent-all-search.png"), fullPage: true });
+});
+
+test("recent — keyboard focus on a row", async ({ page }) => {
+  await mount(page, { dark: true });
+  await page.locator(".recent-search-input").focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.screenshot({ path: path.join(OUT, "recent-keyboard-focus-dark.png"), fullPage: true });
 });
 
 test("recent — empty state", async ({ page }) => {

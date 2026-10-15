@@ -1,8 +1,10 @@
 // Right-click context menu for images in the WYSIWYG view (spec §5.5): Copy
-// image, Copy image path, Copy as markdown, Replace image…, Edit alt text,
-// Delete. Implemented as a $prose plugin so it has the EditorView directly; it
-// also publishes the view into the shared ViewRef used by the missing-image
-// handler (imageView.ts). All mutations go through ProseMirror transactions.
+// image, Copy image path, Copy as Markdown | Replace image…, Edit alt text… |
+// Delete, with Mervin-style icons and separators between the copy, edit and
+// delete groups. Implemented as a $prose plugin so it has the EditorView
+// directly; it also publishes the view into the shared ViewRef used by the
+// missing-image handler (imageView.ts). All mutations go through ProseMirror
+// transactions.
 //
 // "Copy image" uses the DOM clipboard (ClipboardItem) per design risk #9 — no
 // native command needed — normalizing to image/png via a canvas.
@@ -28,6 +30,7 @@ import {
 } from "./imageView";
 import type { WysiwygContext } from "./context";
 import { openTextPrompt } from "../../components/TextPromptDialog";
+import { MENU_ICONS } from "../../shell/menuIcons";
 
 export const imageContextMenuKey = new PluginKey("md-easy-image-context-menu");
 
@@ -90,12 +93,26 @@ function buildItems(
 ): MenuItem[] {
   const { src, alt, altKey } = imageAttrs(node);
   return [
-    { label: "Copy image", run: () => copyImage(src, ctx).catch(() => {}) },
-    { label: "Copy image path", run: () => void navigator.clipboard.writeText(src).catch(() => {}) },
-    { label: "Copy as markdown", run: () => void navigator.clipboard.writeText(`![${alt}](${src})`).catch(() => {}) },
-    { label: "Replace image…", run: () => replaceImage(view, pos, node, ctx) },
+    { label: "Copy image", icon: MENU_ICONS.copy, run: () => copyImage(src, ctx).catch(() => {}) },
+    {
+      label: "Copy image path",
+      icon: MENU_ICONS.copyPath,
+      run: () => void navigator.clipboard.writeText(src).catch(() => {}),
+    },
+    {
+      label: "Copy as Markdown",
+      icon: MENU_ICONS.markdown,
+      run: () => void navigator.clipboard.writeText(`![${alt}](${src})`).catch(() => {}),
+    },
+    {
+      label: "Replace image…",
+      icon: MENU_ICONS.replaceImage,
+      separatorBefore: true,
+      run: () => replaceImage(view, pos, node, ctx),
+    },
     {
       label: "Edit alt text…",
+      icon: MENU_ICONS.edit,
       run: async () => {
         const next = await openTextPrompt({
           title: "Edit alt text",
@@ -108,6 +125,8 @@ function buildItems(
     },
     {
       label: "Delete",
+      icon: MENU_ICONS.delete,
+      separatorBefore: true,
       run: () => {
         view.dispatch(view.state.tr.delete(pos, pos + node.nodeSize));
         view.focus();

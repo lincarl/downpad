@@ -21,7 +21,7 @@ import type { SerializerStyle } from "../../state/types";
 import { toRemarkStringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
 import { linkViewPlugin } from "./linkView";
-import { renderMermaidPreview } from "./mermaid";
+import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import {
@@ -129,6 +129,8 @@ export class WysiwygEditor {
         [Crepe.Feature.CodeMirror]: { renderPreview: renderMermaidPreview },
         // Display linked images + missing-image placeholder/relocate (§5.5).
         [Crepe.Feature.ImageBlock]: imageBlockFeatureConfig(viewRef, context),
+        // Crepe's default empty-line hint is "Please enter...".
+        [Crepe.Feature.Placeholder]: { text: "Type / for blocks" },
       },
     });
     // Apply serialization style (bullets/emphasis/heading style, etc.).
@@ -352,6 +354,8 @@ export class WysiwygEditor {
       // abandoned mount's concern; cleanup still gets a chance to run.
       if (creating) await creating.catch(() => {});
       if (crepe) await crepe.destroy();
+      // Release the closed document's diagrams from the theme watcher.
+      pruneMermaidPreviews();
     })();
     return this.destroyPromise;
   }

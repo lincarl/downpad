@@ -111,10 +111,3 @@ export function pageGeometry(setup: PageSetup): PageGeometry {
     scale,
   };
 }
-
-/** Human-readable summary shown in the print workspace header ("A4 portrait"). */
-export function describeSetup(setup: PageSetup): string {
-  const paper = PAPER_SIZES[setup.paperSize] ?? PAPER_SIZES.a4;
-  const name = paper.label.replace(/\s*\(.*\)$/, "");
-  return `${name} ${setup.orientation}`;
-}

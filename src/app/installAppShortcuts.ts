@@ -24,6 +24,14 @@ export function installAppShortcuts(actions: AppShortcutActions): () => void {
     // The print workspace owns its own key handling while it covers the window.
     if (actions.isPrintOpen()) return;
 
+    // A modal dialog (Settings, File not found, a prompt) owns the keyboard, so
+    // app shortcuts must not act behind it. Ctrl+P still never reaches the
+    // browser's own printing.
+    if (document.querySelector('[role="dialog"][data-state="open"]')) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") event.preventDefault();
+      return;
+    }
+
     if (event.key === "F3") {
       if (actions.store.get().view === "wysiwyg" && actions.isFindOpen()) {
         event.preventDefault();
@@ -55,9 +63,9 @@ export function installAppShortcuts(actions: AppShortcutActions): () => void {
       actions.focusRecentSearch();
     } else if ((key === "f" || key === "h") && !event.shiftKey) {
       const state = actions.store.get();
-      // Search is permanent application chrome. It targets the formatted
-      // document or raw Markdown according to the selected editor layout, so
-      // Ctrl+F always focuses the same already-visible field.
+      // Ctrl+F and Ctrl+H open the find card over the document (Ctrl+H with
+      // its replace row). It targets the formatted document or raw Markdown
+      // according to the selected editor layout.
       if (state.view === "wysiwyg") {
         event.preventDefault();
         event.stopPropagation();
@@ -66,8 +74,8 @@ export function installAppShortcuts(actions: AppShortcutActions): () => void {
     }
   };
 
-  // Capture before editor-local keymaps so CodeMirror cannot open a second
-  // search panel underneath the permanent application strip.
+  // Capture before editor-local keymaps so CodeMirror never opens its own
+  // search panel beside the find card.
   window.addEventListener("keydown", onKeyDown, true);
   return () => window.removeEventListener("keydown", onKeyDown, true);
 }

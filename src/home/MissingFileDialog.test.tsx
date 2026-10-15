@@ -21,6 +21,18 @@ describe("openMissingFileDialog", () => {
     await expect(result).resolves.toBe("remove");
   });
 
+  it("puts Locate last with initial focus, and Escape cancels", async () => {
+    const result = openMissingFileDialog("gone.md");
+    const user = userEvent.setup();
+
+    const buttons = screen.getAllByRole("button").map((button) => button.textContent);
+    expect(buttons).toEqual(["Remove from history", "Cancel", "Locate"]);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Locate" }));
+
+    await user.keyboard("{Escape}");
+    await expect(result).resolves.toBe("cancel");
+  });
+
   it("can be cancelled by its owning Recent view", async () => {
     const controller = new AbortController();
     const result = openMissingFileDialog("gone.md", controller.signal);

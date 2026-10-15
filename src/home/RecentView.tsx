@@ -1,24 +1,31 @@
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { FileText, Search, X } from "lucide-react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent } from "react";
+import { File, FolderOpen } from "lucide-react";
 import type { RecentEntry } from "@/state/types";
 import type { FileStat } from "@/ipc/contracts";
 import type { RecentDataSource } from "./recentData";
+import { fileName, dirName } from "./recentFormat";
 import {
-  fileName,
-  dirName,
-  formatDate,
-  formatSize,
-  filterByName,
-  favoritesSorted,
-} from "./recentFormat";
+  buildListing,
+  emptyNote,
+  recentSummary,
+  searchStatus,
+  widestSearchStatus,
+  type ContentHit,
+  type RecentListing,
+  type SearchPhase,
+  type SearchScope,
+} from "./recentListing";
+import { RecentSearchField } from "./RecentSearchField";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { RecentCaption, RecentRow } from "./RecentRow";
 import { showContextMenu } from "@/shell/contextMenu";
 import { openMissingFileDialog } from "./MissingFileDialog";
 import { cn } from "@/lib/utils";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
 import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { FileCopyIcon, FolderCopyIcon } from "@/components/icons";
 
 export interface RecentViewCallbacks {
   onOpenFile(path: string): void;
@@ -28,36 +35,43 @@ export interface RecentViewCallbacks {
   copy(text: string): void | Promise<void>;
 }
 
-type Mode = "all" | "favorites";
-type Scope = "name" | "inside";
+/** Name filtering waits for a short pause in typing; content search for a longer one. */
+const NAME_DEBOUNCE_MS = 200;
+const CONTENT_DEBOUNCE_MS = 400;
+/** File row height, for Page Up and Page Down. */
+const ROW_HEIGHT = 64;
 
-interface ContentHit {
-  line: number;
-  snippet: string;
-}
-
-interface RowModel {
-  entry: RecentEntry;
-  hit?: ContentHit;
-}
-
+/**
+ * The Recent page, after Mervin PDF's: a search field with Names / Contents / All
+ * scopes above one list with starred files pinned under "Favorites" and the rest
+ * of the history under "Recent". The class owns the state and renders through
+ * its own React root into `element`.
+ */
 export class RecentView {
   readonly element = document.createElement("div");
   private readonly root: Root;
   private searchInput: HTMLInputElement | null = null;
+  private listElement: HTMLDivElement | null = null;
   private entries: RecentEntry[] = [];
   private readonly stats = new Map<string, FileStat>();
-  private mode: Mode = "all";
-  private scope: Scope = "name";
+  private scope: SearchScope = "names";
   private query = "";
   private renderedNameQuery = "";
-  private progressText = "";
   private readonly contentHits = new Map<string, ContentHit>();
+  private phase: SearchPhase = "idle";
+  private scanned = 0;
+  /**
+   * The section each row starred or unstarred during this visit was listed in.
+   * The row keeps its place until the query or scope changes or Recent is left,
+   * so a mistaken click is undone by clicking the same star again.
+   */
+  private readonly keptSections = new Map<string, boolean>();
+  /** The row that holds the list's single tab stop. */
+  private currentPath: string | null = null;
   private searchSeq = 0;
   private prevSearchId: string | null = null;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private nameTimer: ReturnType<typeof setTimeout> | null = null;
-  private contentSearchSettled = false;
   private destroyed = false;
   private missingDialogAbort: AbortController | null = null;
 
@@ -67,11 +81,14 @@ export class RecentView {
     private readonly cb: RecentViewCallbacks,
   ) {
     this.element.dataset.reactRecentView = "";
+    this.element.className = "h-full";
     this.root = createRoot(this.element);
     this.render();
   }
 
+  /** Reload the history. Called each time Recent is shown. */
   async refresh(): Promise<void> {
+    const focusBefore = document.activeElement;
     try {
       this.entries = await this.data.list();
     } catch {
@@ -79,10 +96,11 @@ export class RecentView {
     }
     if (this.destroyed) return;
     this.stats.clear();
-    this.stopContentSearch();
-    this.setProgress("");
+    this.keptSections.clear();
+    this.resetContentSearch();
+    this.scheduleContentSearch();
     this.render();
-    if (this.scope === "inside" && this.query.trim()) this.scheduleContentSearch();
+    this.focusSearchOnShow(focusBefore);
   }
 
   focusSearch(): void {
@@ -91,54 +109,83 @@ export class RecentView {
   }
 
   onLeave(): void {
-    this.stopContentSearch();
-    this.setProgress("");
+    if (this.nameTimer) clearTimeout(this.nameTimer);
+    this.nameTimer = null;
+    this.renderedNameQuery = this.query;
+    this.keptSections.clear();
+    this.resetContentSearch();
     this.render();
   }
 
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.stopContentSearch();
+    this.resetContentSearch();
     if (this.nameTimer) clearTimeout(this.nameTimer);
     this.nameTimer = null;
     this.missingDialogAbort?.abort();
     this.missingDialogAbort = null;
     this.searchInput = null;
+    this.listElement = null;
     disposeReactRoot(this.root, this.element);
   }
 
-  private setMode(mode: Mode): void {
-    if (this.mode === mode) return;
-    this.mode = mode;
-    this.render();
-    this.refreshContentCount();
+  /**
+   * Mervin focuses the search field whenever Recent opens. Take focus only while
+   * the view is on screen, the user has not moved focus since the refresh began,
+   * and no dialog or menu holds it.
+   */
+  private focusSearchOnShow(focusBefore: Element | null): void {
+    if (!this.element.isConnected || this.element.getClientRects().length === 0) return;
+    const active = document.activeElement;
+    if (active && active !== focusBefore && active !== document.body) return;
+    if (active?.closest("[role='dialog'], [role='alertdialog'], [role='menu']")) return;
+    this.focusSearch();
   }
 
-  private setScope(scope: Scope): void {
-    if (this.scope === scope) return;
-    this.scope = scope;
-    this.stopContentSearch();
-    this.setProgress("");
-    if (scope === "inside" && this.query.trim()) this.scheduleContentSearch();
-    this.render();
+  /** The file-name filter the list applies; the Contents scope has none. */
+  private nameQuery(): string {
+    return this.scope === "contents" ? "" : this.renderedNameQuery.trim();
   }
+
+  /** The content query, or "" when the scope does not search contents. */
+  private contentQuery(): string {
+    return this.scope === "names" ? "" : this.query.trim();
+  }
+
+  private readonly bindSearchInput = (element: HTMLInputElement | null): void => {
+    this.searchInput = element;
+    if (element) element.oninput = () => this.onInput(element.value);
+  };
+
+  private readonly bindList = (element: HTMLDivElement | null): void => {
+    this.listElement = element;
+  };
 
   private onInput(value: string): void {
     this.query = value;
-    if (this.scope === "inside") {
-      this.stopContentSearch();
-      this.setProgress("");
-      this.render();
-      this.scheduleContentSearch();
-      return;
-    }
+    this.keptSections.clear();
+    this.resetContentSearch();
     if (this.nameTimer) clearTimeout(this.nameTimer);
-    this.render();
     this.nameTimer = setTimeout(() => {
+      this.nameTimer = null;
       this.renderedNameQuery = this.query;
       this.render();
-    }, 200);
+    }, NAME_DEBOUNCE_MS);
+    this.scheduleContentSearch();
+    this.render();
+  }
+
+  private setScope(scope: SearchScope): void {
+    if (this.scope === scope) return;
+    this.scope = scope;
+    if (this.nameTimer) clearTimeout(this.nameTimer);
+    this.nameTimer = null;
+    this.renderedNameQuery = this.query;
+    this.keptSections.clear();
+    this.resetContentSearch();
+    this.scheduleContentSearch();
+    this.render();
   }
 
   private clearQuery(): void {
@@ -147,273 +194,284 @@ export class RecentView {
     if (this.searchInput) this.searchInput.value = "";
     if (this.nameTimer) clearTimeout(this.nameTimer);
     this.nameTimer = null;
-    this.stopContentSearch();
-    this.setProgress("");
+    this.keptSections.clear();
+    this.resetContentSearch();
     this.render();
   }
 
-  private scheduleContentSearch(): void {
-    this.contentSearchSettled = false;
-    if (this.searchTimer) clearTimeout(this.searchTimer);
-    if (this.scope !== "inside") return;
-    this.searchTimer = setTimeout(() => void this.runContentSearch(), 400);
+  private onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      this.clearQuery();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this.focusList();
+    }
   }
 
-  private stopContentSearch(): void {
-    this.contentSearchSettled = false;
+  /** Focus the list's current row, or its first row. */
+  private focusList(): void {
+    const list = this.listElement;
+    const target =
+      list?.querySelector<HTMLButtonElement>(".recent-row-open[tabindex='0']") ??
+      list?.querySelector<HTMLButtonElement>(".recent-row-open");
+    target?.focus();
+  }
+
+  /** Arrow keys, Home, End, Page Up and Page Down move between rows; Right and Left
+   * step between a row and its star. Up from the first row returns to the field. */
+  private onListKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const row = target.closest<HTMLElement>(".recent-row");
+    if (!row) return;
+    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(".recent-row"));
+    const index = rows.indexOf(row);
+    const onStar = target.classList.contains("recent-star");
+    const page = Math.max(1, Math.floor(event.currentTarget.clientHeight / ROW_HEIGHT));
+    let next: number;
+    switch (event.key) {
+      case "ArrowDown":
+        next = index + 1;
+        break;
+      case "ArrowUp":
+        if (index === 0) {
+          event.preventDefault();
+          this.focusSearch();
+          return;
+        }
+        next = index - 1;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = rows.length - 1;
+        break;
+      case "PageDown":
+        next = index + page;
+        break;
+      case "PageUp":
+        next = index - page;
+        break;
+      case "ArrowRight":
+        if (!onStar) {
+          event.preventDefault();
+          row.querySelector<HTMLButtonElement>(".recent-star")?.focus();
+        }
+        return;
+      case "ArrowLeft":
+        if (onStar) {
+          event.preventDefault();
+          row.querySelector<HTMLButtonElement>(".recent-row-open")?.focus();
+        }
+        return;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const destination = rows[Math.max(0, Math.min(rows.length - 1, next))];
+    destination.querySelector<HTMLButtonElement>(onStar ? ".recent-star" : ".recent-row-open")?.focus();
+  }
+
+  private onRowFocus(path: string): void {
+    if (this.currentPath === path) return;
+    this.currentPath = path;
+    this.render();
+  }
+
+  /** Arm the content search after the typing pause, if the scope searches contents. */
+  private scheduleContentSearch(): void {
+    if (!this.contentQuery()) return;
+    this.phase = "pending";
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = null;
+      void this.runContentSearch();
+    }, CONTENT_DEBOUNCE_MS);
+  }
+
+  /** Drop the pending or running content search and its hits. */
+  private resetContentSearch(): void {
+    this.cancelContentSearch();
+    this.contentHits.clear();
+    this.phase = "idle";
+    this.scanned = 0;
+  }
+
+  private cancelContentSearch(): void {
     if (this.searchTimer) clearTimeout(this.searchTimer);
     this.searchTimer = null;
     if (this.prevSearchId) this.data.cancelContentSearch(this.prevSearchId);
     this.prevSearchId = null;
     this.searchSeq++;
-    this.contentHits.clear();
+  }
+
+  /** Stop: end the scan but keep what it found. */
+  private stopContentSearch(): void {
+    if (this.phase !== "pending" && this.phase !== "running") return;
+    this.cancelContentSearch();
+    this.phase = "stopped";
+    this.render();
   }
 
   private async runContentSearch(): Promise<void> {
-    const query = this.query.trim();
-    if (this.scope !== "inside" || !query) {
-      this.setProgress("");
+    const query = this.contentQuery();
+    if (!query) {
+      this.phase = "idle";
       this.render();
       return;
     }
-    if (this.prevSearchId) this.data.cancelContentSearch(this.prevSearchId);
     const seq = ++this.searchSeq;
     const searchId = `recent-search-${seq}`;
+    const current = (): boolean => seq === this.searchSeq && !this.destroyed;
     this.prevSearchId = searchId;
     this.contentHits.clear();
-    this.setProgress("Searching file contents…");
+    this.phase = "running";
+    this.scanned = 0;
     this.render();
     try {
       const summary = await this.data.searchContents(searchId, query, {
         onHit: (path, line, snippet) => {
-          if (seq !== this.searchSeq || this.destroyed) return;
+          if (!current()) return;
           this.contentHits.set(path, { line, snippet });
           this.render();
         },
         onProgress: (scanned) => {
-          if (seq !== this.searchSeq || this.destroyed) return;
-          this.setProgress(`Searching file contents… ${scanned} / ${this.entries.length}`);
+          if (!current()) return;
+          this.scanned = scanned;
           this.render();
         },
       });
-      if (seq !== this.searchSeq || this.destroyed) return;
+      if (!current()) return;
       this.prevSearchId = null;
-      if (summary.cancelled) {
-        this.setProgress("");
-        this.render();
-        return;
-      }
-      this.contentSearchSettled = true;
-      this.showContentCount(query);
+      // The main process ended the scan early: report it as stopped, so the
+      // hits it found so far are not listed without a status.
+      this.phase = summary.cancelled ? "stopped" : "done";
       this.render();
     } catch {
-      if (seq === this.searchSeq && !this.destroyed) {
-        this.setProgress("");
-        this.render();
-      }
-    }
-  }
-
-  private setProgress(text: string): void {
-    this.progressText = text;
-  }
-
-  private contentMatches(): RecentEntry[] {
-    const base = this.mode === "favorites" ? favoritesSorted(this.entries) : this.entries;
-    return base.filter((entry) => this.contentHits.has(entry.path));
-  }
-
-  private showContentCount(query: string): void {
-    const q = query.trim();
-    if (this.scope !== "inside" || !q) return;
-    const count = this.contentMatches().length;
-    this.setProgress(
-      count > 0
-        ? `${count} file${count === 1 ? "" : "s"} found`
-        : this.mode === "favorites"
-          ? `No favorites contain "${q}"`
-          : `No files contain "${q}"`,
-    );
-  }
-
-  private refreshContentCount(): void {
-    if (this.scope === "inside" && this.contentSearchSettled) {
-      this.showContentCount(this.query);
+      if (!current()) return;
+      this.prevSearchId = null;
+      this.phase = "idle";
       this.render();
     }
   }
 
-  private rows(): { rows: RowModel[]; empty: string; nameQuery: string } {
-    const insideQuery = this.query.trim();
-    const nameQuery = this.scope === "name" ? this.renderedNameQuery.trim() : "";
-    const favorites = favoritesSorted(this.entries);
-    if (this.scope === "inside" && insideQuery) {
-      return {
-        rows: this.contentMatches().map((entry) => ({ entry, hit: this.contentHits.get(entry.path) })),
-        empty: "",
-        nameQuery: "",
-      };
-    }
-    let base = this.mode === "favorites" ? favorites : this.entries;
-    if (nameQuery) base = filterByName(base, nameQuery);
-    else if (this.mode === "all") base = base.slice(0, this.getVisibleCount());
-    let empty = "";
-    if (this.entries.length === 0) empty = "No recent files yet";
-    else if (this.mode === "favorites" && favorites.length === 0) empty = "No favorites yet";
-    else if (nameQuery && base.length === 0) empty = "No recent files match the filter";
-    return { rows: base.map((entry) => ({ entry })), empty, nameQuery };
+  private listing(): RecentListing {
+    return buildListing({
+      entries: this.entries,
+      scope: this.scope,
+      nameQuery: this.nameQuery(),
+      contentQuery: this.contentQuery(),
+      hits: this.contentHits,
+      visibleCount: this.getVisibleCount(),
+      inFavorites: (entry) => this.keptSections.get(entry.path) ?? entry.favorite,
+    });
   }
 
   private render(): void {
     if (this.destroyed) return;
-    const { rows, empty, nameQuery } = this.rows();
-    const count = rows.length;
-    this.cb.onSummaryChange(
-      this.mode === "favorites"
-        ? "Your starred documents"
-        : `Your last ${count} opened document${count === 1 ? "" : "s"}`,
-    );
+    const { favorites, recent } = this.listing();
+    const rows = [...favorites, ...recent];
+    const nameQuery = this.nameQuery();
+    const contentQuery = this.contentQuery();
+    const filter = this.scope === "names" ? nameQuery : contentQuery;
+    this.cb.onSummaryChange(recentSummary(Boolean(nameQuery || contentQuery), rows));
+    const empty = rows.length ? "" : emptyNote(this.scope, filter, this.phase);
+    const status = contentQuery
+      ? searchStatus(this.phase, this.scanned, this.entries.length, rows.length)
+      : null;
+    const tabStop = rows.some((row) => row.entry.path === this.currentPath)
+      ? this.currentPath
+      : (rows[0]?.entry.path ?? null);
     const now = Date.now();
+    const renderRows = (section: typeof rows) =>
+      section.map((row) => (
+        <RecentRow
+          key={row.entry.path}
+          row={row}
+          stat={this.stats.get(row.entry.path)}
+          nameQuery={row.hit ? "" : nameQuery}
+          snippetQuery={contentQuery}
+          now={now}
+          tabStop={row.entry.path === tabStop}
+          onOpen={() => void this.openEntry(row.entry)}
+          onMenu={(x, y) => this.showRowMenu(row.entry, x, y)}
+          onToggleStar={() => void this.toggleFavorite(row.entry)}
+          onFocus={() => this.onRowFocus(row.entry.path)}
+        />
+      ));
     flushSync(() => {
       this.root.render(
-        <div className="recent-view h-full overflow-auto bg-[var(--editor-bg)]">
-          <div className="recent-inner mx-auto max-w-[860px] px-6 pt-7 pb-16">
-            <h1 className="recent-heading mt-0 mb-[14px] text-[24px] font-semibold">Recent files</h1>
-            <ToggleGroup
-              type="single"
-              value={this.mode}
-              className="segmented recent-modes mb-[14px] inline-flex overflow-hidden rounded-[7px] border border-[var(--chrome-border)] bg-[var(--chrome-bg)]"
-              role="group"
-              aria-label="Recent file filter"
-              onValueChange={(value) => {
-                if (value) this.setMode(value as Mode);
-              }}
-            >
-              <Segment value="all" active={this.mode === "all"}>All</Segment>
-              <Segment value="favorites" active={this.mode === "favorites"}>Favorites</Segment>
-            </ToggleGroup>
-            <div className="recent-searchbar mb-[6px] flex items-center gap-3">
-              <div className="recent-search-wrap flex flex-1 items-center gap-[6px] rounded-[7px] border border-[var(--chrome-border)] bg-[var(--editor-bg)] px-[10px] py-[5px] focus-within:border-[var(--accent)]">
-                <span className="recent-search-icon text-[13px] opacity-70"><Search aria-hidden="true" /></span>
-                <input
-                  ref={(element) => {
-                    this.searchInput = element;
-                    if (element) element.oninput = () => this.onInput(element.value);
-                  }}
-                  type="text"
-                  className="recent-search-input flex-1 border-0 bg-transparent font-[inherit] text-[13px] text-[var(--chrome-fg)] outline-none"
-                  aria-label={this.scope === "inside" ? "Search inside recent documents" : "Search recent file names"}
-                  placeholder={this.scope === "inside" ? "Search inside documents" : "Search file names"}
-                  defaultValue={this.query}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.stopPropagation();
-                      this.clearQuery();
-                    }
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="recent-search-clear size-auto rounded-none border-0 bg-transparent px-0.5 py-0 text-[13px] font-normal text-[var(--muted-fg)] hover:bg-transparent"
-                  title="Clear"
-                  aria-label="Clear"
-                  style={{ visibility: this.query ? "visible" : "hidden" }}
-                  onClick={() => this.clearQuery()}
-                ><X aria-hidden="true" /></Button>
-              </div>
-              <ToggleGroup
-                type="single"
-                value={this.scope}
-                className="segmented recent-scope inline-flex overflow-hidden rounded-[7px] border border-[var(--chrome-border)] bg-[var(--chrome-bg)]"
-                role="group"
-                aria-label="Search scope"
-                onValueChange={(value) => {
-                  if (value) this.setScope(value as Scope);
-                }}
-              >
-                <Segment value="name" active={this.scope === "name"}>Name</Segment>
-                <Segment value="inside" active={this.scope === "inside"}>Inside docs</Segment>
-              </ToggleGroup>
-            </div>
+        <TooltipProvider delayDuration={600}>
+        <div className="recent-view flex h-full flex-col bg-window px-6 pt-4 pb-3">
+          <div className="recent-searchbar mb-3 flex h-[29px] shrink-0 items-center">
+            <RecentSearchField
+              scope={this.scope}
+              defaultValue={this.query}
+              hasQuery={this.query !== ""}
+              inputRef={this.bindSearchInput}
+              onScope={(scope) => this.setScope(scope)}
+              onClear={() => this.clearQuery()}
+              onKeyDown={(event) => this.onSearchKeyDown(event)}
+            />
             <div
-              className="recent-progress min-h-[1.2em] px-0.5 py-1 text-[12px] leading-[normal] text-[var(--muted-fg)]"
+              className={cn(
+                "recent-progress ml-4 text-[12px] whitespace-nowrap",
+                status?.running ? "text-ink" : "text-ink-soft",
+              )}
               role="status"
               aria-live="polite"
               aria-atomic="true"
             >
-              {this.progressText}
-            </div>
-            <div className="recent-list flex flex-col">
-              {empty ? (
-                <div className="recent-empty px-1 py-8 text-center text-[14px] leading-[normal] text-[var(--muted-fg)]">{empty}</div>
-              ) : (
-                rows.map(({ entry, hit }) => this.renderRow(entry, hit, nameQuery, now))
+              {status && (
+                <span className="grid">
+                  {/* While the scan runs the label keeps the width of its longest
+                      text, so Stop never moves as the count grows. */}
+                  {status.running && (
+                    <span className="invisible col-start-1 row-start-1" aria-hidden="true">
+                      {`${widestSearchStatus(this.entries.length)} `}
+                    </span>
+                  )}
+                  <span className="recent-progress-text col-start-1 row-start-1">{status.text}</span>
+                </span>
               )}
             </div>
+            {status?.running && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="recent-search-stop ml-[10px] bg-transparent"
+                // Tab focus only: a click leaves the caret in the field.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => this.stopContentSearch()}
+              >
+                Stop
+              </Button>
+            )}
           </div>
-        </div>,
+          <div
+            ref={this.bindList}
+            className="recent-list flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-popover dark:bg-well"
+            onKeyDown={(event) => this.onListKeyDown(event)}
+          >
+            {favorites.length > 0 && <RecentCaption first>Favorites</RecentCaption>}
+            {renderRows(favorites)}
+            {favorites.length > 0 && recent.length > 0 && (
+              <RecentCaption first={false}>Recent</RecentCaption>
+            )}
+            {renderRows(recent)}
+            {empty && (
+              <div className="recent-empty flex h-9 shrink-0 items-center px-4 text-[12px] text-ink-soft">
+                {empty}
+              </div>
+            )}
+          </div>
+        </div>
+        </TooltipProvider>,
       );
     });
-    if (!empty) void this.ensureStats(rows.map(({ entry }) => entry.path));
-  }
-
-  private renderRow(entry: RecentEntry, hit: ContentHit | undefined, nameQuery: string, now: number) {
-    const stat = this.stats.get(entry.path);
-    const missing = stat ? !stat.exists : false;
-    return (
-      <div
-        key={entry.path}
-        className={cn(
-          "recent-row grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-x-[14px] rounded-[7px] px-[10px] py-[9px] hover:bg-[var(--chrome-bg)]",
-          missing && "missing opacity-50",
-        )}
-        title={missing ? "This file is no longer on disk." : entry.path}
-        onClick={() => void this.openEntry(entry)}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          this.showRowMenu(entry, event.clientX, event.clientY);
-        }}
-      >
-        <button
-          type="button"
-          className="recent-row-open col-[1/4] grid w-full min-w-0 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-[14px] border-0 bg-transparent p-0 text-left font-[inherit] text-[inherit] [&_.recent-icon]:text-[18px] [&_.recent-icon]:leading-none [&_.recent-mid]:min-w-0 [&_.recent-name]:truncate [&_.recent-name]:text-[14px] [&_.recent-name]:leading-[normal] [&_.recent-name]:font-semibold [&_.recent-line]:font-normal [&_.recent-line]:text-[var(--muted-fg)] [&_.recent-snippet]:my-px [&_.recent-snippet]:truncate [&_.recent-snippet]:text-[12px] [&_.recent-snippet]:leading-[normal] [&_.recent-snippet]:text-[var(--muted-fg)] [&_.recent-path]:truncate [&_.recent-path]:text-left [&_.recent-path]:text-[12px] [&_.recent-path]:leading-[normal] [&_.recent-path]:text-[var(--muted-fg)] [&_.recent-path]:[direction:rtl] [&_.recent-right]:text-right [&_.recent-right]:whitespace-nowrap [&_.recent-date]:text-[12.5px] [&_.recent-date]:leading-[normal] [&_.recent-date]:text-[var(--chrome-fg)] [&_.recent-size]:text-[12px] [&_.recent-size]:leading-[normal] [&_.recent-size]:text-[var(--muted-fg)]"
-          aria-label={`Open ${fileName(entry.path)}`}
-        >
-          <div className="recent-icon"><FileText aria-hidden="true" /></div>
-          <div className="recent-mid">
-            <div className="recent-name">
-              <Highlighted text={fileName(entry.path)} query={nameQuery} />
-              {hit && <span className="recent-line"> — line {hit.line}</span>}
-            </div>
-            {hit?.snippet && (
-              <div className="recent-snippet"><Highlighted text={hit.snippet} query={this.query.trim()} /></div>
-            )}
-            <div className="recent-path">{String.fromCharCode(0x200e) + entry.path}</div>
-          </div>
-          <div className="recent-right">
-            <div className="recent-date">{formatDate(entry.lastOpenedMs, now)}</div>
-            <div className="recent-size">{stat?.exists ? formatSize(stat.sizeBytes) : ""}</div>
-          </div>
-        </button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn(
-            "recent-star size-auto rounded-none border-0 bg-transparent px-1 py-0.5 text-[17px] leading-none font-normal text-[var(--muted-fg)] hover:bg-transparent hover:text-[#e3b341]",
-            entry.favorite && "on text-[#e3b341]",
-          )}
-          title={entry.favorite ? "Unstar" : "Star"}
-          aria-label={entry.favorite ? "Remove from favorites" : "Add to favorites"}
-          onClick={(event) => {
-            event.stopPropagation();
-            void this.toggleFavorite(entry);
-          }}
-        >{entry.favorite ? "★" : "☆"}</Button>
-      </div>
-    );
+    if (rows.length) void this.ensureStats(rows.map(({ entry }) => entry.path));
   }
 
   private async ensureStats(paths: string[]): Promise<void> {
@@ -429,15 +487,14 @@ export class RecentView {
 
   private async toggleFavorite(entry: RecentEntry): Promise<void> {
     const previous = entry.favorite;
+    if (!this.keptSections.has(entry.path)) this.keptSections.set(entry.path, previous);
     entry.favorite = !previous;
     this.render();
-    this.refreshContentCount();
     try {
       await this.data.setFavorite(entry.path, entry.favorite);
     } catch {
       entry.favorite = previous;
       this.render();
-      this.refreshContentCount();
     }
   }
 
@@ -482,78 +539,20 @@ export class RecentView {
     const stat = this.stats.get(entry.path);
     const folderMissing = stat ? !stat.folderExists : false;
     showContextMenu(x, y, [
-      { label: "Open", run: () => this.openEntry(entry) },
-      { label: "Open folder", separatorBefore: true, disabled: folderMissing, run: () => void this.cb.reveal(entry.path) },
-      { label: "Copy folder path", run: () => void this.cb.copy(folder) },
-      { label: "Copy file path", run: () => void this.cb.copy(entry.path) },
+      { label: "Open", icon: File, run: () => this.openEntry(entry) },
+      {
+        label: "Open folder",
+        icon: FolderOpen,
+        disabled: folderMissing,
+        run: () => void this.cb.reveal(entry.path),
+      },
+      {
+        label: "Copy file path",
+        icon: FileCopyIcon,
+        separatorBefore: true,
+        run: () => void this.cb.copy(entry.path),
+      },
+      { label: "Copy folder path", icon: FolderCopyIcon, run: () => void this.cb.copy(folder) },
     ]);
   }
-}
-
-function Segment({ value, active, children }: { value: string; active: boolean; children: string }) {
-  return (
-    <ToggleGroupItem
-      value={value}
-      role="button"
-      className={cn(
-        "seg-btn cursor-pointer rounded-none border-0 border-r border-[var(--chrome-border)] bg-transparent px-[14px] py-[5px] text-[12.5px] leading-[normal] font-normal text-[var(--chrome-fg)] last:border-r-0 hover:bg-[var(--editor-bg)]",
-        active && "active bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent)]",
-      )}
-      aria-pressed={active}
-    >
-      {children}
-    </ToggleGroupItem>
-  );
-}
-
-function Highlighted({ text, query }: { text: string; query: string }) {
-  const ranges = highlightRanges(text, query);
-  if (!ranges.length) return <>{text}</>;
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  for (const [start, end] of ranges) {
-    if (start > cursor) nodes.push(text.slice(cursor, start));
-    nodes.push(
-      <span
-        key={`${start}-${end}`}
-        className="recent-match rounded-[3px] bg-[color-mix(in_srgb,var(--accent)_18%,transparent)] px-px font-bold"
-      >
-        {text.slice(start, end)}
-      </span>,
-    );
-    cursor = end;
-  }
-  if (cursor < text.length) nodes.push(text.slice(cursor));
-  return <>{nodes}</>;
-}
-
-function highlightRanges(text: string, query: string): Array<[number, number]> {
-  const q = query.trim();
-  if (!q) return [];
-  let lowered = "";
-  const origin: number[] = [];
-  for (let index = 0; index < text.length; ) {
-    const point = text.codePointAt(index)!;
-    const length = point > 0xffff ? 2 : 1;
-    const low = text.slice(index, index + length).toLowerCase();
-    for (let unit = 0; unit < low.length; unit++) origin.push(index);
-    lowered += low;
-    index += length;
-  }
-  const needle = q.toLowerCase();
-  const ranges: Array<[number, number]> = [];
-  let cursor = 0;
-  let from = 0;
-  while (from <= lowered.length) {
-    const at = lowered.indexOf(needle, from);
-    if (at < 0) break;
-    from = at + needle.length;
-    const start = origin[at];
-    const endStart = origin[at + needle.length - 1];
-    const end = endStart + (text.codePointAt(endStart)! > 0xffff ? 2 : 1);
-    if (start < cursor) continue;
-    ranges.push([start, end]);
-    cursor = end;
-  }
-  return ranges;
 }

@@ -71,7 +71,7 @@ describe("installAppShortcuts", () => {
     expect(actions.save).toHaveBeenCalledTimes(2);
   });
 
-  it("routes search to Recent or the permanent editor search strip", () => {
+  it("routes search to Recent or the editor's find card", () => {
     const actions = setup();
     actions.store.set({ view: "recent" });
     keydown("f");
@@ -94,6 +94,25 @@ describe("installAppShortcuts", () => {
     actions.store.set({ editorLayout: "markdown" });
     expect(keydown("f").defaultPrevented).toBe(true);
     expect(actions.showFind).toHaveBeenNthCalledWith(4, "find");
+  });
+
+  it("does nothing behind an open modal dialog but still blocks browser printing", () => {
+    const actions = setup();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.dataset.state = "open";
+    document.body.append(dialog);
+
+    keydown("n");
+    keydown("f");
+    expect(keydown("p").defaultPrevented).toBe(true);
+    expect(actions.create).not.toHaveBeenCalled();
+    expect(actions.showFind).not.toHaveBeenCalled();
+    expect(actions.print).not.toHaveBeenCalled();
+
+    dialog.remove();
+    keydown("n");
+    expect(actions.create).toHaveBeenCalledOnce();
   });
 
   it("steps WYSIWYG matches with F3 and yields while print is open", () => {

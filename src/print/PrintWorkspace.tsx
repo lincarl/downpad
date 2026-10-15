@@ -1,7 +1,7 @@
-// The print workspace (spec §5.21): a full-window print mode rather than a modal,
-// with a scrolling multi-page preview on the left and the page/printer options on
-// the right. It replaces both the old direct `window.print()` call and the
-// WebView's own print dialog.
+// The print workspace (spec §5.21): a full-window print mode laid out like Mervin
+// PDF's print dialog, with the options in group boxes on the left, a scrolling
+// multi-page preview on the right and the actions in a footer row. It replaces
+// both the old direct `window.print()` call and the WebView's own print dialog.
 //
 // The preview shows the very elements that get printed (printRender.ts) at a
 // scaled-down size, so "what you see is the sheet". Changing any option
@@ -10,8 +10,20 @@
 import { saveDialog } from "../ipc/dialogs";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { fieldClassName } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
 import { isElectron } from "../ipc/env";
 import { listPrinters, printWebview, printWebviewToPdf } from "../ipc/commands";
@@ -23,7 +35,6 @@ import {
   MARGIN_PRESETS,
   PAPER_SIZES,
   clampScale,
-  describeSetup,
   pageGeometry,
   type MarginPreset,
   type Orientation,
@@ -54,6 +65,12 @@ interface CoveredSibling {
 
 /** How long to wait for the backend to report a finished print before giving up. */
 const PRINT_TIMEOUT_MS = 300_000;
+
+/** Gap between the preview pane's edge and the sheets, as in Mervin (`p-5`). */
+const PREVIEW_INSET_PX = 20;
+
+const FOCUSABLE =
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export class PrintWorkspace {
   private host: HTMLElement | null = null;
@@ -237,20 +254,28 @@ export class PrintWorkspace {
     this.coveredSiblings = [];
   }
 
+  /** The workspace's tab sequence in DOM order. Like the browser, it holds only
+   *  the checked radio of a group, so the trap wraps from the right element. */
   private focusableElements(): HTMLElement[] {
-    if (!this.host) return [];
-    return Array.from(
-      this.host.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    const host = this.host;
+    if (!host) return [];
+    const radios = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
+    return Array.from(host.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => {
+      if (element.tabIndex < 0 || element.hidden) return false;
+      if (element.getAttribute("aria-hidden") === "true") return false;
+      if (!(element instanceof HTMLInputElement) || element.type !== "radio") return true;
+      return element.checked || !radios.some((r) => r.name === element.name && r.checked);
+    });
   }
 
+  /** Focus Cancel, the safe default (Enter closes, as Back used to), falling back
+   *  to the first control and then the workspace itself. */
   private focusWorkspace(): void {
-    const first = this.focusableElements()[0];
-    (first ?? this.host?.querySelector<HTMLElement>(".print-workspace"))?.focus({
-      preventScroll: true,
-    });
+    const target =
+      this.host?.querySelector<HTMLElement>(".print-ws-cancel") ??
+      this.focusableElements()[0] ??
+      this.host?.querySelector<HTMLElement>(".print-workspace");
+    target?.focus({ preventScroll: true });
   }
 
   private readonly subscribe = (listener: () => void): (() => void) => {
@@ -342,33 +367,36 @@ export class PrintWorkspace {
     this.updateSummary();
   }
 
-  /** Scale the sheets down to fit the preview pane. A transform is used rather
-   *  than `zoom` so the pages keep the exact layout they will print with. */
+  /** Scale the sheets so one whole sheet fits the preview pane inside its inset,
+   *  as Mervin fits its page; the rest of the stack scrolls below it. A transform
+   *  is used rather than `zoom` so the pages keep the exact layout they will
+   *  print with. Layout sizes ignore transforms, so nothing is reset to measure. */
   private fitPreview(): void {
     const root = this.printRoot;
     const scaler = this.scaler;
     const canvas = this.canvas;
     if (!root || !scaler || !canvas) return;
-    root.style.transform = "";
-    scaler.style.width = "";
-    scaler.style.height = "";
-    const available = canvas.clientWidth - 48;
-    const naturalWidth = root.offsetWidth;
+    const sheet = root.querySelector<HTMLElement>(".print-page");
+    const naturalWidth = sheet?.offsetWidth || root.offsetWidth;
+    const sheetHeight = sheet?.offsetHeight || root.offsetHeight;
     const naturalHeight = root.offsetHeight;
-    if (!naturalWidth || available <= 0) return;
-    const scale = Math.min(1, Math.max(0.15, available / naturalWidth));
+    const availableWidth = canvas.clientWidth - PREVIEW_INSET_PX * 2;
+    const availableHeight = canvas.clientHeight - PREVIEW_INSET_PX * 2;
+    if (!naturalWidth || !sheetHeight || availableWidth <= 0 || availableHeight <= 0) return;
+    const fit = Math.min(availableWidth / naturalWidth, availableHeight / sheetHeight);
+    const scale = Math.min(1, Math.max(0.15, fit));
     root.style.transformOrigin = "top left";
     root.style.transform = `scale(${scale})`;
     scaler.style.width = `${naturalWidth * scale}px`;
     scaler.style.height = `${naturalHeight * scale}px`;
+    // The sheet edge in app.css divides by this to stay one screen pixel wide.
+    scaler.style.setProperty("--print-preview-scale", String(scale));
   }
 
+  /** The page count shown at the end of the paper line under the preview. */
   private updateSummary(): void {
     const pages = this.printRoot ? pageCount(this.printRoot) : 0;
-    const printer = this.settings!.printerName || "system default";
-    this.summaryText = `${this.job!.docTitle} · ${pages} ${
-      pages === 1 ? "page" : "pages"
-    } · ${describeSetup(this.setup())} · ${printer}`;
+    this.summaryText = `${pages} ${pages === 1 ? "page" : "pages"}`;
     this.publish();
   }
 
@@ -625,6 +653,23 @@ interface PrintWorkspaceViewProps {
   onPageRangeChange(range: string): void;
 }
 
+const ORIENTATION_LABELS: Record<Orientation, string> = {
+  portrait: "Portrait",
+  landscape: "Landscape",
+};
+
+/** The paper line under the preview, as Mervin writes it: "A4 · Portrait · 210 × 297 mm". */
+function describePaper(settings: Settings): string {
+  const paper = PAPER_SIZES[settings.printPaperSize] ?? PAPER_SIZES.a4;
+  const landscape = settings.printOrientation === "landscape";
+  const width = landscape ? paper.heightMm : paper.widthMm;
+  const height = landscape ? paper.widthMm : paper.heightMm;
+  const name = paper.label.replace(/\s*\(.*\)$/, "");
+  const mm = (value: number): string =>
+    Math.abs(value - Math.round(value)) < 0.05 ? String(Math.round(value)) : value.toFixed(1);
+  return `${name} · ${ORIENTATION_LABELS[settings.printOrientation]} · ${mm(width)} × ${mm(height)} mm`;
+}
+
 function PrintWorkspaceView({
   subscribe,
   getSnapshot,
@@ -639,6 +684,7 @@ function PrintWorkspaceView({
 }: PrintWorkspaceViewProps) {
   const view = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const s = view.settings;
+  const ids = useId();
   const printerOptions: Array<readonly [string, string]> = [["", "System default"]];
   for (const printer of view.printers) {
     printerOptions.push([
@@ -649,39 +695,22 @@ function PrintWorkspaceView({
 
   return (
     <div
-      className="print-workspace"
+      className="print-workspace fixed inset-0 z-[1200] flex flex-col bg-window text-ink outline-none"
       role="dialog"
       aria-label="Print"
       aria-modal="true"
       tabIndex={-1}
     >
-      <div className="print-ws-top">
-        <Button type="button" variant="outline" className="dialog-btn" onClick={onClose}>
-          ‹ Back
-        </Button>
-        <span className="print-ws-title">Print</span>
-        <span className="print-ws-summary">{view.summary}</span>
-        <span className="print-ws-spacer" />
-        <span className="print-ws-status" aria-live="polite">
-          {view.status}
-        </span>
-        <Button type="button" variant="outline" className="dialog-btn" onClick={onSaveAsPdf}>
-          Save as PDF
-        </Button>
-        <Button type="button" className="dialog-btn primary" onClick={onPrint}>
-          Print
-        </Button>
-      </div>
+      <div className="flex min-h-0 flex-1 px-[11px] pb-2.5 pt-[11px]">
+        {/* Settings column: fixed width, scrolls on its own. */}
+        <div className="print-ws-settings flex w-[390px] shrink-0 flex-col gap-1.5 overflow-y-auto leading-[18px] [scrollbar-gutter:stable]">
+          <h2 className="print-ws-title m-0 mb-1 pt-1 text-[15px] font-semibold leading-5 text-ink-primary">
+            Print
+          </h2>
 
-      <div ref={setCanvas} className="print-ws-canvas">
-        <div ref={setScaler} className="print-ws-scaler" />
-      </div>
-
-      <div className="print-ws-rail">
-        <PrintSection heading="Version">
-          <PrintRow label="Print the">
-            <SegmentedControl<PrintVersion>
-              name="Version"
+          <PrintGroup legend="Version">
+            <RadioChoice<PrintVersion>
+              name="print-version"
               options={[
                 ["document", "Document"],
                 ["markdown", "Markdown"],
@@ -689,136 +718,295 @@ function PrintWorkspaceView({
               value={s.printVersion}
               onChange={(printVersion) => onUpdate({ printVersion })}
             />
-          </PrintRow>
-          <p className="print-ws-hint">
-            {s.printVersion === "document"
-              ? "The formatted document, exactly as the editor renders it."
-              : "The raw Markdown source, in a monospace face."}
-          </p>
-        </PrintSection>
+            <p className="print-ws-hint m-0 mt-1.5 text-ink-soft">
+              {s.printVersion === "document"
+                ? "The formatted document, as the editor renders it."
+                : "The raw Markdown source, in a monospace face."}
+            </p>
+          </PrintGroup>
 
-        <PrintSection heading="Printer">
-          <PrintRow label="Printer">
-            {view.electron ? (
-              <SelectControl
-                name="Printer"
-                options={printerOptions}
-                value={s.printerName}
-                onChange={(printerName) => onUpdate({ printerName }, false)}
-              />
-            ) : (
-              <span className="print-ws-note">System dialog</span>
-            )}
-          </PrintRow>
-          <PrintRow label="Copies">
-            <NumberControl
-              name="Copies"
-              value={s.printCopies}
-              min={1}
-              max={99}
-              onChange={(printCopies) => onUpdate({ printCopies }, false)}
-            />
-          </PrintRow>
-          <PrintRow label="Pages">
-            <div className="print-ws-pages">
-              <SelectControl
-                name="Pages"
-                options={[
-                  ["all", "All"],
-                  ["custom", "Custom…"],
-                ]}
-                value={view.pageRange ? "custom" : "all"}
-                onChange={onPageModeChange}
-              />
-              {view.pageRange && (
-                <PageRangeControl value={view.pageRange} onChange={onPageRangeChange} />
+          <PrintGroup legend="Printer">
+            <FormGrid>
+              {view.electron ? (
+                <FormRow label="Printer:" htmlFor={`${ids}printer`}>
+                  <Select
+                    id={`${ids}printer`}
+                    aria-label="Printer"
+                    className="w-full min-w-0"
+                    value={s.printerName}
+                    onChange={(event) => onUpdate({ printerName: event.currentTarget.value }, false)}
+                  >
+                    <Options options={printerOptions} />
+                  </Select>
+                </FormRow>
+              ) : (
+                <FormRow label="Printer:">
+                  <span className="print-ws-note text-ink-soft">System dialog</span>
+                </FormRow>
               )}
+              <FormRow label="Copies:" htmlFor={`${ids}copies`}>
+                <NumberField
+                  id={`${ids}copies`}
+                  name="Copies"
+                  value={s.printCopies}
+                  min={1}
+                  max={99}
+                  onChange={(printCopies) => onUpdate({ printCopies }, false)}
+                />
+              </FormRow>
+              <FormRow label="Pages:" htmlFor={`${ids}pages`}>
+                <div className="flex min-w-0 gap-1.5">
+                  <Select
+                    id={`${ids}pages`}
+                    aria-label="Pages"
+                    className={cn("min-w-0", view.pageRange ? "w-[104px]" : "w-full")}
+                    value={view.pageRange ? "custom" : "all"}
+                    onChange={(event) =>
+                      onPageModeChange(event.currentTarget.value === "custom" ? "custom" : "all")
+                    }
+                  >
+                    <option value="all">All</option>
+                    <option value="custom">Custom</option>
+                  </Select>
+                  {view.pageRange && (
+                    <PageRangeField value={view.pageRange} onChange={onPageRangeChange} />
+                  )}
+                </div>
+              </FormRow>
+            </FormGrid>
+          </PrintGroup>
+
+          <PrintGroup legend="Page">
+            <FormGrid>
+              <FormRow label="Paper size:" htmlFor={`${ids}paper`}>
+                <Select
+                  id={`${ids}paper`}
+                  aria-label="Paper size"
+                  className="w-full min-w-0"
+                  value={s.printPaperSize}
+                  onChange={(event) =>
+                    onUpdate({ printPaperSize: event.currentTarget.value as PaperSize })
+                  }
+                >
+                  <Options
+                    options={(Object.keys(PAPER_SIZES) as PaperSize[]).map((paperSize) => [
+                      paperSize,
+                      PAPER_SIZES[paperSize].label,
+                    ])}
+                  />
+                </Select>
+              </FormRow>
+              <FormRow label="Orientation:">
+                <RadioChoice<Orientation>
+                  name="print-orientation"
+                  label="Orientation"
+                  options={[
+                    ["portrait", ORIENTATION_LABELS.portrait],
+                    ["landscape", ORIENTATION_LABELS.landscape],
+                  ]}
+                  value={s.printOrientation}
+                  onChange={(printOrientation) => onUpdate({ printOrientation })}
+                />
+              </FormRow>
+              <FormRow label="Margins:" htmlFor={`${ids}margins`}>
+                <Select
+                  id={`${ids}margins`}
+                  aria-label="Margins"
+                  className="w-full min-w-0"
+                  value={s.printMargins}
+                  onChange={(event) =>
+                    onUpdate({ printMargins: event.currentTarget.value as MarginPreset })
+                  }
+                >
+                  <Options
+                    options={(Object.keys(MARGIN_PRESETS) as MarginPreset[]).map((margins) => [
+                      margins,
+                      MARGIN_PRESETS[margins].label,
+                    ])}
+                  />
+                </Select>
+              </FormRow>
+              <FormRow label="Scale:" htmlFor={`${ids}scale`}>
+                <NumberField
+                  id={`${ids}scale`}
+                  name="Scale"
+                  suffix="%"
+                  value={s.printScalePercent}
+                  min={50}
+                  max={200}
+                  onChange={(printScalePercent) => onUpdate({ printScalePercent })}
+                />
+              </FormRow>
+            </FormGrid>
+          </PrintGroup>
+
+          <PrintGroup legend="Header and footer">
+            <div className="flex flex-col gap-1">
+              <CheckRow
+                label="Document title in header"
+                checked={s.printHeaderTitle}
+                onChange={(printHeaderTitle) => onUpdate({ printHeaderTitle })}
+              />
+              <CheckRow
+                label="Date in header"
+                checked={s.printHeaderDate}
+                onChange={(printHeaderDate) => onUpdate({ printHeaderDate })}
+              />
+              <CheckRow
+                label="Page numbers in footer"
+                checked={s.printFooterPageNumbers}
+                onChange={(printFooterPageNumbers) => onUpdate({ printFooterPageNumbers })}
+              />
             </div>
-          </PrintRow>
-        </PrintSection>
+          </PrintGroup>
+        </div>
 
-        <PrintSection heading="Page">
-          <PrintRow label="Paper size">
-            <SelectControl<PaperSize>
-              name="Paper size"
-              options={(Object.keys(PAPER_SIZES) as PaperSize[]).map((paperSize) => [
-                paperSize,
-                PAPER_SIZES[paperSize].label,
-              ])}
-              value={s.printPaperSize}
-              onChange={(printPaperSize) => onUpdate({ printPaperSize })}
-            />
-          </PrintRow>
-          <PrintRow label="Orientation">
-            <SelectControl<Orientation>
-              name="Orientation"
-              options={[
-                ["portrait", "Portrait"],
-                ["landscape", "Landscape"],
-              ]}
-              value={s.printOrientation}
-              onChange={(printOrientation) => onUpdate({ printOrientation })}
-            />
-          </PrintRow>
-          <PrintRow label="Margins">
-            <SelectControl<MarginPreset>
-              name="Margins"
-              options={(Object.keys(MARGIN_PRESETS) as MarginPreset[]).map((margins) => [
-                margins,
-                MARGIN_PRESETS[margins].label,
-              ])}
-              value={s.printMargins}
-              onChange={(printMargins) => onUpdate({ printMargins })}
-            />
-          </PrintRow>
-          <PrintRow label="Scale (%)">
-            <NumberControl
-              name="Scale"
-              value={s.printScalePercent}
-              min={50}
-              max={200}
-              onChange={(printScalePercent) => onUpdate({ printScalePercent })}
-            />
-          </PrintRow>
-        </PrintSection>
+        <div aria-hidden="true" className="mx-[7px] w-px shrink-0 bg-line" />
 
-        <PrintSection heading="Header & footer">
-          <CheckRow
-            label="Document title in header"
-            checked={s.printHeaderTitle}
-            onChange={(printHeaderTitle) => onUpdate({ printHeaderTitle })}
-          />
-          <CheckRow
-            label="Date in header"
-            checked={s.printHeaderDate}
-            onChange={(printHeaderDate) => onUpdate({ printHeaderDate })}
-          />
-          <CheckRow
-            label="Page numbers in footer"
-            checked={s.printFooterPageNumbers}
-            onChange={(printFooterPageNumbers) => onUpdate({ printFooterPageNumbers })}
-          />
-        </PrintSection>
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <h3 className="m-0 px-2 pt-[7px] pb-1 text-[12px] font-bold leading-[18px] text-ink">Preview</h3>
+          {/* The sheets keep the body's inherited type, so nothing here sets a
+              font or line height. Sized and scaled by PrintWorkspace.fitPreview. */}
+          <div
+            ref={setCanvas}
+            className="print-ws-canvas flex min-h-0 flex-1 overflow-auto bg-well p-5"
+          >
+            {/* Auto margins centre a sheet that fits and fall back to the top
+                when the stack overflows, so its start never scrolls out of reach.
+                The clip keeps a freshly rendered, not yet scaled stack from
+                adding scroll bars while fitPreview measures the pane; its margin
+                leaves room for the 1px sheet edge. */}
+            <div
+              ref={setScaler}
+              className="print-ws-scaler m-auto flex-none overflow-clip [overflow-clip-margin:2px]"
+            />
+          </div>
+          <p className="print-ws-paper m-0 leading-[18px] text-ink">
+            {describePaper(s)}
+            {view.summary && <span className="print-ws-summary"> · {view.summary}</span>}
+          </p>
+        </div>
+      </div>
+
+      <div className="print-ws-footer flex items-center gap-1.5 border-t border-separator px-[11px] py-2.5 leading-[18px]">
+        <Button type="button" variant="outline" className="dialog-btn" onClick={onSaveAsPdf}>
+          Save as PDF
+        </Button>
+        <span className="print-ws-status ml-2 min-w-0 truncate text-ink-soft" aria-live="polite">
+          {view.status}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          className="dialog-btn print-ws-cancel ml-auto"
+          onClick={onClose}
+        >
+          Cancel
+        </Button>
+        <Button type="button" className="dialog-btn primary" onClick={onPrint}>
+          Print
+        </Button>
       </div>
     </div>
   );
 }
 
-function PrintSection({ heading, children }: { heading: string; children: ReactNode }) {
+/** A Mervin group box: a rounded frame whose sentence-case legend cuts the top
+ *  border. Content sits 22px inside the frame on every side but the bottom (20px). */
+function PrintGroup({ legend, children }: { legend: string; children: ReactNode }) {
   return (
-    <section className="dialog-section">
-      <h3 className="dialog-section-title">{heading}</h3>
-      {children}
-    </section>
+    <fieldset className="m-0 min-w-0 shrink-0 rounded-lg border border-line p-0">
+      <legend className="ml-[9px] px-1 text-ink-soft">{legend}</legend>
+      <div className="px-[21px] pb-[19px] pt-3">{children}</div>
+    </fieldset>
   );
 }
 
-function PrintRow({ label, children }: { label: string; children: ReactNode }) {
+/** Two-column form: "Label:" on the left, the field filling the rest. */
+function FormGrid({ children }: { children: ReactNode }) {
   return (
-    <label className="dialog-row">
-      <span>{label}</span>
+    <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-1.5">
       {children}
-    </label>
+    </div>
+  );
+}
+
+/** The widest label in the workspace. Every label cell also holds it invisibly,
+ *  so the label columns of separate groups line up whatever the UI font, as in
+ *  Mervin's forms. */
+const LABEL_SIZER = "Orientation:";
+
+function FormRow({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <div className="grid">
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className="col-start-1 row-start-1">
+            {label}
+          </label>
+        ) : (
+          <span className="col-start-1 row-start-1">{label}</span>
+        )}
+        <span aria-hidden="true" className="invisible col-start-1 row-start-1">
+          {LABEL_SIZER}
+        </span>
+      </div>
+      {children}
+    </>
+  );
+}
+
+function Options<T extends string>({ options }: { options: ReadonlyArray<readonly [T, string]> }) {
+  return options.map(([option, label]) => (
+    <option key={option} value={option}>
+      {label}
+    </option>
+  ));
+}
+
+/** A row of radio buttons. Pass `label` to make it a named radio group; leave it
+ *  out when the group box's legend already names the choice. */
+function RadioChoice<T extends string>({
+  name,
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  name: string;
+  label?: string;
+  options: ReadonlyArray<readonly [T, string]>;
+  value: T;
+  onChange(value: T): void;
+}) {
+  return (
+    <div
+      role={label ? "radiogroup" : undefined}
+      aria-label={label}
+      className="flex flex-wrap items-center gap-x-2 gap-y-1"
+    >
+      {options.map(([option, text]) => (
+        <label key={option} className="flex cursor-pointer items-center gap-1.5">
+          <input
+            type="radio"
+            className="md-radio"
+            name={name}
+            value={option}
+            checked={option === value}
+            onChange={() => onChange(option)}
+          />
+          {text}
+        </label>
+      ))}
+    </div>
   );
 }
 
@@ -832,56 +1020,39 @@ function CheckRow({
   onChange(value: boolean): void;
 }) {
   return (
-    <PrintRow label={label}>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.currentTarget.checked)}
-      />
-    </PrintRow>
+    <label className="flex w-fit cursor-pointer items-center gap-1.5">
+      <Checkbox checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />
+      {label}
+    </label>
   );
 }
 
-function SelectControl<T extends string>({
-  name,
-  options,
-  value,
-  onChange,
-}: {
-  name: string;
-  options: ReadonlyArray<readonly [T, string]>;
-  value: T;
-  onChange(value: T): void;
-}) {
-  return (
-    <select
-      aria-label={name}
-      value={value}
-      onChange={(event) => onChange(event.currentTarget.value as T)}
-    >
-      {options.map(([option, label]) => (
-        <option key={option} value={option}>
-          {label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function NumberControl({
+/**
+ * A number field drawn as Mervin's spin box: the field well with an 18px
+ * stepper column. Typing commits on blur or Enter and clamps to the range; the
+ * steppers commit at once. They stay out of the tab order (the arrow keys step
+ * the focused field) and keep focus on the field when clicked. `suffix` is
+ * drawn right after the digits, as in Mervin's "100 %".
+ */
+function NumberField({
+  id,
   name,
   value,
   min,
   max,
+  suffix,
   onChange,
 }: {
+  id: string;
   name: string;
   value: number;
   min: number;
   max: number;
+  suffix?: string;
   onChange(value: number): void;
 }) {
   const [draft, setDraft] = useState(String(value));
+  const input = useRef<HTMLInputElement>(null);
   useEffect(() => setDraft(String(value)), [value]);
 
   const commit = (raw: string): void => {
@@ -891,23 +1062,81 @@ function NumberControl({
     if (next !== value) onChange(next);
   };
 
+  const step = (delta: number): void => {
+    const current = Number(draft);
+    commit(String(Math.round(Number.isFinite(current) ? current : value) + delta));
+  };
+
+  const current = Number(draft);
+  const stepper = (delta: number, disabled: boolean): ReactNode => {
+    const Icon = delta > 0 ? ChevronUp : ChevronDown;
+    return (
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        disabled={disabled}
+        className={cn(
+          "flex flex-1 cursor-pointer items-center justify-center text-ink-body hover:bg-hover",
+          "active:bg-pressed disabled:cursor-default disabled:bg-transparent disabled:text-ink-disabled",
+          delta > 0 && "border-b border-line",
+        )}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          input.current?.focus();
+        }}
+        onClick={() => step(delta)}
+      >
+        <Icon size={12} absoluteStrokeWidth strokeWidth={1.25} />
+      </button>
+    );
+  };
+
   return (
-    <input
-      aria-label={name}
-      type="number"
-      value={draft}
-      min={min}
-      max={max}
-      onChange={(event) => setDraft(event.currentTarget.value)}
-      onBlur={(event) => commit(event.currentTarget.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-      }}
-    />
+    <div
+      className={cn(
+        fieldClassName,
+        "relative flex w-full min-w-0 overflow-hidden px-0 focus-within:border-accent",
+      )}
+    >
+      <input
+        ref={input}
+        id={id}
+        aria-label={name}
+        type="number"
+        value={draft}
+        min={min}
+        max={max}
+        className={cn(
+          "min-w-0 flex-1 bg-transparent px-2 tabular-nums text-ink-primary outline-none",
+          "selection:bg-accent selection:text-accent-fg",
+          "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+        )}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={(event) => commit(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+      />
+      {suffix && draft && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1/2 -translate-y-1/2 tabular-nums text-ink-primary"
+          style={{ left: `calc(8px + ${draft.length}ch + 0.3em)` }}
+        >
+          {suffix}
+        </span>
+      )}
+      <div className="flex w-[18px] shrink-0 flex-col border-l border-line">
+        {stepper(1, Number.isFinite(current) && current >= max)}
+        {stepper(-1, Number.isFinite(current) && current <= min)}
+      </div>
+    </div>
   );
 }
 
-function PageRangeControl({
+/** The custom page range ("1-3, 5"), shown next to Pages once Custom is chosen. */
+function PageRangeField({
   value,
   onChange,
 }: {
@@ -919,7 +1148,8 @@ function PageRangeControl({
   return (
     <input
       type="text"
-      className="print-ws-range"
+      aria-label="Page range"
+      className={cn(fieldClassName, "print-ws-range w-auto min-w-0 flex-1")}
       value={draft}
       placeholder="1-3, 5"
       onChange={(event) => setDraft(event.currentTarget.value)}
@@ -928,34 +1158,5 @@ function PageRangeControl({
         if (event.key === "Enter") event.currentTarget.blur();
       }}
     />
-  );
-}
-
-/** The Document | Markdown chooser: a joined two-segment pill. */
-function SegmentedControl<T extends string>({
-  name,
-  options,
-  value,
-  onChange,
-}: {
-  name: string;
-  options: ReadonlyArray<readonly [T, string]>;
-  value: T;
-  onChange(value: T): void;
-}) {
-  return (
-    <div className="print-ws-segmented" role="group" aria-label={name}>
-      {options.map(([option, label]) => (
-        <button
-          key={option}
-          type="button"
-          aria-pressed={option === value}
-          className={option === value ? "active" : undefined}
-          onClick={() => onChange(option)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
   );
 }

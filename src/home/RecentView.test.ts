@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { RecentView } from "./RecentView";
-import type { RecentDataSource } from "./recentData";
+import type { ContentSearchCallbacks, ContentSearchSummary, RecentDataSource } from "./recentData";
 import type { RecentEntry } from "../state/types";
 
-// These tests pin the spec §5.8 rule that the All/Favorites view-mode filter
-// applies to "Inside documents" content-search results too — switching modes (or
-// un-starring a row) while a search is showing must re-filter the list *and*
-// re-count the "N files found" line, without re-scanning.
+// The Recent view after Mervin's Recent page: one list with starred files pinned
+// under "Favorites", Names / Contents / All search scopes inside the field, and a
+// content-search status with Stop beside it.
 
 const entry = (path: string, favorite: boolean): RecentEntry => ({
   path,
@@ -15,7 +14,7 @@ const entry = (path: string, favorite: boolean): RecentEntry => ({
   favorite,
 });
 
-// alpha (fav) + bravo (not fav) both contain "quick"; charlie (fav) does not.
+// History, newest first. alpha (fav) and bravo contain "quick"; charlie (fav) does not.
 const ALPHA = entry("C:/n/alpha.md", true);
 const BRAVO = entry("C:/n/bravo.md", false);
 const CHARLIE = entry("C:/n/charlie.md", true);
@@ -25,8 +24,19 @@ const CONTENT: Record<string, string> = {
   "C:/n/charlie.md": "lazy dog",
 };
 
-function makeData(entries: RecentEntry[]): RecentDataSource {
+const fresh = (...entries: RecentEntry[]): RecentEntry[] => entries.map((e) => ({ ...e }));
+
+interface MockData extends RecentDataSource {
+  cancelled: string[];
+}
+
+/** A data source over CONTENT. With `hold`, a scan reports its first hit and then
+ * waits until it is cancelled, as a long scan would. */
+function makeData(entries: RecentEntry[], { hold = false } = {}): MockData {
+  const cancelled: string[] = [];
+  const waiting = new Map<string, () => void>();
   return {
+    cancelled,
     async list() {
       return entries;
     },
@@ -39,27 +49,38 @@ function makeData(entries: RecentEntry[]): RecentDataSource {
       return e ?? null;
     },
     async remove() {},
-    async searchContents(_id, query, cb) {
+    searchContents(id: string, query: string, cb: ContentSearchCallbacks): Promise<ContentSearchSummary> {
       const q = query.toLowerCase();
       let matched = 0;
       for (const e of entries) {
         const text = CONTENT[e.path] ?? "";
-        if (text.toLowerCase().includes(q)) {
-          matched++;
-          // Mirror the backend: report the matching line and a preview of it.
-          cb.onHit(e.path, 1, text);
+        if (!text.toLowerCase().includes(q)) continue;
+        matched++;
+        // Mirror the backend: report the matching line and a preview of it.
+        cb.onHit(e.path, 1, text);
+        if (hold) {
+          return new Promise((resolve) =>
+            waiting.set(id, () => resolve({ matched, scanned: 1, cancelled: true })),
+          );
         }
       }
-      return { matched, scanned: entries.length, cancelled: false };
+      return Promise.resolve({ matched, scanned: entries.length, cancelled: false });
     },
-    cancelContentSearch() {},
+    cancelContentSearch(id) {
+      cancelled.push(id);
+      waiting.get(id)?.();
+    },
   };
 }
 
-async function mount(entries: RecentEntry[]): Promise<RecentView> {
-  const rv = new RecentView(makeData(entries), () => 100, {
+let summary = "";
+
+async function mount(data: RecentDataSource, visibleCount = 100): Promise<RecentView> {
+  const rv = new RecentView(data, () => visibleCount, {
     onOpenFile() {},
-    onSummaryChange() {},
+    onSummaryChange(text) {
+      summary = text;
+    },
     async pickFile() {
       return null;
     },
@@ -78,148 +99,215 @@ const flush = async (): Promise<void> => {
   await Promise.resolve();
 };
 
-function names(rv: RecentView): string[] {
-  return Array.from(rv.element.querySelectorAll(".recent-row")).map((row) =>
-    (row.querySelector(".recent-name")?.textContent ?? "").replace(/ — line.*$/, "").trim(),
-  );
-}
+const $ = <T extends Element = HTMLElement>(rv: RecentView, selector: string): T | null =>
+  rv.element.querySelector<T>(selector);
+const $$ = <T extends Element = HTMLElement>(rv: RecentView, selector: string): T[] =>
+  Array.from(rv.element.querySelectorAll<T>(selector));
 
-function progress(rv: RecentView): string {
-  return rv.element.querySelector(".recent-progress")?.textContent ?? "";
-}
+const names = (rv: RecentView): string[] => $$(rv, ".recent-row .recent-name").map((n) => n.textContent ?? "");
+const captions = (rv: RecentView): string[] => $$(rv, ".recent-caption").map((c) => c.textContent ?? "");
+const progress = (rv: RecentView): string => $(rv, ".recent-progress-text")?.textContent ?? "";
+const empty = (rv: RecentView): string => $(rv, ".recent-empty")?.textContent ?? "";
+const input = (rv: RecentView): HTMLInputElement => $<HTMLInputElement>(rv, ".recent-search-input")!;
+const star = (rv: RecentView, name: string): HTMLButtonElement =>
+  $$(rv, ".recent-row")
+    .find((row) => row.querySelector(".recent-name")?.textContent === name)!
+    .querySelector<HTMLButtonElement>(".recent-star")!;
 
-function clickSeg(rv: RecentView, label: string): void {
-  const btn = Array.from(rv.element.querySelectorAll<HTMLButtonElement>(".seg-btn")).find(
-    (b) => b.textContent === label,
+function clickScope(rv: RecentView, label: string): void {
+  const button = $$<HTMLButtonElement>(rv, ".recent-scope-btn").find(
+    (b) => b.querySelector(".recent-scope-label")?.textContent === label,
   );
-  if (!btn) throw new Error(`segment "${label}" not found`);
-  btn.click();
+  if (!button) throw new Error(`scope "${label}" not found`);
+  button.click();
 }
 
 function typeQuery(rv: RecentView, text: string): void {
-  const input = rv.element.querySelector<HTMLInputElement>(".recent-search-input")!;
-  input.value = text;
-  input.dispatchEvent(new Event("input"));
+  input(rv).value = text;
+  input(rv).dispatchEvent(new Event("input"));
 }
 
-async function runInsideSearch(rv: RecentView, query: string): Promise<void> {
-  clickSeg(rv, "Inside docs");
-  typeQuery(rv, query);
-  await vi.advanceTimersByTimeAsync(400); // debounce + the (resolved) scan
+/** Type a query and let both debounces and a resolved scan run. */
+async function search(rv: RecentView, text: string): Promise<void> {
+  typeQuery(rv, text);
+  await vi.advanceTimersByTimeAsync(400);
   await flush();
 }
 
-describe("RecentView — view-mode filter on content search (§5.8)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    document.body.innerHTML = "";
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+function press(target: Element, key: string): void {
+  target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
 
-  it("filters Inside-docs results to favorites and re-counts when the mode switches", async () => {
-    const rv = await mount([ALPHA, BRAVO, CHARLIE].map((e) => ({ ...e })));
-    await runInsideSearch(rv, "quick");
+beforeEach(() => {
+  vi.useFakeTimers();
+  document.body.innerHTML = "";
+  summary = "";
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
-    // All: both files that contain "quick".
-    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
-    expect(progress(rv)).toBe("2 files found");
+describe("RecentView — sections and stars", () => {
+  it("pins favourites under captions in history order, with no captions when nothing is starred", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    expect(captions(rv)).toEqual(["Favorites", "Recent"]);
+    expect(names(rv)).toEqual(["alpha.md", "charlie.md", "bravo.md"]);
+    expect(summary).toBe("2 starred, 1 recent");
 
-    // Favorites: only the starred match — list AND count update, no re-scan.
-    clickSeg(rv, "Favorites");
-    await flush();
-    expect(names(rv)).toEqual(["alpha.md"]);
-    expect(progress(rv)).toBe("1 file found");
-
-    // Back to All restores the full result set and count.
-    clickSeg(rv, "All");
-    await flush();
-    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
-    expect(progress(rv)).toBe("2 files found");
+    const plain = await mount(makeData(fresh(entry("C:/n/a.md", false), entry("C:/n/b.md", false))));
+    expect(captions(plain)).toEqual([]);
+    expect(summary).toBe("Your last 2 opened documents");
   });
 
-  it("re-counts when a starred result is un-starred during a Favorites search", async () => {
-    const rv = await mount([ALPHA, BRAVO, CHARLIE].map((e) => ({ ...e })));
-    await runInsideSearch(rv, "quick");
-    clickSeg(rv, "Favorites");
+  it("keeps a toggled row in place until the query changes or Recent is left", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    star(rv, "bravo.md").click();
+    star(rv, "alpha.md").click();
     await flush();
-    expect(names(rv)).toEqual(["alpha.md"]);
+    // Both stars flipped, but neither row moved.
+    expect(names(rv)).toEqual(["alpha.md", "charlie.md", "bravo.md"]);
+    expect(star(rv, "bravo.md").classList.contains("on")).toBe(true);
+    expect(star(rv, "alpha.md").classList.contains("on")).toBe(false);
+    expect(summary).toBe("2 starred, 1 recent");
 
-    // Un-star the only favorite match → it leaves the list and the count drops.
-    const star = rv.element
-      .querySelectorAll<HTMLButtonElement>(".recent-row")[0]
-      .querySelector<HTMLButtonElement>(".recent-star")!;
-    star.click();
-    await flush();
+    // A new query files them by their stars again.
+    typeQuery(rv, ".md");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(names(rv)).toEqual(["bravo.md", "charlie.md", "alpha.md"]);
 
+    // So does leaving Recent.
+    star(rv, "charlie.md").click();
+    expect(names(rv)).toEqual(["bravo.md", "charlie.md", "alpha.md"]);
+    rv.onLeave();
+    expect(names(rv)).toEqual(["bravo.md", "alpha.md", "charlie.md"]);
+  });
+
+  it("caps the history but never the favourites", async () => {
+    const rv = await mount(
+      makeData(fresh(entry("C:/n/a.md", false), entry("C:/n/b.md", false), entry("C:/n/c.md", true))),
+      1,
+    );
+    expect(names(rv)).toEqual(["c.md", "a.md"]);
+  });
+
+  it("says which search found nothing", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO)));
+    typeQuery(rv, "zzz");
+    await vi.advanceTimersByTimeAsync(200);
     expect(names(rv)).toEqual([]);
-    // Zero-match wording is scoped to favorites — the matches exist, just none
-    // are starred, so "No files contain" would be misleading.
-    expect(progress(rv)).toBe('No favorites contain "quick"');
-  });
+    expect(empty(rv)).toBe('No file names contain "zzz"');
+    expect(summary).toBe("0 results");
 
-  it("keeps the All result set unfiltered by favorites", async () => {
-    const rv = await mount([ALPHA, BRAVO, CHARLIE].map((e) => ({ ...e })));
-    await runInsideSearch(rv, "quick");
-    // bravo.md is not a favorite yet appears in All — favorites must not leak in.
-    expect(names(rv)).toContain("bravo.md");
+    const none = await mount(makeData([]));
+    expect(empty(none)).toBe("No recent files yet");
+  });
+});
+
+describe("RecentView — content search", () => {
+  it("lists hits by section and counts them in the status", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    clickScope(rv, "Contents");
+    expect(input(rv).placeholder).toBe("Search inside documents");
+    typeQuery(rv, "quick");
+    expect(progress(rv)).toBe("Searching…");
+    expect($(rv, ".recent-search-stop")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(400);
+    await flush();
+
+    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
+    expect(captions(rv)).toEqual(["Favorites", "Recent"]);
     expect(progress(rv)).toBe("2 files found");
+    expect($(rv, ".recent-search-stop")).toBeNull();
+
+    // No hit: the status hides and the list says so.
+    await search(rv, "zebra");
+    expect(progress(rv)).toBe("");
+    expect(empty(rv)).toBe('No documents contain "zebra"');
   });
 
-  it("clears the stale count and re-scans when refresh() reloads entries", async () => {
-    const entries = [ALPHA, BRAVO, CHARLIE].map((e) => ({ ...e }));
-    const rv = await mount(entries);
-    await runInsideSearch(rv, "quick");
+  it("lists name matches first, then content hits for the other files, in the All scope", async () => {
+    const quick = entry("C:/n/quick-notes.md", false);
+    const rv = await mount(makeData(fresh(BRAVO, quick, CHARLIE)));
+    clickScope(rv, "All");
+    expect(input(rv).placeholder).toBe("Search names and contents");
+    await search(rv, "quick");
+    // quick-notes.md by name, then bravo.md by content; each file once.
+    expect(names(rv)).toEqual(["quick-notes.md", "bravo.md"]);
+    expect($$(rv, ".recent-snippet").map((s) => s.textContent)).toEqual(["the quick red fox"]);
+    expect(progress(rv)).toBe("2 files found");
+
+    await search(rv, "zebra");
+    expect(empty(rv)).toBe('No file names or documents contain "zebra"');
+  });
+
+  it("stops a running scan and keeps what it found", async () => {
+    const data = makeData(fresh(ALPHA, BRAVO, CHARLIE), { hold: true });
+    const rv = await mount(data);
+    clickScope(rv, "Contents");
+    await search(rv, "quick");
+    expect(names(rv)).toEqual(["alpha.md"]);
+    expect(progress(rv)).toBe("Searching file 1 of 3");
+
+    $<HTMLButtonElement>(rv, ".recent-search-stop")!.click();
+    await flush();
+    expect(data.cancelled).toHaveLength(1);
+    expect(progress(rv)).toBe("Stopped, 1 file found");
+    expect(names(rv)).toEqual(["alpha.md"]);
+    expect($(rv, ".recent-search-stop")).toBeNull();
+  });
+
+  it("reports a scan the main process ends early as stopped", async () => {
+    const data = makeData(fresh(ALPHA, BRAVO, CHARLIE));
+    data.searchContents = async (_id, _query, cb) => {
+      cb.onHit(ALPHA.path, 1, CONTENT[ALPHA.path]!);
+      return { matched: 1, scanned: 1, cancelled: true };
+    };
+    const rv = await mount(data);
+    clickScope(rv, "Contents");
+    await search(rv, "quick");
+    expect(names(rv)).toEqual(["alpha.md"]);
+    expect(progress(rv)).toBe("Stopped, 1 file found");
+  });
+
+  it("drops the stale count and scans again when refresh() reloads entries", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    clickScope(rv, "Contents");
+    await search(rv, "quick");
     expect(progress(rv)).toBe("2 files found");
 
     // A reload (e.g. after locating a missing file) must not leave the old
     // count showing against the freshly-loaded list.
     await rv.refresh();
-    expect(progress(rv)).toBe(""); // stale count cleared; the re-scan is only scheduled
+    expect(progress(rv)).toBe("Searching…");
     await vi.advanceTimersByTimeAsync(400);
     await flush();
-    expect(progress(rv)).toBe("2 files found"); // re-scan settled with fresh hits
+    expect(progress(rv)).toBe("2 files found");
   });
 });
 
-describe("RecentView — match highlighting & content snippet (§5.8)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    document.body.innerHTML = "";
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function typeName(rv: RecentView, text: string): void {
-    typeQuery(rv, text);
-    vi.advanceTimersByTime(200); // Name search debounce
-  }
-
-  it("bolds the matched run of the filename in a Name search, preserving case", async () => {
-    const rv = await mount([ALPHA, BRAVO, CHARLIE].map((e) => ({ ...e })));
-    typeName(rv, "ALPH"); // upper-case query against the lower-case filename
-    await flush();
+describe("RecentView — match highlighting & content snippet", () => {
+  it("marks the matched run of the filename in a Names search, preserving case", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    typeQuery(rv, "ALPH"); // upper-case query against the lower-case filename
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(names(rv)).toEqual(["alpha.md"]);
-    const nameEl = rv.element.querySelector(".recent-name")!;
-    const mark = nameEl.querySelector(".recent-match");
-    expect(mark).not.toBeNull();
+    const mark = $(rv, ".recent-name .recent-match");
     // The displayed run keeps the file's own casing, not the query's.
-    expect(mark!.textContent).toBe("alph");
-    // Name search shows no content snippet.
-    expect(rv.element.querySelector(".recent-snippet")).toBeNull();
+    expect(mark?.textContent).toBe("alph");
+    // A Names search shows no content snippet.
+    expect($(rv, ".recent-snippet")).toBeNull();
   });
 
-  it("renders a highlighted snippet between the filename and the path for Inside-docs hits", async () => {
-    const rv = await mount([ALPHA, BRAVO, CHARLIE].map((e) => ({ ...e })));
-    await runInsideSearch(rv, "quick");
+  it("renders a highlighted snippet between the filename and the path for content hits", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    clickScope(rv, "Contents");
+    await search(rv, "quick");
 
-    const row = rv.element.querySelector(".recent-row")!; // alpha.md
+    const row = $(rv, ".recent-row")!; // alpha.md
     const mid = row.querySelector(".recent-mid")!;
     // The snippet line sits between the name and the path, in that order.
-    expect(Array.from(mid.children).map((c) => c.className)).toEqual([
+    expect(Array.from(mid.children).map((c) => c.classList[0])).toEqual([
       "recent-name",
       "recent-snippet",
       "recent-path",
@@ -228,31 +316,54 @@ describe("RecentView — match highlighting & content snippet (§5.8)", () => {
     const snippet = row.querySelector(".recent-snippet")!;
     expect(snippet.textContent).toBe("the quick brown fox");
     expect(snippet.querySelector(".recent-match")?.textContent).toBe("quick");
-    // Every matched document gets its own snippet row.
-    expect(rv.element.querySelectorAll(".recent-snippet").length).toBe(2);
+    // Every matched document gets its own snippet row, and its line in the tooltip.
+    expect($$(rv, ".recent-snippet")).toHaveLength(2);
+    expect(row.getAttribute("title")).toBe("C:/n/alpha.md\nMatch on line 1");
   });
 
-  it("never bolds the filename during an Inside-docs search, even if the name contains the term", async () => {
+  it("never marks the filename during a Contents search, even if the name contains the term", async () => {
     const quick = entry("C:/n/quick.md", false);
     CONTENT[quick.path] = "a quick brown note";
-    const rv = await mount([quick]);
-    await runInsideSearch(rv, "quick");
+    const rv = await mount(makeData([quick]));
+    clickScope(rv, "Contents");
+    await search(rv, "quick");
 
-    const row = rv.element.querySelector(".recent-row")!;
-    // The snippet highlights "quick"; the filename (also "quick") stays plain —
-    // content search highlights the preview, not the name (§5.8).
-    expect(row.querySelector(".recent-snippet .recent-match")?.textContent).toBe("quick");
-    expect(row.querySelector(".recent-name .recent-match")).toBeNull();
+    // The snippet marks "quick"; the filename (also "quick") stays plain.
+    expect($(rv, ".recent-snippet .recent-match")?.textContent).toBe("quick");
+    expect($(rv, ".recent-name .recent-match")).toBeNull();
   });
 
-  it("keeps the bold run aligned when the filename has a length-changing uppercase char", async () => {
+  it("keeps the marked run aligned when the filename has a length-changing uppercase char", async () => {
     // "İ" (U+0130) lowercases to two code units; a naive lowercased-index
     // highlighter would shift the run to "tanbul." — assert it stays "stanbul".
-    const rv = await mount([entry("C:/n/İstanbul.md", false)]);
-    typeName(rv, "stanbul");
-    await flush();
+    const rv = await mount(makeData([entry("C:/n/İstanbul.md", false)]));
+    typeQuery(rv, "stanbul");
+    await vi.advanceTimersByTimeAsync(200);
 
-    const mark = rv.element.querySelector(".recent-name .recent-match");
-    expect(mark?.textContent).toBe("stanbul");
+    expect($(rv, ".recent-name .recent-match")?.textContent).toBe("stanbul");
+  });
+});
+
+describe("RecentView — keyboard", () => {
+  it("moves from the field into the list and between rows", async () => {
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)));
+    const openButtons = () => $$<HTMLButtonElement>(rv, ".recent-row-open");
+    // One tab stop for the whole list.
+    expect(openButtons().map((b) => b.tabIndex)).toEqual([0, -1, -1]);
+
+    input(rv).focus();
+    press(input(rv), "ArrowDown");
+    expect(document.activeElement).toBe(openButtons()[0]);
+
+    press(openButtons()[0], "ArrowDown");
+    expect(document.activeElement).toBe(openButtons()[1]);
+    expect(openButtons().map((b) => b.tabIndex)).toEqual([-1, 0, -1]);
+
+    press(openButtons()[1], "ArrowRight");
+    expect(document.activeElement).toBe(star(rv, "charlie.md"));
+
+    press(openButtons()[1], "Home");
+    press(openButtons()[0], "ArrowUp");
+    expect(document.activeElement).toBe(input(rv));
   });
 });

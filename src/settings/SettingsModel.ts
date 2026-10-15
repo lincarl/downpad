@@ -113,7 +113,9 @@ export class SettingsModel {
     // the max-width, so it adapts on resize with no JS); "fixed" caps it at
     // --editor-width. Fall back to "fill" for settings files predating the field.
     root.setAttribute("data-width-mode", s.editorWidthMode === "fixed" ? "fixed" : "fill");
-    root.style.setProperty("--editor-font", s.fontFamily);
+    // Keep a fallback stack: a bare family missing on this system (Segoe UI on
+    // Linux) would otherwise fall back to the browser's serif default.
+    root.style.setProperty("--editor-font", `${s.fontFamily}, system-ui, sans-serif`);
     // Document text size (spec §5.20): a multiplier applied to the editor's base
     // font size in both views. Fall back to 1 for settings files predating it.
     root.style.setProperty("--editor-font-scale", String(s.editorFontScale ?? 1));
@@ -122,13 +124,20 @@ export class SettingsModel {
     this.applyAccent(s);
   }
 
-  /** Resolve and apply the accent color (spec §6.2): the built-in blue, the
-   *  Windows system accent, or a custom color, plus a readable foreground. */
+  /** Resolve and apply the accent color (spec §6.2): the theme's design accent,
+   *  the operating system accent, or a custom color, plus a readable foreground. */
   private applyAccent(s: Settings): void {
     const root = document.documentElement;
     const set = (color: string): void => {
       root.style.setProperty("--accent", color);
       root.style.setProperty("--accent-fg", readableForeground(color));
+    };
+    // The theme tokens supply each scheme's design accent: Nord's frost blue in
+    // dark and the Cool slate blue in light. Removing the inline values lets them
+    // apply, so the default needs no color of its own here.
+    const useThemeAccent = (): void => {
+      root.style.removeProperty("--accent");
+      root.style.removeProperty("--accent-fg");
     };
     const mode = s.accentMode ?? "default";
     if (mode === "custom") {
@@ -136,21 +145,18 @@ export class SettingsModel {
       return;
     }
     if (mode !== "system") {
-      // Let the theme tokens supply their own built-in blue: Compact Slate uses
-      // a brighter #4f8cff against dark chrome, while light mode keeps the
-      // established #0067c0. Remove stale inline custom/system values first.
-      root.style.removeProperty("--accent");
-      root.style.removeProperty("--accent-fg");
+      useThemeAccent();
       return;
     }
-    // "system": use the cached OS accent if we have it; otherwise show the
-    // default immediately and resolve it once (then re-apply with whatever the
-    // current settings are — the user may have switched modes meanwhile).
+    // "system": use the cached OS accent if we have it, falling back to the
+    // theme accent when the platform reports none. Resolve it once, then re-apply
+    // with the current settings, since the user may have switched modes meanwhile.
     if (this.systemAccent !== undefined) {
-      set(this.systemAccent ?? DEFAULT_ACCENT);
+      if (this.systemAccent) set(this.systemAccent);
+      else useThemeAccent();
       return;
     }
-    set(DEFAULT_ACCENT);
+    useThemeAccent();
     if (!isElectron()) {
       this.systemAccent = null;
       return;
