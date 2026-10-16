@@ -929,6 +929,22 @@ test("Tab in the split moves from the document pane to the Markdown pane, then t
   await expect(markdownLine).toHaveText("First line.");
 });
 
+test("a click in the split's Markdown pane closes the slash menu and leaves Enter to that pane", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("slash-blur.md");
+  await typeAtEnd(documentLine, "\n/");
+  const menu = page.getByRole("listbox", { name: "Insert block" });
+  await expect(menu).toBeVisible();
+  // Click once the Markdown pane shows the new line, not while it changes.
+  await expect(page.locator(".editor-pane-raw .cm-line").nth(2)).toHaveText("/");
+  await markdownLine.click();
+  await expect(menu).toBeHidden();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Typed.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\nTyped.\n\n/\n");
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");

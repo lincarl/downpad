@@ -44,7 +44,7 @@ md-easy adapts pasted content to the document:
 
 ## Keyboard
 
-In the document view, Tab and Shift+Tab indent and outdent list items, move between table cells, and indent and outdent code in code blocks. In a list or table they stay in the document even where there is nothing to indent or no next cell. Elsewhere they move focus to the next or previous control outside the document, as in the Markdown view, and never type spaces. They also stay in the document while the block menu that "/" opens is showing, and Esc closes that menu. Esc, then Tab or Shift+Tab within two seconds, leaves the document from anywhere in it. In a code block, Esc then Tab first moves to the block's language and Copy buttons, and Tab from the last of them leaves the document.
+In the document view, Tab and Shift+Tab indent and outdent list items, move between table cells, and indent and outdent code in code blocks. In a list or table they stay in the document even where there is nothing to indent or no next cell. Elsewhere they move focus to the next or previous control outside the document, as in the Markdown view, and never type spaces. They also stay in the document while the block menu that "/" opens is showing. Esc closes that menu, and so does moving focus elsewhere in the window, such as with a click on the toolbar. Esc, then Tab or Shift+Tab within two seconds, leaves the document from anywhere in it. In a code block, Esc then Tab first moves to the block's language and Copy buttons, and Tab from the last of them leaves the document.
 
 ## Recent files and recovery
 
