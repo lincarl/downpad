@@ -20,6 +20,8 @@ function install(html: string): HTMLElement {
   return root;
 }
 
+/** Attribute `name` of the first element in `root` matching `selector`. Null
+ *  if the element lacks it, undefined if nothing matches. */
 const attr = (root: HTMLElement, selector: string, name: string) => root.querySelector(selector)?.getAttribute(name);
 
 describe("installEditorAccessibility", () => {

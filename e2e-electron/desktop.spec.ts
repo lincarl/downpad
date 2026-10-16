@@ -225,7 +225,17 @@ const NAMED_ROLES = new Set([
   "navigation", "option", "radio", "searchbox", "slider", "switch", "tab", "textbox",
 ]);
 
-test("the document view names every image and control it shows", async () => {
+/** The element with its two nearest ancestors, such as
+ *  "svg < span.milkdown-icon < button.copy-button". Runs in the page. */
+function describeElement(element: Element): string {
+  const parts: string[] = [];
+  for (let el: Element | null = element; el && parts.length < 3; el = el.parentElement) {
+    parts.push(el.tagName.toLowerCase() + [...el.classList].map((name) => "." + name).join(""));
+  }
+  return parts.join(" < ");
+}
+
+test("the document view names every image and control it shows, and hides none that Tab reaches", async () => {
   const file = path.join(directory, "names.md");
   await writeFile(path.join(directory, "image.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
   await writeFile(file, [
@@ -243,11 +253,12 @@ test("the document view names every image and control it shows", async () => {
   const session = await page.context().newCDPSession(page);
   const editor = page.locator(".milkdown > .ProseMirror");
   const lastLine = editor.locator("p").filter({ hasText: "Last line." });
-  const unnamed = new Set<string>();
+  const failures = new Set<string>();
   /** Record the images and controls in the document view that have no
-   *  accessible name in Chromium's tree while the view is in `state`. Each is
-   *  its role and the element with its two nearest ancestors, such as
-   *  "image svg < span.milkdown-icon < button.copy-button". */
+   *  accessible name in Chromium's tree while the view is in `state`, such as
+   *  "image svg < span.milkdown-icon < button.copy-button". Also record any
+   *  element a Tab can reach inside an aria-hidden container, which a screen
+   *  reader would focus without announcing. */
   const check = async (state: string) => {
     const { result } = await session.send("Runtime.evaluate", { expression: "document.querySelector('.crepe-root')" });
     const { nodes } = await session.send("Accessibility.queryAXTree", { objectId: result.objectId });
@@ -258,16 +269,17 @@ test("the document view names every image and control it shows", async () => {
       const described = await session.send("Runtime.callFunctionOn", {
         objectId: object.objectId,
         returnByValue: true,
-        functionDeclaration: `function () {
-          const parts = [];
-          for (let el = this; el && parts.length < 3; el = el.parentElement) {
-            parts.push(el.tagName.toLowerCase() + [...el.classList].map((name) => "." + name).join(""));
-          }
-          return parts.join(" < ");
-        }`,
+        functionDeclaration: `function () { return (${describeElement})(this); }`,
       });
-      unnamed.add(`${state}: ${role} ${String(described.result.value)}`);
+      failures.add(`${state}: unnamed ${role} ${String(described.result.value)}`);
     }
+    const hidden = '.crepe-root [aria-hidden="true"]';
+    const focusable = await session.send("Runtime.evaluate", {
+      returnByValue: true,
+      expression: `[...document.querySelectorAll('${hidden}, ${hidden} *')]
+        .filter((el) => el.tabIndex >= 0).map((el) => (${describeElement})(el))`,
+    });
+    for (const element of focusable.result.value as string[]) failures.add(`${state}: focusable inside aria-hidden ${element}`);
   };
   await expect(page.locator(".mermaid-preview svg")).toBeVisible();
   await check("at rest");
@@ -304,32 +316,31 @@ test("the document view names every image and control it shows", async () => {
   await editor.locator(".katex").click();
   await expect(page.locator(".milkdown-latex-inline-edit")).toHaveAttribute("data-show", "true");
   await check("math field");
-  expect([...unnamed]).toEqual([]);
+  expect([...failures]).toEqual([]);
 });
 
-test("keyboard focus shows a code block's tools and skips the table's pointer controls", async () => {
+test("a code block's tools show while they have keyboard focus, and the table's pointer controls take none", async () => {
   const file = path.join(directory, "focus.md");
-  await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nLast line.\n");
+  await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n");
   await launch(file);
-  /** Click into the code, move the pointer off the block, and leave by keyboard.
-   *  After Escape, CodeMirror lets the next Tab move focus. */
-  const leaveCode = async (key: string) => {
-    await page.locator(".milkdown-code-block .cm-content").click();
-    await page.locator(".milkdown > .ProseMirror > p").filter({ hasText: "Last line." }).hover();
-    await page.keyboard.press("Escape");
-    await page.keyboard.press(key);
-  };
-  await leaveCode("Shift+Tab");
+  // Keep the pointer off the code block, where hover alone shows the tools.
+  await page.locator(".milkdown > .ProseMirror > p").first().hover();
+  const language = page.locator(".milkdown-code-block .language-button");
   const copy = page.locator(".milkdown-code-block .copy-button");
+  await expect(copy).toHaveCSS("opacity", "0");
+  // Start on the first tool and move with Tab and Shift+Tab, so each tool gets keyboard focus.
+  await language.focus();
+  await page.keyboard.press("Tab");
   await expect(copy).toBeFocused();
   await expect(copy).toHaveCSS("opacity", "1");
   await page.keyboard.press("Shift+Tab");
-  const language = page.locator(".milkdown-code-block .language-button");
   await expect(language).toBeFocused();
   await expect(language).toHaveCSS("opacity", "1");
   // The table's buttons are invisible until hovered and do nothing from the keyboard.
-  await leaveCode("Tab");
-  await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".milkdown-table-block") === null)).toBe(true);
+  const tableButtons = page.locator(".milkdown-table-block .handle button");
+  await expect(tableButtons.first()).toBeAttached();
+  expect(await tableButtons.evaluateAll((buttons) => buttons.filter((button) => button.tabIndex >= 0).map((button) => button.className)))
+    .toEqual([]);
 });
 
 test("a toolbar tooltip lets a click through to Recent", async () => {
