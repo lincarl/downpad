@@ -617,6 +617,36 @@ test("closing a tab right after typing asks before discarding the edit", async (
   await expect(paragraph).toHaveText("First line. Not lost.");
 });
 
+test("Tab leaves the document view without typing spaces, and still nests a list item", async () => {
+  const file = path.join(directory, "tab.md");
+  await writeFile(file, "First line.\n\n- One\n- Two\n\n```js\nlet x = 1;\n```\n");
+  await launch(file);
+  const document = page.locator(".milkdown .ProseMirror");
+  // Nothing follows the document, so Tab wraps to the first control, as it
+  // does from the Markdown view.
+  const next = page.getByRole("button", { name: "Application menu", exact: true });
+  await document.locator("p").first().click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Edited.");
+  await page.keyboard.press("Tab");
+  await expect(next).toBeFocused();
+  // In a list Tab nests the item, and Esc then Tab leaves.
+  await document.getByText("Two", { exact: true }).click();
+  await page.keyboard.press("Tab");
+  await expect(document.locator("li li")).toHaveText("Two");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Tab");
+  await expect(next).toBeFocused();
+  // Esc then Shift+Tab leaves a code block for the control before the document,
+  // not for a code block or table button inside it.
+  await page.locator(".milkdown-code-block .cm-content").click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button", { name: "New document", exact: true })).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n- One\n  - Two\n\n```js\nlet x = 1;\n```\n");
+});
+
 /** Open a one-line file in the split, returning each pane's first line. */
 async function openSplit(name: string): Promise<{ file: string; documentLine: Locator; markdownLine: Locator }> {
   const file = path.join(directory, name);
