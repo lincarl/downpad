@@ -1,7 +1,7 @@
 // The single canonical store. A minimal observable — no framework.
 // See docs/design.md §4. `state.doc.markdown` is the single source of truth.
 
-import type { AppState, DocumentState } from "./types";
+import type { AppState, DocumentState, DocumentViewFailure } from "./types";
 import { blankDoc } from "./types";
 
 type Listener = (state: AppState, prev: AppState) => void;
@@ -116,6 +116,16 @@ export class Store {
       return { tabs, activeTabId: nextActive, doc: neighbour?.doc ?? blankDoc() };
     });
     return nextActive;
+  }
+
+  /** Record why a tab's Document view could not be built, or clear it with
+   *  null. No-op for an unknown id, or to clear a tab that has no failure. */
+  setDocumentViewFailure(tabId: string, failure: DocumentViewFailure | null): void {
+    const tab = this.state.tabs.find((t) => t.id === tabId);
+    if (!tab || (!tab.documentViewFailure && !failure)) return;
+    this.set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, documentViewFailure: failure ?? undefined } : t)),
+    }));
   }
 
   /** Patch the find slice. */

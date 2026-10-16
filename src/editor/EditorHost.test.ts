@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import { Store } from "../state/store";
 import type { AppState } from "../state/types";
@@ -268,25 +268,6 @@ describe("EditorHost terminal disposal", () => {
     expect(fakeEditors.destroyCalls).toBe(1);
   });
 
-  it("removes a failed partial pane so presentation can retry cleanly", async () => {
-    const root = document.createElement("div");
-    const store = makeStore();
-    const host = new EditorHost(root, store);
-    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
-
-    await expect(host.reloadActiveDoc()).rejects.toThrow("create failed");
-    expect(root.querySelector(".editor-pane-wysiwyg")).toBeNull();
-    expect(fakeEditors.destroyCalls).toBe(1);
-
-    fakeEditors.mountPromise = Promise.resolve();
-    await host.reloadActiveDoc();
-    expect(fakeEditors.mountCalls).toBe(2);
-    expect(root.querySelector(".editor-pane-wysiwyg")).not.toBeNull();
-
-    await host.dispose();
-    expect(fakeEditors.destroyCalls).toBe(2);
-  });
-
   it("waits for a pane already detached by an in-flight reload", async () => {
     const root = document.createElement("div");
     const host = new EditorHost(root, makeStore());
@@ -311,6 +292,136 @@ describe("EditorHost terminal disposal", () => {
     await disposing;
     expect(disposeSettled).toBe(true);
     expect(fakeEditors.destroyCalls).toBe(1);
+  });
+});
+
+describe("EditorHost document view failure", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The classes of the visible panes. */
+  const shown = (root: HTMLElement): string[] =>
+    [...root.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")].map((pane) => pane.className);
+  const failureOf = (store: Store, tabId: string) =>
+    store.get().tabs.find((tab) => tab.id === tabId)?.documentViewFailure;
+
+  it("shows the tab's Markdown alone and records why, then Try again builds the document pane", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+
+    await host.reloadActiveDoc();
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(root.querySelector(".editor-pane-wysiwyg")).toBeNull();
+    expect(root.classList.contains("split")).toBe(false);
+    expect(failureOf(store, "tab-1")).toEqual({ message: "create failed", dismissed: false });
+    expect(fakeEditors.destroyCalls).toBe(1);
+    // Find searches the Markdown pane it shows.
+    expect(host.counts()).toEqual(MARKDOWN_COUNTS);
+    // Typing there edits this tab.
+    fakeEditors.rawChange!("fixed text");
+    expect(store.get().doc).toMatchObject({ markdown: "fixed text", isDirty: true });
+
+    fakeEditors.mountPromise = Promise.resolve();
+    await host.retryDocumentView();
+    expect(fakeEditors.mountCalls).toBe(2);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw", "editor-pane editor-pane-wysiwyg"]);
+    expect(root.classList.contains("split")).toBe(true);
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    expect(host.counts()).toEqual(DOCUMENT_COUNTS);
+
+    await host.dispose();
+    expect(fakeEditors.destroyCalls).toBe(2);
+  });
+
+  it("keeps the Markdown view and shows the new error when Try again fails", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    store.setDocumentViewFailure("tab-1", { message: "create failed", dismissed: true });
+
+    fakeEditors.mountPromise = Promise.reject(new Error("failed again"));
+    await host.retryDocumentView();
+    expect(fakeEditors.mountCalls).toBe(2);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(failureOf(store, "tab-1")).toEqual({ message: "failed again", dismissed: false });
+    await host.dispose();
+  });
+
+  it("tries the document pane again in the Markdown layout, keeping it hidden", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    // Another tab chooses the Markdown layout for the window.
+    fakeEditors.mountPromise = Promise.resolve();
+    store.addTab({ ...store.get().doc, markdown: "other" });
+    await host.reloadActiveDoc();
+    await host.setLayout("markdown");
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+
+    await host.retryDocumentView();
+    expect(fakeEditors.mountCalls).toBe(3);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    // Built and hidden, next to the other tab's.
+    expect(root.querySelectorAll(".editor-pane-wysiwyg[hidden]")).toHaveLength(2);
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    await host.dispose();
+  });
+
+  it("shows no other tab's pane under a failing tab, and other tabs keep the window's layout", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const first = root.querySelector<HTMLElement>(".editor-pane-wysiwyg")!;
+
+    const second = store.addTab({ ...store.get().doc, markdown: "> deep" });
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    expect(first.hidden).toBe(true);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(fakeEditors.rawText).toBe("> deep");
+    fakeEditors.rawChange!("> deeper");
+    expect(store.get().tabs.map((tab) => tab.doc.markdown)).toEqual(["original markdown", "> deeper"]);
+
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    expect(first.hidden).toBe(false);
+
+    // Returning to the failing tab shows its Markdown again without trying again.
+    store.activateTab(second);
+    await host.showActiveDoc();
+    expect(fakeEditors.mountCalls).toBe(2);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    await host.dispose();
+  });
+
+  it("tries the document pane again when the document layout is chosen again", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+
+    // The window has the document layout already.
+    fakeEditors.mountPromise = Promise.resolve();
+    await host.setLayout("document");
+    expect(fakeEditors.mountCalls).toBe(2);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    await host.dispose();
   });
 });
 

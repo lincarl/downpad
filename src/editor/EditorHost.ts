@@ -23,7 +23,7 @@
 
 import type { Store } from "../state/store";
 import { serializerStyleFromSettings } from "../state/types";
-import type { EditorLayout } from "../state/types";
+import type { DocumentViewFailure, EditorLayout } from "../state/types";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { forgetImageAnswers } from "./wysiwyg/imageView";
@@ -80,8 +80,11 @@ export class EditorHost implements FindController {
    *  Track those detached panes so `dispose()` still waits for their cleanup. */
   private readonly pendingTeardowns = new Set<Promise<void>>();
   private readonly paneTeardowns = new WeakMap<Pane, Promise<void>>();
-  /** Which editor panes are shown — document only, the split, or Markdown only
-   *  (§6.1). Mirrors `AppState.editorLayout`. */
+  /** The window's layout — document only, the split, or Markdown only (§6.1).
+   *  Mirrors `AppState.editorLayout`. */
+  private windowLayout: EditorLayout = "document";
+  /** The layout the active tab is shown in: the window's, or Markdown only
+   *  while the tab's Document view cannot be built (`shownLayout`). */
   private layout: EditorLayout = "document";
   /** Set while a mirror sync writes into a pane, so a change report made during
    *  the write is ignored (the Markdown pane also suppresses its own). The
@@ -139,7 +142,7 @@ export class EditorHost implements FindController {
    *  `setLayout` for a runtime change — it flushes and re-presents. */
   initLayout(layout: EditorLayout): void {
     if (this.disposed) return;
-    this.layout = layout;
+    this.windowLayout = layout;
   }
 
   /** Insert markdown at the caret of the pane being edited (§5.4): the split's
@@ -307,16 +310,33 @@ export class EditorHost implements FindController {
     }
   }
 
-  /** Switch the editor layout — document / split / Markdown (§6.1). Flushes the
-   *  visible edits first so the (possibly newly built) panes start from the
-   *  current canonical. */
+  /** Switch the window's layout — document / split / Markdown (§6.1). Flushes
+   *  the visible edits first so the (possibly newly built) panes start from the
+   *  current canonical. Choosing the document or the split while the active
+   *  tab's Document view has failed tries that view again, even when the
+   *  window already has that layout. */
   async setLayout(layout: EditorLayout): Promise<void> {
-    if (this.disposed || this.switching || this.layout === layout) return;
+    if (this.disposed || this.switching) return;
+    const retry = layout !== "markdown";
+    if (this.windowLayout === layout && !(retry && this.hasFailed(this.store.get().activeTabId))) return;
     this.switching = true;
     try {
       this.flush();
-      this.layout = layout;
-      await this.present();
+      this.windowLayout = layout;
+      await this.present({ retry });
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** Try again to build the active tab's Document view after it failed (the
+   *  notice's Try again), from the tab's current text. In the Markdown layout
+   *  the view is built hidden, so a success is ready when the layout changes. */
+  async retryDocumentView(): Promise<void> {
+    if (this.disposed || this.switching) return;
+    this.switching = true;
+    try {
+      await this.present({ retry: true });
     } finally {
       this.switching = false;
     }
@@ -479,35 +499,59 @@ export class EditorHost implements FindController {
     this.tabMru = [tabId, ...this.tabMru.filter((t) => t !== tabId)];
   }
 
-  /** Reveal the active tab's panes for the current layout: the document, the
+  /** Reveal the active tab's panes for the window's layout: the document, the
    *  Markdown source, or both side by side (§6.1). Rebuilds stale panes, hides
-   *  every other tab's pane, and lays out the divider. */
-  private async present(opts: { rebuild?: boolean } = {}): Promise<void> {
+   *  every other tab's pane, and lays out the divider.
+   *
+   *  When the document pane cannot be built, the tab shows its Markdown alone
+   *  and the failure is recorded on the tab for the notice bar. Later reveals
+   *  leave the document pane unbuilt until `retry`, or a `rebuild` after the
+   *  tab's text was replaced, tries again. */
+  private async present(opts: { rebuild?: boolean; retry?: boolean } = {}): Promise<void> {
     if (this.disposed) return;
     const id = this.store.get().activeTabId;
     if (!id) return;
     const rebuild = opts.rebuild ?? false;
-    const showWysiwyg = this.layout !== "markdown";
-    const showRaw = this.layout !== "document";
+    const failed = this.hasFailed(id);
 
     // Building a pane never changes the tab's text, because the document pane
     // reports its exact source until the user edits it. In the Markdown-only
-    // view the document pane isn't built at all.
-    const wysiwygPane = showWysiwyg ? await this.ensurePane(id, "wysiwyg", rebuild) : null;
-    if (this.disposed || this.store.get().activeTabId !== id || (showWysiwyg && !wysiwygPane)) {
-      return;
+    // view the document pane isn't built at all, except to try a failed one again.
+    const attempt = failed ? rebuild || (opts.retry ?? false) : this.windowLayout !== "markdown";
+    let wysiwygPane: Pane | null = null;
+    let failure: DocumentViewFailure | null = null;
+    if (attempt) {
+      try {
+        wysiwygPane = await this.ensurePane(id, "wysiwyg", rebuild);
+      } catch (error) {
+        console.error("md-easy: the Document view could not be built", error);
+        failure = { message: error instanceof Error ? error.message : String(error), dismissed: false };
+      }
+      if (this.disposed || (!failure && !wysiwygPane)) return;
     }
+    const fallback = attempt ? failure !== null : failed;
+    const layout = fallback ? "markdown" : this.windowLayout;
+    // A document pane built only to try it again stays hidden in the Markdown view.
+    if (layout === "markdown") wysiwygPane = null;
+    // Record the build's outcome once the panes are shown and focused. A notice
+    // it brings up then returns focus to the editor when dismissed.
+    const record = (): void => {
+      if (attempt && !this.disposed) this.store.setDocumentViewFailure(id, failure);
+    };
+    if (this.store.get().activeTabId !== id) return record();
+    const showRaw = layout !== "document";
     const rawPane = showRaw ? await this.ensurePane(id, "raw", rebuild) : null;
-    if (this.disposed || this.store.get().activeTabId !== id || (showRaw && !rawPane)) return;
+    if (this.disposed || this.store.get().activeTabId !== id || (showRaw && !rawPane)) return record();
 
     for (const pane of this.panes.values()) {
       pane.el.hidden = pane !== wysiwygPane && pane !== rawPane;
     }
 
     this.activeTabId = id;
+    this.layout = layout;
     // The "active" pane (find / print / focus target) is the document when it's
     // shown, otherwise the Markdown source (Markdown-only view).
-    this.currentView = showWysiwyg ? "wysiwyg" : "raw";
+    this.currentView = wysiwygPane ? "wysiwyg" : "raw";
     this.touchTab(id);
     this.layoutSplit();
     this.applySpellcheck();
@@ -515,10 +559,11 @@ export class EditorHost implements FindController {
     // re-measures (focus=false) so it doesn't steal focus or fight the document.
     // In the Markdown-only view the raw source is the sole pane, so it takes focus.
     wysiwygPane?.wysiwyg?.onShow();
-    rawPane?.raw?.onShow(this.layout === "markdown");
+    rawPane?.raw?.onShow(layout === "markdown");
     // Keep the two visible panes' scroll positions in sync (§5.3); rewires to the
     // current pair on every reveal, and disconnects whenever it isn't the split.
     this.syncScroll(wysiwygPane, rawPane);
+    record();
 
     await this.enforceLru();
   }
@@ -878,6 +923,11 @@ export class EditorHost implements FindController {
 
   private hasTab(tabId: string): boolean {
     return this.store.get().tabs.some((tab) => tab.id === tabId);
+  }
+
+  /** Whether the tab's Document view failed to build and has not built since. */
+  private hasFailed(tabId: string | null): boolean {
+    return !!this.store.get().tabs.find((tab) => tab.id === tabId)?.documentViewFailure;
   }
 
   private async enforceLru(): Promise<void> {

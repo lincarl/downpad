@@ -62,6 +62,18 @@ export interface Tab {
   /** Stable identity (untitled buffers have no path, so paths can't be the id). */
   id: string;
   doc: DocumentState;
+  /** Set while md-easy cannot build this tab's Document view, for example
+   *  because the parser overflows its stack. The tab then shows its Markdown
+   *  alone, whatever the window's layout (`shownLayout`). */
+  documentViewFailure?: DocumentViewFailure;
+}
+
+/** Why a tab's Document view could not be built, for the notice that says so. */
+export interface DocumentViewFailure {
+  /** The error's message. */
+  message: string;
+  /** Whether the user dismissed the notice for this failure. */
+  dismissed: boolean;
 }
 
 /** A fresh, empty untitled document buffer. */
@@ -112,7 +124,9 @@ export interface AppState {
   activeTabId: string | null;
   /** Which editor panes are shown — the document alone, the document and the
    *  Markdown source side by side, or the Markdown source alone (§6.1). Driven by
-   *  the toolbar's Document | Split | Markdown control; persists across tab switches. */
+   *  the toolbar's Document | Split | Markdown control; persists across tab switches.
+   *  A tab whose Document view cannot be built shows its Markdown alone instead
+   *  (`shownLayout`), without changing this. */
   editorLayout: EditorLayout;
   settings: Settings;
   find: FindState;
@@ -236,6 +250,13 @@ export function layoutFromDefaultView(s: Pick<Settings, "defaultView">): EditorL
     default:
       return "document";
   }
+}
+
+/** The layout the active tab is shown in: the window's layout, or the Markdown
+ *  view alone while the tab's Document view cannot be built. */
+export function shownLayout(state: Pick<AppState, "tabs" | "activeTabId" | "editorLayout">): EditorLayout {
+  const active = state.tabs.find((tab) => tab.id === state.activeTabId);
+  return active?.documentViewFailure ? "markdown" : state.editorLayout;
 }
 
 /** Derive the WYSIWYG serializer style from settings (spec §5.16). */

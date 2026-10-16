@@ -554,6 +554,42 @@ test("launching with a file builds its document editor once", async () => {
   expect(await page.evaluate(() => Reflect.get(window, "editorBuilds"))).toBe(2);
 });
 
+test("a file the document view cannot show opens in the Markdown view with a notice, and Try again shows it once fixed", async () => {
+  const deep = path.join(directory, "deep.md");
+  const normal = path.join(directory, "normal.md");
+  // Nesting this deep overflows the Markdown parser's stack.
+  await writeFile(deep, ">".repeat(10_000) + " deep\n");
+  await writeFile(normal, "# Normal file\n");
+  await launch(deep);
+  const notice = page.getByRole("alert");
+  await expect(notice).toHaveText(
+    "md-easy can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.Try again",
+  );
+  const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
+  await expect(markdown).toContainText("> deep");
+  await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(1);
+  await expect(page.getByRole("radio", { name: "Markdown", exact: true })).toHaveAttribute("aria-checked", "true");
+
+  // Startup finished, so the shortcuts work. Other tabs show no notice.
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("tab", { name: "Untitled", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(notice).toHaveCount(0);
+  await chooseOpen(normal);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Normal file");
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toHaveAttribute("aria-checked", "true");
+
+  await page.getByRole("tab", { name: "deep.md", exact: true }).click();
+  await expect(notice).toBeVisible();
+  await markdown.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText("# Fixed\n\nNo longer deep.\n");
+  await notice.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Fixed");
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toBeFocused();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toHaveAttribute("aria-checked", "true");
+});
+
 test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   const file = path.join(directory, "recovered.md");
   await writeFile(file, "# Before the crash\n");
