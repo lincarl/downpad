@@ -18,6 +18,7 @@ import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
 import { codeMirrorSpan, revealSpan } from "../wysiwyg/findReveal";
+import type { DropTarget } from "../wysiwyg/fileDrop";
 
 /** How long edits and caret moves must pause before the find card recounts.
  *  Counting after an edit walks the whole document, which takes about 200ms
@@ -84,9 +85,14 @@ export class RawEditor {
   /** The matches last counted, reused while the document and query stay the
    *  same, so a caret move or F3 does not walk the whole document again. */
   private counted: { doc: Text; query: SearchQuery; matches: Match[] } | null = null;
+  /** The targets of drops on this pane whose files are not all in yet. Every
+   *  change maps their positions, so each stays where its files were dropped,
+   *  after the files of its drop already inserted. */
+  private readonly dropTargets = new Set<DropTarget>();
 
   mount(root: HTMLElement, initial: string, cb: RawCallbacks, opts: RawOptions = {}): void {
     const updateListener = EditorView.updateListener.of((u) => {
+      if (u.docChanged) for (const target of this.dropTargets) target.pos = u.changes.mapPos(target.pos, 1);
       if (u.docChanged && !this.applying) cb.onChange(u.state.doc.toString());
       // The current match is the selected one, so a caret move changes it too.
       if ((u.docChanged || u.selectionSet) && cb.onFindChange && getSearchQuery(u.state).search) {
@@ -140,17 +146,33 @@ export class RawEditor {
     }
   }
 
-  /** Insert text for a dropped file at the caret, with the caret after it
-   *  (§5.4). It goes in after any selection, such as the find card's current
-   *  match, and never replaces it. */
-  insertText(text: string): void {
+  /** Aim a file drop at the text position nearest a viewport point (§5.4).
+   *  Returns the target for `insertText`, which the pane keeps in step with
+   *  edits until `releaseDropTarget`, or null without an editor. */
+  dropTargetAt(x: number, y: number): DropTarget | null {
+    if (!this.view) return null;
+    const target: DropTarget = { pos: this.view.posAtCoords({ x, y }, false) };
+    this.dropTargets.add(target);
+    return target;
+  }
+
+  /** Stop keeping a drop target in step, once the files of its drop are in. */
+  releaseDropTarget(target: DropTarget): void {
+    this.dropTargets.delete(target);
+  }
+
+  /** Insert text for a dropped file (§5.4) at the target of a drop on this
+   *  pane, after any file of the same drop, or else at the caret. At the caret
+   *  it goes in after any selection, such as the find card's current match,
+   *  and never replaces it. The caret moves after the text, unless
+   *  `keepCaret` leaves it where the user is typing. */
+  insertText(text: string, target: DropTarget | null = null, keepCaret = false): void {
     if (!this.view || !text) return;
-    const { to } = this.view.state.selection.main;
+    const at = target && this.dropTargets.has(target) ? target.pos : this.view.state.selection.main.to;
     this.view.dispatch({
-      changes: { from: to, insert: text },
-      selection: { anchor: to + text.length },
+      changes: { from: at, insert: text },
+      ...(keepCaret ? {} : { selection: { anchor: at + text.length } }),
     });
-    this.view.focus();
   }
 
   /**
@@ -308,6 +330,7 @@ export class RawEditor {
     if (this.findChangeTimer != null) clearTimeout(this.findChangeTimer);
     this.findChangeTimer = null;
     this.counted = null;
+    this.dropTargets.clear();
     this.view?.destroy();
     this.view = null;
   }

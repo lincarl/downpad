@@ -1815,6 +1815,22 @@ test("a file dropped on the find card goes in after the current match instead of
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[notes.csv](attachments/notes.csv)\n\nSecond line.\n");
 });
 
+test("a file dropped on the split's Markdown pane goes in there, where it was dropped, while the document pane has focus", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("drop-on-markdown-pane.md", "First line.\n\nSecond line.\n");
+  // The Markdown pane's caret at the end of its first line, then focus in the document pane.
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await documentLine.click();
+  // Past the end of the second line, where CodeMirror's drop cursor shows at its end.
+  const secondLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
+  await dropFiles(secondLine, [await csvFile("notes.csv")]);
+  await expect(secondLine).toHaveText("Second line.[notes.csv](attachments/notes.csv)");
+  // The Markdown pane takes focus, with the caret after the file.
+  await page.keyboard.type(" Typed.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\nSecond line.[notes.csv](attachments/notes.csv) Typed.\n");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

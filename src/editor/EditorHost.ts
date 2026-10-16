@@ -66,11 +66,13 @@ interface Pane {
 
 /** Where the files of a drop go in. */
 interface AimedDrop {
-  /** The document pane the files were dropped on, which takes them. Null for
-   *  a drop elsewhere, whose files go into the pane being edited. */
-  pane: Pane | null;
-  /** The place in that pane the files were dropped on. */
+  /** The pane that takes the files. */
+  pane: Pane;
+  /** The place in the pane the files were dropped on. Without one, they go
+   *  in at the pane's caret. */
   target: DropTarget | null;
+  /** Whether the files were dropped on the pane, which then takes focus. */
+  onPane: boolean;
   /** When the drop happened (`performance.now()`). */
   at: number;
 }
@@ -205,56 +207,71 @@ export class EditorHost implements FindController {
   }
 
   /**
-   * Aim the files of a drop (§5.4). A drop on the document pane, or on the
-   * page around it in the Document view, goes in at the block edge nearest
-   * the drop point, which Crepe's drop indicator marked during the drag, or
-   * at the start or end for a drop above or below the text. A drop anywhere
-   * else, or a call without a drop point, goes in at the caret of the pane
-   * being edited: the split's Markdown pane while it has focus, else the
-   * document. Returns null when no document is shown. Call it while handling
-   * the drop event, before the drop point's text can move.
+   * Aim the files of a drop (§5.4) at the pane under the drop point. On the
+   * document pane, or on the page around it in the Document view, they go in
+   * at the block edge nearest the drop point, which Crepe's drop indicator
+   * marked during the drag, or at the start or end for a drop above or below
+   * the text. On a Markdown pane they go in at the text position nearest the
+   * drop point. A drop anywhere else, or a call without a drop point, goes in
+   * at the caret of the pane being edited, which is the split's Markdown pane
+   * while it has focus and the document otherwise. Returns null when no
+   * document is shown. Call it while handling the drop event, before the drop
+   * point's text can move.
    */
   aimDrop(drop?: DropPoint): FileDrop | null {
     if (this.disposed || this.activeTabId === null) return null;
-    const pane = this.active();
-    const element = drop?.target;
+    const under = drop ? this.paneUnder(drop.target) : null;
+    const pane = under ?? this.focusedSplitRaw() ?? this.active();
+    if (!pane) return null;
     let target: DropTarget | null = null;
-    if (drop && pane?.wysiwyg && element instanceof Node && (pane.el.contains(element) || element.contains(this.root))) {
+    if (drop && under?.wysiwyg) {
       // The split catches up first, so the target is a place in the latest text.
       this.flush();
-      target = pane.wysiwyg.dropTargetAt(drop.clientX, drop.clientY);
+      target = under.wysiwyg.dropTargetAt(drop.clientX, drop.clientY);
+    } else if (drop && under?.raw) {
+      target = under.raw.dropTargetAt(drop.clientX, drop.clientY);
     }
-    const handle: FileDrop = { tabId: this.activeTabId };
-    this.drops.set(handle, { pane: target ? pane : null, target, at: performance.now() });
+    const handle: FileDrop = { tabId: pane.tabId };
+    this.drops.set(handle, { pane, target, onPane: under !== null, at: performance.now() });
     return handle;
   }
 
   /**
-   * Insert markdown for a file of a drop (§5.4). A file dropped on the
-   * document pane goes in there at the drop's target, after the drop's
-   * earlier files. Any other goes in at the caret of the pane being edited.
+   * Insert markdown for a file of a drop (§5.4) in the pane `aimDrop` chose.
+   * It goes in at the drop's target, after the drop's earlier files, or at the
+   * pane's caret. If a tab or layout switch hid that pane since the drop, it
+   * goes in at the caret of the pane being edited.
    *
    * The visible panes catch up before and after, so the split's other pane
-   * holds the insert at once. The document pane takes focus for a file
-   * dropped on it, with the caret after the file, as after Crepe's own drops.
-   * But while the user types in the split's Markdown pane, a file dropped on
-   * the document pane waits for typing to pause, and focus stays in the
-   * Markdown pane. An insert in the document pane writes the whole text in its
-   * own form, which would drop a space just typed at the end of the line, and
-   * the next keys would go elsewhere.
+   * holds the insert at once. A pane the files were dropped on takes focus,
+   * with the caret after the file, as after Crepe's own drops. But while the
+   * user types in the split's Markdown pane, a file dropped on the document
+   * pane waits for typing to pause, and focus stays in the Markdown pane. An
+   * insert in the document pane writes the whole text in its own form, which
+   * would drop a space just typed at the end of the line, and the next keys
+   * would go elsewhere. A file dropped on a Markdown pane the user is typing
+   * in leaves the caret where they type.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
-    const typing = this.drops.get(drop)?.pane ? this.typedInMarkdownSince(drop) : false;
+    const typing = this.drops.get(drop)?.pane.wysiwyg ? this.typedInMarkdownSince(drop) : false;
     if (typing) await this.markdownTypingPause();
     const aimed = this.drops.get(drop);
     if (this.disposed || !aimed) return false;
+    let { pane, target } = aimed;
+    if (pane.el.hidden) {
+      const current = this.focusedSplitRaw() ?? this.active();
+      if (!current) return false;
+      pane = current;
+      target = null;
+    }
     this.flush();
-    const onPane = aimed.pane && !aimed.pane.el.hidden ? aimed.pane : null;
-    const pane = onPane ?? this.focusedSplitRaw() ?? this.active();
-    if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, aimed.target);
-    else pane?.raw?.insertText(markdown);
+    if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target);
+    else pane.raw?.insertText(markdown, target, this.typingIn(pane));
     this.flush();
-    if (onPane && !typing) onPane.wysiwyg?.focusText();
+    if (aimed.onPane && !typing) {
+      if (pane.wysiwyg) pane.wysiwyg.focusText();
+      else pane.raw?.focus();
+    }
     return true;
   }
 
@@ -263,7 +280,9 @@ export class EditorHost implements FindController {
     const aimed = this.drops.get(drop);
     if (!aimed) return;
     this.drops.delete(drop);
-    if (aimed.target) aimed.pane?.wysiwyg?.releaseDropTarget(aimed.target);
+    if (!aimed.target) return;
+    aimed.pane.wysiwyg?.releaseDropTarget(aimed.target);
+    aimed.pane.raw?.releaseDropTarget(aimed.target);
   }
 
   /** Hide the drop indicator the document pane drew while files were dragged
@@ -665,8 +684,20 @@ export class EditorHost implements FindController {
     return this.active()?.raw ?? null;
   }
 
-  /** Whether the user is typing in a Markdown pane: it has focus and took a
-   *  key within `TYPING_PAUSE_MS`. */
+  /** The visible pane of the active tab under a drop target element. That is
+   *  a pane that contains it, or the active pane for the page around the
+   *  panes. Null for anything else, such as the toolbar or the find card. */
+  private paneUnder(element: EventTarget | null): Pane | null {
+    if (!(element instanceof Node) || this.activeTabId === null) return null;
+    for (const view of ["raw", "wysiwyg"] as View[]) {
+      const pane = this.panes.get(paneKey(this.activeTabId, view));
+      if (pane && !pane.el.hidden && pane.el.contains(element)) return pane;
+    }
+    return element.contains(this.root) ? this.active() : null;
+  }
+
+  /** Whether the user is typing in a Markdown pane, which has focus and took
+   *  a key within `TYPING_PAUSE_MS`. */
   private typingIn(pane: Pane | null): boolean {
     return !!pane?.el.contains(document.activeElement) && performance.now() - this.markdownTypedAt < TYPING_PAUSE_MS;
   }
