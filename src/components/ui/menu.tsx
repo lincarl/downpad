@@ -7,7 +7,8 @@ export interface MenuItem {
   label: string;
   run: () => void | Promise<void>;
   icon?: LucideIcon;
-  /** Shortcut hint shown at the row's right end. */
+  /** Shortcut hint shown at the row's right end, such as "Ctrl+Shift+V". Screen
+   *  readers get it as the row's `aria-keyshortcuts`, not as part of its name. */
   shortcut?: string;
   danger?: boolean;
   disabled?: boolean;
@@ -52,6 +53,9 @@ export function MenuRows({
   ));
 }
 
+/** One menu row, with the separator and section caption that come before it.
+ *  The row gives its shortcut to screen readers as `aria-keyshortcuts` and hides
+ *  the visible hint from them, so the hint is not read as part of its name. */
 function MenuRow({
   item,
   first,
@@ -92,6 +96,7 @@ function MenuRow({
         )}
         role={item.checked === undefined ? "menuitem" : item.radio ? "menuitemradio" : "menuitemcheckbox"}
         aria-checked={item.checked}
+        aria-keyshortcuts={item.shortcut?.replace(/\bCtrl\b/g, "Control")}
         disabled={item.disabled}
         onClick={item.disabled ? undefined : () => onActivate(item)}
       >
@@ -107,7 +112,7 @@ function MenuRow({
         )}
         <span className="md-context-menu-label flex-1 whitespace-nowrap pr-2">{item.label}</span>
         {item.shortcut && (
-          <span className="md-context-menu-key whitespace-nowrap pl-3 text-[11px] text-ink-faint">
+          <span className="md-context-menu-key whitespace-nowrap pl-3 text-[11px] text-ink-faint" aria-hidden="true">
             {item.shortcut}
           </span>
         )}

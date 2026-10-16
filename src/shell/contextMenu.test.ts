@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { screen } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { closeContextMenu, showContextMenu, isContextMenuOpen } from "./contextMenu";
 import { MENU_ICONS } from "./menuIcons";
@@ -14,7 +15,7 @@ describe("showContextMenu", () => {
     showContextMenu(10, 20, [
       { label: "Cut", shortcut: "Ctrl+X", icon: MENU_ICONS.cut, run: () => {} },
       { label: "Print…", shortcut: "Ctrl+P", icon: MENU_ICONS.print, run: () => {} },
-    ]);
+    ], "Menu");
     expect(rows()).toHaveLength(2);
     expect(rows()[0].querySelector(".md-context-menu-label")!.textContent).toBe("Cut");
     expect(rows()[0].querySelector(".md-context-menu-key")!.textContent).toBe("Ctrl+X");
@@ -23,18 +24,31 @@ describe("showContextMenu", () => {
     expect(menu().style.top).toBe("20px");
   });
 
+  it("has a name, and gives screen readers each shortcut as a key, not as part of the row's name", () => {
+    showContextMenu(0, 0, [
+      { label: "Cut", shortcut: "Ctrl+X", run: () => {} },
+      { label: "Paste as plain text", shortcut: "Ctrl+Shift+V", run: () => {} },
+      { label: "Insert link…", run: () => {} },
+    ], "Edit");
+    expect(screen.getByRole("menu", { name: "Edit" })).toBe(menu());
+    expect(screen.getByRole("menuitem", { name: "Cut" }).getAttribute("aria-keyshortcuts")).toBe("Control+X");
+    expect(screen.getByRole("menuitem", { name: "Paste as plain text" }).getAttribute("aria-keyshortcuts"))
+      .toBe("Control+Shift+V");
+    expect(screen.getByRole("menuitem", { name: "Insert link…" }).hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
   it("reserves the icon column on rows without an icon so labels stay aligned", () => {
     showContextMenu(0, 0, [
       { label: "With", icon: MENU_ICONS.copy, run: () => {} },
       { label: "Without", run: () => {} },
-    ]);
+    ], "Menu");
     // Both rows get the slot; only the first one has glyph markup inside it.
     expect(rows()[1].querySelector(".md-context-menu-icon")).not.toBeNull();
     expect(rows()[1].querySelector(".md-context-menu-icon svg")).toBeNull();
   });
 
   it("omits the icon column entirely for a text-only menu", () => {
-    showContextMenu(0, 0, [{ label: "Open", run: () => {} }]);
+    showContextMenu(0, 0, [{ label: "Open", run: () => {} }], "Menu");
     expect(rows()[0].querySelector(".md-context-menu-icon")).toBeNull();
   });
 
@@ -54,7 +68,7 @@ describe("showContextMenu", () => {
           ran += "d";
         },
       },
-    ]);
+    ], "Menu");
     rows()[1].click();
     expect(ran).toBe("");
     expect(isContextMenuOpen()).toBe(true);
@@ -67,7 +81,7 @@ describe("showContextMenu", () => {
     showContextMenu(0, 0, [
       { label: "A", run: () => {} },
       { label: "B", separatorBefore: true, run: () => {} },
-    ]);
+    ], "Menu");
     expect(menu().querySelectorAll(".md-context-menu-sep")).toHaveLength(1);
     expect(menu().children[1].className).toBe("md-context-menu-sep");
   });
@@ -76,7 +90,7 @@ describe("showContextMenu", () => {
     const opener = document.createElement("button");
     document.body.append(opener);
     opener.focus();
-    showContextMenu(0, 0, [{ label: "Copy", run: () => {} }]);
+    showContextMenu(0, 0, [{ label: "Copy", run: () => {} }], "Menu");
     expect(document.activeElement).toBe(rows()[0]);
 
     const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
@@ -88,8 +102,8 @@ describe("showContextMenu", () => {
   });
 
   it("replaces an already-open menu instead of stacking a second one", () => {
-    showContextMenu(0, 0, [{ label: "First", run: () => {} }]);
-    showContextMenu(0, 0, [{ label: "Second", run: () => {} }]);
+    showContextMenu(0, 0, [{ label: "First", run: () => {} }], "Menu");
+    showContextMenu(0, 0, [{ label: "Second", run: () => {} }], "Menu");
     expect(document.querySelectorAll(".md-context-menu")).toHaveLength(1);
     expect(rows()[0].textContent).toBe("Second");
   });
@@ -98,7 +112,7 @@ describe("showContextMenu", () => {
     const invoker = document.createElement("button");
     document.body.append(invoker);
     invoker.focus();
-    showContextMenu(0, 0, [{ label: "Open", run: () => {} }]);
+    showContextMenu(0, 0, [{ label: "Open", run: () => {} }], "Menu");
 
     expect(document.activeElement).toBe(rows()[0]);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

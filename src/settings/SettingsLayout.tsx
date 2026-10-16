@@ -42,14 +42,15 @@ export function SettingsPage({ id, tabId, active, plain, children }: SettingsPag
 }
 
 /**
- * A bordered group on a page. A title cuts the top border; leave it out when
- * the nav row already names the group.
+ * A bordered group on a page. A title cuts the top border and names the group
+ * for screen readers. Leave it out when the page's tab already names the
+ * group; the box is then only a frame.
  */
 export function SettingsBox({ title, children }: { title?: string; children: ReactNode }) {
   const titleId = useId();
   return (
     <div
-      role="group"
+      role={title ? "group" : undefined}
       aria-labelledby={title ? titleId : undefined}
       className={cn(
         subgridClassName,

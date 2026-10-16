@@ -51,6 +51,23 @@ describe("SettingsDialogView accessibility", () => {
   });
 });
 
+describe("SettingsDialogView landmarks and groups", () => {
+  it("adds no unnamed landmark or group to any page", async () => {
+    const { user } = renderDialog();
+    // The tab list names the pages; a navigation landmark around it would add an unnamed stop.
+    expect(screen.queryByRole("navigation")).toBeNull();
+    for (const tab of screen.getAllByRole("tab")) {
+      await user.click(tab);
+      const groups = within(screen.getByRole("tabpanel")).queryAllByRole("group");
+      const unnamed = groups.filter((group) => !group.hasAttribute("aria-labelledby") && !group.hasAttribute("aria-label"));
+      expect(unnamed, tab.textContent ?? "").toEqual([]);
+    }
+    // A titled box is a group named by its title.
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    expect(screen.getByRole("group", { name: "Autosave" })).toBeTruthy();
+  });
+});
+
 describe("SettingsDialogView pages", () => {
   it("switches pages with the arrow keys and keeps every page mounted", async () => {
     const { user } = renderDialog();

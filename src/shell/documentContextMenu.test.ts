@@ -126,6 +126,16 @@ describe("installDocumentContextMenu", () => {
     expect(result.menu).toBe(true);
   });
 
+  it("names the menu for what it holds", () => {
+    const chrome = document.createElement("button");
+    const editable = document.createElement("textarea");
+    document.body.append(chrome, editable);
+    rightClick(chrome);
+    expect(document.querySelector(".md-context-menu")?.getAttribute("aria-label")).toBe("Document");
+    rightClick(editable);
+    expect(document.querySelector(".md-context-menu")?.getAttribute("aria-label")).toBe("Edit");
+  });
+
   it("lets Shift+right-click through so Chromium spell-check suggestions survive (§5.14)", () => {
     const editable = document.createElement("div");
     editable.className = "ProseMirror";

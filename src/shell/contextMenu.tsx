@@ -57,7 +57,9 @@ function onKeyDown(event: KeyboardEvent): void {
   event.stopPropagation();
 }
 
-export function showContextMenu(x: number, y: number, items: MenuItem[]): void {
+/** Open a menu of `items` at the pointer position, named `label` for screen
+ *  readers, such as "Tab". It replaces any menu that is already open. */
+export function showContextMenu(x: number, y: number, items: MenuItem[], label: string): void {
   const restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   closeActiveMenu(false);
   const host = document.createElement("div");
@@ -65,7 +67,7 @@ export function showContextMenu(x: number, y: number, items: MenuItem[]): void {
   document.body.append(host);
   const root = createRoot(host);
   flushSync(() => {
-    root.render(<ContextMenu x={x} y={y} items={items} />);
+    root.render(<ContextMenu x={x} y={y} items={items} label={label} />);
   });
   const menu = host.querySelector<HTMLElement>(".md-context-menu");
   if (!menu) {
@@ -91,10 +93,17 @@ export function showContextMenu(x: number, y: number, items: MenuItem[]): void {
   }, 0);
 }
 
-function ContextMenu({ x, y, items }: { x: number; y: number; items: MenuItem[] }) {
+/** The menu element at `x`, `y`, named `label` for screen readers. Choosing a
+ *  row closes the menu before the row's command runs. */
+function ContextMenu({ x, y, items, label }: { x: number; y: number; items: MenuItem[]; label: string }) {
   const style: CSSProperties = { left: x, top: y };
   return (
-    <div className={cn("md-context-menu fixed z-[1100]", menuSurfaceClassName)} role="menu" style={style}>
+    <div
+      className={cn("md-context-menu fixed z-[1100]", menuSurfaceClassName)}
+      role="menu"
+      aria-label={label}
+      style={style}
+    >
       <MenuRows
         items={items}
         onActivate={(item) => {
