@@ -600,6 +600,12 @@ test("the find count follows edits made while the card is open", async () => {
   await expect(count).toHaveText("1 of 3");
   await typeAtEnd(omega, " zeta");
   await expect(count).toHaveText("0 of 4");
+  // F3 selects the next match, and a click away from the matches leaves none
+  // current again.
+  await page.keyboard.press("F3");
+  await expect(count).toHaveText("1 of 4");
+  await page.locator(".editor-pane-raw .cm-line").filter({ hasText: "Middle line." }).click({ position: { x: 4, y: 4 } });
+  await expect(count).toHaveText("0 of 4");
 });
 
 test("a file that ends in a list opens as saved", async () => {

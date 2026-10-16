@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorView } from "@codemirror/view";
+import { findNext } from "@codemirror/search";
 import { RawEditor } from "./RawEditor";
 import type { FindOptions } from "../wysiwyg/findEngine";
 
@@ -63,16 +64,40 @@ describe("find count changes in the Markdown view", () => {
     expect(onFindChange).toHaveBeenCalledOnce();
   });
 
-  it("reports nothing without a query or when only the selection moves", async () => {
+  it("reports a caret move, which can leave no match current", async () => {
+    const { editor, view, onFindChange } = open("Alpha zeta.\n\nOmega zeta.\n");
+    expect(editor.searchText("zeta", opts)).toEqual({ current: 1, total: 2 });
+    await settle();
+    onFindChange.mockClear();
+
+    // A click on the empty line between the matches.
+    view.dispatch({ selection: { anchor: view.state.doc.line(2).from } });
+    await settle();
+    expect(onFindChange).toHaveBeenCalledOnce();
+    expect(editor.currentCounts()).toEqual({ current: 0, total: 2 });
+
+    // CodeMirror's own find next (Ctrl+G) selects a match without the find card.
+    findNext(view);
+    await settle();
+    expect(onFindChange).toHaveBeenCalledTimes(2);
+    expect(editor.currentCounts()).toEqual({ current: 2, total: 2 });
+    // Another query counts again.
+    expect(editor.searchText("omega", opts)).toEqual({ current: 1, total: 1 });
+  });
+
+  it("reports nothing without a query", async () => {
     const { editor, view, onFindChange } = open("Alpha zeta.\n");
     typeOnFirstLine(view, " zeta");
+    view.dispatch({ selection: { anchor: 0 } });
+    await settle();
+    expect(onFindChange).not.toHaveBeenCalled();
 
     editor.searchText("zeta", opts);
-    view.dispatch({ selection: { anchor: 0 } });
-    editor.findNext();
-
+    await settle();
+    onFindChange.mockClear();
     editor.clearSearch();
     typeOnFirstLine(view, " zeta");
+    view.dispatch({ selection: { anchor: 0 } });
     await settle();
     expect(onFindChange).not.toHaveBeenCalled();
   });
