@@ -102,7 +102,7 @@ export class DocumentFind {
       return this.counts(view);
     }
     const rewritten = replaceInFrontmatter(block, [match], replacement);
-    if (rewritten !== block) view.dispatch(setFrontmatter(view.state, view.state.tr, rewritten));
+    if (rewritten !== block) view.dispatch(setFrontmatter(view.state, view.state.tr, { block: rewritten }));
     // Go on from the end of the replacement, or past a match that stayed.
     const end = { ...match, from: rewritten !== block ? match.from + replacement.length : match.to };
     this.setQuery(query, opts);
@@ -120,7 +120,9 @@ export class DocumentFind {
     const block = this.host.block();
     const tr = view.state.tr;
     if (block != null) {
-      setFrontmatter(view.state, tr, replaceInFrontmatter(block, findInFrontmatter(block, query, opts), replacement));
+      setFrontmatter(view.state, tr, {
+        block: replaceInFrontmatter(block, findInFrontmatter(block, query, opts), replacement),
+      });
     }
     // The table's and the document's replacements in one transaction, so one
     // undo takes back both.

@@ -224,4 +224,22 @@ describe("undo in the frontmatter table", () => {
     press(body(), "z");
     expect(editor.getMarkdown()).toBe(FILE);
   });
+
+  it("puts back the blank lines after the frontmatter with an undo of a mirrored edit", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open();
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    // The Markdown pane removes the blank line, then after a pause changes the
+    // title and adds two.
+    const joined = FILE.replace("---\n\nThe", "---\nThe");
+    editor.setMarkdown(joined);
+    clock.mockReturnValue(start + 1000);
+    editor.setMarkdown(FILE.replace("Draft", "Mirrored").replace("---\n\nThe", "---\n\n\nThe"));
+    press(body(), "z");
+    expect(reported(editor, onChange)).toBe(joined);
+    press(body(), "z");
+    expect(reported(editor, onChange)).toBe(FILE);
+    press(body(), "y");
+    expect(reported(editor, onChange)).toBe(joined);
+  });
 });

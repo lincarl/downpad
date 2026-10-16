@@ -6,9 +6,9 @@
 //   - Frontmatter (§5.17): a leading `---` YAML block is split off and projected
 //     through a React-owned editable table above the editor; Crepe only sees the
 //     body, and the block and the blank lines after it are written back
-//     unchanged on serialize. Each change to the block is a step in Crepe's
-//     undo history (frontmatterHistory.ts), so undo takes back table and body
-//     edits in one order.
+//     unchanged on serialize. Each change to them is a step in Crepe's undo
+//     history (frontmatterHistory.ts), so undo takes back table and body edits
+//     in one order.
 //   - Exact source: until the user changes the body, it is reported as the text
 //     Crepe parsed, not Milkdown's rewrite of it.
 
@@ -92,7 +92,8 @@ export class WysiwygEditor {
    *  state's. */
   private frontmatterBlock: string | null = null;
   /** The blank lines between the frontmatter block and the body. Crepe never
-   *  sees them, so they are kept here and written back as they were. */
+   *  sees them, so they are kept here and written back as they were. The
+   *  editor state holds them too, so undo of a mirror sync puts them back. */
   private frontmatterSeparator = "";
   /** Stable host element for the React-owned frontmatter table. */
   private fmPanel: HTMLElement | null = null;
@@ -260,11 +261,12 @@ export class WysiwygEditor {
     );
     // Tell the find card when an edit changes the matches (§5.13).
     this.crepe.editor.use(findChangeListener(() => this.onFindChange?.()));
-    // Keep the frontmatter block in the editor state, so undo and redo take
-    // back table edits along with the body's (§5.17).
+    // Keep the frontmatter block and the blank lines after it in the editor
+    // state, so undo and redo take back table edits along with the body's
+    // (§5.17).
     this.crepe.editor.use(
       frontmatterState(
-        () => this.frontmatterBlock,
+        () => ({ block: this.frontmatterBlock, separator: this.frontmatterSeparator }),
         (view, prev) => this.frontmatterChanged(view, prev),
       ),
     );
@@ -381,12 +383,13 @@ export class WysiwygEditor {
     // Find again in a table this added; redraws of a shown table refresh on their own.
     this.find.refresh();
     try {
-      // Milkdown's replaceAll, with the block in the same transaction.
+      // Milkdown's replaceAll, with the block and the blank lines after it in
+      // the same transaction.
       this.crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
         const body = ctx.get(parserCtx)(split.body);
         const tr = view.state.tr.replace(0, view.state.doc.content.size, new Slice(body.content, 0, 0));
-        view.dispatch(setFrontmatter(view.state, tr, split.frontmatter));
+        view.dispatch(setFrontmatter(view.state, tr, { block: split.frontmatter, separator: split.separator }));
       });
       // The doc updates synchronously with the dispatch.
       this.rememberSource(split.body);
@@ -602,7 +605,7 @@ export class WysiwygEditor {
    *  document does. The edits of one input method composition stay in one
    *  step even when the user pauses before choosing the text. */
   private recordTableEdit(view: EditorView, block: string, typed: boolean): void {
-    const tr = setFrontmatter(view.state, view.state.tr, block);
+    const tr = setFrontmatter(view.state, view.state.tr, { block });
     const cell = typed ? document.activeElement : null;
     const composition = cell ? this.composition : null;
     const last = this.typing;
@@ -625,12 +628,19 @@ export class WysiwygEditor {
    *  table draws it right away, as a new table, so no cell keeps text the user
    *  typed. When the focus was in this editor and the body did not change, the
    *  caret goes to the changed cell, as undo puts it at the change in the
-   *  document. Edits made in the table, and mirror syncs, show their block
-   *  before they reach the state, so they are left alone. */
+   *  document. Undo and redo of a mirror sync also put back the blank lines
+   *  after the block. Edits made in the table, and mirror syncs, show their
+   *  frontmatter before it reaches the state, so they are left alone. */
   private frontmatterChanged(view: EditorView, prev: EditorState): void {
-    const block = frontmatterOf(view.state);
+    const { block, separator } = frontmatterOf(view.state);
     const before = this.frontmatterBlock;
-    if (block === before) return;
+    if (block === before && separator === this.frontmatterSeparator) return;
+    this.frontmatterSeparator = separator;
+    if (block === before) {
+      // Only the blank lines changed, which the table does not show.
+      this.reportPendingChange();
+      return;
+    }
     const inTable = !!this.fmPanel?.contains(document.activeElement);
     const inEditor = inTable || view.hasFocus();
     this.frontmatterBlock = block;
