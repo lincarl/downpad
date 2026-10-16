@@ -150,11 +150,18 @@ export function onMenuKeyDown(event: KeyboardEvent<HTMLElement>): void {
 }
 
 const TABBABLE =
-  'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex], [contenteditable="true"]';
+  'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex], [contenteditable]:not([contenteditable="false"])';
 
-/** Whether Tab can reach `el`, which must be in the tab order and not hidden or inert. */
+/**
+ * Whether Tab can reach `el`, which must be in the tab order and not hidden or
+ * inert. An editable element whose parent is not editable, such as the document
+ * editor or the Markdown pane, is in the tab order without a tabindex, although
+ * Chromium reports its `tabIndex` as -1.
+ */
 function isTabbable(el: HTMLElement): boolean {
-  return el.tabIndex >= 0 && !el.closest("[hidden], [inert]") && (el.checkVisibility?.() ?? true);
+  const inOrder =
+    el.tabIndex >= 0 || (!el.hasAttribute("tabindex") && el.isContentEditable && !el.parentElement?.isContentEditable);
+  return inOrder && !el.closest("[hidden], [inert]") && (el.checkVisibility?.() ?? true);
 }
 
 /**

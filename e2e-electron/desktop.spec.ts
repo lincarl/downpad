@@ -913,6 +913,16 @@ test("Escape closes find after Replace all removes the last match", async () => 
   }
 });
 
+test("Tab in the split moves from the document pane to the Markdown pane, then to the divider", async () => {
+  const { documentLine, markdownLine } = await openSplit("tab-split.md");
+  await documentLine.click();
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("separator", { name: "Resize Markdown split" })).toBeFocused();
+  await expect(markdownLine).toHaveText("First line.");
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");
