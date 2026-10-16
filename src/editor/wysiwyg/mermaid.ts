@@ -130,6 +130,11 @@ async function renderInto(preview: LivePreview): Promise<void> {
       const el = document.createElement("div");
       el.className = "mermaid-preview";
       el.innerHTML = svg;
+      // Mermaid names a diagram only from an accTitle in its source.
+      const drawing = el.querySelector("svg");
+      if (drawing && !drawing.hasAttribute("aria-label") && !drawing.hasAttribute("aria-labelledby")) {
+        drawing.setAttribute("aria-label", "Mermaid diagram");
+      }
       return el;
     });
     if (element && !superseded()) show(preview, element);
