@@ -32,6 +32,28 @@ describe("RawEditor.setText", () => {
     expect(editor.getText()).toBe(typed);
   });
 
+  it("moves a caret inside the change before a whole emoji, not between its halves", () => {
+    // U+1F600 and U+1F601 share their first UTF-16 unit.
+    const editor = mountWithCaret("\u{1F600}abc", "def");
+
+    editor.setText("\u{1F601}abcdeg");
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe("X\u{1F601}abcdeg");
+  });
+
+  it("moves a selection that starts inside the change after a whole emoji", () => {
+    const editor = mountWithCaret("", "ab\u{1F600}yz");
+    // Select "b", the emoji and "y". The find card is one way to select.
+    editor.searchText("b\u{1F600}y", { caseSensitive: true, wholeWord: false, regex: false });
+
+    // U+1F600 and U+1F200 share their second UTF-16 unit.
+    editor.setText("cd\u{1F200}yz");
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe("cd\u{1F200}Xz");
+  });
+
   it.each([
     ["abcabc", "abc"],
     ["abc", "abcabc"],
