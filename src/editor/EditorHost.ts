@@ -238,8 +238,9 @@ export class EditorHost implements FindController {
    * marked during the drag, or at the start or end for a drop above or below
    * the text. On a Markdown pane they go in at the text position nearest the
    * drop point. A drop anywhere else, or a call without a drop point, goes in
-   * at the caret of the pane being edited, which is the split's Markdown pane
-   * while it has focus and the document otherwise. Returns null when no
+   * at the caret of the pane being edited when the file goes in, which is the
+   * split's Markdown pane while it has focus and the document otherwise. The
+   * drop also notes where focus is, for `insertDropped`. Returns null when no
    * document is shown. Call it while handling the drop event, before the drop
    * point's text can move.
    */
