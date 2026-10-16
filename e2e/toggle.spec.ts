@@ -45,8 +45,8 @@ test("'Split' shows the Markdown source beside the document", async ({ page }) =
 });
 
 test("an edit in the document keeps a standalone image's alt text", async ({ page }) => {
-  // Crepe stores its resize ratio in an image block's alt text, so an edit in the
-  // document used to write this image back as ![1.00](…).
+  // Crepe stores an image block's resize ratio in its alt text, so resizing the
+  // image used to save it as ![31.00](…).
   const square =
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFElEQVR4nGNkYGD4z0AEYBxVSF+FAP5FBQXxiME7AAAAAElFTkSuQmCC";
   await page.locator(markdownSeg).click();
@@ -54,9 +54,15 @@ test("an edit in the document keeps a standalone image's alt text", async ({ pag
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.insertText(`![A tiny square](${square})\n\nText\n`);
   await page.locator(documentSeg).click();
-  await page.locator(`${wysiwyg} p`).last().click();
-  await page.keyboard.press("End");
-  await page.keyboard.type(" here");
+  // Drag the image's resize handle down. The document writes only the blocks an
+  // edit changes, so the edit must change the image block itself.
+  await page.locator(`${wysiwyg} .image-wrapper`).hover();
+  const handle = await page.locator(`${wysiwyg} .image-resize-handle`).boundingBox();
+  if (!handle) throw new Error("the image has no resize handle");
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 150, { steps: 5 });
+  await page.mouse.up();
   await page.locator(markdownSeg).click();
   // The source view shows the base64 data collapsed, so match up to it.
   await expect(page.locator(rawContent)).toContainText("![A tiny square](data:image/png;base64,");
