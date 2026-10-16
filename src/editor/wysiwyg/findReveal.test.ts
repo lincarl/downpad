@@ -28,13 +28,6 @@ vi.stubGlobal(
   },
 );
 
-// jsdom has no layout, and scrolling to a match measures text. Give text the
-// empty boxes a browser gives hidden text.
-Object.assign(Range.prototype, {
-  getClientRects: () => [],
-  getBoundingClientRect: () => new DOMRect(),
-});
-
 const opts: FindOptions = { caseSensitive: false, wholeWord: false, regex: false };
 
 let editor: WysiwygEditor | null = null;
