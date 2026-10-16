@@ -20,16 +20,18 @@
 // own parser, in a window that starts where the text above cannot change how
 // it reads and ends with the first lines of the piece below. The window must
 // read as exactly the pieces it holds. Each source block must be the same kind
-// of node over the same text. Each block Milkdown wrote must be the document's
-// block in Milkdown's form, or read as that form reads on its own, as it would
-// in Milkdown's form of the whole document.
+// of node over the same text, and open the same blocks on its first line, such
+// as a quote and a list in it. Each block Milkdown wrote must be the
+// document's block in Milkdown's form, or read as that form reads on its own,
+// as it would in Milkdown's form of the whole document.
 //
 // It writes Milkdown's form of the whole document instead whenever a window
 // does not read back that way, even with blank lines at its joins. It also
 // does so when the source's blocks do not match the document's one for one,
 // when a changed block held a definition, when a new footnote could change how
-// a kept block reads, or when reading the windows back would take longer than
-// writing the whole document.
+// a kept block reads, when indented code could end in another place than in
+// the source, or when reading the windows back would take longer than writing
+// the whole document.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { RemarkParser } from "@milkdown/kit/transformer";
@@ -42,7 +44,7 @@ interface MdNode {
   type: string;
   identifier?: string;
   children?: readonly MdNode[];
-  position?: { start: { offset?: number }; end: { offset?: number } };
+  position?: { start: { line?: number; offset?: number }; end: { offset?: number } };
 }
 
 /** Milkdown's conversions between Markdown and the document. */
@@ -72,6 +74,8 @@ export interface OutlineNode {
   uses: readonly string[];
   /** Whether a definition sits inside it, which is lost if it is rewritten. */
   holdsDefinition: boolean;
+  /** The blocks its first line opens (`opens`). */
+  opens: string;
 }
 
 /**
@@ -106,6 +110,8 @@ interface SourceItem {
   label?: string;
   uses: readonly string[];
   holdsDefinition: boolean;
+  /** The blocks its first line opens in the source (`opens`). */
+  opens: string;
   /** What ends it, worked out when a join needs it (`itemEnding`). */
   ending?: Ending;
   /** Whether it read in the source as it reads at the start of a text, worked
@@ -182,6 +188,8 @@ const PARSE_COST = 10;
 /** How many characters a write may always read back. That takes a few
  *  milliseconds, so short files keep every join they can. */
 const MIN_BUDGET = 2_000;
+/** The syntax tree types of the blocks that hold other blocks. */
+const CONTAINERS: ReadonlySet<string> = new Set(["blockquote", "list", "listItem", "footnoteDefinition"]);
 /** The syntax tree and ProseMirror types of the blocks that stay open over
  *  blank lines, lists and footnotes (see `codeMayMove`). */
 const STAYS_OPEN: ReadonlySet<string> = new Set(["list", "footnoteDefinition", "bullet_list", "ordered_list", "footnote_definition"]);
@@ -207,8 +215,9 @@ export class SourceBaseline {
   private readonly keys = new WeakMap<ProseNode, string>();
   /** Each compared block's type and text, which differ when blocks differ. */
   private readonly texts = new WeakMap<ProseNode, string>();
-  /** The node type the first lines of each block Milkdown wrote read as. */
-  private readonly firstTypes = new WeakMap<ProseNode, string>();
+  /** The blocks the first lines of each block Milkdown wrote open on their own
+   *  (`headOpens`). */
+  private readonly firstOpens = new WeakMap<ProseNode, string>();
   /** The source split into its nodes, made at the first edit. Null when its
    *  blocks do not match the baseline document's. */
   private layout: SourceLayout | null | undefined;
@@ -465,24 +474,35 @@ export class SourceBaseline {
    * the index of the join it went wrong at. That is `window.first - 1`, the
    * join above the window, when its first piece reads wrongly from its start.
    *
-   * Each source item read in full must be one node of its source type over its
-   * exact text. Each block Milkdown wrote must read as that document block in
-   * Milkdown's form, or as that form reads on its own (`readsAs`). The first
-   * node of the head piece must start where it starts and be of the type it
-   * has in the source, or that its first lines have on their own. A node that
-   * starts at the same place over the same text, as the same kind of node,
-   * reads the same, so the rest of the head piece reads as it should too.
+   * Each source item read in full must be one node over its exact text that
+   * opens the same blocks on its first line as in the source (`opens`). Each
+   * block Milkdown wrote must read as that document block in Milkdown's form,
+   * or as that form reads on its own (`readsAs`). The first node of the head
+   * piece must start where it starts and open the blocks it opens in the
+   * source, or that its first lines open on their own.
+   *
+   * For a node that starts where it should, micromark carries two things from
+   * the text above into how it reads. One is a paragraph, definition or
+   * indented code above that has not ended, as indented code has not across
+   * blank lines. Then a list item that does not start at 1, or an empty one,
+   * cannot start on the node's first line, even inside a quote or list that
+   * starts there. Comparing the blocks the first line opens shows that. The
+   * other is a lazy first line, which ends indented code after it
+   * (`codeMayMove`). Every later line reads as the node's first line and its
+   * own text decide, so the rest of the head piece reads as it should too.
    */
   private reads(window: Window, pieces: readonly Piece[], gaps: readonly string[], layout: SourceLayout): number | null {
     let text = "";
     const starts: number[] = [];
     const notes = new Set<string>();
-    const shape: string[] = [];
+    // Which source item each piece is, or the length of a block Milkdown
+    // wrote, whose text decides how it should read.
+    const ids: string[] = [];
     for (let k = window.first; k <= window.last; k++) {
       const piece = pieces[k];
       starts.push(text.length);
       text += piece.text + gaps[k];
-      shape.push(`${piece.text.length}:${piece.item >= 0 ? `${layout.items[piece.item].type}@${layout.items[piece.item].lead}` : "w"}`);
+      ids.push(piece.item >= 0 ? String(piece.item) : `w${piece.text.length}`);
       // A footnote reference reads as one only where its definition is, so
       // stand-ins are added below.
       piece.block?.descendants((node) => {
@@ -497,16 +517,15 @@ export class SourceBaseline {
     text +=
       lines +
       (lines.length < lower.text.length ? "\n" : window.head + 1 < pieces.length ? firstLine(gaps[window.head]) : layout.tail);
-    const lowerType = this.firstType(lower, layout);
-    shape.push(`${leadOf(lower, layout)}:${lowerType}`);
+    ids.push(lower.item >= 0 ? String(lower.item) : "w");
     if (notes.size > 0) text += `${text.endsWith("\n") ? "" : "\n"}\n${[...notes].map((label) => `[^${label}]: .`).join("\n\n")}\n`;
 
     // The same window can sit further up or down in another write, so the
     // join at fault is kept as counted from the window's first piece.
-    const key = `${text}\u0000${shape.join(",")}`;
+    const key = `${text}\u0000${ids.join(",")}`;
     let wrong = this.windows.get(key) ?? this.lastWindows.get(key);
     if (wrong === undefined) {
-      const found = this.findWrong(window, pieces, layout, text, starts, headStart, lowerType);
+      const found = this.findWrong(window, pieces, layout, text, starts, headStart);
       wrong = found === null ? null : found - window.first;
     }
     this.windows.set(key, wrong);
@@ -523,7 +542,6 @@ export class SourceBaseline {
     text: string,
     starts: readonly number[],
     headStart: number,
-    lowerType: string,
   ): number | null {
     const tree = this.tools.parse(text);
     const nodes = tree.children;
@@ -536,12 +554,12 @@ export class SourceBaseline {
       while (i < nodes.length && startOf(nodes[i]) < end) own.push(nodes[i++]);
       const first = own[0];
       const last = own[own.length - 1];
-      // A piece that does not start a node where it starts, or starts another
-      // kind of node there, was changed by the join above it. One that runs on
-      // past its end took in the text below it.
+      // A piece that does not start a node where it starts, or opens other
+      // blocks there, was changed by the join above it. One that runs on past
+      // its end took in the text below it.
       if (piece.item >= 0) {
         const item = layout.items[piece.item];
-        if (!first || startOf(first) !== start + item.lead || first.type !== item.type) return k - 1;
+        if (!first || startOf(first) !== start + item.lead || opens(first) !== item.opens) return k - 1;
         if (own.length !== 1 || first.position?.end.offset !== end) return k;
       } else {
         if (!first || startOf(first) < start || startOf(first) > start + indentOf(piece.text)) return k - 1;
@@ -549,11 +567,12 @@ export class SourceBaseline {
         if (!piece.block || !this.readsAs(tree, own, text, piece)) return k - 1;
       }
     }
+    const lower = pieces[window.head];
     const node = nodes[i];
-    const lead = leadOf(pieces[window.head], layout);
+    const lead = leadOf(lower, layout);
     const start = node ? startOf(node) : -1;
-    const fits = lead >= 0 ? start === headStart + lead : start >= headStart && start <= headStart + indentOf(pieces[window.head].text);
-    return node && fits && node.type === lowerType ? null : window.head - 1;
+    const fits = lead >= 0 ? start === headStart + lead : start >= headStart && start <= headStart + indentOf(lower.text);
+    return node && fits && opens(node) === this.headOpens(lower, layout) ? null : window.head - 1;
   }
 
   /**
@@ -573,17 +592,19 @@ export class SourceBaseline {
     return read.length === own.length && read.every((node, k) => this.key(node) === this.key(own[k]));
   }
 
-  /** The node type the first lines of `piece` read as: its source type, or
-   *  for a block Milkdown wrote, the type they have on their own. */
-  private firstType(piece: Piece, layout: SourceLayout): string {
-    if (piece.item >= 0) return layout.items[piece.item].type;
+  /** The blocks the first line of `piece` should open (`opens`). Those are
+   *  the ones it opens in the source, or for a block Milkdown wrote, the ones
+   *  it opens with its first lines on their own. */
+  private headOpens(piece: Piece, layout: SourceLayout): string {
+    if (piece.item >= 0) return layout.items[piece.item].opens;
     const { block } = piece;
-    let type = block && this.firstTypes.get(block);
-    if (type === undefined) {
-      type = this.tools.parse(`${head(piece.text)}\n`).children[0]?.type ?? "";
-      if (block) this.firstTypes.set(block, type);
+    let found = block && this.firstOpens.get(block);
+    if (found === undefined) {
+      const node = this.tools.parse(`${head(piece.text)}\n`).children[0];
+      found = node ? opens(node) : "";
+      if (block) this.firstOpens.set(block, found);
     }
-    return type;
+    return found;
   }
 
   /** The source split into its nodes, made once. Null when it cannot be. */
@@ -675,9 +696,28 @@ export function outlineOf(tree: MdNode): OutlineNode[] | null {
       footnote: node.type === "footnoteDefinition" ? node.identifier : undefined,
       uses: [...uses],
       holdsDefinition,
+      opens: opens(node),
     });
   }
   return outline;
+}
+
+/**
+ * The blocks that start on the first line of `node`, outermost first, each
+ * as its type and how far after `node` it starts, such as
+ * "blockquote@0 list@2 listItem@2 paragraph@5 ". A quote, list, list item or
+ * footnote holds the next block on its line. Text above can change which
+ * blocks a line opens (see `reads`).
+ */
+function opens(node: MdNode): string {
+  const line = node.position?.start.line;
+  let found = "";
+  let at: MdNode | undefined = node;
+  while (at && at.position?.start.line === line) {
+    found += `${at.type}@${startOf(at) - startOf(node)} `;
+    at = CONTAINERS.has(at.type) ? at.children?.[0] : undefined;
+  }
+  return found;
 }
 
 /**
@@ -1078,6 +1118,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       label: node.label,
       uses: node.uses,
       holdsDefinition: node.holdsDefinition,
+      opens: node.opens,
     });
     end = start + text.length;
   }

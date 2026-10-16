@@ -621,6 +621,42 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => deleteBlock(view, "Run"),
       "> ```\n> unclosed\n> ```\n\n```\nmake\nmake install\n```\n",
     ],
+    // On a line that goes on from a paragraph or indented code above, the
+    // parser does not start a list item that does not start at 1, or an empty
+    // one, even inside a quote or list that starts on that line.
+    [
+      "a list in a quote that would read as text below indented code",
+      "    make install\n\nThen:\n\n> 2. Restart the server.\n> 3. Check the logs.\n",
+      (view: EditorView) => deleteBlock(view, "Then:"),
+      "```\nmake install\n```\n\n> 2. Restart the server.\n> 3. Check the logs.\n",
+    ],
+    [
+      "text in a quote that reads as text only below indented code",
+      "    make install\n\n> 2. Restart the server.\n> 3. Check the logs.\n",
+      (view: EditorView) => deleteBlock(view, "make install"),
+      "> 2\\. Restart the server.\n> 3\\. Check the logs.\n",
+    ],
+    [
+      "text in a quote that reads as text only below a paragraph",
+      "Para\n> 2. Restart the server.\n> 3. Check the logs.\n",
+      (view: EditorView) => {
+        const { from, to } = blockWith(view, "Para");
+        view.dispatch(view.state.tr.setBlockType(from, to, view.state.schema.nodes.heading, { level: 1 }));
+      },
+      "# Para\n\n> 2\\. Restart the server.\n> 3\\. Check the logs.\n",
+    ],
+    [
+      "a list in a list item that would read as text below indented code",
+      "    make\n\nThen:\n\n- 2. nested\n",
+      (view: EditorView) => deleteBlock(view, "Then:"),
+      "```\nmake\n```\n\n- <br />\n\n  2. nested\n",
+    ],
+    [
+      "an empty list item in a quote below indented code",
+      "    make\n\nThen:\n\n> -\n>   empty first item\n",
+      (view: EditorView) => deleteBlock(view, "Then:"),
+      "```\nmake\n```\n\n> - empty first item\n",
+    ],
     // Milkdown writes a heading with line breaks in setext form. Starting with
     // a comment, it reads as the comment and a paragraph "===", which would
     // take in the next line.
