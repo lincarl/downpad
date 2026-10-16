@@ -52,6 +52,8 @@ The Electron main process provides operations that require native access. File r
 
 Packaged builds always load the bundled frontend and ignore development URL overrides. Unpackaged development launches accept only HTTP or HTTPS URLs on localhost, 127.0.0.1, or ::1, without credentials. Native commands accept only the authorized main frame.
 
+The built frontend carries a Content Security Policy, defined in `vite.config.ts`. It blocks inline scripts, eval and scripts from the web, and allows images from the web, data and blob URLs, and local files. The development server goes without it. A feature that needs a new kind of resource, such as a frame or a web font, must add it to the policy.
+
 ## Data and persistence
 
 User documents remain standard Markdown files. md-easy does not use a proprietary document format.

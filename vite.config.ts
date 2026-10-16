@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -11,8 +11,40 @@ const appVersion = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
 ).version as string;
 
+// On md-easy's file:// page, 'self' matches every local file: URL. Scripts load
+// only from there, never inline, through eval or from the web.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  // CodeMirror, KaTeX and Mermaid's diagrams add inline styles.
+  "style-src 'self' 'unsafe-inline'",
+  // Web and embedded images, local images through md-easy-file: or file: URLs,
+  // and the blob: URL Copy image converts through.
+  "img-src 'self' data: blob: https: http: md-easy-file:",
+  // Vite inlines one of KaTeX's fonts as a data: URL.
+  "font-src 'self' data:",
+  // The welcome document, and Copy image on an embedded image.
+  "connect-src 'self' data:",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
+/** Add the Content Security Policy to the built index.html. The dev server's
+ *  React refresh runs an inline script, so development pages go without it. */
+function contentSecurityPolicy(): Plugin {
+  return {
+    name: "md-easy-content-security-policy",
+    apply: "build",
+    transformIndexHtml: () => [{
+      tag: "meta",
+      attrs: { "http-equiv": "Content-Security-Policy", content: CONTENT_SECURITY_POLICY },
+      injectTo: "head-prepend",
+    }],
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), contentSecurityPolicy()],
   base: "./",
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   clearScreen: false,

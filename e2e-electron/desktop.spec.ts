@@ -1,5 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import type { WebPreferences } from "electron";
 import type {} from "../src/ipc/bridge";
@@ -122,6 +123,90 @@ test("a missing local image shows its placeholder without handler errors or fail
   await expect(printed).toHaveCount(1);
   await expect.poll(() => printed.evaluateAll((images) => images.every((image) => image instanceof HTMLImageElement && image.complete))).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test("the renderer's Content Security Policy allows md-easy's content and blocks inline scripts and eval", async () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
+  // Copy image converts a GIF to PNG through a blob: URL.
+  const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const server = createServer((_request, response) => response.writeHead(200, { "Content-Type": "image/png" }).end(png));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("The image server has no port.");
+    const file = path.join(directory, "policy.md");
+    await writeFile(path.join(directory, "image.png"), png);
+    await writeFile(file, [
+      "# Policy", "",
+      "![Local](image.png)", "",
+      `![Web](http://127.0.0.1:${address.port}/web.png)`, "",
+      `![Embedded](data:image/gif;base64,${gif})`, "",
+      "Inline $a^2$ and block math.", "",
+      "$$", "\\frac{1}{2}", "$$", "",
+      "```mermaid", "graph LR", "  A --> B", "```", "",
+    ].join("\n"));
+    // The welcome document is read from md-easy's own files.
+    await writeFile(path.join(directory, "profile", "settings.toml"), "hasCheckedDefaultHandler = true\n");
+    await launch();
+    await expect(page.locator(heading)).toHaveText("Welcome to md-easy 👋");
+    const log = await page.evaluateHandle(() => {
+      const violations: string[] = [];
+      const copies: string[] = [];
+      document.addEventListener("securitypolicyviolation", (event) => violations.push(`${event.effectiveDirective} ${event.blockedURI}`));
+      // Record what Copy image writes instead of using the system clipboard.
+      navigator.clipboard.write = async (items) => {
+        for (const item of items) for (const type of item.types) copies.push((await item.getType(type)).type);
+      };
+      return { violations, copies };
+    });
+
+    const errors: string[] = [];
+    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("pageerror", (error) => errors.push(String(error)));
+    await chooseOpen(file);
+    const pane = page.locator(".editor-pane:not([hidden])");
+    // Crepe draws a code block, and its diagram, once the block is on screen.
+    await pane.locator(".milkdown-code-block").last().scrollIntoViewIfNeeded();
+    await expect(pane.locator(".mermaid-preview svg")).toBeVisible().catch(async (error: Error) => {
+      const violations = await log.evaluate(({ violations }) => violations);
+      throw new Error(`${error.message}\nViolations: ${JSON.stringify(violations)}\nErrors: ${JSON.stringify(errors)}`);
+    });
+    await expect(pane.locator(".katex")).toHaveCount(2);
+    await expect.poll(() => pane.locator(".ProseMirror img").evaluateAll((images) => images.map((image) => image instanceof HTMLImageElement && image.naturalWidth > 0))).toEqual([true, true, true]);
+    // Copy image fetches the embedded image's data: URL and converts it to PNG.
+    await pane.getByRole("img", { name: "Embedded", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy image", exact: true }).click();
+    await expect.poll(() => log.evaluate(({ copies }) => copies)).toEqual(["image/png"]);
+    // Vite inlines KaTeX_Size3 as a data: URL. A blocked inlined font falls back to
+    // its font file without a violation event, so load each inlined source directly.
+    const inlinedFonts = await page.evaluate(() => {
+      const faces = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]).filter((rule) => rule instanceof CSSFontFaceRule);
+      return Promise.all(faces.flatMap((face) => {
+        const family = face.style.getPropertyValue("font-family");
+        return [...face.style.getPropertyValue("src").matchAll(/url\("?(data:[^")]+)"?\)/g)]
+          .map(([, source]) => new FontFace(family, `url(${source})`).load().then(() => `${family} loaded`, () => `${family} blocked`));
+      }));
+    });
+    expect(inlinedFonts).toEqual(["KaTeX_Size3 loaded"]);
+    expect(await log.evaluate(({ violations }) => ({
+      violations,
+      failedFonts: [...document.fonts].filter((font) => font.status === "error").map((font) => font.family),
+    }))).toEqual({ violations: [], failedFonts: [] });
+
+    expect(await page.evaluate(() => new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.textContent = "document.body.dataset.inlineScript = 'ran'";
+      document.head.append(script);
+      // Test evaluation lifts the eval block for its own call, so check from a timer.
+      setTimeout(() => {
+        let evaluated = true;
+        try { new Function(""); } catch { evaluated = false; }
+        resolve({ inlineScript: document.body.dataset.inlineScript ?? "blocked", evaluated });
+      });
+    }))).toEqual({ inlineScript: "blocked", evaluated: false });
+  } finally {
+    server.close();
+  }
 });
 
 test("the packaged app ignores a remote development URL override", async () => {
