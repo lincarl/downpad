@@ -141,10 +141,16 @@ export class EditorHost implements FindController {
     this.layout = layout;
   }
 
-  /** Insert markdown into the document editor at its current selection (§5.4). */
+  /** Insert markdown at the caret of the pane being edited (§5.4): the split's
+   *  Markdown pane while it holds focus, otherwise the document editor, or the
+   *  Markdown source in the Markdown-only view. A file drop lands here with no
+   *  click or focus on a pane, so the split catches up first and the target
+   *  pane holds the other pane's latest edit. The Markdown pane reports the
+   *  insert at once, like typing, and keeps the rest of its text as written. */
   insertMarkdown(markdown: string): void {
     if (this.disposed) return;
-    const pane = this.active();
+    this.flush();
+    const pane = this.focusedSplitRaw() ?? this.active();
     if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown);
     else if (pane?.raw) pane.raw.insertText(markdown);
   }
@@ -246,7 +252,7 @@ export class EditorHost implements FindController {
   /**
    * Bring the active tab up to date before something reads it, leaves it, or
    * types into it: Save, Print, Copy as Markdown, a close prompt, a tab or
-   * layout switch, or a click or focus moving into a split pane.
+   * layout switch, a file drop, or a click or focus moving into a split pane.
    * The document editor reports typing after a ~200ms pause, and the split
    * mirrors each edit into its other pane after a further delay. This does both
    * now, so the tab's canonical string holds every edit and both visible panes
@@ -447,6 +453,13 @@ export class EditorHost implements FindController {
 
   private activeRaw(): RawEditor | null {
     return this.active()?.raw ?? null;
+  }
+
+  /** The split's Markdown pane when it holds focus, else null. */
+  private focusedSplitRaw(): Pane | null {
+    if (this.layout !== "split" || this.activeTabId === null) return null;
+    const pane = this.panes.get(paneKey(this.activeTabId, "raw"));
+    return pane?.el.contains(document.activeElement) ? pane : null;
   }
 
   private revOf(tabId: string): number {

@@ -43,6 +43,34 @@ function outsideImageData(_match: string, state: EditorState, from: number, to: 
   return !inBase64Payload(state.doc, from, to);
 }
 
+/** Whether a UTF-16 code unit is the first half of a surrogate pair, the two
+ *  units that encode one character such as an emoji. */
+const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xdbff;
+/** Whether a UTF-16 code unit is the second half of a surrogate pair. */
+const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdfff;
+
+/** The one change that turns `before` into `after`, leaving out the text they
+ *  share at the start and at the end. Both ends fall between characters, never
+ *  between the halves of a surrogate pair, so a caret mapped to an end cannot
+ *  split one. */
+function changedRange(before: string, after: string): { from: number; to: number; insert: string } {
+  const shorter = Math.min(before.length, after.length);
+  let from = 0;
+  while (from < shorter && before.charCodeAt(from) === after.charCodeAt(from)) from += 1;
+  if (from > 0 && isHighSurrogate(before.charCodeAt(from - 1))) from -= 1;
+  let to = before.length;
+  let end = after.length;
+  while (to > from && end > from && before.charCodeAt(to - 1) === after.charCodeAt(end - 1)) {
+    to -= 1;
+    end -= 1;
+  }
+  if (to < before.length && isLowSurrogate(before.charCodeAt(to))) {
+    to += 1;
+    end += 1;
+  }
+  return { from, to, insert: after.slice(from, end) };
+}
+
 export class RawEditor {
   private view: EditorView | null = null;
   /** Set while `setText` replaces the doc programmatically (split-view mirror
@@ -92,17 +120,20 @@ export class RawEditor {
     return this.view ? this.view.state.doc.toString() : "";
   }
 
-  /** Replace the whole document to mirror an edit made in the other split pane
-   *  (§6.1). The replacement is dispatched with `applying` set so it doesn't
-   *  re-emit onChange. No-op when the text already matches (avoids needless
-   *  transactions / cursor churn). This pane is the unfocused mirror, so the
-   *  resulting caret position doesn't matter. */
+  /** Set the text to mirror an edit made in the other split pane (§6.1). Only
+   *  the range from the first to the last difference is replaced, so the caret,
+   *  the selection and the lines in view keep their place when they lie outside
+   *  it. This pane can have focus meanwhile, for example when focus moves into
+   *  it and the split catches it up first. The change is dispatched with
+   *  `applying` set so it doesn't re-emit onChange. No-op when the text already
+   *  matches. */
   setText(text: string): void {
     if (!this.view) return;
-    if (this.view.state.doc.toString() === text) return;
+    const current = this.view.state.doc.toString();
+    if (current === text) return;
     this.applying = true;
     try {
-      this.view.dispatch({ changes: { from: 0, to: this.view.state.doc.length, insert: text } });
+      this.view.dispatch({ changes: changedRange(current, text) });
     } finally {
       this.applying = false;
     }

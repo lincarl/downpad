@@ -73,8 +73,16 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       this.onChange?.(fakeEditors.markdown);
     }
 
+    /** Like the real editor, hold the insert back until typing pauses. */
+    insertMarkdown(markdown: string): void {
+      fakeEditors.markdown = `${fakeEditors.markdown}\n\n${markdown}`;
+      fakeEditors.pending = true;
+    }
+
+    /** The pane now shows the mirrored text, dropping anything it held. */
     setMarkdown(markdown: string): void {
       fakeEditors.mirrored = markdown;
+      fakeEditors.markdown = markdown;
     }
 
     currentCounts() {
@@ -108,6 +116,13 @@ vi.mock("./raw/RawEditor", () => ({
 
     currentCounts() {
       return MARKDOWN_COUNTS;
+    }
+
+    /** Like the real editor, add the text at the caret, here the end, and
+     *  report the edit at once. */
+    insertText(text: string): void {
+      fakeEditors.rawText = `${fakeEditors.rawText ?? ""}${text}`;
+      fakeEditors.rawChange?.(fakeEditors.rawText);
     }
 
     destroy(): void {}
@@ -494,6 +509,37 @@ describe("EditorHost split catch-up", () => {
     control.dispatchEvent(new Event("pointerdown", { bubbles: true }));
 
     expect(fakeEditors.mirrored).toBe("newer Markdown text");
+    await host.dispose();
+  });
+
+  it("puts a file dropped while the Markdown pane has focus at its caret, as written", async () => {
+    const { root, store, host } = await openSplit();
+    document.body.append(root);
+    const caret = document.createElement("textarea");
+    root.querySelector(".editor-pane-raw")!.append(caret);
+    caret.focus();
+    fakeEditors.rawText = "Markdown text, typed";
+    fakeEditors.rawChange!(fakeEditors.rawText);
+
+    host.insertMarkdown("[notes.csv](attachments/notes.csv)");
+
+    // The document pane would report its own form of the whole text.
+    expect(store.get().doc.markdown).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
+    host.flush();
+    expect(fakeEditors.mirrored).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
+    root.remove();
+    await host.dispose();
+  });
+
+  it("drops a file into a document pane that holds the latest Markdown edit", async () => {
+    const { store, host } = await openSplit();
+    fakeEditors.rawChange!("newer Markdown text");
+
+    host.insertMarkdown("![](image.png)");
+    host.flush();
+
+    expect(store.get().doc.markdown).toBe("newer Markdown text\n\n![](image.png)");
+    expect(fakeEditors.rawText).toBe("newer Markdown text\n\n![](image.png)");
     await host.dispose();
   });
 
