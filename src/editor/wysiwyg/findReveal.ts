@@ -52,11 +52,22 @@ export const codeBlockFindHighlights: Extension = [
  */
 const awaitingEditor = new WeakMap<EditorView, Element>();
 
+/** What each document view calls right before find scrolls it (see `codeBlockMatchesView`). */
+const beforeScroll = new WeakMap<EditorView, () => void>();
+
 /**
  * ProseMirror plugin view that marks the matches `read` returns in the code
  * blocks, whenever the matches change and whenever a block's editor is created.
+ * `onScroll` runs right before find scrolls the page to a match, including the
+ * second scroll once a code block's editor is drawn, which can come well after
+ * the find step that asked for it.
  */
-export function codeBlockMatchesView(view: EditorView, read: (state: EditorState) => Matches | undefined): PluginView {
+export function codeBlockMatchesView(
+  view: EditorView,
+  read: (state: EditorState) => Matches | undefined,
+  onScroll: () => void = () => {},
+): PluginView {
+  beforeScroll.set(view, onScroll);
   const paint = () => showCodeBlockMatches(view, read(view.state));
   const onReady = (event: Event) => {
     paint();
@@ -73,6 +84,7 @@ export function codeBlockMatchesView(view: EditorView, read: (state: EditorState
     },
     destroy() {
       view.dom.removeEventListener(CODE_BLOCK_READY, onReady);
+      beforeScroll.delete(view);
     },
   };
 }
@@ -109,6 +121,7 @@ function showCodeBlockMatches(view: EditorView, matches: Matches | undefined): v
  */
 export function revealMatch(view: EditorView, range: MatchRange): void {
   awaitingEditor.delete(view);
+  beforeScroll.get(view)?.();
   if (revealCodeBlockMatch(view, range)) return;
   const start = view.coordsAtPos(range.from, 1);
   const end = view.coordsAtPos(range.to, -1);

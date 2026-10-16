@@ -584,7 +584,9 @@ export class EditorHost implements FindController {
         await editor.mount(
           el,
           markdown,
-          { onChange },
+          // Find can scroll the document again once a code block is drawn,
+          // after the step's own suppression has run out.
+          { onChange, onFindScroll: () => this.suppressMirrorScroll() },
           serializerStyleFromSettings(this.store.get().settings),
           this.wysiwygContext(tabId),
         );

@@ -127,12 +127,13 @@ function buildDecorationSet(doc: ProseNode, s: FindPluginState): DecorationSet {
   return DecorationSet.create(doc, decos);
 }
 
-/** Milkdown wrapper so the search plugin can be registered via `editor.use`. */
-export function searchMilkdownPlugin() {
-  return $prose(() => findPlugin());
+/** Milkdown wrapper so the search plugin can be registered via `editor.use`.
+ *  `onScroll` runs right before find scrolls the page to a match. */
+export function searchMilkdownPlugin(onScroll?: () => void) {
+  return $prose(() => findPlugin(onScroll));
 }
 
-export function findPlugin() {
+export function findPlugin(onScroll?: () => void) {
   return new Plugin<FindPluginState>({
     key: findKey,
     state: {
@@ -159,7 +160,7 @@ export function findPlugin() {
       },
     },
     // Code blocks draw their own text, so they get the matches separately.
-    view: (view) => codeBlockMatchesView(view, (state) => findKey.getState(state)),
+    view: (view) => codeBlockMatchesView(view, (state) => findKey.getState(state), onScroll),
     props: {
       decorations(state: EditorState) {
         const s = findKey.getState(state);

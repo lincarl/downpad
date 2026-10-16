@@ -54,6 +54,9 @@ import { splitFrontmatter, joinFrontmatter } from "../../document/frontmatter";
 
 export interface WysiwygCallbacks {
   onChange: (markdown: string) => void;
+  /** Called right before find scrolls the document to a match, which can be
+   *  after the find step that asked for it has returned. */
+  onFindScroll?: () => void;
 }
 
 export class WysiwygEditor {
@@ -183,7 +186,7 @@ export class WysiwygEditor {
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
     // WYSIWYG find/replace search state + decorations (§5.13).
-    this.crepe.editor.use(searchMilkdownPlugin());
+    this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back

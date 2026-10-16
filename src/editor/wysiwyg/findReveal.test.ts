@@ -39,11 +39,11 @@ afterEach(async () => {
 });
 
 /** Mount the document editor on `markdown`. */
-async function open(markdown: string): Promise<WysiwygEditor> {
+async function open(markdown: string, onFindScroll?: () => void): Promise<WysiwygEditor> {
   const root = document.createElement("div");
   document.body.append(root);
   editor = new WysiwygEditor();
-  await editor.mount(root, markdown, { onChange: () => {} }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  await editor.mount(root, markdown, { onChange: () => {}, onFindScroll }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => null,
     requestSave: async () => false,
@@ -86,6 +86,19 @@ describe("find highlights in code blocks", () => {
 
     await showCodeBlocks();
     expect(inCodeBlocks(".md-find-current")).toEqual(["zeta"]);
+  });
+
+  it("tells the host before it scrolls again to a code block drawn after the search", { timeout: 60_000 }, async () => {
+    const onFindScroll = vi.fn();
+    const editor = await open("Intro.\n\n```js\nconst zeta = 1;\n```\n", onFindScroll);
+    expect(editor.search("zeta", opts)).toEqual({ current: 1, total: 1 });
+    expect(onFindScroll).toHaveBeenCalled();
+    // Let the step's own follow-up scroll pass, as the split's suppression would.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    onFindScroll.mockClear();
+
+    await showCodeBlocks();
+    expect(onFindScroll).toHaveBeenCalledTimes(1);
   });
 
   it("moves the highlights with a replacement in the code block", { timeout: 60_000 }, async () => {
