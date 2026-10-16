@@ -42,6 +42,7 @@ import {
   type FindCounts,
   type FindOptions,
 } from "./findEngine";
+import { codeBlockFindHighlights } from "./findReveal";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { installEditorAccessibility } from "./editorAccessibility";
@@ -144,8 +145,12 @@ export class WysiwygEditor {
       // split.body === initial when there is no frontmatter.
       defaultValue: split.body,
       featureConfigs: {
-        // Render ```mermaid code blocks as diagrams below the source (§5.2).
-        [Crepe.Feature.CodeMirror]: { renderPreview: renderMermaidPreview },
+        // Render ```mermaid code blocks as diagrams below the source (§5.2), and
+        // show the find card's matches inside code blocks (§5.13).
+        [Crepe.Feature.CodeMirror]: {
+          renderPreview: renderMermaidPreview,
+          extensions: [codeBlockFindHighlights],
+        },
         // Display linked images + missing-image placeholder/relocate (§5.5).
         [Crepe.Feature.ImageBlock]: imageBlockFeatureConfig(viewRef, context),
         // Crepe's default empty-line hint is "Please enter...".

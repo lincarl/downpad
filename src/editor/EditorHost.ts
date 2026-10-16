@@ -185,10 +185,10 @@ export class EditorHost implements FindController {
       : this.activeWysiwyg()?.replaceAll(replacement, query, opts) ?? NO_MATCHES;
   }
 
-  /** A Find/replace op scrolls the document to the match via ProseMirror's
-   *  `scrollIntoView` (per keystroke during incremental search). In the split,
-   *  tell the scroll sync that this scroll is app-originated so it doesn't drive
-   *  — and jerk, per keystroke — the Markdown pane (§5.3). */
+  /** A Find/replace op scrolls the document to the match (per keystroke during
+   *  incremental search). In the split, tell the scroll sync that this scroll
+   *  is app-originated, so it does not drive the Markdown pane and jerk it on
+   *  every keystroke (§5.3). */
   private suppressMirrorScroll(): void {
     if (this.layout === "split") this.scrollSync.suppressNext();
   }

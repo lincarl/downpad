@@ -74,8 +74,8 @@ export class ScrollSync {
   }
 
   /** Ignore scrolls for a brief window — call right before a scroll the app
-   *  originates itself (e.g. ProseMirror's `scrollIntoView` when Find jumps to a
-   *  match, which fires per keystroke during incremental search). Without this
+   *  originates itself (e.g. when Find scrolls to a match, which happens per
+   *  keystroke during incremental search). Without this
    *  such a scroll would be mistaken for a user gesture and jerk the other pane.
    *  Genuine wheel/keyboard/drag scrolling a moment later still syncs. */
   suppressNext(): void {

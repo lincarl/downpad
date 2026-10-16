@@ -6,6 +6,7 @@
 //   - a ProseMirror plugin holds the match set + current index, paints
 //     decorations, and remaps on edits; replacements go through transactions so
 //     undo/redo behaves normally.
+//   - `findReveal` shows matches inside code blocks and scrolls to the current one.
 
 import { $prose } from "@milkdown/kit/utils";
 import { Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
@@ -13,6 +14,7 @@ import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { EditorState } from "@milkdown/kit/prose/state";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
+import { codeBlockMatchesView, revealMatch } from "./findReveal";
 
 export interface FindOptions {
   caseSensitive: boolean;
@@ -156,6 +158,8 @@ export function findPlugin() {
         return prev;
       },
     },
+    // Code blocks draw their own text, so they get the matches separately.
+    view: (view) => codeBlockMatchesView(view, (state) => findKey.getState(state)),
     props: {
       decorations(state: EditorState) {
         const s = findKey.getState(state);
@@ -172,13 +176,12 @@ function counts(s: FindPluginState | undefined): FindCounts {
   return { total: s.ranges.length, current: s.current + 1 };
 }
 
+/** Select the current match, so closing the card leaves the caret there, and scroll to it. */
 function scrollToCurrent(view: EditorView, s: FindPluginState): void {
   const range = s.ranges[s.current];
   if (!range) return;
-  const tr = view.state.tr
-    .setSelection(TextSelection.create(view.state.doc, range.from, range.to))
-    .scrollIntoView();
-  view.dispatch(tr);
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, range.from, range.to)));
+  revealMatch(view, range);
 }
 
 export function runSearch(view: EditorView, query: string, opts: FindOptions): FindCounts {

@@ -616,6 +616,55 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n```js\nlet x = 1;\n```\n");
 });
 
+test("find scrolls to each match and highlights matches inside code blocks", async () => {
+  const file = path.join(directory, "find.md");
+  const filler = Array.from({ length: 60 }, (_, index) => `Filler paragraph ${index + 1}.`).join("\n\n");
+  // A 300-line code block whose match ends a line too long for the block, which
+  // scrolls sideways.
+  const code = (match: number) => {
+    const lines = Array.from({ length: 300 }, (_, index) => `line ${index + 1}`);
+    lines[match - 1] += ` ${"x".repeat(200)} needle`;
+    return ["```text", ...lines, "```"].join("\n");
+  };
+  // The first code block is drawn at once, but only its first lines. The second
+  // is drawn only when it nears the screen.
+  const blocks = ["# Find", "Intro needle.", code(120), filler, code(250), filler, "Last needle."];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  await page.locator(heading).click();
+  await page.keyboard.press("ControlOrMeta+f");
+  const input = page.getByRole("textbox", { name: "Find in document" });
+  const count = page.locator(".find-count");
+  const inCodeBlock = page.locator(".milkdown-code-block .md-find-current");
+  const inParagraph = page.locator(".milkdown .ProseMirror > p .md-find-current");
+
+  await input.fill("needle");
+  await expect(count).toHaveText("1 of 4");
+  await expect(inParagraph).toBeInViewport({ ratio: 1 });
+  // A match on screen leaves the page where it is.
+  expect(await page.locator(".editor-area").evaluate((area) => area.scrollTop)).toBe(0);
+
+  await input.press("Enter");
+  await expect(count).toHaveText("2 of 4");
+  await expect(inCodeBlock).toHaveText("needle");
+  await expect(inCodeBlock).toBeInViewport({ ratio: 1 });
+
+  await input.press("Enter");
+  await expect(count).toHaveText("3 of 4");
+  await expect(inCodeBlock).toHaveText("needle");
+  await expect(inCodeBlock).toBeInViewport({ ratio: 1 });
+
+  await input.press("Enter");
+  await expect(count).toHaveText("4 of 4");
+  await expect(inParagraph).toHaveText("needle");
+  await expect(inParagraph).toBeInViewport({ ratio: 1 });
+
+  // Back to the first match at the top.
+  await input.press("Enter");
+  await expect(count).toHaveText("1 of 4");
+  await expect(inParagraph).toBeInViewport({ ratio: 1 });
+});
+
 test("the document page runs to the end of a long document", async () => {
   const file = path.join(directory, "long.md");
   const paragraphs = Array.from({ length: 120 }, (_, index) => `Paragraph ${index + 1}.`);
