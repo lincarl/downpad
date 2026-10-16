@@ -93,6 +93,8 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
   }, 0);
 }
 
+/** The menu element at `x`, `y`, named `label` for screen readers. Choosing a
+ *  row closes the menu before the row's command runs. */
 function ContextMenu({ x, y, items, label }: { x: number; y: number; items: MenuItem[]; label: string }) {
   const style: CSSProperties = { left: x, top: y };
   return (

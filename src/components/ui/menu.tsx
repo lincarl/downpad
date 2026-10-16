@@ -53,6 +53,9 @@ export function MenuRows({
   ));
 }
 
+/** One menu row, with the separator and section caption that come before it.
+ *  The row gives its shortcut to screen readers as `aria-keyshortcuts` and hides
+ *  the visible hint from them, so the hint is not read as part of its name. */
 function MenuRow({
   item,
   first,
