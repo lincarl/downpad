@@ -18,8 +18,16 @@ import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
 
+/** How long edits must pause before the find card recounts. Counting walks the
+ *  whole document, which takes about 200ms for 2 MB, too slow for every
+ *  keystroke. */
+const FIND_RECOUNT_DELAY_MS = 200;
+
 export interface RawCallbacks {
   onChange: (text: string) => void;
+  /** Called once edits pause while a find query is set, so the find card can
+   *  show the new count (§5.13). */
+  onFindChange?: () => void;
 }
 
 export interface RawOptions {
@@ -38,10 +46,15 @@ export class RawEditor {
    *  sync, §6.1) so the resulting transaction doesn't echo back through onChange
    *  and clobber the pane that authored the change. */
   private applying = false;
+  /** Pending `onFindChange` call, set while edits have not paused yet. */
+  private findChangeTimer: ReturnType<typeof setTimeout> | null = null;
 
   mount(root: HTMLElement, initial: string, cb: RawCallbacks, opts: RawOptions = {}): void {
     const updateListener = EditorView.updateListener.of((u) => {
       if (u.docChanged && !this.applying) cb.onChange(u.state.doc.toString());
+      if (u.docChanged && cb.onFindChange && getSearchQuery(u.state).search) {
+        this.scheduleFindChange(cb.onFindChange);
+      }
     });
     this.view = new EditorView({
       parent: root,
@@ -184,7 +197,8 @@ export class RawEditor {
     return matches;
   }
 
-  private currentCounts(): FindCounts {
+  /** The match the selection covers (0 when none) and the total. */
+  currentCounts(): FindCounts {
     if (!this.view) return { current: 0, total: 0 };
     const query = getSearchQuery(this.view.state);
     const matches = this.matches(query);
@@ -193,6 +207,15 @@ export class RawEditor {
       ({ from, to }) => selection.from === from && selection.to === to,
     );
     return { current: current < 0 ? 0 : current + 1, total: matches.length };
+  }
+
+  /** Call `notify` once edits pause, restarting the wait on every edit. */
+  private scheduleFindChange(notify: () => void): void {
+    if (this.findChangeTimer != null) clearTimeout(this.findChangeTimer);
+    this.findChangeTimer = setTimeout(() => {
+      this.findChangeTimer = null;
+      notify();
+    }, FIND_RECOUNT_DELAY_MS);
   }
 
   focus(): void {
@@ -210,6 +233,8 @@ export class RawEditor {
   }
 
   destroy(): void {
+    if (this.findChangeTimer != null) clearTimeout(this.findChangeTimer);
+    this.findChangeTimer = null;
     this.view?.destroy();
     this.view = null;
   }

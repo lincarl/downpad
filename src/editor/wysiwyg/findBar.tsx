@@ -23,6 +23,8 @@ export interface FindController {
   prev(): FindCounts;
   replaceCurrent(replacement: string, query: string, opts: FindOptions): FindCounts;
   replaceAll(replacement: string, query: string, opts: FindOptions): FindCounts;
+  /** The current match and total in the searched editor, without moving. */
+  counts(): FindCounts;
   clear(): void;
   focusEditor(): void;
 }
@@ -31,6 +33,7 @@ interface FindBarHandle {
   show(mode: "find" | "replace"): void;
   close(): void;
   refresh(): void;
+  syncCounts(): void;
   next(): void;
   prev(): void;
 }
@@ -95,6 +98,12 @@ export class FindBar {
   /** Search again in the editor that is now visible, keeping the card open. */
   refresh(): void {
     this.handle?.refresh();
+  }
+
+  /** Show the count after an edit changed the matches. Does nothing while the
+   *  card is closed or its field is empty. */
+  syncCounts(): void {
+    this.handle?.syncCounts();
   }
 
   next(): void {
@@ -174,6 +183,9 @@ const FindBarView = forwardRef<
       controller.clear();
       setCounts({ current: 0, total: 0 });
       if (open && query) runSearch();
+    },
+    syncCounts() {
+      if (open && query) apply(controller.counts());
     },
     next: () => apply(controller.next()),
     prev: () => apply(controller.prev()),

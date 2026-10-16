@@ -36,16 +36,28 @@ const fakeEditors = vi.hoisted(() => ({
   rawChange: null as ((text: string) => void) | null,
   /** The Markdown pane's current text. */
   rawText: null as string | null,
+  /** Each pane's find change callback, to simulate an edit with the card open. */
+  wysiwygFindChange: null as (() => void) | null,
+  rawFindChange: null as (() => void) | null,
 }));
+
+/** The counts each fake pane reports, so a test can tell which pane answered. */
+const DOCUMENT_COUNTS = { current: 1, total: 3 };
+const MARKDOWN_COUNTS = { current: 0, total: 4 };
 
 vi.mock("./wysiwyg/WysiwygEditor", () => ({
   WysiwygEditor: class {
     private onChange: ((markdown: string) => void) | null = null;
 
-    async mount(_root: HTMLElement, _markdown: string, cb: { onChange(markdown: string): void }): Promise<void> {
+    async mount(
+      _root: HTMLElement,
+      _markdown: string,
+      cb: { onChange(markdown: string): void; onFindChange?(): void },
+    ): Promise<void> {
       fakeEditors.mountCalls += 1;
       this.onChange = cb.onChange;
       fakeEditors.wysiwygChange = cb.onChange;
+      fakeEditors.wysiwygFindChange = cb.onFindChange ?? null;
       await fakeEditors.mountPromise;
     }
 
@@ -65,6 +77,10 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       fakeEditors.mirrored = markdown;
     }
 
+    currentCounts() {
+      return DOCUMENT_COUNTS;
+    }
+
     async destroy(): Promise<void> {
       fakeEditors.destroyCalls += 1;
       await fakeEditors.destroyPromise;
@@ -76,9 +92,10 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
 vi.mock("./raw/RawEditor", () => ({
   RawEditor: class {
-    mount(_root: HTMLElement, text: string, cb: { onChange(text: string): void }): void {
+    mount(_root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }): void {
       fakeEditors.rawText = text;
       fakeEditors.rawChange = cb.onChange;
+      fakeEditors.rawFindChange = cb.onFindChange ?? null;
     }
 
     getText(): string {
@@ -87,6 +104,10 @@ vi.mock("./raw/RawEditor", () => ({
 
     setText(text: string): void {
       fakeEditors.rawText = text;
+    }
+
+    currentCounts() {
+      return MARKDOWN_COUNTS;
     }
 
     destroy(): void {}
@@ -145,6 +166,8 @@ beforeEach(() => {
   fakeEditors.wysiwygChange = null;
   fakeEditors.rawChange = null;
   fakeEditors.rawText = null;
+  fakeEditors.wysiwygFindChange = null;
+  fakeEditors.rawFindChange = null;
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -273,6 +296,35 @@ describe("EditorHost terminal disposal", () => {
     await disposing;
     expect(disposeSettled).toBe(true);
     expect(fakeEditors.destroyCalls).toBe(1);
+  });
+});
+
+describe("EditorHost find count", () => {
+  it("passes on edits only from the pane the find card searches", async () => {
+    const host = new EditorHost(document.createElement("div"), makeStore());
+    const recount = vi.fn();
+    host.setFindChangeHandler(recount);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+
+    // The split searches the document pane. A Markdown edit reaches it by mirror sync.
+    fakeEditors.rawFindChange!();
+    expect(recount).not.toHaveBeenCalled();
+    fakeEditors.wysiwygFindChange!();
+    expect(recount).toHaveBeenCalledOnce();
+    expect(host.counts()).toEqual(DOCUMENT_COUNTS);
+
+    // The Markdown view searches the Markdown pane; the hidden document pane is ignored.
+    await host.setLayout("markdown");
+    fakeEditors.wysiwygFindChange!();
+    expect(recount).toHaveBeenCalledOnce();
+    fakeEditors.rawFindChange!();
+    expect(recount).toHaveBeenCalledTimes(2);
+    expect(host.counts()).toEqual(MARKDOWN_COUNTS);
+
+    await host.dispose();
+    fakeEditors.rawFindChange!();
+    expect(recount).toHaveBeenCalledTimes(2);
   });
 });
 
