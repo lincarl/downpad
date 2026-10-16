@@ -11,7 +11,8 @@
 //      shows its URL from its first render.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
-//      relocate via a file dialog (updates the node's src).
+//      relocate via a file dialog (updates the node's src). The placeholder
+//      goes once an image loads in the block.
 //   3. Node helpers (isImageNode / imageAttrs / setImageAttrs / lookups) reused
 //      by the image context menu (imageContextMenu.ts).
 
@@ -94,16 +95,22 @@ export async function pickImageFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-async function relocate(viewRef: ViewRef, dom: Node): Promise<void> {
+/** Point a missing image at a file the user picks. The main process is asked
+ *  about that file again, since it may be the one it could not find before. */
+async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => void): Promise<void> {
   const view = viewRef.current;
   if (!view) return;
   const found = imageNodeAtDom(view, dom);
   if (!found) return;
   const path = await pickImageFile();
-  if (path) setImageAttrs(view, found.pos, found.node, { src: path });
+  if (!path) return;
+  forget(path);
+  setImageAttrs(view, found.pos, found.node, { src: path });
 }
 
-function markMissing(event: Event, viewRef: ViewRef): void {
+/** Show an image block that failed to load as the missing-image placeholder,
+ *  which a click relocates. The placeholder goes once an image loads there. */
+function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => void): void {
   const img = event.target as HTMLElement | null;
   if (!img) return;
   const host = (img.closest?.(".milkdown-image-block") as HTMLElement | null) ?? img;
@@ -116,9 +123,15 @@ function markMissing(event: Event, viewRef: ViewRef): void {
   if (!host.dataset.mdRelocateBound) {
     host.dataset.mdRelocateBound = "1";
     host.addEventListener("click", (e) => {
+      if (!host.classList.contains("md-image-missing")) return;
       e.preventDefault();
       e.stopPropagation();
-      void relocate(viewRef, img);
+      void relocate(viewRef, img, forget);
+    });
+    img.addEventListener("load", () => {
+      host.classList.remove("md-image-missing");
+      delete host.dataset.mdPath;
+      host.removeAttribute("title");
     });
   }
 }
@@ -180,6 +193,11 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
    *  is not a local image. Outside Electron every src is shown as it is. */
   const localPath = (src: string): string | null =>
     isElectron() ? resolveImagePath(src, ctx.getFilePath()) : null;
+  /** Forget the answer about an image src, so its next view asks again. */
+  const forget = (src: string): void => {
+    const path = localPath(src);
+    if (path) answers.delete(path);
+  };
   /** The local paths the open document shows, kept per document and file path. */
   let shown: { doc: ProseNode; filePath: string | null; paths: Set<string> } | null = null;
   /** Whether an image in the open document still shows `path`. True before the
@@ -260,6 +278,6 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
         timers.forEach(clearTimeout);
       }
     },
-    onImageLoadError: (event: Event): void => markMissing(event, viewRef),
+    onImageLoadError: (event: Event): void => markMissing(event, viewRef, forget),
   };
 }

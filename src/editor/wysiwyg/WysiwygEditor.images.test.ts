@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Crepe's image views render a node's raw src until proxyDomURL answers, and
 // Chromium looks a raw relative src up next to md-easy's own page. These tests
-// use the real editor to check that local images start at the URL they show
-// and that a late answer never replaces a newer one.
+// use the real editor to check that local images start at the URL they show,
+// that a late answer never replaces a newer one, and that a relocated image
+// shows the file it is pointed at.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -10,12 +11,14 @@ import { serializerStyleFromSettings } from "../../state/types";
 
 const native = vi.hoisted(() => ({
   convertFileSrc: vi.fn<(path: string) => Promise<string | null>>(),
+  openDialog: vi.fn<() => Promise<string | null>>(),
 }));
 vi.mock("../../ipc/env", () => ({ isElectron: () => true }));
 vi.mock("../../ipc/bridge", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../ipc/bridge")>()),
   convertFileSrc: native.convertFileSrc,
 }));
+vi.mock("../../ipc/dialogs", () => ({ openDialog: native.openDialog }));
 
 import { WysiwygEditor } from "./WysiwygEditor";
 import { forgetImageAnswers } from "./imageView";
@@ -44,6 +47,7 @@ beforeEach(() => {
     },
   });
   native.convertFileSrc.mockReset();
+  native.openDialog.mockReset();
   forgetImageAnswers();
 });
 
@@ -129,5 +133,29 @@ describe("a late answer", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(sources(root)).toEqual(["url /docs/a.png"]);
+  });
+});
+
+describe("a relocated image", () => {
+  it("shows the file it is pointed at, even the one it could not find before", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockResolvedValue(null);
+    const root = await open("![Missing](pic.png)\n");
+    const block = root.querySelector(".milkdown-image-block")!;
+    const image = block.querySelector("img")!;
+    // jsdom loads no images, so tell the view the empty source failed.
+    image.dispatchEvent(new Event("error"));
+    expect(block.classList).toContain("md-image-missing");
+
+    // The file is put back, and the user picks it.
+    native.convertFileSrc.mockResolvedValue("md-easy-file://pic");
+    native.openDialog.mockResolvedValue("/docs/pic.png");
+    block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    image.dispatchEvent(new Event("load"));
+    expect(block.classList).not.toContain("md-image-missing");
+    // A click on the found image leaves it alone.
+    block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(native.openDialog).toHaveBeenCalledTimes(1);
   });
 });
