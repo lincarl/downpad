@@ -139,8 +139,12 @@ export class RawEditor {
   replaceCurrent(replacement: string, query: string, opts: FindOptions): FindCounts {
     if (!this.view) return { current: 0, total: 0 };
     this.searchText(query, opts, replacement);
+    const before = this.view.state.doc;
     replaceNextMatch(this.view);
-    return this.searchText(query, opts, replacement);
+    // CodeMirror leaves the replacement selected. Move on to the next match, as
+    // the document view does, so the next Replace does not edit the first one.
+    if (this.view.state.doc !== before) findNextMatch(this.view);
+    return this.currentCounts();
   }
 
   replaceAll(replacement: string, query: string, opts: FindOptions): FindCounts {

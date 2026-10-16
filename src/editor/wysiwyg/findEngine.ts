@@ -120,7 +120,8 @@ const EMPTY_OPTS: FindOptions = { caseSensitive: false, wholeWord: false, regex:
 export const findKey = new PluginKey<FindPluginState>("md-easy-find");
 
 type FindMeta =
-  | { type: "search"; query: string; opts: FindOptions }
+  /** With `from`, the first match at or after that position becomes current. */
+  | { type: "search"; query: string; opts: FindOptions; from?: number }
   | { type: "current"; current: number }
   | { type: "clear" };
 
@@ -149,7 +150,8 @@ export function findPlugin(onScroll?: () => void) {
         const meta = tr.getMeta(findKey) as FindMeta | undefined;
         if (meta?.type === "search") {
           const ranges = searchDoc(tr.doc, meta.query, meta.opts);
-          return { query: meta.query, opts: meta.opts, ranges, current: ranges.length ? 0 : -1 };
+          const after = ranges.findIndex((range) => range.from >= (meta.from ?? 0));
+          return { query: meta.query, opts: meta.opts, ranges, current: ranges.length ? Math.max(after, 0) : -1 };
         }
         if (meta?.type === "current") {
           return { ...prev, current: meta.current };
@@ -229,11 +231,14 @@ export function replaceCurrent(
 ): FindCounts {
   const s = findKey.getState(view.state);
   const range = s?.ranges[s.current];
-  if (s && range) {
-    view.dispatch(view.state.tr.insertText(replacement, range.from, range.to));
-  }
-  // Re-search afterwards so counts/positions reflect the edit.
-  return runSearch(view, query, opts);
+  if (!range) return runSearch(view, query, opts);
+  // Search again and carry on with the match after the replacement, so the
+  // next Replace does not go back to the first match.
+  const tr = view.state.tr.insertText(replacement, range.from, range.to);
+  view.dispatch(tr.setMeta(findKey, { type: "search", query, opts, from: tr.mapping.map(range.to) }));
+  const next = findKey.getState(view.state)!;
+  scrollToCurrent(view, next);
+  return counts(next);
 }
 
 export function replaceAll(
