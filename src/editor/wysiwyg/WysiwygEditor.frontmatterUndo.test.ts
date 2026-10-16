@@ -151,6 +151,21 @@ describe("undo in the frontmatter table", () => {
     expect(onChange.mock.lastCall?.[0]).toBe(FILE.replace("# keep", "# keep日本"));
     press(document.activeElement!, "z");
     expect(onChange.mock.lastCall?.[0]).toBe(FILE);
+
+    // Ctrl+Z in the middle of a composition draws a new cell, so the
+    // composition ends without a compositionend in it. Typing in the new cell
+    // after a pause is a step of its own again.
+    const composing = cell(0, "value");
+    composing.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    composing.textContent += "に";
+    composing.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true, data: "に" }));
+    press(composing, "z");
+    for (const [text, time] of [["a", 5000], ["b", 6000]] as const) {
+      clock.mockReturnValue(start + time);
+      type(cell(0, "value"), text);
+    }
+    press(cell(0, "value"), "z");
+    expect(onChange.mock.lastCall?.[0]).toBe(FILE.replace("# keep", "# keepa"));
   });
 
   it("takes back table and body edits in the order they were made, from either place", { timeout: 60_000 }, async () => {

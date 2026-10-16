@@ -136,10 +136,12 @@ export class WysiwygEditor {
   private typingRuns = 0;
   /** Counts input method compositions in the table, to give each its own id. */
   private compositions = 0;
-  /** The composition in progress in the table, or null between compositions.
-   *  Chromium reports the text a composition commits before it ends it, so
-   *  the commit is part of the composition too. */
-  private composition: number | null = null;
+  /** The composition in progress in the table and the cell it is in, or null
+   *  between compositions. Chromium reports the text a composition commits
+   *  before it ends it, so the commit is part of the composition too. A redraw
+   *  that replaces the cell ends the composition without a compositionend
+   *  there, so only edits in that cell count as part of it. */
+  private composition: { id: number; cell: EventTarget | null } | null = null;
   /** Find and replace over the frontmatter table and the document (§5.13). */
   private readonly find = new DocumentFind({
     block: () => (this.fmPanel ? this.frontmatterBlock : null),
@@ -418,7 +420,9 @@ export class WysiwygEditor {
         panel.addEventListener("beforeinput", this.tableHistory);
         // An input method composition is one undo step, however long the
         // user waits before choosing the text (recordTableEdit).
-        panel.addEventListener("compositionstart", () => (this.composition = ++this.compositions));
+        panel.addEventListener("compositionstart", (event) => {
+          this.composition = { id: ++this.compositions, cell: event.target };
+        });
         panel.addEventListener("compositionend", () => (this.composition = null));
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);
@@ -607,7 +611,7 @@ export class WysiwygEditor {
   private recordTableEdit(view: EditorView, block: string, typed: boolean): void {
     const tr = setFrontmatter(view.state, view.state.tr, { block });
     const cell = typed ? document.activeElement : null;
-    const composition = cell ? this.composition : null;
+    const composition = cell && this.composition?.cell === cell ? this.composition.id : null;
     const last = this.typing;
     const joins =
       cell &&
