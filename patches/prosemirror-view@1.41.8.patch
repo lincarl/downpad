@@ -1,0 +1,37 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..7e43faf3be2b1aaefb787abd5ca2b4bffce8e67a 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -3563,8 +3563,12 @@ handlers.focus = function (view) {
+     view.dom.classList.add("ProseMirror-focused");
+     view.domObserver.start();
+     view.focused = true;
++    // md-easy patch: a key or click since focus may have moved the DOM
++    // selection before ProseMirror read it (End on a busy page). Putting
++    // the old selection back would undo that move, so leave it.
++    var selectionTime = view.input.lastSelectionTime;
+     setTimeout(function () {
+-      if (view.docView && view.hasFocus() && !view.domObserver.currentSelection.eq(view.domSelectionRange())) selectionToDOM(view);
++      if (view.docView && view.hasFocus() && view.input.lastSelectionTime == selectionTime && !view.domObserver.currentSelection.eq(view.domSelectionRange())) selectionToDOM(view);
+     }, 20);
+   }
+ };
+diff --git a/dist/index.js b/dist/index.js
+index 2f19364145a8bb8c0f44c738d58271c76078e6f9..7ad83228255435303f417f6deee0c3766057b523 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3816,8 +3816,13 @@ handlers.focus = view => {
+         view.dom.classList.add("ProseMirror-focused");
+         view.domObserver.start();
+         view.focused = true;
++        // md-easy patch: a key or click since focus may have moved the DOM
++        // selection before ProseMirror read it (End on a busy page). Putting
++        // the old selection back would undo that move, so leave it.
++        let selectionTime = view.input.lastSelectionTime;
+         setTimeout(() => {
+-            if (view.docView && view.hasFocus() && !view.domObserver.currentSelection.eq(view.domSelectionRange()))
++            if (view.docView && view.hasFocus() && view.input.lastSelectionTime == selectionTime &&
++                !view.domObserver.currentSelection.eq(view.domSelectionRange()))
+                 selectionToDOM(view);
+         }, 20);
+     }
