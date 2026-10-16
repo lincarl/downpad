@@ -217,3 +217,20 @@ describe("a file dropped between list items", () => {
     expect(opened.getMarkdown()).toBe(`Intro.\n\n- Parent\n  - N1\n  - ${LINK_A}\n  - N2\n- Next\n\nOutro.\n`);
   });
 });
+
+describe("drops whose files are still being read", () => {
+  it("each go in where they were dropped", async () => {
+    const opened = await open("First line.\n\nSecond line.\n\nThird line.\n");
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("paragraph", "Second line."), 140, 170);
+    place(opened, block("paragraph", "Third line."), 180, 210);
+
+    const first = opened.dropTargetAt(300, 128);
+    const second = opened.dropTargetAt(300, 208);
+    // The second drop's file is read first.
+    opened.insertMarkdown(LINK_B, second);
+    opened.insertMarkdown(LINK_A, first);
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\nThird line.\n\n${LINK_B}\n`);
+  });
+});

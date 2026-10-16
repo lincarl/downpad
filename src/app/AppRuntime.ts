@@ -538,9 +538,14 @@ export class AppRuntime {
     // Aim now, during the drop event, while the drop point is over the text the
     // file was dropped on. Reading the file comes after.
     else target = this.editorHost.dropTarget(drop);
-    for (const path of paths) {
-      if (classifyDrop(path) === "image") await this.embedDroppedImage(path, target);
-      else await this.attachDroppedFile(path, target);
+    try {
+      for (const path of paths) {
+        if (classifyDrop(path) === "image") await this.embedDroppedImage(path, target);
+        else await this.attachDroppedFile(path, target);
+      }
+    } finally {
+      // Each drop keeps its own target until its files are in.
+      if (target) this.editorHost.releaseDropTarget(target);
     }
   }
 

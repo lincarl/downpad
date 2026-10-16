@@ -200,6 +200,11 @@ export class EditorHost implements FindController {
     return aimed;
   }
 
+  /** Stop keeping a drop's target in step with edits, once its files are in. */
+  releaseDropTarget(target: DropTarget): void {
+    for (const pane of this.panes.values()) pane.wysiwyg?.releaseDropTarget(target);
+  }
+
   /** Hide the drop indicator the document pane drew while files were dragged
    *  over it. The app takes file drops before the editor sees them (§5.4). */
   hideDropIndicator(): void {

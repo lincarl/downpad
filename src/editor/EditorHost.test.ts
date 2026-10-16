@@ -102,6 +102,8 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       return { pos: 7 };
     }
 
+    releaseDropTarget(): void {}
+
     /** Take focus with a caret in the pane. */
     focus(): void {
       if (!this.root) return;
