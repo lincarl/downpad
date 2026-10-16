@@ -75,16 +75,13 @@ interface AimedDrop {
   onPane: boolean;
   /** The element that had focus when the files were dropped. */
   focus: Element | null;
-  /** Whether the user was typing in that element when the files were dropped. */
-  typing: boolean;
   /** When the drop happened (`performance.now()`). */
   at: number;
 }
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 const paneKey = (tabId: string, view: View): string => `${tabId} ${view}`;
-/** How long after a key the user still counts as typing, for a drop
- *  (`AimedDrop.typing`). */
+/** How long after a key the user still counts as typing (`typingIn`). */
 const TYPING_PAUSE_MS = 1000;
 
 /** Debounce for mirroring an edit into the other split pane (§6.1). Coalesces a
@@ -179,12 +176,11 @@ export class EditorHost implements FindController {
   private readonly drops = new Map<FileDrop, AimedDrop>();
   /** Callers waiting for the next document to be shown, or a tab to close. */
   private readonly presentWaiters = new Set<() => void>();
-  /** When the user last pressed a key (`performance.now()`), and the element
-   *  that had focus then. */
-  private lastKey: { at: number; focus: Element | null } = { at: -Infinity, focus: null };
+  /** When the user last pressed a key (`performance.now()`). */
+  private lastKeyAt = -Infinity;
   /** When the user last pressed a mouse button, pen or finger down. */
   private lastPointerAt = -Infinity;
-  /** Removes the window listeners that record `lastKey` and `lastPointerAt`. */
+  /** Removes the window listeners that record `lastKeyAt` and `lastPointerAt`. */
   private readonly stopWatchingInput: () => void;
 
   constructor(
@@ -193,7 +189,7 @@ export class EditorHost implements FindController {
   ) {
     // Captured on the whole window, so typing in the find card counts too.
     const onKey = (): void => {
-      this.lastKey = { at: performance.now(), focus: document.activeElement };
+      this.lastKeyAt = performance.now();
     };
     const onPointer = (): void => {
       this.lastPointerAt = performance.now();
@@ -258,10 +254,7 @@ export class EditorHost implements FindController {
       target = under.raw.dropTargetAt(drop.clientX, drop.clientY);
     }
     const handle: FileDrop = { tabId: pane.tabId };
-    const focus = document.activeElement;
-    const at = performance.now();
-    const typing = this.lastKey.focus === focus && at - this.lastKey.at < TYPING_PAUSE_MS;
-    this.drops.set(handle, { pane, target, onPane: under !== null, focus, typing, at });
+    this.drops.set(handle, { pane, target, onPane: under !== null, focus: document.activeElement, at: performance.now() });
     return handle;
   }
 
@@ -281,8 +274,9 @@ export class EditorHost implements FindController {
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
    * with the caret after the file, as after Crepe's own drops, unless the
-   * user has moved on since the drop (`movedOn`). Then focus and the caret
-   * stay where the user is, such as typing in the find card.
+   * user has moved on since the drop (`movedOn`), or types in that Markdown
+   * pane. Then focus and the caret stay where the user is, such as typing in
+   * the find card.
    *
    * While the split's Markdown pane has focus, a file dropped on the
    * document pane goes into the Markdown pane too, at the place in the source
@@ -311,7 +305,9 @@ export class EditorHost implements FindController {
       this.flush();
       return true;
     }
-    const stay = !this.movedOn(aimed);
+    // The file's text goes into a Markdown pane's line, often the one the user
+    // types in, where their next keys would land after the file.
+    const stay = !this.movedOn(aimed) && !(pane.raw && this.typingIn(pane));
     if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target, stay);
     else pane.raw?.insertText(markdown, target, stay);
     this.flush();
@@ -324,15 +320,15 @@ export class EditorHost implements FindController {
 
   /** Whether the user has moved on since a drop, so a file that goes in now
    *  leaves focus and the caret where they are. That is when focus has left
-   *  the element it was on, they clicked or pressed a key since, or they were
-   *  typing there when they dropped the files. */
+   *  the element it was on, or they clicked or pressed a key since. */
   private movedOn(aimed: AimedDrop): boolean {
-    return (
-      aimed.typing ||
-      document.activeElement !== aimed.focus ||
-      this.lastKey.at > aimed.at ||
-      this.lastPointerAt > aimed.at
-    );
+    return document.activeElement !== aimed.focus || this.lastKeyAt > aimed.at || this.lastPointerAt > aimed.at;
+  }
+
+  /** Whether the user is typing in a pane: it has focus and took a key within
+   *  `TYPING_PAUSE_MS`. */
+  private typingIn(pane: Pane): boolean {
+    return pane.el.contains(document.activeElement) && performance.now() - this.lastKeyAt < TYPING_PAUSE_MS;
   }
 
   /**

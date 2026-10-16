@@ -1156,6 +1156,34 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
+  it("puts the caret after a file dropped on the document right after typing there, but leaves a Markdown pane's caret", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const typeIn = (element: HTMLElement) => {
+      element.focus();
+      element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "x" }));
+    };
+
+    // The document pane puts the file at a block edge, away from the typing.
+    const text = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("textarea"));
+    typeIn(text);
+    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 120, target: text })!, "[a.csv](attachments/a.csv)");
+    expect(fakeEditors.movedCaret).toBe(true);
+
+    // A Markdown pane puts it into a line, where typing would go on after it.
+    await host.setLayout("markdown");
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
+    typeIn(line);
+    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 20, target: line })!, "[b.csv](attachments/b.csv)");
+    expect(fakeEditors.movedCaret).toBe(false);
+    expect(document.activeElement).toBe(line);
+    root.remove();
+    await host.dispose();
+  });
+
   it("puts a file dropped on a document now behind another tab where it was dropped once that document is shown", async () => {
     const root = document.createElement("div");
     const store = makeStore();
