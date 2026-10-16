@@ -579,6 +579,16 @@ function decide(state: EditorState, pos: number): Transaction {
   return (closing(state, pos, characterAt(state, pos + 1)) ?? state.tr).setMeta(waitingKey, null);
 }
 
+/** Decide a typed closing `$` or `~` that still waits by the character now
+ *  after it. The document editor calls this before its text is read, as for
+ *  Save or a view switch, and when it loses focus, such as to the split's
+ *  Markdown pane, whose edit would replace the whole text with a waiting mark
+ *  as text. A composition decides the mark once it ends. */
+export function decideTypedMark(view: EditorView): void {
+  const waiting = waitingKey.getState(view.state);
+  if (waiting && !view.composing) view.dispatch(decide(view.state, waiting.pos));
+}
+
 /** Once a composition ends, decide a mark that waited through it by the text
  *  it put after the mark, and let a `$` or `~` that it put right before the
  *  cursor wait like a typed one. */
@@ -586,10 +596,12 @@ function afterComposition(view: EditorView): void {
   if (view.isDestroyed) return;
   const waiting = waitingKey.getState(view.state);
   // A composition that put nothing after the mark, such as a cancelled one,
-  // leaves it waiting, and so does one between the marks of its span.
-  const { selection } = view.state;
-  if (waiting && !(selection.empty && selection.from === waiting.pos + 1) && !keepsWaiting(view.state, waiting.pos)) {
-    view.dispatch(decide(view.state, waiting.pos));
+  // leaves it waiting, and so does one between the marks of its span, unless
+  // the editor lost focus, which ended the composition.
+  if (waiting) {
+    const { selection } = view.state;
+    const kept = (selection.empty && selection.from === waiting.pos + 1) || keepsWaiting(view.state, waiting.pos);
+    if (!kept || !view.hasFocus()) view.dispatch(decide(view.state, waiting.pos));
   }
   const { from, empty } = view.state.selection;
   if (empty && closingMark(view.state, from, "") === "wait") view.dispatch(view.state.tr.setMeta(waitingKey, from - 1));
@@ -687,6 +699,12 @@ export const closingDelimiterGuard = $prose(() => {
         return false;
       },
       handleDOMEvents: {
+        /** Decide a waiting mark when the editor loses focus, so it shows
+         *  and is reported as it will be saved. */
+        blur(view) {
+          decideTypedMark(view);
+          return false;
+        },
         /** Run `afterComposition` once a composition ends. Milkdown runs the
          *  shortcuts in a timeout then, such as for a dead-key `~`. This
          *  timeout is set first, so it runs first. */

@@ -55,7 +55,7 @@ import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } f
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
-import { mathDelimiters } from "./mathDelimiters";
+import { decideTypedMark, mathDelimiters } from "./mathDelimiters";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -364,9 +364,14 @@ export class WysiwygEditor {
   }
 
   /** Report an edit now instead of waiting for typing to pause. A caller that
-   *  reads the document right away (Save) calls this first. The edit takes the
-   *  usual `onChange` path, and the pending report is cancelled. */
-  reportPendingChange(): void {
+   *  reads the document right away (Save) calls this first. A typed closing
+   *  `$` or `~` that still waits for the next character is decided first, so
+   *  the report holds the formula or strikethrough that the file would read.
+   *  `keepTypedMark` leaves it waiting, for a click or focus moving into this
+   *  pane, which may put the cursor inside the text the mark closes. The edit
+   *  takes the usual `onChange` path, and the pending report is cancelled. */
+  reportPendingChange({ keepTypedMark = false }: { keepTypedMark?: boolean } = {}): void {
+    if (!keepTypedMark) this.withView(decideTypedMark, undefined);
     if (this.changeTimer == null || this.ignoreUpdates) return;
     clearTimeout(this.changeTimer);
     this.changeTimer = null;

@@ -33,13 +33,13 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** Mount the document editor on `markdown`. */
-async function open(markdown: string): Promise<{ editor: WysiwygEditor; root: HTMLElement }> {
+/** Mount the document editor on `markdown`, reporting its edits to `onChange`. */
+async function open(markdown: string, onChange = vi.fn()): Promise<{ editor: WysiwygEditor; root: HTMLElement }> {
   const root = document.createElement("div");
   document.body.append(root);
   const editor = new WysiwygEditor();
   opened.push(editor);
-  await editor.mount(root, markdown, { onChange: vi.fn() }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  await editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => null,
     requestSave: async () => false,
@@ -114,6 +114,9 @@ function moveToEnd(view: EditorView, start: string): void {
   });
   moveTo(view, end);
 }
+
+/** The document editor's view, for typing, which its public API cannot do. */
+const viewOf = (editor: WysiwygEditor) => (editor as unknown as { crepe: Crepe }).crepe.editor.ctx.get(editorViewCtx);
 
 /** The struck text on screen. */
 const strikes = (root: HTMLElement) => [...root.querySelectorAll("del")].map((del) => del.textContent);
@@ -518,6 +521,35 @@ describe("math and strikethrough delimiters", () => {
     type(view, " now.");
     expect(formulas(root)).toEqual(["x"]);
     expect(crepe.getMarkdown()).toBe(markdown);
+  });
+
+  it("decides a typed closing mark when the editor loses focus", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("One.\n");
+    moveToEnd(view, "One.");
+    type(view, " $x$ and ~~old~~");
+    view.dom.dispatchEvent(new FocusEvent("blur"));
+    expect(strikes(root)).toEqual(["old"]);
+    type(view, " $y$");
+    view.dom.dispatchEvent(new FocusEvent("blur"));
+    expect(formulas(root)).toEqual(["x", "y"]);
+    expect(crepe.getMarkdown()).toBe("One. $x$ and ~~old~~ $y$\n");
+  });
+
+  it("decides a typed closing mark before the document editor reports its text", { timeout: 60_000 }, async () => {
+    const onChange = vi.fn();
+    const { editor, root } = await open("One.\n", onChange);
+    const view = viewOf(editor);
+    moveToEnd(view, "One.");
+    type(view, " $x$");
+    // The edit is reported once typing pauses, with the waiting mark as text.
+    await vi.waitFor(() => expect(onChange).toHaveBeenLastCalledWith("One. \\$x\\$\n"));
+    // A click in the document pane itself may land inside the formula's text.
+    editor.reportPendingChange({ keepTypedMark: true });
+    expect(formulas(root)).toEqual([]);
+    // Save, a view switch or a click in the split's Markdown pane.
+    editor.reportPendingChange();
+    expect(formulas(root)).toEqual(["x"]);
+    expect(onChange).toHaveBeenLastCalledWith("One. $x$\n");
   });
 
   it("keeps a formula when the text typed after it is undone", { timeout: 60_000 }, async () => {

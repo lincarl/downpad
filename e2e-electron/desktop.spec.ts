@@ -1361,6 +1361,24 @@ test("a file dropped while typing in the split's Markdown pane lands at the care
   expect(saved.replace(link, "")).toBe(text.replace("First line.", "First line. Typed during the drop."));
 });
 
+test("a formula typed last in the document pane is kept by the split's Markdown pane and a view switch", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("formula-last.md");
+  await typeAtEnd(documentLine, " a $x$");
+  // Once typing pauses the Markdown pane shows the closing `$` as text, since
+  // it still waits for the next character.
+  await expect(markdownLine).toHaveText("First line. a \\$x\\$");
+  await typeAtEnd(markdownLine, " raw");
+  await expect(page.locator('.editor-pane-wysiwyg [data-type="math_inline"]')).toHaveCount(1);
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await typeAtEnd(documentLine, " b $y$");
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-line").first()).toHaveText("First line. a $x$ raw b $y$");
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. a $x$ raw b $y$\n");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

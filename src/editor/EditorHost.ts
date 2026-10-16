@@ -296,14 +296,21 @@ export class EditorHost implements FindController {
    * Edits only ever arrive through a pane's change report, which the host
    * drops when the pane lags the tab. Never read a pane's text here, which
    * would skip that check and could write older text over a newer edit.
+   *
+   * `input` names the split pane about to take a click or focus. The document
+   * pane decides a typed closing `$` or `~` that still waits before it
+   * reports, unless it takes the input itself, where a click may land inside
+   * the text the mark closes.
    */
-  flush(): void {
+  flush(input?: View): void {
     if (this.disposed || !this.activeTabId) return;
     const pane = this.panes.get(paneKey(this.activeTabId, "wysiwyg"));
     // Only a visible pane can hold unreported typing. A stale one holds text
     // older than the canonical string, and reporting it would overwrite newer
     // edits from the Markdown pane. The mirror below replaces it instead.
-    if (pane && !pane.el.hidden && !this.isStale(pane)) pane.wysiwyg?.reportPendingChange();
+    if (pane && !pane.el.hidden && !this.isStale(pane)) {
+      pane.wysiwyg?.reportPendingChange({ keepTypedMark: input === "wysiwyg" });
+    }
     this.runPendingSync();
   }
 
@@ -745,7 +752,7 @@ export class EditorHost implements FindController {
      *  such as task checkboxes and table buttons, and before the editors place
      *  the caret on mousedown. Also runs when the keyboard moves focus in. */
     const catchUp = (): void => {
-      if (this.layout === "split" && tabId === this.activeTabId) this.flush();
+      if (this.layout === "split" && tabId === this.activeTabId) this.flush(view);
     };
     el.addEventListener("pointerdown", catchUp, true);
     el.addEventListener("focusin", catchUp);
