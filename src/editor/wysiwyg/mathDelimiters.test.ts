@@ -290,6 +290,8 @@ describe("math and strikethrough delimiters", () => {
     // No backslash may come before that `|`, so TeX's `\|` is saved as
     // `\Vert`, which TeX reads the same.
     ["\\|x\\|_2 + \\|\\|", "$\\Vert x\\Vert_2 + \\Vert\\Vert$", "\\Vert x\\Vert_2 + \\Vert\\Vert"],
+    // KaTeX reads `@` as a letter in a command's name, as in `\Vert@`.
+    ["\\|@x", "$\\Vert @x$", "\\Vert @x"],
     // An escaped backslash escapes nothing.
     ["a \\\\| b", "$a \\\\\\| b$", "a \\\\| b"],
     // A cell is one line.

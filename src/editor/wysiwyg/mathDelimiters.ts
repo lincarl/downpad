@@ -258,10 +258,11 @@ function besideFormula(node: unknown, parent: { children?: readonly { type: stri
  *  that no backslash escapes, so a `|` is written `\|`, as remark-gfm writes
  *  one in inline code, and GitHub, VS Code and md-easy read it back as `|`. No
  *  backslash may come before such a `|`, so TeX's `\|` is written `\Vert`,
- *  which TeX reads the same. A cell is one line, so line endings are written
- *  as spaces. */
+ *  which TeX reads the same, with a space before a letter or `@`, which KaTeX
+ *  reads as part of a command's name. A cell is one line, so line endings
+ *  are written as spaces. */
 function inTableCell(value: string): string {
-  return value.replace(/\r\n?|\n/g, " ").replace(/(\\*)\|([a-zA-Z]?)/g, (_match, backslashes: string, letter: string) =>
+  return value.replace(/\r\n?|\n/g, " ").replace(/(\\*)\|([a-zA-Z@]?)/g, (_match, backslashes: string, letter: string) =>
     backslashes.length % 2 ? `${backslashes.slice(1)}\\Vert${letter && " "}${letter}` : `${backslashes}\\|${letter}`,
   );
 }
