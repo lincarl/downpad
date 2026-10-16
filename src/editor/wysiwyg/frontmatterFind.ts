@@ -141,6 +141,20 @@ function closingQuote(text: string, quote: string): number {
   return -1;
 }
 
+/** Whether `scalar` is one whole YAML scalar between `quote`s, closed by its last
+ *  character, with only escapes YAML defines inside double quotes. */
+function isQuotedScalar(scalar: string, quote: string): boolean {
+  if (scalar[0] !== quote || closingQuote(scalar, quote) !== scalar.length - 1) return false;
+  if (quote === "'") return true;
+  for (let i = 1; i < scalar.length - 1; i++) {
+    if (scalar[i] !== "\\") continue;
+    const escape = /^(?:[0abtnvfre "/\\N_LP\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/.exec(scalar.slice(i + 1));
+    if (!escape) return false;
+    i += escape[0].length;
+  }
+  return true;
+}
+
 /** Whether YAML reads `scalar`, written unquoted after `key: `, as that text. */
 function isPlainScalar(scalar: string): boolean {
   if (/^[,[\]{}#&*!|>'"%@`]/.test(scalar) || /^[-?:](\s|$)/.test(scalar)) return false;
@@ -150,8 +164,9 @@ function isPlainScalar(scalar: string): boolean {
 /**
  * Whether replacing `matches` in a value cell's `text` with `replacement`
  * leaves a line YAML reads the same way: the scalar changes only where it
- * matched, a quoted scalar stays closed by its own quote, an unquoted one gains
- * no comment, `: ` or leading indicator, and a comment stays a comment.
+ * matched, a quoted scalar stays one whole scalar in the same quotes with valid
+ * escapes, an unquoted one gains no comment, `: ` or leading indicator, and a
+ * comment stays a comment.
  */
 function keepsValueShape(text: string, matches: readonly FrontmatterMatch[], replacement: string): boolean {
   const before = splitValue(text);
@@ -162,8 +177,9 @@ function keepsValueShape(text: string, matches: readonly FrontmatterMatch[], rep
     .reduceRight((current, m) => current.slice(0, m.from) + replacement + current.slice(m.to), before.scalar);
   const after = splitValue(matches.reduceRight((current, m) => current.slice(0, m.from) + replacement + current.slice(m.to), text));
   if (after.scalar !== expected || (before.rest === "") !== (after.rest === "")) return false;
-  const quoted = before.scalar[0] === '"' || before.scalar[0] === "'";
-  return quoted || !isPlainScalar(before.scalar) || isPlainScalar(after.scalar);
+  const quote = before.scalar[0];
+  if (quote === '"' || quote === "'") return isQuotedScalar(after.scalar, quote);
+  return !isPlainScalar(before.scalar) || isPlainScalar(after.scalar);
 }
 
 /** Matches of `query` in the frontmatter table drawn for `block`, top to bottom. */

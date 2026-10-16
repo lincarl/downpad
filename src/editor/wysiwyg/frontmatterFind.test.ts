@@ -116,6 +116,9 @@ describe("replaceInFrontmatter", () => {
     ["moves a comment into the text", "title: Draft notes # keep", "Draft", "A # B"],
     ["closes a quoted value early", 'status: "draft"', "draft", 'a "b'],
     ["closes a single-quoted value early", "status: 'draft'", "draft", "it's"],
+    ["escapes the closing quote", 'title: "foo"', "foo", "bar\\"],
+    ["drops the quotes", 'title: "null"', '"null"', "null"],
+    ["adds an escape YAML does not define", 'title: "foo"', "foo", "a\\q"],
   ])("leaves a value when the replacement %s", (_name, line, query, replacement) => {
     const block = `---\n${line}\n---\n`;
     const found = findInFrontmatter(block, query, opts()).filter((m) => m.part === "value");
@@ -128,6 +131,7 @@ describe("replaceInFrontmatter", () => {
     ["inside quotes, with characters plain text cannot hold", 'status: "draft"', "draft", "a: b # c", 'status: "a: b # c"'],
     ["with an escaped quote", 'status: "draft"', "draft", 'say \\"hi\\"', 'status: "say \\"hi\\""'],
     ["with a doubled single quote", "status: 'draft'", "draft", "it''s", "status: 'it''s'"],
+    ["with escapes YAML defines", 'status: "draft"', "draft", "a\\tb\\u00e9\\\\", 'status: "a\\tb\\u00e9\\\\"'],
     ["with a hash that starts no comment", "title: notes", "notes", "C#", "title: C#"],
   ])("replaces a value %s", (_name, line, query, replacement, expected) => {
     const block = `---\n${line}\n---\n`;
