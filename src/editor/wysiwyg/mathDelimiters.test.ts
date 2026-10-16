@@ -412,6 +412,9 @@ describe("math and strikethrough delimiters", () => {
     ["Cross ~old~ab out.", ["old"], /^Cross ~~old~~ab out\.\n$/],
     // A tilde inside struck text pairs with nothing after it.
     ["It ~~takes ~5 min~~ now 10~ish.", ["takes ~5 min"], /^It ~~takes \\?~5 min~~ now 10\\~ish\.\n$/],
+    // md-easy's Markdown reader reads 😀 by its first UTF-16 unit, which is
+    // no punctuation, so the run between `)` and 😀 closes nothing.
+    ["Cross ~(a)~😀 out.", [], /^Cross \\~\(a\)\\~😀 out\.\n$/],
     // The text typed after the closing run is outside the italic text too.
     ["Cross ~*old*~ out.", ["old"], /^Cross \*~~old~~\* out\.\n$/],
   ])("strikes typed %j as GFM reads it", { timeout: 60_000 }, async (typed, struck, markdown) => {

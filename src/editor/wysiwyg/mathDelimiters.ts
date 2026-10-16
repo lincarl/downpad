@@ -440,7 +440,9 @@ function plainText(block: ProseNode): string {
 }
 
 /** GFM's class of the character next to a run of tildes: a space, which the
- *  start and end of the paragraph count as, punctuation, or neither. */
+ *  start and end of the paragraph count as, punctuation, or neither.
+ *  `character` is one UTF-16 unit, as md-easy's Markdown reader reads it, so
+ *  a character outside the Basic Multilingual Plane, such as 😀, is neither. */
 function classOf(character: string): "space" | "punctuation" | undefined {
   if (character === "" || /\s/.test(character)) return "space";
   return /[\p{P}\p{S}]/u.test(character) ? "punctuation" : undefined;
@@ -475,7 +477,7 @@ function strikeOpening(text: string, next: string): number {
     const size = run[0].length - escaped;
     const last = index + size === text.length;
     const before = classOf(text.charAt(index - 1));
-    const after = classOf(last ? next : text.charAt(index + size));
+    const after = classOf(last ? next.charAt(0) : text.charAt(index + size));
     if (size < 1 || size > 2) {
       if (last) return -1;
       continue;
