@@ -44,8 +44,8 @@ const OPTS: FindOptions = { caseSensitive: false, wholeWord: false, regex: false
 // A title, a nested value, a list the table shows read-only, then the body.
 const FILE = "---\ntitle: Draft notes\nmeta:\n  status: draft\ntags:\n  - draft\n---\n\nThe draft body.\n";
 
-/** Wait for React to draw the table again and the next frame to repaint it. */
-const redraw = () => new Promise((resolve) => setTimeout(resolve, 60));
+/** Let the editor's first timers run, so change reports start. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
 
 let editor: WysiwygEditor | null = null;
 afterEach(async () => {
@@ -67,7 +67,12 @@ async function open(markdown: string, settings: Settings = DEFAULT_SETTINGS): Pr
     getFilePath: () => null,
     requestSave: async () => false,
   });
-  await redraw();
+  // React draws the table after the mount. On a busy machine that can take
+  // longer than any fixed wait, so wait for the table itself.
+  if (settings.showFrontmatterPanel !== false && splitFrontmatter(markdown).frontmatter !== null) {
+    await vi.waitFor(() => expect(root.querySelector("[data-line]")).not.toBeNull());
+  }
+  await settle();
   return { editor, onChange };
 }
 
@@ -100,8 +105,7 @@ describe("document view find with a frontmatter table", () => {
     editor.search("draft", OPTS);
     expect(editor.replaceCurrent("final", "draft", OPTS)).toEqual({ total: 3, current: 1 });
     expect(reportedFrontmatter(onChange)).toBe("---\ntitle: final notes\nmeta:\n  status: draft\ntags:\n  - draft\n---\n");
-    await redraw();
-    expect(painted("md-find-current")).toEqual(["draft"]);
+    await vi.waitFor(() => expect(painted("md-find-current")).toEqual(["draft"]));
 
     expect(editor.replaceCurrent("final", "draft", OPTS)).toEqual({ total: 2, current: 1 });
     // The list item is read-only, so Replace leaves it and moves to the document.
@@ -117,8 +121,7 @@ describe("document view find with a frontmatter table", () => {
     expect(editor.replaceAll("final", "draft", OPTS)).toEqual({ total: 1, current: 1 });
     expect(reportedFrontmatter(onChange)).toBe("---\ntitle: final notes\nmeta:\n  status: final\ntags:\n  - draft\n---\n");
     expect(onChange.mock.lastCall?.[0]).toContain("The final body.");
-    await redraw();
-    expect(painted("md-find-current")).toEqual(["draft"]);
+    await vi.waitFor(() => expect(painted("md-find-current")).toEqual(["draft"]));
     expect(painted("md-find-match")).toEqual([]);
   });
 
@@ -128,9 +131,8 @@ describe("document view find with a frontmatter table", () => {
     const title = document.querySelector<HTMLElement>('[data-line="0"][data-part="value"]')!;
     title.textContent = "Draft notes, second draft";
     title.dispatchEvent(new Event("input", { bubbles: true }));
-    await redraw();
+    await vi.waitFor(() => expect(painted("md-find-match")).toEqual(["draft", "draft", "draft"]));
     expect(painted("md-find-current")).toEqual(["Draft"]);
-    expect(painted("md-find-match")).toEqual(["draft", "draft", "draft"]);
   });
 
   it("shows the replaced text in a cell the user typed into", { timeout: 60_000 }, async () => {
@@ -142,8 +144,7 @@ describe("document view find with a frontmatter table", () => {
     editor.search("notes2", OPTS);
     editor.replaceCurrent("notes", "notes2", OPTS);
     expect(reportedFrontmatter(onChange)).toContain("title: Draft notes\n");
-    await redraw();
-    expect(document.querySelector('[data-line="0"][data-part="value"]')?.textContent).toBe("Draft notes");
+    await vi.waitFor(() => expect(document.querySelector('[data-line="0"][data-part="value"]')?.textContent).toBe("Draft notes"));
   });
 
   it("keeps no document match current while the table has it and the document changes", { timeout: 60_000 }, async () => {

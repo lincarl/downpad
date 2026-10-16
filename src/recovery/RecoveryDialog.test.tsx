@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { waitForDialogPointerInput } from "@/components/ui/dialog-test-utils";
 import type { Snapshot } from "@/ipc/contracts";
 import { RecoveryDialog, type RecoveryHandlers } from "./RecoveryDialog";
 
@@ -57,6 +58,7 @@ describe("RecoveryDialog", () => {
     const closed = dialog.open([newer], actions);
     const user = userEvent.setup();
 
+    await waitForDialogPointerInput();
     await user.click(screen.getByRole("button", { name: "Discard" }));
 
     await closed;

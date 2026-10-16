@@ -301,13 +301,13 @@ test("the document view names every image and control it shows, and hides none t
   await editor.locator("td").first().evaluate((cell) => cell.scrollIntoView({ block: "center" }));
   await editor.locator("td").first().click();
   // Crepe moves the column handle over the hovered column a moment after the
-  // pointer arrives, so a click can land where the handle was before.
+  // pointer arrives, and its click selects that column and opens the menu.
+  // Where floating-ui puts the handle differs between machines, and on the
+  // Linux CI runner it sat outside the window, so send the click to it directly.
   const colHandle = page.locator('[data-role="col-drag-handle"]');
   await expect(colHandle).toHaveAttribute("data-show", "true");
-  await expect(async () => {
-    await colHandle.click({ force: true });
-    await expect(colHandle.locator(".button-group")).toHaveAttribute("data-show", "true", { timeout: 1000 });
-  }).toPass();
+  await colHandle.dispatchEvent("click");
+  await expect(colHandle.locator(".button-group")).toHaveAttribute("data-show", "true");
   await check("column handle");
   await lastLine.click();
   await page.keyboard.press("End");
