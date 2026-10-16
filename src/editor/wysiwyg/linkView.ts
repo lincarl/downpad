@@ -12,7 +12,8 @@
 // open itself is delegated to the app via ctx.openMarkdownFile.
 
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, PluginKey } from "@milkdown/kit/prose/state";
+import { Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
+import { AddMarkStep, RemoveMarkStep } from "@milkdown/kit/prose/transform";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
@@ -21,7 +22,7 @@ import { desktopBridge } from "../../ipc/bridge";
 import { resolveMarkdownLinkTarget } from "../../images/pathResolve";
 import type { WysiwygContext } from "./context";
 
-export const linkUrlKey = new PluginKey("md-easy-link-url");
+export const linkUrlKey = new PluginKey<LinkUrlState>("md-easy-link-url");
 
 const MAX_URL = 42;
 
@@ -39,52 +40,87 @@ function linkMarkHref(node: ProseNode): string | null {
   return mark ? ((mark.attrs.href as string | undefined) ?? null) : null;
 }
 
-/** Build URL-suffix decorations, one per contiguous link run (text-and-url only). */
-function buildDecorations(doc: ProseNode, linkDisplay: string): DecorationSet {
-  if (linkDisplay !== "text-and-url") return DecorationSet.empty;
-
-  const decos: Decoration[] = [];
+/** Add a URL suffix after each run of text in `block` (at `pos`) that links
+ *  to one href. A run never crosses a text block, so each block is independent. */
+function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): void {
   let runHref: string | null = null;
   let runEnd = -1;
-
   const flush = () => {
-    if (runHref !== null && runEnd >= 0) {
-      decos.push(
-        Decoration.widget(runEnd, makeSuffix(runHref), {
-          side: 1,
-          ignoreSelection: true,
-          key: `md-link-url:${runEnd}:${runHref}`,
-        }),
-      );
+    if (runHref !== null) {
+      // Keyed by the href alone, so an edit that only moves a link keeps its
+      // widget instead of drawing it again.
+      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, ignoreSelection: true, key: `md-link-url:${runHref}` }));
     }
     runHref = null;
-    runEnd = -1;
   };
-
-  doc.descendants((node, pos) => {
-    if (!node.isText) {
-      // A non-text node breaks any open link run.
-      if (node.isBlock) flush();
+  block.forEach((child, offset) => {
+    const start = pos + 1 + offset;
+    const href = child.isText ? linkMarkHref(child) : null;
+    if (href !== null && href === runHref && start === runEnd) {
+      runEnd = start + child.nodeSize; // contiguous continuation of the same link
       return;
     }
-    const href = linkMarkHref(node);
-    const start = pos;
-    const end = pos + node.nodeSize;
-    if (href === null) {
-      flush();
-      return;
-    }
-    if (runHref === href && start === runEnd) {
-      runEnd = end; // contiguous continuation of the same link
-    } else {
-      flush();
+    flush();
+    if (href !== null) {
       runHref = href;
-      runEnd = end;
+      runEnd = start + child.nodeSize;
     }
   });
   flush();
+}
 
+/** URL-suffix decorations for the whole document, one per contiguous link run
+ *  (text-and-url only). */
+function buildDecorations(doc: ProseNode, linkDisplay: string): DecorationSet {
+  if (linkDisplay !== "text-and-url") return DecorationSet.empty;
+  const decos: Decoration[] = [];
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    addBlockSuffixes(node, pos, decos);
+    return false;
+  });
   return DecorationSet.create(doc, decos);
+}
+
+/** The text blocks of `tr.doc` that a change in `tr` touched, by position. */
+function changedTextblocks(tr: Transaction): Map<number, ProseNode> {
+  const blocks = new Map<number, ProseNode>();
+  const { doc, mapping } = tr;
+  tr.steps.forEach((step, index) => {
+    const ranges: Array<[number, number]> = [];
+    // Adding or removing a mark, such as a link, moves no positions, so its
+    // step map is empty.
+    if (step instanceof AddMarkStep || step instanceof RemoveMarkStep) ranges.push([step.from, step.to]);
+    else step.getMap().forEach((_oldFrom, _oldTo, from, to) => ranges.push([from, to]));
+    const later = mapping.slice(index + 1);
+    for (const [from, to] of ranges) {
+      doc.nodesBetween(later.map(from, -1), later.map(to, 1), (node, pos) => {
+        if (!node.isTextblock) return true;
+        blocks.set(pos, node);
+        return false;
+      });
+    }
+  });
+  return blocks;
+}
+
+/** Bring `old` up to date with `tr`. The set is mapped, and only the text
+ *  blocks the change touched get their suffixes again. Rebuilding every suffix
+ *  on each keystroke made typing slow in long documents with many links. */
+function updateDecorations(tr: Transaction, old: DecorationSet): DecorationSet {
+  let set = old.map(tr.mapping, tr.doc);
+  for (const [pos, block] of changedTextblocks(tr)) {
+    const decos: Decoration[] = [];
+    addBlockSuffixes(block, pos, decos);
+    set = set.remove(set.find(pos + 1, pos + block.nodeSize - 1)).add(tr.doc, decos);
+  }
+  return set;
+}
+
+interface LinkUrlState {
+  /** The linkDisplay setting the decorations were built for. */
+  display: string;
+  decorations: DecorationSet;
 }
 
 function makeSuffix(href: string): () => HTMLElement {
@@ -112,40 +148,51 @@ function openExternally(href: string): void {
 
 /** A `$prose` plugin: text-and-url link suffixes + Ctrl/Cmd-click to open. */
 export function linkViewPlugin(ctx: WysiwygContext) {
-  return $prose(
-    () =>
-      new Plugin({
-        key: linkUrlKey,
-        state: {
-          init: (_config, state) => buildDecorations(state.doc, ctx.getSettings().linkDisplay),
-          apply: (tr, old) =>
-            tr.docChanged ? buildDecorations(tr.doc, ctx.getSettings().linkDisplay) : old,
-        },
-        props: {
-          decorations(state) {
-            return linkUrlKey.getState(state) as DecorationSet | undefined;
-          },
-          handleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
-            if (!(event.ctrlKey || event.metaKey)) return false;
-            const href = hrefAt(view.state.doc, pos);
-            if (!href) return false;
-            event.preventDefault();
-            openExternally(href);
-            return true;
-          },
-          handleDoubleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
-            // Double-click a link to a local .md file → open it in a tab (§5.6),
-            // rather than selecting a word. Other links fall through to default.
-            if (!ctx.openMarkdownFile) return false;
-            const href = hrefAt(view.state.doc, pos);
-            if (!href) return false;
-            const target = resolveMarkdownLinkTarget(href, ctx.getFilePath());
-            if (!target) return false;
-            event.preventDefault();
-            ctx.openMarkdownFile(target);
-            return true;
-          },
-        },
-      }),
-  );
+  return $prose(() => linkUrlPlugin(ctx));
+}
+
+/** The ProseMirror plugin behind `linkViewPlugin`. */
+export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFilePath" | "openMarkdownFile">): Plugin<LinkUrlState> {
+  return new Plugin<LinkUrlState>({
+    key: linkUrlKey,
+    state: {
+      init: (_config, state): LinkUrlState => {
+        const display = ctx.getSettings().linkDisplay;
+        return { display, decorations: buildDecorations(state.doc, display) };
+      },
+      apply: (tr, old: LinkUrlState): LinkUrlState => {
+        if (!tr.docChanged) return old;
+        const display = ctx.getSettings().linkDisplay;
+        if (display !== old.display || display !== "text-and-url") {
+          return { display, decorations: buildDecorations(tr.doc, display) };
+        }
+        return { display, decorations: updateDecorations(tr, old.decorations) };
+      },
+    },
+    props: {
+      decorations(state) {
+        return linkUrlKey.getState(state)?.decorations;
+      },
+      handleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
+        if (!(event.ctrlKey || event.metaKey)) return false;
+        const href = hrefAt(view.state.doc, pos);
+        if (!href) return false;
+        event.preventDefault();
+        openExternally(href);
+        return true;
+      },
+      handleDoubleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
+        // Double-click a link to a local .md file → open it in a tab (§5.6),
+        // rather than selecting a word. Other links fall through to default.
+        if (!ctx.openMarkdownFile) return false;
+        const href = hrefAt(view.state.doc, pos);
+        if (!href) return false;
+        const target = resolveMarkdownLinkTarget(href, ctx.getFilePath());
+        if (!target) return false;
+        event.preventDefault();
+        ctx.openMarkdownFile(target);
+        return true;
+      },
+    },
+  });
 }
