@@ -296,6 +296,9 @@ test("the document view names every image and control it shows, and hides none t
   await editor.locator("a").hover();
   await expect(page.locator(".milkdown-link-preview")).toHaveAttribute("data-show", "true");
   await check("link preview");
+  // Keep the table clear of the top edge, so the column handle above it stays
+  // on screen.
+  await editor.locator("td").first().evaluate((cell) => cell.scrollIntoView({ block: "center" }));
   await editor.locator("td").first().click();
   // Crepe moves the column handle over the hovered column a moment after the
   // pointer arrives, so a click can land where the handle was before.
@@ -632,6 +635,9 @@ test("Tab leaves the document view without typing spaces, and still nests a list
   await expect(next).toBeFocused();
   // In a list Tab nests the item, and Esc then Tab leaves.
   await document.getByText("Two", { exact: true }).click();
+  // On a fast machine Playwright can send Tab before ProseMirror has read the
+  // caret the click placed, which no person can do. Wait a frame so it has.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
   await page.keyboard.press("Tab");
   await expect(document.locator("li li")).toHaveText("Two");
   await page.keyboard.press("Escape");
