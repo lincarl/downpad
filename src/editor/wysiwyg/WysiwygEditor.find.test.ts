@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The document view's find with a frontmatter table above the document: the
+// The document view's find with a frontmatter table above the document. The
 // table's keys and values join the document's matches in one list. These tests
 // use the real editor.
 

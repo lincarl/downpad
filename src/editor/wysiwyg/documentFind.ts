@@ -1,6 +1,6 @@
-// The document view's find and replace (spec §5.13) over one list of matches:
-// the frontmatter table's first, as the table sits above the document, then
-// ProseMirror's. findEngine keeps the document's matches and paints them as
+// The document view's find and replace (spec §5.13) uses one list of matches.
+// The frontmatter table's come first, as the table sits above the document,
+// then ProseMirror's. findEngine keeps the document's matches and paints them as
 // decorations. This class keeps the table's matches and paints them with the
 // CSS Custom Highlight API under the same names, md-find-match and
 // md-find-current, so app.css gives both the same colours. While the current
@@ -41,6 +41,7 @@ export interface FrontmatterHost {
 
 const NO_OPTIONS: FindOptions = { caseSensitive: false, wholeWord: false, regex: false };
 
+/** Find and replace over the frontmatter table and the document as one list of matches. */
 export class DocumentFind {
   private query = "";
   private opts = NO_OPTIONS;
@@ -49,8 +50,8 @@ export class DocumentFind {
   /** Index into `matches` of the current match; -1 when it is in the document
    *  or there is none. */
   private current = -1;
-  /** This editor's highlights. They are registered again on every paint, as
-   *  the registry is shared by every open document. */
+  /** This editor's highlights. They are registered again on each paint while a
+   *  search is active, as the registry is shared by every open document. */
   private highlights: { match: Highlight; current: Highlight } | null = null;
   /** Finds and paints again when React redraws the table or a cell is edited,
    *  as both replace the text the highlights cover. */
@@ -86,7 +87,7 @@ export class DocumentFind {
     const match = this.matches[this.current];
     const block = this.host.block();
     if (!match || block == null) {
-      // A document match: findEngine replaces it and searches the document
+      // findEngine replaces the document's match and searches the document
       // again. With no document match left, the table's first comes next.
       replaceCurrent(view, replacement, query, opts);
       this.setQuery(query, opts);
@@ -144,6 +145,7 @@ export class DocumentFind {
     this.host.changed();
   }
 
+  /** Remember the search and find it again in the table's current block. */
   private setQuery(query: string, opts: FindOptions): void {
     this.query = query;
     this.opts = opts;

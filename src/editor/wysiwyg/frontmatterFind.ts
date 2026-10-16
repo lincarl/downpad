@@ -23,10 +23,10 @@ import { findMatchRanges, type FindOptions } from "./findEngine";
 /** Which text of a table row a match is in. */
 export type FrontmatterPart = "key" | "value";
 
-/** A place in the table's text: a row's key or value cell and an offset in it. */
+/** A place in the table's text, given as a row's key or value cell and an offset in it. */
 export interface FrontmatterPosition {
-  /** Inner YAML line of the row: the scalar line, the mapping header, or the
-   *  first line of read-only text. */
+  /** Inner YAML line of the row, which is the scalar line, the mapping header
+   *  or the first line of read-only text. */
   line: number;
   part: FrontmatterPart;
   from: number;
@@ -186,6 +186,6 @@ export function revealCell(panel: Element, match: FrontmatterPosition): void {
     if (box.top >= view.top && box.bottom <= view.bottom) return;
     break;
   }
-  // Optional call: test DOMs (jsdom) have no scrollIntoView.
+  // jsdom has no scrollIntoView, so the call is optional.
   cell.scrollIntoView?.({ block: "center", inline: "nearest" });
 }
