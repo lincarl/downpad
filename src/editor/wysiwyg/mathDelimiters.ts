@@ -4,9 +4,11 @@
 // `~` typed after a space into math or strikethrough. Pandoc, Obsidian and VS
 // Code's preview read these as text. These plugins read single-dollar math by
 // Pandoc's rules and write each formula so that it reads back as the same
-// formula, except two formulas side by side where one needs `$$`, which no run
-// of dollars can keep apart. A typed closing `$` or `~` waits for the next
-// character, which decides how a file with the same text would read.
+// formula, except two formulas side by side where one needs `$$`, because it
+// holds a `$` no backslash escapes, ends in a backslash or comes right before
+// a digit. No run of dollars can keep those apart. A typed closing `$` or `~`
+// waits for the next character, which decides how a file with the same text
+// would read.
 //
 // A paragraph that is only `$$...$$` is display math on GitHub, in VS Code and
 // in Obsidian. remark-math reads it as inline math, which was saved as `$...$`.
@@ -216,11 +218,12 @@ const pandocDollar: Construct = {
 };
 
 /** `value` without the spaces and line endings around it, which TeX ignores. A
- *  space escaped as `\ ` stays. */
+ *  space or line ending escaped by a backslash, such as `\ `, stays. */
 function trimMath(value: string): string {
   const start = value.replace(/^[ \t\r\n]+/, "");
   const trimmed = start.replace(/[ \t\r\n]+$/, "");
-  return /(^|[^\\])\\(\\\\)*$/.test(trimmed) ? start.slice(0, trimmed.length + 1) : trimmed;
+  if (!/(^|[^\\])\\(\\\\)*$/.test(trimmed)) return trimmed;
+  return start.slice(0, trimmed.length + (start.startsWith("\r\n", trimmed.length) ? 2 : 1));
 }
 
 /** Whether `$inner$` followed by `after` reads back as the formula `inner`, both
@@ -231,22 +234,37 @@ function readsAsMath(inner: string, after: string): boolean {
   return (
     !inner.includes("$") &&
     !/^[ \t\r\n]/.test(inner) &&
-    !/(^|[^\\])(\\\\)*([ \t\r\n]|\\)$/.test(inner) &&
+    // A backslash escapes a CRLF line ending as a whole.
+    !/(^|[^\\])(\\\\)*([ \t\r\n]|\\)$/.test(inner.replace(/\r\n/g, "\n")) &&
     !/^\d/.test(after)
   );
 }
 
+/** Whether every `$` in `value` follows an odd run of backslashes, which
+ *  escapes it. */
+const escapesEveryDollar = (value: string): boolean => !/(^|[^\\])(\\\\)*\$/.test(value);
+
+/** Whether `node` sits right before or after another formula in `parent`. */
+function besideFormula(node: unknown, parent: { children?: readonly { type: string }[] } | undefined): boolean {
+  const siblings = parent?.children ?? [];
+  const index = siblings.findIndex((sibling) => sibling === node);
+  return index >= 0 && (siblings[index - 1]?.type === "inlineMath" || siblings[index + 1]?.type === "inlineMath");
+}
+
 /** Wraps remark-math's inline math writer so every formula reads back as the
  *  same formula. remark-math alone reads it the same too, unless another formula
- *  follows right after it. The spaces around it are left out. Where single
+ *  sits right next to it. The spaces around it are left out. Where single
  *  dollars would not read back, such as right before a digit, it is fenced with
  *  the shortest run of two or more dollars that the formula does not hold on
  *  its own, and of three or more when it fills a line, because a paragraph that
  *  is only `$$...$$` reads as a math block. Line endings in such a formula are
  *  written as spaces, because a line that starts with `$$` and holds no other
  *  `$` opens a math block. TeX reads a line ending as a space, except at the end
- *  of a `%` comment. An empty formula shows nothing and is left out, because
- *  `$$` reads as text or as the start of a math block. */
+ *  of a `%` comment. Right next to another formula a run of dollars reads as
+ *  text, so a formula whose every `$` is escaped is fenced with single dollars
+ *  there, with its line endings written as spaces too. An empty formula shows
+ *  nothing and is left out, because `$$` reads as text or as the start of a
+ *  math block. */
 function pandocMathWriter(write: Handle): Handle {
   return (node: { value?: string }, parent, state, info) => {
     const value = trimMath(node.value ?? "");
@@ -256,6 +274,11 @@ function pandocMathWriter(write: Handle): Handle {
     const size = written.search(/[^$]/);
     const inner = written.slice(size, -size);
     if (size === 1 && readsAsMath(inner, info.after)) return written;
+    // Single dollars hold a `$` that a backslash escapes.
+    const oneLine = value.replace(/\r\n?|\n/g, " ");
+    if (besideFormula(node, parent) && escapesEveryDollar(value) && readsAsMath(oneLine.replace(/\$/g, "x"), info.after)) {
+      return "$" + oneLine + "$";
+    }
     const fillsLine = /^$|[\r\n]$/.test(info.before) && /^$|^[\r\n]/.test(info.after);
     let fence = fillsLine ? 3 : 2;
     while (new RegExp(`(^|[^$])${"\\$".repeat(fence)}([^$]|$)`).test(value)) fence++;
@@ -267,7 +290,8 @@ function pandocMathWriter(write: Handle): Handle {
  *  remark-math plugin, because micromark tries the syntax added last first, and
  *  this wraps remark-math's writer. */
 export const pandocInlineMath = $remark("mdEasyPandocInlineMath", () =>
-  /** Adds the reader and wraps remark-math's writer. */
+  /** Adds the reader, wraps remark-math's writer and escapes every `$` in
+   *  text. */
   function () {
     const data = this.data();
     (data.micromarkExtensions ??= []).push({ text: { [DOLLAR]: pandocDollar } });
@@ -280,7 +304,13 @@ export const pandocInlineMath = $remark("mdEasyPandocInlineMath", () =>
     }
     if (!write) return;
     const ours: Partial<Record<string, Handle>> = { inlineMath: pandocMathWriter(write) };
-    extensions.push({ handlers: ours });
+    // remark-math escapes a `$` in text through a pattern with an `after` key,
+    // which mdast-util-to-markdown reads as a condition. It then left the `$`
+    // unescaped before a character it always escapes, so `\$_GET` was saved
+    // as `$\_GET`, and two of them read as a formula. This pattern has no
+    // condition, so a `$` in text is always escaped.
+    const unsafe: StringifyExtension["unsafe"] = [{ character: "$", inConstruct: "phrasing" }];
+    extensions.push({ handlers: ours, unsafe });
   },
 );
 

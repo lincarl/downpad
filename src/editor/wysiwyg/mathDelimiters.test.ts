@@ -248,6 +248,41 @@ describe("math and strikethrough delimiters", () => {
     expect(formulas((await openCrepe(markdown)).root)).toEqual(math);
   });
 
+  it("keeps the backslash of an escaped dollar before a character Markdown escapes", { timeout: 60_000 }, async () => {
+    const markdown = "Read \\$_GET['a'].\\$_POST['b'], \\$[a]\\$[b] and \\$~5,\\$~6.\n";
+    const { editor, root } = await open(`Edit.\n\n${markdown}`);
+    expect(formulas(root)).toEqual([]);
+    edit(editor);
+    const saved = editor.getMarkdown();
+    // remark-math's escape for a text `$` was dropped before `_`, `[` and `~`,
+    // and two such dollars then read as a formula.
+    expect(saved.match(/\\?\$/g)).toEqual(Array(6).fill("\\$"));
+    expect(formulas((await open(saved)).root)).toEqual([]);
+  });
+
+  it.each([
+    "$a$$\\$5$ q",
+    "$\\$5$$a$ q",
+    "$x\\$$$x_1$ q",
+    "$x\\$$$\\{x\\}$ q",
+  ])("saves the side-by-side formulas in %j with single dollars", { timeout: 60_000 }, async (paragraph) => {
+    const { editor, root } = await open(`Edit.\n\n${paragraph}\n`);
+    const math = formulas(root);
+    expect(math).toHaveLength(2);
+    edit(editor);
+    // Right after a formula, a run of dollars reads as text.
+    expect(editor.getMarkdown()).toBe(`Edited.\n\n${paragraph}\n`);
+    expect(formulas((await open(editor.getMarkdown())).root)).toEqual(math);
+  });
+
+  it("keeps a whole Windows line ending after a backslash at the end of a formula", { timeout: 60_000 }, async () => {
+    const { editor, root } = await open("Edit.\n\n$a\\\r\n$ b\n");
+    expect(formulas(root)).toEqual(["a\\\r\n"]);
+    edit(editor);
+    expect(editor.getMarkdown()).toBe("Edited.\n\n$a\\\r\n$ b\n");
+    expect(formulas((await open(editor.getMarkdown())).root)).toEqual(["a\\\r\n"]);
+  });
+
   it.each([
     // A closing mark after a space.
     ["Tickets cost $5 for kids and $10.", "Tickets cost \\$5 for kids and \\$10.\n"],
