@@ -480,6 +480,23 @@ test("a file that ends in a list opens as saved", async () => {
   await expect(page).toHaveTitle("list-end.md — md-easy");
 });
 
+test("pasting a copy of the whole document adds no empty line", async () => {
+  const file = path.join(directory, "copy-all.md");
+  await writeFile(file, "Intro.\n\n> Quote\n");
+  await launch(file);
+  const intro = page.locator(".milkdown .ProseMirror > p").first();
+  await intro.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ControlOrMeta+c");
+  await expect.poll(clipboardText).toBe("Intro.\n\n> Quote\n");
+  // The document view keeps an empty line after the final quote. The copy's
+  // HTML, which a paste reads, must leave it out too.
+  await typeAtEnd(intro, "\n");
+  await page.keyboard.press("ControlOrMeta+v");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro.\n\nIntro.\n\n> Quote\n\n> Quote\n");
+});
+
 test("an edit to a file that ends in a code block saves no extra blank line", async () => {
   const file = path.join(directory, "code-end.md");
   await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n");
