@@ -15,6 +15,7 @@ import type { EditorView } from "@milkdown/kit/prose/view";
 import type { EditorState } from "@milkdown/kit/prose/state";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { codeBlockMatchesView, revealMatch } from "./findReveal";
+import { replaceText } from "./autolinkReplace";
 
 export interface FindOptions {
   caseSensitive: boolean;
@@ -37,14 +38,21 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** A word character in any script, as the Markdown view's whole-word search counts them. */
+const WORD = "[\\p{Alphabetic}\\p{Number}_]";
+
 /** Find non-overlapping match ranges of `query` in `text` (string offsets). */
 export function findMatchRanges(text: string, query: string, opts: FindOptions): MatchRange[] {
   if (!query) return [];
   let re: RegExp;
   try {
-    const flags = opts.caseSensitive ? "g" : "gi";
+    const flags = opts.caseSensitive ? "gu" : "giu";
     let pattern = opts.regex ? query : escapeRegExp(query);
-    if (opts.wholeWord) pattern = `\\b(?:${pattern})\\b`;
+    // A whole-word match does not continue a word on either side. JavaScript's
+    // \b only knows ASCII letters, so it split words at å, ä, ö and the like.
+    if (opts.wholeWord) {
+      pattern = `(?:(?<!${WORD})|(?!${WORD}))(?:${pattern})(?:(?!${WORD})|(?<!${WORD}))`;
+    }
     re = new RegExp(pattern, flags);
   } catch {
     return []; // invalid regex → no matches (the bar shows 0)
@@ -113,7 +121,8 @@ const EMPTY_OPTS: FindOptions = { caseSensitive: false, wholeWord: false, regex:
 export const findKey = new PluginKey<FindPluginState>("md-easy-find");
 
 type FindMeta =
-  | { type: "search"; query: string; opts: FindOptions }
+  /** With `from`, the first match at or after that position becomes current. */
+  | { type: "search"; query: string; opts: FindOptions; from?: number }
   | { type: "current"; current: number }
   | { type: "clear" };
 
@@ -142,7 +151,8 @@ export function findPlugin(onScroll?: () => void) {
         const meta = tr.getMeta(findKey) as FindMeta | undefined;
         if (meta?.type === "search") {
           const ranges = searchDoc(tr.doc, meta.query, meta.opts);
-          return { query: meta.query, opts: meta.opts, ranges, current: ranges.length ? 0 : -1 };
+          const after = ranges.findIndex((range) => range.from >= (meta.from ?? 0));
+          return { query: meta.query, opts: meta.opts, ranges, current: ranges.length ? Math.max(after, 0) : -1 };
         }
         if (meta?.type === "current") {
           return { ...prev, current: meta.current };
@@ -222,11 +232,14 @@ export function replaceCurrent(
 ): FindCounts {
   const s = findKey.getState(view.state);
   const range = s?.ranges[s.current];
-  if (s && range) {
-    view.dispatch(view.state.tr.insertText(replacement, range.from, range.to));
-  }
-  // Re-search afterwards so counts/positions reflect the edit.
-  return runSearch(view, query, opts);
+  if (!range) return runSearch(view, query, opts);
+  // Search again and carry on with the match after the replacement, so the
+  // next Replace does not go back to the first match.
+  const tr = replaceText(view.state.tr, range.from, range.to, replacement);
+  view.dispatch(tr.setMeta(findKey, { type: "search", query, opts, from: tr.mapping.map(range.to) }));
+  const next = findKey.getState(view.state)!;
+  scrollToCurrent(view, next);
+  return counts(next);
 }
 
 export function replaceAll(
@@ -240,7 +253,7 @@ export function replaceAll(
     const tr = view.state.tr;
     // Replace from last to first so earlier ranges keep their positions.
     for (let i = s.ranges.length - 1; i >= 0; i--) {
-      tr.insertText(replacement, s.ranges[i].from, s.ranges[i].to);
+      replaceText(tr, s.ranges[i].from, s.ranges[i].to, replacement);
     }
     view.dispatch(tr);
   }
