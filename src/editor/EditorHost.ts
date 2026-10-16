@@ -107,6 +107,9 @@ export class EditorHost implements FindController {
   /** Set by AppRuntime; opens a local markdown file in a tab when a `.md` link is
    *  double-clicked in the WYSIWYG view (§5.6). */
   private openLinkHandler: ((absPath: string) => void) | null = null;
+  /** Set by AppRuntime; shows the new count on the find card after an edit
+   *  changes the matches in the pane it searches (§5.13). */
+  private findChangeHandler: (() => void) | null = null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -123,6 +126,12 @@ export class EditorHost implements FindController {
   setOpenLinkHandler(handler: (absPath: string) => void): void {
     if (this.disposed) return;
     this.openLinkHandler = handler;
+  }
+
+  /** Wire the find card's recount (FindBar.syncCounts) used after edits. */
+  setFindChangeHandler(handler: () => void): void {
+    if (this.disposed) return;
+    this.findChangeHandler = handler;
   }
 
   /** Set the initial layout before the first `present` (bootstrap only). Use
@@ -183,6 +192,13 @@ export class EditorHost implements FindController {
     return this.layout === "markdown"
       ? this.activeRaw()?.replaceAll(replacement, query, opts) ?? NO_MATCHES
       : this.activeWysiwyg()?.replaceAll(replacement, query, opts) ?? NO_MATCHES;
+  }
+  /** The searched editor's current match and total, read after an edit. */
+  counts(): FindCounts {
+    if (this.disposed) return NO_MATCHES;
+    return this.layout === "markdown"
+      ? this.activeRaw()?.currentCounts() ?? NO_MATCHES
+      : this.activeWysiwyg()?.currentCounts() ?? NO_MATCHES;
   }
 
   /** A Find/replace op scrolls the document to the match (per keystroke during
@@ -390,6 +406,7 @@ export class EditorHost implements FindController {
     this.switching = true;
     this.saveHandler = null;
     this.openLinkHandler = null;
+    this.findChangeHandler = null;
     this.cancelSync();
     this.scrollSync.disconnect();
     this.endDrag();
@@ -576,6 +593,11 @@ export class EditorHost implements FindController {
         if (this.layout === "split" && tabId === this.activeTabId) this.scheduleSync(pane);
       }
     };
+    // Only the pane the find card searches can change its count. In the split
+    // that is the document pane, which a Markdown edit reaches by mirror sync.
+    const onFindChange = (): void => {
+      if (pane === this.active()) this.findChangeHandler?.();
+    };
 
     if (view === "wysiwyg") {
       const editor = new WysiwygEditor();
@@ -586,7 +608,7 @@ export class EditorHost implements FindController {
           markdown,
           // Find can scroll the document again once a code block is drawn,
           // after the step's own suppression has run out.
-          { onChange, onFindScroll: () => this.suppressMirrorScroll() },
+          { onChange, onFindChange, onFindScroll: () => this.suppressMirrorScroll() },
           serializerStyleFromSettings(this.store.get().settings),
           this.wysiwygContext(tabId),
         );
@@ -611,7 +633,7 @@ export class EditorHost implements FindController {
         editor.mount(
           el,
           markdown,
-          { onChange },
+          { onChange, onFindChange },
           { collapseBase64: this.store.get().settings.collapseBase64InRawView },
         );
       } catch (err) {

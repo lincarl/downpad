@@ -39,10 +39,12 @@ import {
   replaceCurrent,
   replaceAll,
   clearSearch,
+  matchCounts,
   type FindCounts,
   type FindOptions,
 } from "./findEngine";
 import { codeBlockFindHighlights } from "./findReveal";
+import { findChangeListener } from "./findChanges";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { installEditorAccessibility } from "./editorAccessibility";
@@ -54,6 +56,9 @@ import { splitFrontmatter, joinFrontmatter } from "../../document/frontmatter";
 
 export interface WysiwygCallbacks {
   onChange: (markdown: string) => void;
+  /** Called after an edit while a find query is set, so the find card can
+   *  show the new count (§5.13). */
+  onFindChange?: () => void;
   /** Called right before find scrolls the document to a match, which can be
    *  after the find step that asked for it has returned. */
   onFindScroll?: () => void;
@@ -212,6 +217,8 @@ export class WysiwygEditor {
           }),
       ),
     );
+    // Tell the find card when an edit changes the matches (§5.13).
+    this.crepe.editor.use(findChangeListener(() => cb.onFindChange?.()));
     const crepe = this.crepe;
     let createPromise: Promise<void> | null = null;
     try {
@@ -373,6 +380,11 @@ export class WysiwygEditor {
 
   replaceAll(replacement: string, query: string, opts: FindOptions): FindCounts {
     return this.withView((v) => replaceAll(v, replacement, query, opts), NO_MATCHES);
+  }
+
+  /** The current match and total, for a find card catching up with an edit. */
+  currentCounts(): FindCounts {
+    return this.withView(matchCounts, NO_MATCHES);
   }
 
   clearSearch(): void {

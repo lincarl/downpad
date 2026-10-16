@@ -570,6 +570,44 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await expect(page).toHaveTitle("bullets.md — md-easy");
 });
 
+test("the find count follows edits made while the card is open", async () => {
+  const file = path.join(directory, "find-count.md");
+  await writeFile(file, "Alpha zeta.\n\nMiddle line.\n\nOmega zeta.\n");
+  await launch(file);
+  const count = page.locator(".find-count");
+  const middle = page.locator(".editor-pane-wysiwyg .ProseMirror p").filter({ hasText: "Middle line." });
+  await middle.click();
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("zeta");
+  await expect(count).toHaveText("1 of 2");
+
+  await typeAtEnd(middle, " zeta");
+  await expect(count).toHaveText("1 of 3");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(count).toHaveText("1 of 2");
+
+  // In the split, a Markdown edit reaches the count through the document pane.
+  // The card covers the top lines of the Markdown pane.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await expect(count).toHaveText("1 of 2");
+  const omega = page.locator(".editor-pane-raw .cm-line").filter({ hasText: "Omega zeta." });
+  await typeAtEnd(omega, " zeta");
+  await expect(count).toHaveText("1 of 3");
+
+  // The Markdown view counts once typing pauses. The caret is on no match, so
+  // none is current.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(count).toHaveText("1 of 3");
+  await typeAtEnd(omega, " zeta");
+  await expect(count).toHaveText("0 of 4");
+  // F3 selects the next match, and a click away from the matches leaves none
+  // current again.
+  await page.keyboard.press("F3");
+  await expect(count).toHaveText("1 of 4");
+  await page.locator(".editor-pane-raw .cm-line").filter({ hasText: "Middle line." }).click({ position: { x: 4, y: 4 } });
+  await expect(count).toHaveText("0 of 4");
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");

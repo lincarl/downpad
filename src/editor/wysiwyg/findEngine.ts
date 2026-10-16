@@ -187,6 +187,11 @@ function counts(s: FindPluginState | undefined): FindCounts {
   return { total: s.ranges.length, current: s.current + 1 };
 }
 
+/** The current match position and total, without moving to a match. */
+export function matchCounts(view: EditorView): FindCounts {
+  return counts(findKey.getState(view.state));
+}
+
 /** Select the current match, so closing the card leaves the caret there, and scroll to it. */
 function scrollToCurrent(view: EditorView, s: FindPluginState): void {
   const range = s.ranges[s.current];

@@ -79,6 +79,9 @@ export class AppRuntime {
     // document or raw Markdown according to the active layout. Its open state
     // lives in the store so the toolbar's Find button can show as pressed.
     this.findBar = new FindBar(hosts.findHost, this.editorHost, (open) => this.store.patchFind({ open }));
+    // Typing, undo or a split mirror sync can add or remove matches while the
+    // card is open. The card then shows the new count.
+    this.editorHost.setFindChangeHandler(() => this.findBar.syncCounts());
 
     // Replace the native WebView right-click menu with md-easy's own (§6.1). It
     // offers the editing commands over editable text and the document actions

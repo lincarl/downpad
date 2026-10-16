@@ -2,7 +2,7 @@
 // canonical markdown string; raw edits are written back verbatim (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Text } from "@codemirror/state";
 import {
   SearchQuery,
   findNext as findNextMatch,
@@ -18,8 +18,19 @@ import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
 
+/** How long edits and caret moves must pause before the find card recounts.
+ *  Counting after an edit walks the whole document, which takes about 200ms
+ *  for 2 MB, too slow for every keystroke. */
+const FIND_RECOUNT_DELAY_MS = 200;
+
+/** A match of the find card's query, as document offsets. */
+type Match = { from: number; to: number };
+
 export interface RawCallbacks {
   onChange: (text: string) => void;
+  /** Called once edits or selection moves pause while a find query is set, so
+   *  the find card can show the new count and current match (§5.13). */
+  onFindChange?: () => void;
 }
 
 export interface RawOptions {
@@ -38,10 +49,20 @@ export class RawEditor {
    *  sync, §6.1) so the resulting transaction doesn't echo back through onChange
    *  and clobber the pane that authored the change. */
   private applying = false;
+  /** Pending `onFindChange` call, set while edits or selection moves have not
+   *  paused yet. */
+  private findChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The matches last counted, reused while the document and query stay the
+   *  same, so a caret move or F3 does not walk the whole document again. */
+  private counted: { doc: Text; query: SearchQuery; matches: Match[] } | null = null;
 
   mount(root: HTMLElement, initial: string, cb: RawCallbacks, opts: RawOptions = {}): void {
     const updateListener = EditorView.updateListener.of((u) => {
       if (u.docChanged && !this.applying) cb.onChange(u.state.doc.toString());
+      // The current match is the selected one, so a caret move changes it too.
+      if ((u.docChanged || u.selectionSet) && cb.onFindChange && getSearchQuery(u.state).search) {
+        this.scheduleFindChange(cb.onFindChange);
+      }
     });
     this.view = new EditorView({
       parent: root,
@@ -171,20 +192,25 @@ export class RawEditor {
 
   clearSearch(): void {
     if (!this.view) return;
+    this.counted = null;
     this.view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "" })) });
   }
 
-  private matches(query: SearchQuery): Array<{ from: number; to: number }> {
+  private matches(query: SearchQuery): Match[] {
     if (!this.view || !query.valid) return [];
-    const matches: Array<{ from: number; to: number }> = [];
+    const { doc } = this.view.state;
+    if (this.counted?.doc === doc && this.counted.query.eq(query)) return this.counted.matches;
+    const matches: Match[] = [];
     const cursor = query.getCursor(this.view.state);
     for (let result = cursor.next(); !result.done; result = cursor.next()) {
       matches.push(result.value);
     }
+    this.counted = { doc, query, matches };
     return matches;
   }
 
-  private currentCounts(): FindCounts {
+  /** The match the selection covers (0 when none) and the total. */
+  currentCounts(): FindCounts {
     if (!this.view) return { current: 0, total: 0 };
     const query = getSearchQuery(this.view.state);
     const matches = this.matches(query);
@@ -193,6 +219,15 @@ export class RawEditor {
       ({ from, to }) => selection.from === from && selection.to === to,
     );
     return { current: current < 0 ? 0 : current + 1, total: matches.length };
+  }
+
+  /** Call `notify` once changes pause, restarting the wait on every change. */
+  private scheduleFindChange(notify: () => void): void {
+    if (this.findChangeTimer != null) clearTimeout(this.findChangeTimer);
+    this.findChangeTimer = setTimeout(() => {
+      this.findChangeTimer = null;
+      notify();
+    }, FIND_RECOUNT_DELAY_MS);
   }
 
   focus(): void {
@@ -210,6 +245,9 @@ export class RawEditor {
   }
 
   destroy(): void {
+    if (this.findChangeTimer != null) clearTimeout(this.findChangeTimer);
+    this.findChangeTimer = null;
+    this.counted = null;
     this.view?.destroy();
     this.view = null;
   }
