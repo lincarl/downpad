@@ -47,7 +47,7 @@ import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
-import { changedCell, focusCaret } from "./frontmatterFind";
+import { changedCell, focusCaret, showsBlock } from "./frontmatterFind";
 import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } from "./frontmatterHistory";
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 import { tabExit } from "./tabExit";
@@ -353,7 +353,8 @@ export class WysiwygEditor {
    * or removed as the source gains/loses a `---` block) and Crepe's body is
    * replaced. Both changes are one transaction, so an undo here takes back the
    * block and the body together. This pane is the unfocused mirror, so the
-   * reset selection/scroll is acceptable.
+   * reset selection/scroll is acceptable. The table keeps its cells unless one
+   * still shows text the block no longer has.
    *
    * The replacement is reported like an edit after a ~200ms pause
    * (`scheduleChange`). That report carries `markdown` itself, because the body
@@ -366,7 +367,17 @@ export class WysiwygEditor {
     const split = splitFrontmatter(markdown);
     this.frontmatterBlock = split.frontmatter;
     this.frontmatterSeparator = split.separator;
-    this.syncFrontmatterPanel();
+    // Draw the table at once, so the check below sees it.
+    flushSync(() => this.syncFrontmatterPanel());
+    // A cell whose typed text the Markdown pane took back can still show that
+    // text (`showsBlock`), and the next keystroke there would write it back.
+    // Then draw a new table. Otherwise React patches the cells it has, so a
+    // click that brought this pane up to date (EditorHost's catch-up on
+    // pointerdown) still lands in its cell.
+    if (this.fmPanel && this.frontmatterBlock != null && !showsBlock(this.fmPanel, this.frontmatterBlock)) {
+      this.fmTableKey += 1;
+      flushSync(() => this.renderFrontmatter());
+    }
     // Find again in a table this added; redraws of a shown table refresh on their own.
     this.find.refresh();
     try {

@@ -12,6 +12,8 @@
 //     each cell.
 //   - `changedCell` and `focusCaret` put the caret back at the text an undo or
 //     redo changed in the table (frontmatterHistory.ts).
+//   - `showsBlock` tells whether the drawn table's editable cells still show
+//     a block, as a cell keeps text typed into it until React draws a new one.
 
 import {
   isValidEditableKey,
@@ -252,7 +254,7 @@ export function isBefore(a: FrontmatterPosition, b: FrontmatterPosition): boolea
 }
 
 /** The drawn cell that shows `match`, or null when the table does not show it. */
-function cellOf(panel: Element, match: FrontmatterPosition): HTMLElement | null {
+function cellOf(panel: Element, match: Pick<FrontmatterPosition, "line" | "part">): HTMLElement | null {
   return panel.querySelector<HTMLElement>(`[data-line="${match.line}"][data-part="${match.part}"]`);
 }
 
@@ -328,4 +330,14 @@ export function focusCaret(panel: Element, position: FrontmatterPosition): boole
   selection.removeAllRanges();
   selection.addRange(range);
   return true;
+}
+
+/** Whether each editable cell drawn in `panel` shows the text the table for
+ *  `block` gives it. A cell keeps the text typed into it, and React leaves a
+ *  cell alone when its value is the one it drew last, so after a redraw a
+ *  cell can still show text that is no longer in the block. */
+export function showsBlock(panel: Element, block: string): boolean {
+  return frontmatterCells(parseFrontmatterTable(block)).every(
+    (cell) => !cell.write || cellOf(panel, cell)?.textContent === cell.text,
+  );
 }

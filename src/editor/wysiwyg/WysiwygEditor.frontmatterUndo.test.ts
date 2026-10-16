@@ -200,6 +200,24 @@ describe("undo in the frontmatter table", () => {
     expect(cell(1, "value").textContent).toBe("draft");
   });
 
+  it("shows a mirrored Markdown edit that takes back text typed in a cell", { timeout: 60_000 }, async () => {
+    const { editor } = await open();
+    type(cell(0, "value"), " abc");
+    // The Markdown pane deletes " abc" again.
+    editor.setMarkdown(FILE);
+    expect(cell(0, "value").textContent).toBe("Draft notes # keep");
+    type(cell(0, "value"), "X");
+    expect(editor.getMarkdown()).toBe(FILE.replace("# keep", "# keepX"));
+
+    // A mirrored edit to another cell keeps the cells, so a cell clicked
+    // right as the edit is mirrored keeps the focus.
+    const status = cell(1, "value");
+    status.focus();
+    editor.setMarkdown(FILE.replace("Draft", "Mirrored"));
+    expect(cell(0, "value").textContent).toBe("Mirrored notes # keep");
+    expect(document.activeElement).toBe(status);
+  });
+
   it("takes back a mirrored Markdown edit to the frontmatter along with the body", { timeout: 60_000 }, async () => {
     const { editor } = await open();
     editor.setMarkdown(FILE.replace("Draft", "Mirrored").replace("The draft", "The mirrored"));
