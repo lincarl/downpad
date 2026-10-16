@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -153,6 +154,7 @@ const FindBarView = forwardRef<
   const [replacement, setReplacement] = useState("");
   const [options, setOptions] = useState(DEFAULT_OPTIONS);
   const [counts, setCounts] = useState<FindCounts>({ current: 0, total: 0 });
+  const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const setOpen = (next: boolean) => {
@@ -201,6 +203,17 @@ const FindBarView = forwardRef<
       : "No results";
   const noMatches = !query || !counts.total;
 
+  // Losing the last match disables the step and replace buttons, and the
+  // browser then moves focus from the one in use to the page, where Escape no
+  // longer reaches the card. It does so only when it next renders, so the
+  // button still has focus here and can pass it to the find field.
+  useLayoutEffect(() => {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLButtonElement && focused.disabled && cardRef.current?.contains(focused)) {
+      inputRef.current?.focus();
+    }
+  }, [noMatches]);
+
   // Escape closes the card from any of its controls; the editor never sees the
   // keys the card handles.
   const onCardKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -222,6 +235,7 @@ const FindBarView = forwardRef<
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         "find-bar pointer-events-auto flex flex-col gap-1.5 rounded-[10px] border bg-popover py-[7px] pr-[5px] pl-[7px] text-[12px] text-ink",
         "border-line-popover dark:border-line-strong",

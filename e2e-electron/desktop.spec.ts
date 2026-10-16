@@ -701,6 +701,28 @@ test("closing find on a frontmatter match leaves the caret there", async () => {
     .toMatch(/^---\ntitle: Final notes\n---\n\n?First paragraph\.\n\nThe draft body\.\n$/);
 });
 
+test("Escape closes find after Replace all removes the last match", async () => {
+  const file = path.join(directory, "replace-all-escape.md");
+  await writeFile(file, "Alpha zeta.\n\nOmega zeta.\n");
+  await launch(file);
+  const card = page.locator(".find-bar");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  const count = page.locator(".find-count");
+  for (const [view, query, replacement] of [["Document", "zeta", "eta"], ["Markdown", "eta", "nu"]] as const) {
+    await page.getByRole("radio", { name: view, exact: true }).click();
+    await page.keyboard.press("ControlOrMeta+h");
+    await find.fill(query);
+    await page.getByRole("textbox", { name: "Replace with" }).fill(replacement);
+    await expect(count).toHaveText(/ of 2$/);
+    // The click focuses Replace all, which no match left disables.
+    await page.getByRole("button", { name: "Replace all" }).click();
+    await expect(count).toHaveText("No results");
+    await expect(find).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(card).toBeHidden();
+  }
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");
