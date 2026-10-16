@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import type { FindOptions } from "./findEngine";
+import { undoOrRedo } from "../../shell/editorActions";
 import { WysiwygEditor } from "./WysiwygEditor";
 
 // Crepe's code block view watches whether it is on screen, which jsdom cannot tell.
@@ -175,6 +176,26 @@ describe("undo in the frontmatter table", () => {
     press(cell(0, "value"), "z", true);
     expect(reported(editor, onChange)).toBe(both);
     expect(document.activeElement).toBe(body());
+  });
+
+  it("runs Undo and Redo from a native menu in the table and the document", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open();
+    const typed = FILE.replace("# keep", "# keep v2");
+    type(cell(0, "value"), " v2");
+    undoOrRedo("undo");
+    expect(reported(editor, onChange)).toBe(FILE);
+    undoOrRedo("redo");
+    expect(reported(editor, onChange)).toBe(typed);
+
+    editor.insertMarkdown("Typed.");
+    body().focus();
+    undoOrRedo("undo");
+    expect(reported(editor, onChange)).toBe(typed);
+    undoOrRedo("undo");
+    expect(reported(editor, onChange)).toBe(FILE);
+    undoOrRedo("redo");
+    undoOrRedo("redo");
+    expect(reported(editor, onChange)).toContain("Typed.");
   });
 
   it("takes back Replace all in the table and the document with one Ctrl+Z", { timeout: 60_000 }, async () => {

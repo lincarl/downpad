@@ -32,6 +32,7 @@ vi.mock("../ipc/events", () => ({
     return () => { events.fileChanged = null; };
   },
   onOpenFileRequested: async () => () => {},
+  onHistoryRequested: async () => () => {},
   onCloseRequested: async (handler: () => void) => {
     events.closeRequested = handler;
     return () => { events.closeRequested = null; };

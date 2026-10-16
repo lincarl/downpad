@@ -1,14 +1,22 @@
 // Desktop-only event lifecycle: filesystem notifications, second-launch file
-// opens, Explorer drag/drop, and the window-close guard. All listener ownership
-// stays in this service so AppRuntime can dispose the group as one unit.
+// opens, Explorer drag/drop, Undo and Redo from native menus, and the
+// window-close guard. All listener ownership stays in this service so
+// AppRuntime can dispose the group as one unit.
 
 import type { EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
 import { sameFilePath } from "../files/pathIdentity";
 import { readFile } from "../ipc/commands";
-import { onCloseRequested, onFileChanged, onOpenFileRequested, type FileChangedPayload } from "../ipc/events";
+import {
+  onCloseRequested,
+  onFileChanged,
+  onHistoryRequested,
+  onOpenFileRequested,
+  type FileChangedPayload,
+} from "../ipc/events";
 import { desktopBridge } from "../ipc/bridge";
 import { isElectron } from "../ipc/env";
+import { undoOrRedo } from "../shell/editorActions";
 import type { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Store } from "../state/store";
 
@@ -41,6 +49,7 @@ export class DesktopEventBindings {
         this.dependencies.run(() => this.dependencies.files.openPath(path)),
       ),
     );
+    this.captureCleanup(onHistoryRequested(undoOrRedo));
     this.captureCleanup(this.registerDragDrop());
     this.captureCleanup(this.registerCloseGuard());
   }

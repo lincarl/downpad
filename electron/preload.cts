@@ -10,6 +10,7 @@ const commands = new Set<keyof DesktopCommandArgs>([
 ]);
 const events = new Set<keyof DesktopEventPayloads>([
   "settings-changed", "file-changed", "open-file-requested", "print-completed", "search-result", "close-requested",
+  "history-requested",
 ]);
 let closeListeners = 0;
 let openListeners = 0;

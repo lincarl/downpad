@@ -13,6 +13,11 @@
 // replayed as a synthetic `paste` ClipboardEvent on the editable, so the app's
 // own smart-paste pipeline (editor/wysiwyg/pasteHandler, spec §5.4) handles
 // images / HTML / markdown exactly as it does for a real Ctrl+V.
+//
+// Undo and Redo from a native menu (`undoOrRedo`) reach the editors the same
+// way, as the beforeinput event each editor's history handles.
+
+import type { HistoryCommand } from "../ipc/bridge";
 
 /** The kinds of editable surface the menu can act on. */
 export type EditableKind = "wysiwyg" | "raw" | "field";
@@ -135,4 +140,28 @@ function dispatchPaste(el: HTMLElement, transfer: DataTransfer): boolean {
   }
   el.dispatchEvent(event);
   return event.defaultPrevented;
+}
+
+/**
+ * Run Undo or Redo, chosen in a native menu, in what has the focus. Chromium's
+ * own undo knows nothing of the editors' histories, so the document, its
+ * frontmatter table and the Markdown source get their editor's undo or redo,
+ * through the beforeinput event their histories handle. A plain text field,
+ * such as the find card's, keeps Chromium's own.
+ */
+export function undoOrRedo(command: HistoryCommand): void {
+  // The command comes from the main process.
+  if (command !== "undo" && command !== "redo") return;
+  const focused = document.activeElement;
+  // The frontmatter table passes the event on to the document's history. The
+  // document gets it at its root, as a code block's editor stops events
+  // inside it from reaching ProseMirror.
+  const editor =
+    focused?.closest(".frontmatter-table-wrap") ? focused : (focused?.closest(".ProseMirror") ?? focused?.closest(".cm-content"));
+  if (!editor) {
+    document.execCommand(command);
+    return;
+  }
+  const inputType = command === "undo" ? "historyUndo" : "historyRedo";
+  editor.dispatchEvent(new InputEvent("beforeinput", { inputType, bubbles: true, cancelable: true }));
 }

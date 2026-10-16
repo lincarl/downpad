@@ -79,6 +79,9 @@ export interface DesktopCommandResults {
   print_webview_to_pdf: void;
 }
 
+/** Undo or Redo, chosen in a native menu. */
+export type HistoryCommand = "undo" | "redo";
+
 export interface DesktopEventPayloads {
   "settings-changed": Settings;
   "file-changed": { path: string; modifiedMs: number };
@@ -86,6 +89,7 @@ export interface DesktopEventPayloads {
   "print-completed": PrintCompleted;
   "search-result": { searchId: string; hit: SearchHit };
   "close-requested": void;
+  "history-requested": HistoryCommand;
 }
 
 export interface FileDialogFilter {
