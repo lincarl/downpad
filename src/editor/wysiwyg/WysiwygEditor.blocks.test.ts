@@ -448,6 +448,44 @@ describe("a join between a changed block and the file's text", () => {
     expect(editor.getMarkdown()).toBe(expected);
   });
 
+  // A quote or list whose last block is a code block the file left open ends
+  // after its line break when a list or quote starts on the next line.
+  it.each([
+    [
+      "a quote, under a heading that took in its code",
+      "## Notes\n\n> ```\n> unclosed code in a quote\n- item one\n- item two\n",
+      (view: EditorView) => {
+        const { from } = blockWith(view, "Notes");
+        const { to } = blockWith(view, "unclosed code");
+        const text = view.state.schema.text("Notesunclosed code in a quote");
+        view.dispatch(view.state.tr.replaceWith(from, to, view.state.schema.nodes.heading.create({ level: 2 }, text)));
+      },
+      "## Notesunclosed code in a quote\n- item one\n- item two\n",
+    ],
+    [
+      "a quote, when its code moves out of it",
+      "Intro.\n\n> ```\n> unclosed code in a quote\n- item one\n- item two\n",
+      (view: EditorView) => {
+        const quote = blockWith(view, "unclosed code");
+        view.dispatch(view.state.tr.replaceWith(quote.from, quote.to, quote.node.child(0)));
+      },
+      "Intro.\n\n```\nunclosed code in a quote\n```\n- item one\n- item two\n",
+    ],
+    [
+      "a list, under a changed heading",
+      "## Notes\n\n- ```\n  unclosed in item\n> quoted after\n",
+      (view: EditorView) => {
+        typeAfter(view, "Notes", " x");
+        deleteBlock(view, "unclosed");
+      },
+      "## Notes x\n> quoted after\n",
+    ],
+  ])("starts the block below on its own line when %s", { timeout: 60_000 }, async (_name, markdown, edit, expected) => {
+    const { editor, view } = await open(markdown);
+    edit(view);
+    expect(editor.getMarkdown()).toBe(expected);
+  });
+
   it("gets a blank line when reading the join back would take longer than writing the whole body", { timeout: 60_000 }, async () => {
     // The list starts on its own line under the quote, but only reading the
     // whole quote back would tell.

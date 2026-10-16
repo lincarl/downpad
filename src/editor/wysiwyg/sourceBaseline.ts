@@ -95,7 +95,8 @@ export type Ending = "line" | "blank" | "html" | "list" | "footnote" | "indented
 
 /** A top-level node of the source. */
 interface SourceItem {
-  /** Its text, from the start of its first line, so it keeps its indent. */
+  /** Its text, from the start of its first line, so it keeps its indent, to
+   *  the end of its last line. */
   text: string;
   type: string;
   /** How far into its first line its node starts. */
@@ -117,7 +118,8 @@ interface SourceLayout {
   /** Blank lines before the first node. */
   lead: string;
   items: SourceItem[];
-  /** `gaps[k]` separates `items[k]` from `items[k + 1]`. */
+  /** `gaps[k]` separates `items[k]` from `items[k + 1]`, from the line break
+   *  that ends `items[k]`. */
   gaps: string[];
   /** Blank text after the last node. */
   tail: string;
@@ -744,12 +746,15 @@ export function increasingRun(found: readonly number[]): number[] {
 /**
  * Whether the parser, after reading `above`, a block that ends as `ending`,
  * and then `gap`, starts afresh on the first line of `below`, so that `above`
- * reads as it does on its own and `below` as it does at the start of a text. False when only reading them back
- * can tell. Each rule follows from how micromark ends the block above (see
- * `Ending`). An ATX heading line starts a heading even where other blocks
- * cannot start, and ends every block except HTML and an open fence.
+ * reads as it does on its own and `below` as it does at the start of a text.
+ * False when only reading them back can tell. Each rule follows from how
+ * micromark ends the block above (see `Ending`) and is about the line that
+ * `below` starts, so it holds only with a line break in `gap`. An ATX heading
+ * line starts a heading even where other blocks cannot start, and ends every
+ * block except HTML and an open fence.
  */
 export function apart(ending: Ending, above: string, gap: string, below: string): boolean {
+  if (!gap.includes("\n")) return false;
   const blankLine = /\n[ \t]*\n/.test(gap);
   const flush = !/^[ \t]/.test(below);
   const heading = flush && ATX.test(below);
@@ -1026,7 +1031,11 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
     }
     for (const label of node.uses) used.add(label);
     if (node.footnote !== undefined) footnotes.add(footnoteLabel(node.footnote));
-    const text = source.slice(start, node.end);
+    // A quote or list whose last block is left open, such as a fence, ends
+    // after its line break when a list or quote starts on the next line. The
+    // line break goes in the gap instead, so every node's text ends on its
+    // last line and every gap holds the line break before the next node.
+    const text = source.slice(start, node.end).replace(/[\r\n]+$/, "");
     items.push({
       text,
       type: node.type,
@@ -1035,7 +1044,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       uses: node.uses,
       holdsDefinition: node.holdsDefinition,
     });
-    end = node.end;
+    end = start + text.length;
   }
   const tail = source.slice(end);
   if (items.length === 0 || !BLANK.test(tail)) return null;

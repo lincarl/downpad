@@ -74,6 +74,8 @@ describe("apart", () => {
     // After indented code, a list that does not start at 1 reads as a paragraph.
     expect(apart("indented", "    code", "\n\n", "3. third")).toBe(false);
     expect(apart("open", "```js\nlet x", "\n\n", "# Next")).toBe(false);
+    // With no line break between them, the two share a line.
+    expect(apart("line", "# Title", "", "- item")).toBe(false);
   });
 });
 
