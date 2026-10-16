@@ -1670,7 +1670,7 @@ test("a Markdown file dropped on the document opens without leaving the drop ind
 
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
   // The document view would write this heading and these bullets another way.
-  const text = "Title\n=====\n\n* Alpha\n* Beta\n\nFirst line.\n\nSecond line.\n";
+  const text = "First line.\n\nSecond line.\n\nTitle\n=====\n\n* Alpha\n* Beta\n";
   const { file } = await openSplit("drop-on-document-pane.md", text);
   const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
   await markdownLine.click();
@@ -1820,7 +1820,7 @@ test("a file dropped while the find card's match is in the frontmatter table lea
 
 test("typing in the split's Markdown pane across a drop on the document pane stays in the Markdown pane as typed", async () => {
   // The document view would write this heading and these bullets another way.
-  const text = "Title\n=====\n\n* Alpha\n\nFirst line.\n\nSecond line.\n\n* Gamma\n";
+  const text = "First line.\n\nSecond line.\n\nTitle\n=====\n\n* Gamma\n";
   const { file } = await openSplit("type-across-drop.md", text);
   const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
   await markdownLine.click();
