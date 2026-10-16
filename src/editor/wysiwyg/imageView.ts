@@ -6,7 +6,9 @@
 //      against the document dir and turned into an Electron asset URL so linked
 //      images render inline. A local image that cannot be loaded gets an empty
 //      data: URL, which fails at once, so an image block shows the missing-image
-//      placeholder and an inline image its broken-image icon.
+//      placeholder and an inline image its broken-image icon. Answers are kept,
+//      so an image the editor has asked about (see preloadImages.ts) shows its
+//      URL from its first render.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
 //      relocate via a file dialog (updates the node's src).
@@ -130,6 +132,21 @@ const UNAVAILABLE_IMAGE = "data:,";
 
 /** Crepe ImageBlock feature config: render linked images + missing-image UX. */
 export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
+  // What the main process answered for each local image, by absolute path,
+  // while the answer is pending and after.
+  const answers = new Map<string, string | Promise<string>>();
+  /** Ask the main process for a local image's URL and remember the answer. */
+  const ask = (path: string): Promise<string> => {
+    const answer = convertFileSrc(path)
+      .catch(() => null)
+      .then((url) => {
+        const shown = url ?? UNAVAILABLE_IMAGE;
+        answers.set(path, shown);
+        return shown;
+      });
+    answers.set(path, answer);
+    return answer;
+  };
   return {
     // Storage hook for pasted/dropped/uploaded image *files* (§5.5). Crepe's
     // upload pipeline calls this for the image's `src`; its default returns a
@@ -148,12 +165,20 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
      *  outside Electron. An empty src stays empty so Crepe shows its upload input.
      *  A local path the main process does not authorize (missing, not an image, or
      *  otherwise refused), or one relative to a document that is not saved yet,
-     *  becomes UNAVAILABLE_IMAGE. */
-    proxyDomURL: async (url: string): Promise<string> => {
+     *  becomes UNAVAILABLE_IMAGE.
+     *
+     *  Once the main process has answered for a local image, later calls return
+     *  that answer at once. Crepe's image views render the raw src until an
+     *  asynchronous answer arrives, and Chromium requests a relative one next to
+     *  md-easy's own page. preloadImages asks about a document's images before
+     *  its first render for this reason. The answers last as long as the editor,
+     *  so a missing image that appears meanwhile shows once the document is
+     *  opened again. */
+    proxyDomURL: (url: string): string | Promise<string> => {
       if (!url || !isElectron() || isRemoteOrData(url)) return url;
       const abs = resolveImagePath(url, ctx.getFilePath());
-      const authorized = abs ? await convertFileSrc(abs).catch(() => null) : null;
-      return authorized ?? UNAVAILABLE_IMAGE;
+      if (!abs) return UNAVAILABLE_IMAGE;
+      return answers.get(abs) ?? ask(abs);
     },
     onImageLoadError: (event: Event): void => markMissing(event, viewRef),
   };

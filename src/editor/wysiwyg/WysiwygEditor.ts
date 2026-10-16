@@ -37,6 +37,7 @@ import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
+import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
   type FindCounts,
@@ -185,6 +186,7 @@ export class WysiwygEditor {
     // Shared holder so the missing-image handler (a Crepe feature config) can
     // reach the live EditorView captured by the image context-menu plugin.
     const viewRef: ViewRef = { current: null };
+    const imageConfig = imageBlockFeatureConfig(viewRef, context);
     this.crepe = new Crepe({
       root: crepeRoot,
       // Crepe only ever sees the body (the frontmatter, if any, is split off above);
@@ -198,7 +200,7 @@ export class WysiwygEditor {
           extensions: [codeBlockFindHighlights],
         },
         // Display linked images + missing-image placeholder/relocate (§5.5).
-        [Crepe.Feature.ImageBlock]: imageBlockFeatureConfig(viewRef, context),
+        [Crepe.Feature.ImageBlock]: imageConfig,
         // Crepe's default empty-line hint is "Please enter...".
         [Crepe.Feature.Placeholder]: { text: "Type / for blocks" },
       },
@@ -230,6 +232,8 @@ export class WysiwygEditor {
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
+    // Look up local image URLs before the first render, so none starts raw.
+    this.crepe.editor.use(preloadImages(imageConfig.proxyDomURL));
     // WYSIWYG find/replace search state + decorations (§5.13).
     this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Tab that the editor does not use, or Esc then Tab, moves focus out.
