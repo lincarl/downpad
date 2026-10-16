@@ -87,7 +87,7 @@ function inTable($pos: ResolvedPos): boolean {
  * null where the content goes in as it is. Crepe puts a block dropped beside an
  * item's text in that item, and one dropped between the items of a nested
  * list in the parent item, and either way Markdown writes the list loose. So
- * there the content becomes an item of its own: before or after the item, or
+ * there the content becomes an item of its own, before or after the item, or
  * at the near end of a nested list beside the text. Between the items of a
  * list that is not inside another, Crepe splits the list and the content goes
  * between the two halves, which stay tight, so that is left to it, unless an
@@ -210,7 +210,7 @@ export function insertBlocksAt(markdown: string, target: DropTarget) {
 /**
  * Milkdown action that inserts Markdown at the caret, for a file dropped away
  * from the document text (§5.4). A file never replaces what is selected, such
- * as the find card's current match: it goes in after the selected text, and
+ * as the find card's current match. It goes in after the selected text, and
  * after a selected image or other block. The caret then goes after it
  * (`placeCaret`).
  */
