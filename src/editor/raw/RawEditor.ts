@@ -14,6 +14,7 @@ import {
   setSearchQuery,
 } from "@codemirror/search";
 import { base64Collapse, inBase64Payload, pastBase64Payload } from "./base64Collapse";
+import { differingRuns } from "../differingRuns";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
@@ -73,6 +74,31 @@ function changedRange(before: string, after: string): { from: number; to: number
   return { from, to, insert: after.slice(from, end) };
 }
 
+/** The lines of a text, each with the line break that ends it. */
+const linesOf = (text: string): string[] => text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+
+/** The offset in a text where each of its lines starts, and its length last. */
+function lineStarts(lines: string[]): number[] {
+  const starts = [0];
+  for (const line of lines) starts.push(starts[starts.length - 1] + line.length);
+  return starts;
+}
+
+/** The changes that turn `before` into `after`, one for each run of lines
+ *  that differ, and within those lines only the part that changed. Text
+ *  between two changed places keeps its offsets. */
+function changedLines(before: string, after: string): Array<{ from: number; to: number; insert: string }> {
+  const a = linesOf(before);
+  const b = linesOf(after);
+  const startsA = lineStarts(a);
+  const startsB = lineStarts(b);
+  return differingRuns(a.length, b.length, (i, j) => a[i] === b[j], 4_000_000).map((run) => {
+    const from = startsA[run.fromA];
+    const part = changedRange(before.slice(from, startsA[run.toA]), after.slice(startsB[run.fromB], startsB[run.toB]));
+    return { from: from + part.from, to: from + part.to, insert: part.insert };
+  });
+}
+
 export class RawEditor {
   private view: EditorView | null = null;
   /** Set while `setText` replaces the doc programmatically (split-view mirror
@@ -128,19 +154,21 @@ export class RawEditor {
   }
 
   /** Set the text to mirror an edit made in the other split pane (§6.1). Only
-   *  the range from the first to the last difference is replaced, so the caret,
-   *  the selection and the lines in view keep their place when they lie outside
-   *  it. This pane can have focus meanwhile, for example when focus moves into
-   *  it and the split catches it up first. The change is dispatched with
-   *  `applying` set so it doesn't re-emit onChange. No-op when the text already
-   *  matches. */
+   *  the lines that differ are replaced, each run of them on its own, so the
+   *  caret, the selection, the lines in view and the targets of drops keep
+   *  their place outside them. The document pane's report can change several
+   *  places at once, such as Replace all or its first edit, which writes the
+   *  source in its own form. This pane can have focus meanwhile, for example
+   *  when focus moves into it and the split catches it up first. The change is
+   *  dispatched with `applying` set so it doesn't re-emit onChange. No-op when
+   *  the text already matches. */
   setText(text: string): void {
     if (!this.view) return;
     const current = this.view.state.doc.toString();
     if (current === text) return;
     this.applying = true;
     try {
-      this.view.dispatch({ changes: changedRange(current, text) });
+      this.view.dispatch({ changes: changedLines(current, text) });
     } finally {
       this.applying = false;
     }

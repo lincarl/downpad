@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EditorView } from "@codemirror/view";
 import { RawEditor } from "./RawEditor";
 
@@ -88,6 +88,30 @@ describe("RawEditor.setText", () => {
     editor.insertText(" Typed.");
 
     expect(editor.getText()).toBe(typed);
+  });
+
+  // The document pane's report can change several places at once. Its first
+  // edit writes these bullets in its own form, and Replace all changes every match.
+  it.each([
+    [
+      "an edit that rewrites the source",
+      "* Alpha\n* Beta\n\nFirst line.\n\nSecond line.\n\nThird line.\n\n* Gamma\n* Delta\n",
+      "- Alpha\n- Beta\n\nFirst line.\n\nSecond line.\n\nThird line.X\n\n- Gamma\n- Delta\n",
+    ],
+    ["Replace all", "Alpha word.\n\nFirst line.\n\nSecond line.\n\nOmega word.\n", "Alpha term.\n\nFirst line.\n\nSecond line.\n\nOmega term.\n"],
+  ])("keeps a drop's place and the caret between the places %s changed", (_change, text, mirrored) => {
+    const editor = mountWithCaret("", text);
+    const { view } = editor as unknown as { view: EditorView };
+    const lineEnd = text.indexOf("First line.") + "First line.".length;
+    vi.spyOn(view, "posAtCoords").mockReturnValue(lineEnd);
+    const target = editor.dropTargetAt(10, 10);
+    view.dispatch({ selection: { anchor: text.indexOf("Second line.") + "Second".length } });
+
+    editor.setText(mirrored);
+    editor.insertText("[n.csv](attachments/n.csv)", target, false);
+    typeOver(editor, "!");
+
+    expect(editor.getText()).toBe(mirrored.replace("First line.", "First line.[n.csv](attachments/n.csv)").replace("Second line.", "Second! line."));
   });
 
   it("moves a caret inside the change before a whole emoji, not between its halves", () => {
