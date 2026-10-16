@@ -330,7 +330,7 @@ test("the document view names every image and control it shows, and hides none t
   expect([...failures]).toEqual([]);
 });
 
-test("a code block's tools show while they have keyboard focus, and the table's pointer controls take none", async () => {
+test("a code block's tools show with a focus ring while they have keyboard focus, and the table's pointer controls take none", async () => {
   const file = path.join(directory, "focus.md");
   await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n");
   await launch(file);
@@ -339,14 +339,29 @@ test("a code block's tools show while they have keyboard focus, and the table's 
   const language = page.locator(".milkdown-code-block .language-button");
   const copy = page.locator(".milkdown-code-block .copy-button");
   await expect(copy).toHaveCSS("opacity", "0");
+  // The accent the page's own buttons ring with, in the form Chromium reports colors.
+  const accent = await page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement("span"));
+    probe.style.color = "var(--doc-accent)";
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+  /** Check that `tool` has focus, shows, and draws the page's solid accent
+   *  focus ring. Sizes are left out, as Chromium snaps them to whole device
+   *  pixels on a scaled display. */
+  const expectFocusRing = async (tool: Locator): Promise<void> => {
+    await expect(tool).toBeFocused();
+    await expect(tool).toHaveCSS("opacity", "1");
+    await expect(tool).toHaveCSS("outline-style", "solid");
+    await expect(tool).toHaveCSS("outline-color", accent);
+  };
   // Start on the first tool and move with Tab and Shift+Tab, so each tool gets keyboard focus.
   await language.focus();
   await page.keyboard.press("Tab");
-  await expect(copy).toBeFocused();
-  await expect(copy).toHaveCSS("opacity", "1");
+  await expectFocusRing(copy);
   await page.keyboard.press("Shift+Tab");
-  await expect(language).toBeFocused();
-  await expect(language).toHaveCSS("opacity", "1");
+  await expectFocusRing(language);
   // The table's buttons are invisible until hovered and do nothing from the keyboard.
   const tableButtons = page.locator(".milkdown-table-block .handle button");
   await expect(tableButtons.first()).toBeAttached();

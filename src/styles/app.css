@@ -720,11 +720,15 @@ body {
   text-transform: none;
 }
 
-/* Crepe shows a code block's tools only while the pointer is over the block.
-   Show a tool that has keyboard focus too, as it looks on hover. */
+/* Crepe shows a code block's tools only while the pointer is over the block,
+   and removes every focus outline. Show a tool that has keyboard focus too, as
+   it looks on hover, with the app's focus ring in the page's accent, as the
+   frontmatter buttons draw it. */
 .editor-host .milkdown .milkdown-code-block .language-button:focus-visible,
 .editor-host .milkdown .milkdown-code-block .tools-button-group > button:focus-visible {
   opacity: 1;
+  outline: 2px solid var(--doc-accent);
+  outline-offset: 1px;
 }
 
 /* Markdown tables size to their content (§6.2). prosemirror-tables ships
