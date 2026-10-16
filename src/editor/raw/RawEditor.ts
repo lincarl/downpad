@@ -27,7 +27,7 @@ export interface RawOptions {
   collapseBase64?: boolean;
 }
 
-/** Search test that skips base64 image data, so Replace all cannot corrupt an image. */
+/** Search test that skips the base64 data of data: URIs, so Replace all cannot corrupt an image. */
 function outsideImageData(_match: string, state: EditorState, from: number, to: number): boolean {
   return !inBase64Payload(state.doc, from, to);
 }

@@ -4,16 +4,21 @@
 // (or moving the selection into it) expands that occurrence. Gated by the
 // `collapseBase64InRawView` setting (the extension is only added when enabled).
 //
-// Find in the Markdown view skips every base64 payload, collapsed or not
-// (`inBase64Payload`). The data is not text anyone searches for, the document
-// view never matches it, and Replace all would corrupt the image.
+// Find in the Markdown view skips the base64 payload of every data: URI,
+// collapsed or not (`inBase64Payload`). The data is not text anyone searches
+// for, and Replace all would corrupt the image. That includes a data: URI
+// written as text, such as in a code sample, which the document view still
+// searches.
 
 import { ViewPlugin, Decoration, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { StateEffect, RangeSetBuilder, type Extension, type Text } from "@codemirror/state";
 import { formatSize } from "../../document/docSize";
 
-// data: URI with a base64 payload.
+// data: URI with a base64 payload, in the plain form the view collapses.
 const DATA_URI = /data:[\w.+-]*\/?[\w.+-]*;base64,([A-Za-z0-9+/=]+)/g;
+// Any data: URI with a base64 payload, which find skips. That includes media
+// type parameters such as `;charset=utf-8` and any letter case (RFC 2397).
+const ANY_DATA_URI = /data:[^,\s"'()<>]*;base64,([A-Za-z0-9+/=]+)/gi;
 /** Shorter payloads are not worth collapsing. */
 const MIN_COLLAPSED = 64;
 
@@ -26,7 +31,7 @@ const payloads = new WeakMap<Text, Array<[number, number]>>();
 export function inBase64Payload(doc: Text, from: number, to: number): boolean {
   let ranges = payloads.get(doc);
   if (!ranges) {
-    ranges = [...doc.toString().matchAll(DATA_URI)].map((m) => {
+    ranges = [...doc.toString().matchAll(ANY_DATA_URI)].map((m) => {
       const end = m.index + m[0].length;
       return [end - m[1].length, end];
     });

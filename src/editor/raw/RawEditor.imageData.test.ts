@@ -9,7 +9,8 @@ import type { FindOptions } from "../wysiwyg/findEngine";
 const opts: FindOptions = { caseSensitive: false, wholeWord: false, regex: false };
 
 // Base64 data holds short words by chance. "kq" occurs in this payload.
-const png = "![pasted](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAkqYAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=)";
+const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAkqYAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=";
+const png = `![pasted](data:image/png;base64,${pngData})`;
 // A 1x1 GIF, too short to collapse. "AQAB" occurs in its payload.
 const gif = "![pixel](data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==)";
 
@@ -39,6 +40,19 @@ describe("find in the Markdown view", () => {
     expect(editor.findNext()).toEqual({ current: 1, total: 1 });
     editor.replaceAll("ZZ", "kq", opts);
     expect(editor.getText()).toBe(`Visible ZZ.\n\n${png}\n`);
+  });
+
+  // Other tools write media type parameters, and RFC 2397 allows any case.
+  it.each([
+    "data:image/svg+xml;charset=utf-8;base64,",
+    "data:image/png;name=shot.png;base64,",
+    "data:image/png;BASE64,",
+  ])("skips the data after %s", (prefix) => {
+    const image = `![pasted](${prefix}${pngData})`;
+    const editor = open(`Visible kq.\n\n${image}\n`);
+    expect(editor.searchText("kq", opts)).toEqual({ current: 1, total: 1 });
+    editor.replaceAll("ZZ", "kq", opts);
+    expect(editor.getText()).toBe(`Visible ZZ.\n\n${image}\n`);
   });
 
   it("skips the data of an image too small to collapse", () => {
