@@ -1766,6 +1766,39 @@ test("typing right after a file dropped on the document goes after it and keeps 
   ));
 });
 
+test("typing right after a link dropped as a list item stays out of the link", async () => {
+  const file = path.join(directory, "type-after-list-drop.md");
+  await writeFile(file, "Intro.\n\n- Item 1\n- Item 2\n\n1. One\n2. Two\n");
+  await launch(file);
+  await dropBelow(page.locator(".ProseMirror li p", { hasText: "Item 1" }), [await csvFile("a.csv")]);
+  await expect(page.locator(".ProseMirror li p").nth(1)).toHaveText(/a\.csv/);
+  await page.keyboard.type(" typed");
+  await dropBelow(page.locator(".ProseMirror li p", { hasText: "One" }), [await csvFile("b.csv")]);
+  await expect(page.locator(".ProseMirror ol li p").nth(1)).toHaveText(/b\.csv/);
+  await page.keyboard.type(" typed");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "Intro.\n\n- Item 1\n- [a.csv](attachments/a.csv) typed\n- Item 2\n\n1. One\n2. [b.csv](attachments/b.csv) typed\n3. Two\n",
+  );
+});
+
+test("a file dropped on a collapsed base64 image in the Markdown view goes in after the image", async () => {
+  const file = path.join(directory, "drop-on-image-data.md");
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=".repeat(4);
+  const image = `![pic](data:image/png;base64,${data})`;
+  await writeFile(file, `First line.\n\n${image}\n\nLast line.\n`);
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const chip = page.locator(".cm-base64-collapsed");
+  // Near the chip's start, where the drop finds the start of the data.
+  await dropFiles(chip, [await csvFile("a.csv")], { x: 2, y: 5 });
+  const link = "[a.csv](attachments/a.csv)";
+  await expect(page.locator(".cm-line", { hasText: "a.csv" })).toContainText(link);
+  await page.keyboard.type("!");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(`First line.\n\n${image}${link}!\n\nLast line.\n`);
+});
+
 test("a file dropped while the find card's match is in the frontmatter table leaves the table alone", async () => {
   const file = path.join(directory, "drop-find-frontmatter.md");
   await writeFile(file, "---\ntitle: Review notes\n---\n\nFirst line.\n\nSecond line.\n");
@@ -1840,7 +1873,7 @@ test("a file dropped on the split's Markdown pane goes in there, where it was dr
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\nSecond line.[notes.csv](attachments/notes.csv) Typed.\n");
 });
 
-test("a file dropped on a document goes into it after another tab comes to the front", async () => {
+test("a file dropped on a document goes into it once it is in front again after another tab came to the front", async () => {
   const other = path.join(directory, "other.md");
   await writeFile(other, "Other line.\n");
   await launch(other);
@@ -1865,6 +1898,8 @@ test("a file dropped on a document goes into it after another tab comes to the f
   await app!.evaluate(() => (Reflect.get(globalThis, "answerSave") as () => void)());
   await expect.poll(() => stat(path.join(directory, "sub", "attachments", "notes.csv")).then(() => true, () => false)).toBe(true);
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toHaveText("Other line.");
+  // The file waits for its document, which shows as unsaved meanwhile.
+  await expect(page.getByRole("tab", { name: /saved\.md/ }).locator(".tab-dot")).toBeVisible();
   await page.getByRole("tab", { name: /saved\.md/ }).click();
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
   await page.keyboard.press("ControlOrMeta+s");
