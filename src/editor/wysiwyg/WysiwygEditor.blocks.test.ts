@@ -696,6 +696,45 @@ describe("an edit near text that reads as it does only where it is", () => {
       },
       "- one\n- two\n\n<custom-tag>\n\nAfter.\n",
     ],
+    // Milkdown writes the raw text of an HTML block that an edit merged into
+    // a paragraph as it is. Next to a definition the file keeps, its `[ref]`
+    // would read as a link the document does not have.
+    [
+      "bracketed text in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[ref] here\n\nUses [ref].\n\n[ref]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[ref] here\n\nUses [ref](https://r.example).\n",
+    ],
+    [
+      "collapsed and full references in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[Ref][] and [x][ REF ]\n\nUses [ref].\n\n[ref]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[Ref][] and [x][ REF ]\n\nUses [ref](https://r.example).\n",
+    ],
+    [
+      "bracketed text in merged HTML next to a definition inside a kept quote",
+      "Intro.\n\n</div>\n[q] here\n\n> Quote [a][q].\n>\n> [q]: https://q.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[q] here\n\n> Quote [a](https://q.example).\n",
+    ],
+    [
+      "bracketed text in HTML joined to the paragraph above",
+      "Inline $x$ math.\n\n</div>\nUses [ref] and [t] links.\n\t\n<div>\nblock\n</div>\n    code a\n    code b\n  \n-     code in item\n\n[ref]: /r\n[t]: /t\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Inline $x$ math.</div>\nUses [ref] and [t] links.\n\n<div>\nblock\n</div>\n    code a\n    code b\n\n- <br />\n\n  ```\n  code in item\n  ```\n",
+    ],
+    [
+      "bracketed text in HTML that a mark made into a paragraph",
+      "</div>\n[ref]: https://example.com\n  \n<span>seven</span>\n<!-- c -->\n\t\n- - -\n\n[ref]: /r\n[t]: /t\n",
+      (view: EditorView) => view.dispatch(view.state.tr.addMark(1, 2, view.state.schema.marks.emphasis.create())),
+      "*</div>\n[ref]: https://example.com*\n\n<span>seven</span>\n\n<!-- c -->\n\n---\n",
+    ],
+    [
+      "bracketed text in HTML after text typed before it",
+      "***\n\t\n<table><tr><td>x</td></tr></table>\n[t]: /url\n  'title'\n\n2) two\n3) three\n\n\n- <custom-tag>\n\n[ref]: /r\n[t]: /t\n",
+      (view: EditorView) => view.dispatch(view.state.tr.insertText("[^1]", 2)),
+      "---\n\n\\[^1]<table><tr><td>x</td></tr></table>\n[t]: /url\n  'title'\n\n2. two\n3. three\n\n- <custom-tag>\n",
+    ],
     // Milkdown writes a heading with line breaks in setext form. Starting with
     // a comment, it reads as the comment and a paragraph "===", which would
     // take in the next line.
@@ -714,6 +753,16 @@ describe("an edit near text that reads as it does only where it is", () => {
     edit(view);
     expect(editor.getMarkdown()).toBe(expected);
     expect(expected).toBe(crepe.editor.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc)));
+  });
+});
+
+describe("a definition the file keeps", () => {
+  it("keeps the file's text when only a changed link's text matches its label", { timeout: 60_000 }, async () => {
+    const markdown = "Intro.\n\nSee [ref](https://x.example).\n\nUses [ref].\n\n[ref]: https://r.example\n";
+    const { editor, view } = await open(markdown);
+    // An inline link takes the place of a reference, so its text is no label.
+    typeAfter(view, "See", " now");
+    expect(editor.getMarkdown()).toBe(markdown.replace("See [ref]", "See now [ref]"));
   });
 });
 

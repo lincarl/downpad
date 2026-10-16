@@ -29,7 +29,8 @@
 // does not read back that way, even with blank lines at its joins. It also
 // does so when the source's blocks do not match the document's one for one,
 // when a changed block held a definition, when a new footnote could change how
-// a kept block reads, when indented code could end in another place than in
+// a kept block reads, when a kept definition could turn text in a changed block
+// into a link, when indented code could end in another place than in
 // the source, when text follows a block that read as it did only at the very
 // end of the source, or when reading the windows back would take longer than
 // writing the whole document.
@@ -75,6 +76,8 @@ export interface OutlineNode {
   uses: readonly string[];
   /** Whether a definition sits inside it, which is lost if it is rewritten. */
   holdsDefinition: boolean;
+  /** The labels of the link reference definitions it is or holds. */
+  defines: readonly string[];
   /** The blocks its first line opens (`opens`). */
   opens: string;
 }
@@ -111,6 +114,8 @@ interface SourceItem {
   label?: string;
   uses: readonly string[];
   holdsDefinition: boolean;
+  /** The labels of the link reference definitions it is or holds. */
+  defines: readonly string[];
   /** The blocks its first line opens in the source (`opens`). */
   opens: string;
   /** What ends it, worked out when a join needs it (`itemEnding`). */
@@ -375,7 +380,7 @@ export class SourceBaseline {
     }
     if (!passTo(layout.items.length)) return null;
     if (pieces.length === 0) return "";
-    if (addsFootnote(pieces, layout)) return null;
+    if (addsFootnote(pieces, layout) || linksToKeptDefinition(pieces, layout)) return null;
     const gaps = this.join(pieces, layout);
     if (!gaps) return null;
     return layout.lead + pieces.map((piece, k) => piece.text + (gaps[k] ?? "")).join("") + layout.tail;
@@ -682,12 +687,15 @@ export function outlineOf(tree: MdNode): OutlineNode[] | null {
     const end = node.position?.end.offset;
     if (start == null || end == null) return null;
     const uses = new Set<string>();
+    const defines = node.type === "definition" && node.identifier ? [node.identifier] : [];
     let holdsDefinition = false;
     // Definitions and references sit at any depth below a container.
     const visit = (parent: MdNode): void => {
       for (const child of parent.children ?? []) {
-        if (child.type === "definition") holdsDefinition = true;
-        else if ((child.type === "linkReference" || child.type === "imageReference") && child.identifier) uses.add(child.identifier);
+        if (child.type === "definition") {
+          holdsDefinition = true;
+          if (child.identifier) defines.push(child.identifier);
+        } else if ((child.type === "linkReference" || child.type === "imageReference") && child.identifier) uses.add(child.identifier);
         visit(child);
       }
     };
@@ -700,6 +708,7 @@ export function outlineOf(tree: MdNode): OutlineNode[] | null {
       footnote: node.type === "footnoteDefinition" ? node.identifier : undefined,
       uses: [...uses],
       holdsDefinition,
+      defines,
       opens: opens(node),
     });
   }
@@ -1087,14 +1096,50 @@ function windowCost(window: Window, pieces: readonly Piece[], gaps: readonly str
  */
 function addsFootnote(pieces: readonly Piece[], layout: SourceLayout): boolean {
   const added = pieces.some(
-    ({ block }) => block?.type.name === "footnote_definition" && !layout.footnotes.has(footnoteLabel(String(block.attrs.label))),
+    ({ block }) => block?.type.name === "footnote_definition" && !layout.footnotes.has(referenceLabel(String(block.attrs.label))),
   );
   return added && pieces.some((piece) => piece.item >= 0 && piece.text.includes("[^"));
 }
 
-/** A footnote label as the parser compares it. */
-function footnoteLabel(label: string): string {
-  return label.replace(/[\t\n\r ]+/g, " ").trim().toLowerCase();
+/**
+ * Whether a definition the write keeps could turn text in a block Milkdown
+ * wrote into a link the document does not have. Milkdown writes every link
+ * inline, as `[text](url)`, and escapes the brackets of other text, but some
+ * text keeps them as they are, such as the raw text of an HTML block that an
+ * edit merged into a paragraph. Next to a definition with the same label, a
+ * `[label]`, `[label][]` or `[text][label]` there reads as a link. A code
+ * block holds no references.
+ */
+function linksToKeptDefinition(pieces: readonly Piece[], layout: SourceLayout): boolean {
+  const kept = new Set(pieces.flatMap(({ item }) => (item >= 0 ? layout.items[item].defines.map(referenceLabel) : [])));
+  if (kept.size === 0) return false;
+  return pieces.some(
+    ({ item, text, block }) => item < 0 && block?.type.name !== "code_block" && bracketLabels(text).some((label) => kept.has(label)),
+  );
+}
+
+/** The label of each `[...]` in `text` that could be a link reference (see
+ *  `referenceLabel`). That is every innermost bracketed text that is not
+ *  escaped, and not the text of an inline link. */
+function bracketLabels(text: string): string[] {
+  const labels: string[] = [];
+  // An escape is matched first, so an escaped bracket neither opens nor
+  // closes a label.
+  for (const match of text.matchAll(/\\.|\[((?:\\.|[^\\[\]])*)\](?!\()/g)) {
+    if (match[1] !== undefined && /\S/.test(match[1])) labels.push(referenceLabel(match[1]));
+  }
+  return labels;
+}
+
+/** A link or footnote label as micromark compares it, with runs of
+ *  whitespace as one space, none at either end, and case folded. */
+function referenceLabel(label: string): string {
+  return label
+    .replace(/[\t\n\r ]+/g, " ")
+    .replace(/^ | $/g, "")
+    .toLowerCase()
+    .toUpperCase()
+    .toLowerCase();
 }
 
 /**
@@ -1123,7 +1168,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       blockItems.push(items.length);
     }
     for (const label of node.uses) used.add(label);
-    if (node.footnote !== undefined) footnotes.add(footnoteLabel(node.footnote));
+    if (node.footnote !== undefined) footnotes.add(referenceLabel(node.footnote));
     // A quote or list whose last block is left open, such as a fence, ends
     // after its line break when a list or quote starts on the next line. The
     // line break goes in the gap instead, so every node's text ends on its
@@ -1136,6 +1181,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       label: node.label,
       uses: node.uses,
       holdsDefinition: node.holdsDefinition,
+      defines: node.defines,
       opens: node.opens,
     });
     end = start + text.length;
