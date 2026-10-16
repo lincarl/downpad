@@ -258,3 +258,26 @@ describe("drops whose files are still being read", () => {
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\nThird line. Typed.\n`);
   });
 });
+
+describe("a file dropped away from the document text", () => {
+  it("goes in after the selected text, such as the find card's match, not over it", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    // "line." in "First line."
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 7, 12)));
+
+    opened.insertMarkdown(LINK_A);
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n`);
+  });
+
+  it("goes in after a selected image, not over it", async () => {
+    const opened = await open(`First line.\n\n${IMAGE}\n\nSecond line.\n`);
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, view.state.doc.child(0).nodeSize)));
+
+    opened.insertMarkdown(LINK_A);
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${IMAGE}\n\n${LINK_A}\n\nSecond line.\n`);
+  });
+});

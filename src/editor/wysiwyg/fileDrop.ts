@@ -208,9 +208,11 @@ export function insertBlocksAt(markdown: string, target: DropTarget) {
 }
 
 /**
- * Milkdown action that inserts Markdown at the selection, as Milkdown's
- * `insert` does, for a file dropped away from the document text (§5.4). The
- * caret then goes after it (`placeCaret`).
+ * Milkdown action that inserts Markdown at the caret, for a file dropped away
+ * from the document text (§5.4). A file never replaces what is selected, such
+ * as the find card's current match: it goes in after the selected text, and
+ * after a selected image or other block. The caret then goes after it
+ * (`placeCaret`).
  */
 export function insertAtSelection(markdown: string) {
   return (ctx: Ctx): void => {
@@ -218,8 +220,15 @@ export function insertAtSelection(markdown: string) {
     const doc = ctx.get(parserCtx)(markdown);
     if (!doc?.lastChild) return;
     const { tr } = view.state;
-    const { openStart, openEnd } = tr.selection.content();
-    tr.replaceSelection(new Slice(doc.content, openStart, openEnd));
+    const { selection } = tr;
+    if (selection instanceof TextSelection) {
+      if (!selection.empty) tr.setSelection(TextSelection.create(tr.doc, selection.to));
+      // As Milkdown's `insert` does, so a one-line file joins the caret's line.
+      const { openStart, openEnd } = tr.selection.content();
+      tr.replaceSelection(new Slice(doc.content, openStart, openEnd));
+    } else if (!placeBlocks(tr, { pos: selection.to }, doc)) {
+      return;
+    }
     if (!tr.docChanged) return;
     view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
   };

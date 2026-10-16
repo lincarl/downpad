@@ -140,13 +140,15 @@ export class RawEditor {
     }
   }
 
-  /** Insert text at the current selection (used by drag-and-drop, §5.4). */
+  /** Insert text for a dropped file at the caret, with the caret after it
+   *  (§5.4). It goes in after any selection, such as the find card's current
+   *  match, and never replaces it. */
   insertText(text: string): void {
     if (!this.view || !text) return;
-    const { from, to } = this.view.state.selection.main;
+    const { to } = this.view.state.selection.main;
     this.view.dispatch({
-      changes: { from, to, insert: text },
-      selection: { anchor: from + text.length },
+      changes: { from: to, insert: text },
+      selection: { anchor: to + text.length },
     });
     this.view.focus();
   }

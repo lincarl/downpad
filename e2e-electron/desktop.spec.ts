@@ -1800,6 +1800,21 @@ test("typing in the split's Markdown pane across a drop on the document pane sta
   );
 });
 
+test("a file dropped on the find card goes in after the current match instead of over it", async () => {
+  const file = path.join(directory, "drop-on-find.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await launch(file);
+  await page.locator(".ProseMirror p", { hasText: "Second line." }).click();
+  await page.keyboard.press("ControlOrMeta+f");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  await find.fill("line.");
+  await expect(page.locator(".find-count")).toHaveText("1 of 2");
+  await dropFiles(find, [await csvFile("notes.csv")]);
+  await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[notes.csv](attachments/notes.csv)\n\nSecond line.\n");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

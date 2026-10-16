@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it } from "vitest";
+import type { EditorView } from "@codemirror/view";
 import { RawEditor } from "./RawEditor";
 
 const editors: RawEditor[] = [];
@@ -16,6 +17,26 @@ function mountWithCaret(before: string, after = ""): RawEditor {
 
 afterEach(() => {
   for (const editor of editors.splice(0)) editor.destroy();
+});
+
+/** Type `text` over the selection, as a key press does. */
+function typeOver(editor: RawEditor, text: string): void {
+  const { view } = editor as unknown as { view: EditorView };
+  view.dispatch(view.state.replaceSelection(text));
+}
+
+const FIND = { caseSensitive: true, wholeWord: false, regex: false };
+
+describe("RawEditor.insertText", () => {
+  it("puts a dropped file after the selected text, such as the find card's match, not over it", () => {
+    const editor = mountWithCaret("", "First line.\n");
+    editor.searchText("line", FIND);
+
+    editor.insertText("[a.csv](attachments/a.csv)");
+    typeOver(editor, "!");
+
+    expect(editor.getText()).toBe("First line[a.csv](attachments/a.csv)!.\n");
+  });
 });
 
 describe("RawEditor.setText", () => {
@@ -45,11 +66,11 @@ describe("RawEditor.setText", () => {
   it("moves a selection that starts inside the change after a whole emoji", () => {
     const editor = mountWithCaret("", "ab\u{1F600}yz");
     // Select "b", the emoji and "y". The find card is one way to select.
-    editor.searchText("b\u{1F600}y", { caseSensitive: true, wholeWord: false, regex: false });
+    editor.searchText("b\u{1F600}y", FIND);
 
     // U+1F600 and U+1F200 share their second UTF-16 unit.
     editor.setText("cd\u{1F200}yz");
-    editor.insertText("X");
+    typeOver(editor, "X");
 
     expect(editor.getText()).toBe("cd\u{1F200}Xz");
   });

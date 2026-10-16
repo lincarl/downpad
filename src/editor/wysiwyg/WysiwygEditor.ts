@@ -445,8 +445,8 @@ export class WysiwygEditor {
 
   /** Insert markdown for a dropped file (§5.4). With the target of a drop on
    *  this editor, its blocks go in at that edge, after any file of the same
-   *  drop. Otherwise they go in at the current selection. Either way the caret
-   *  ends up after them. */
+   *  drop. Otherwise they go in at the caret, after any selection, which they
+   *  never replace. Either way the caret ends up after them. */
   insertMarkdown(markdown: string, target: DropTarget | null = null): void {
     if (!this.crepe || !markdown) return;
     try {
