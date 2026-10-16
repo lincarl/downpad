@@ -1,16 +1,29 @@
-// Replace text inside an autolink. In Markdown, the text of an autolink such as
-// <https://example.com/help> or <support@example.com> is also its target. The
-// document view keeps the target in the link mark's href, so a find and replace
-// that only edited the text left a link whose visible URL and real target
-// differed. Links whose text differs from their target keep it.
+// Replace text inside an autolink. Markdown makes a link from bare text in
+// three shapes, and its target repeats the text:
+// - <https://example.com/help> and a bare https://example.com/help link to the text.
+// - <support@example.com> and a bare email address link to mailto: plus the text.
+// - A bare www.example.com links to http:// plus the text.
+// The document view keeps the target in the link mark's href, so a find and
+// replace that only edited the text left a link whose visible URL and real
+// target differed. Every other link keeps its target, even one that repeats its
+// text, such as [CONTRIBUTING.md](CONTRIBUTING.md) or [example.com](http://example.com).
 
 import type { Mark, Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { Transaction } from "@milkdown/kit/prose/state";
 
-/** What a link's target may add in front of its text when the text is the
- *  target. <https://…> adds nothing, an email address adds mailto: and a bare
- *  www. link adds http://. */
-const TARGET_PREFIXES = ["", "mailto:", "http://"];
+/** A URI scheme as CommonMark autolinks require it, such as https: or mailto:. */
+const SCHEME = /^[a-z][a-z0-9+.-]{1,31}:/i;
+
+/**
+ * What `href` adds in front of `text` when Markdown made the link from the
+ * text alone, or null when the link has a target of its own.
+ */
+function autolinkPrefix(text: string, href: string): string | null {
+  if (href === text && SCHEME.test(text)) return "";
+  if (href === `mailto:${text}` && text.includes("@")) return "mailto:";
+  if (href === `http://${text}` && /^www\./i.test(text)) return "http://";
+  return null;
+}
 
 interface Autolink {
   from: number;
@@ -32,9 +45,8 @@ function autolinkAround(doc: ProseNode, from: number, to: number): Autolink | nu
   while (end < parent.childCount && mark.isInSet(parent.child(end).marks)) end++;
   const link = { from: $from.posAtIndex(start), to: $from.posAtIndex(end) };
   if (to > link.to) return null;
-  const text = doc.textBetween(link.from, link.to);
-  const prefix = TARGET_PREFIXES.find((p) => mark.attrs.href === p + text);
-  return prefix === undefined ? null : { ...link, mark, prefix };
+  const prefix = autolinkPrefix(doc.textBetween(link.from, link.to), String(mark.attrs.href));
+  return prefix === null ? null : { ...link, mark, prefix };
 }
 
 /**

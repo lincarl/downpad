@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Replace in the document view, with the real editor: Replace moves on to the
+// Replace in the document view, with the real editor. Replace moves on to the
 // next match, and an autolink's target follows its text.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,15 +66,17 @@ describe("replace in the document view", () => {
   it("changes an autolink's target along with its text", { timeout: 60_000 }, async () => {
     const editor = await open(
       "Mail <support@example.com> or see <https://example.com/example> and www.example.net.\n\n" +
-        "Read [the example guide](https://example.com/guide) or [https://example.com](https://mirror.org).\n",
+        "Read [the example guide](https://example.com/guide) or [https://example.com](https://mirror.org).\n\n" +
+        "Open [example.md](example.md), [#example](#example) or [example.com](http://example.com).\n",
     );
-    expect(editor.search("example", opts)).toEqual({ current: 1, total: 6 });
+    expect(editor.search("example", opts)).toEqual({ current: 1, total: 9 });
     editor.replaceCurrent("sample", "example", opts);
     editor.replaceAll("sample", "example", opts);
-    // Links whose text is not their target keep the target.
+    // Explicit links keep their target, even when it repeats their text.
     expect(editor.getMarkdown()).toBe(
       "Mail <support@sample.com> or see <https://sample.com/sample> and [www.sample.net](http://www.sample.net).\n\n" +
-        "Read [the sample guide](https://example.com/guide) or [https://sample.com](https://mirror.org).\n",
+        "Read [the sample guide](https://example.com/guide) or [https://sample.com](https://mirror.org).\n\n" +
+        "Open [sample.md](example.md), [#sample](#example) or [sample.com](http://example.com).\n",
     );
   });
 });
