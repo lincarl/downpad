@@ -1118,15 +1118,16 @@ describe("EditorHost split catch-up", () => {
     await host.dispose();
   });
 
-  it("has the document pane decide a typed closing mark unless it takes the click itself", async () => {
+  it("has the document pane decide a typed closing mark unless it takes the click itself or autosave asks", async () => {
     const { root, host } = await openSplit();
 
     root.querySelector(".editor-pane-raw")!.dispatchEvent(new Event("pointerdown"));
     root.querySelector(".editor-pane-wysiwyg")!.dispatchEvent(new Event("pointerdown"));
     host.flush();
+    host.flush({ keepTypedMark: true });
 
     // A click there may land inside the text the mark closes.
-    expect(fakeEditors.keptTypedMarks).toEqual([false, true, false]);
+    expect(fakeEditors.keptTypedMarks).toEqual([false, true, false, true]);
     await host.dispose();
   });
 

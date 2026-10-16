@@ -69,7 +69,7 @@ export class AppRuntime {
     // The editor presenter lets FileService flush + re-show the active document
     // after the active tab changes, without owning the editor or view state.
     const presenter: EditorPresenter = {
-      flush: () => this.editorHost.flush(),
+      flush: (options) => this.editorHost.flush(options),
       showActiveDoc: () => this.showActiveDoc(),
       reloadActiveDoc: () => this.reloadActiveDoc(),
     };

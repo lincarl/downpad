@@ -785,6 +785,23 @@ test("a typed closing mark is decided in a heading, by Tab in a list and by a pa
     .toBe("# Head $x$ and ~~old~~ end\n\n- item\n  - next $y$ more\n\nOne. Let $z$, small\n");
 });
 
+test("autosave in a pause leaves a typed closing mark waiting for the next character", async () => {
+  const file = path.join(directory, "autosaved.md");
+  await writeFile(file, "Start.\n");
+  await writeFile(
+    path.join(directory, "profile", "settings.toml"),
+    "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nautosaveEnabled = true\nautosaveIntervalSeconds = 5\n",
+  );
+  await launch(file);
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Tickets cost $5-$");
+  // Autosave writes the waiting `$` as text, and it keeps waiting.
+  await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost \\$5-\\$\n");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(0);
+  await page.keyboard.type("10 each.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start. Tickets cost \\$5-\\$10 each.\n");
+});
+
 test("Save right after typing writes the last edit in the document and split views", async () => {
   const file = path.join(directory, "typed.md");
   await writeFile(file, "# Typed\n\nFirst line.\n");

@@ -367,9 +367,10 @@ export class WysiwygEditor {
    *  reads the document right away (Save) calls this first. A typed closing
    *  `$` or `~` that still waits for the next character is decided first, so
    *  the report holds the formula or strikethrough that the file would read.
-   *  `keepTypedMark` leaves it waiting, for a click or focus moving into this
-   *  pane, which may put the cursor inside the text the mark closes. The edit
-   *  takes the usual `onChange` path, and the pending report is cancelled. */
+   *  `keepTypedMark` leaves it waiting and reports it as text, for a click or
+   *  focus moving into this pane, which may put the cursor inside the text the
+   *  mark closes, and for autosave. The edit takes the usual `onChange` path,
+   *  and the pending report is cancelled. */
   reportPendingChange({ keepTypedMark = false }: { keepTypedMark?: boolean } = {}): void {
     if (!keepTypedMark) this.withView(decideTypedMark, undefined);
     if (this.changeTimer == null || this.ignoreUpdates) return;
