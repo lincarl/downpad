@@ -12,6 +12,7 @@
 
 import { Crepe } from "@milkdown/crepe";
 import { remarkStringifyOptionsCtx, editorViewCtx } from "@milkdown/kit/core";
+import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { $prose, insert, replaceAll as replaceAllMarkdown } from "@milkdown/kit/utils";
 import { Plugin, type Transaction } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -43,6 +44,7 @@ import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
+import { tabExit } from "./tabExit";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -207,6 +209,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(codeBlockMetaSchema);
     // WYSIWYG find/replace search state + decorations (§5.13).
     this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
+    // Tab that the editor does not use, or Esc then Tab, moves focus out.
+    this.crepe.editor.use(tabExit);
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
@@ -238,9 +242,10 @@ export class WysiwygEditor {
     let createPromise: Promise<void> | null = null;
     try {
       // Keep even a synchronous create/config failure inside this lifecycle's
-      // cleanup path; Promise.resolve alone cannot catch an exception thrown
-      // while evaluating `crepe.create()`.
-      createPromise = Promise.resolve(crepe.create()).then(() => undefined);
+      // cleanup path. First drop Crepe's indent plugin, which types four spaces
+      // on Tab that Markdown saves as `&#x20;`. Lists, tables and code blocks
+      // have their own Tab keys.
+      createPromise = crepe.editor.remove(indentPlugin).then(() => crepe.create()).then(() => undefined);
       this.createPromise = createPromise;
       await createPromise;
     } catch (err) {

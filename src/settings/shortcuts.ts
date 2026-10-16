@@ -1,8 +1,9 @@
 // The keyboard shortcuts the Settings dialog lists. Each one is bound in code:
 // the app-wide handler (src/app/installAppShortcuts.ts), the tab strip
-// (src/App.tsx), the link view (src/editor/wysiwyg/linkView.ts), and the
-// Milkdown keymaps the Crepe editor installs (preset-commonmark, preset-gfm,
-// plugin-history; CodeMirror's history keymap matches for undo and redo).
+// (src/App.tsx), the link view (src/editor/wysiwyg/linkView.ts), Tab in the
+// document view (src/editor/wysiwyg/tabExit.ts), and the Milkdown keymaps the
+// Crepe editor installs (preset-commonmark, preset-gfm, plugin-history;
+// CodeMirror's history keymap matches for undo and redo).
 // Keep this list in step when a binding changes.
 
 export interface Shortcut {
@@ -27,7 +28,8 @@ export const KEYBOARD_SHORTCUTS: readonly Shortcut[] = [
   { action: "Heading 1 to 6", keys: "Ctrl+Alt+1 to Ctrl+Alt+6" },
   { action: "Paragraph", keys: "Ctrl+Alt+0" },
   { action: "Bulleted / numbered list", keys: "Ctrl+Alt+8 / Ctrl+Alt+7" },
-  { action: "Indent / outdent list item", keys: "Tab / Shift+Tab" },
+  { action: "Indent / outdent list item, next / previous table cell", keys: "Tab / Shift+Tab" },
+  { action: "Leave the document", keys: "Esc, then Tab" },
   { action: "Quote", keys: "Ctrl+Shift+B" },
   { action: "Code block", keys: "Ctrl+Alt+C" },
   { action: "Open link", keys: "Ctrl+click" },

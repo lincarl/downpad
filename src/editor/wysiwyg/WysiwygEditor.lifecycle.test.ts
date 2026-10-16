@@ -35,6 +35,7 @@ vi.mock("@milkdown/crepe", () => ({
       },
       use: () => {},
       action: () => undefined,
+      remove: async () => {},
     };
 
     on(register: (listener: { markdownUpdated(cb: () => void): void }) => void): void {
@@ -96,7 +97,8 @@ describe("WysiwygEditor lifecycle", () => {
         requestSave: async () => false,
       },
     );
-    expect(fakeCrepe.createCalls).toBe(1);
+    // Creation starts once Crepe's indent plugin is removed.
+    await vi.waitFor(() => expect(fakeCrepe.createCalls).toBe(1));
 
     const firstDestroy = editor.destroy();
     const secondDestroy = editor.destroy();

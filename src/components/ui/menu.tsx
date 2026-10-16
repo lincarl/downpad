@@ -150,7 +150,19 @@ export function onMenuKeyDown(event: KeyboardEvent<HTMLElement>): void {
 }
 
 const TABBABLE =
-  'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex], [contenteditable="true"]';
+  'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex], [contenteditable]:not([contenteditable="false"])';
+
+/**
+ * Whether Tab can reach `el`, which must be in the tab order and not hidden or
+ * inert. An editable element whose parent is not editable, such as the document
+ * editor or the Markdown pane, is in the tab order without a tabindex, although
+ * Chromium reports its `tabIndex` as -1.
+ */
+function isTabbable(el: HTMLElement): boolean {
+  const inOrder =
+    el.tabIndex >= 0 || (!el.hasAttribute("tabindex") && el.isContentEditable && !el.parentElement?.isContentEditable);
+  return inOrder && !el.closest("[hidden], [inert]") && (el.checkVisibility?.() ?? true);
+}
 
 /**
  * Focus the control after `from` in the page's tab order, or the one before it
@@ -160,10 +172,23 @@ const TABBABLE =
  */
 export function focusBeside(from: HTMLElement, backward: boolean): void {
   const order = Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter(
-    (el) =>
-      el === from ||
-      (el.tabIndex >= 0 && !el.closest("[hidden], [inert]") && (el.checkVisibility?.() ?? true)),
+    (el) => el === from || isTabbable(el),
   );
   const at = order.indexOf(from);
   (order[at + (backward ? -1 : 1)] ?? from).focus();
+}
+
+/**
+ * Focus the first control after `container` in the page's tab order, or the
+ * last one before it when `backward`, skipping every control inside it. Wraps
+ * around at the ends of the page, as Tab does in the app window. Used when Tab
+ * leaves the document editor.
+ */
+export function focusPast(container: HTMLElement, backward: boolean): void {
+  const order = Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    (el) => !container.contains(el) && isTabbable(el),
+  );
+  const after = order.findIndex((el) => container.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const next = after < 0 ? order.length : after;
+  order[(backward ? next - 1 + order.length : next) % order.length]?.focus();
 }

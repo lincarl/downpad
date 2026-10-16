@@ -296,6 +296,9 @@ test("the document view names every image and control it shows, and hides none t
   await editor.locator("a").hover();
   await expect(page.locator(".milkdown-link-preview")).toHaveAttribute("data-show", "true");
   await check("link preview");
+  // Keep the table clear of the top edge, so the column handle above it stays
+  // on screen.
+  await editor.locator("td").first().evaluate((cell) => cell.scrollIntoView({ block: "center" }));
   await editor.locator("td").first().click();
   // Crepe moves the column handle over the hovered column a moment after the
   // pointer arrives, so a click can land where the handle was before.
@@ -617,6 +620,39 @@ test("closing a tab right after typing asks before discarding the edit", async (
   await expect(paragraph).toHaveText("First line. Not lost.");
 });
 
+test("Tab leaves the document view without typing spaces, and still nests a list item", async () => {
+  const file = path.join(directory, "tab.md");
+  await writeFile(file, "First line.\n\n- One\n- Two\n\n```js\nlet x = 1;\n```\n");
+  await launch(file);
+  const document = page.locator(".milkdown .ProseMirror");
+  // Nothing follows the document, so Tab wraps to the first control, as it
+  // does from the Markdown view.
+  const next = page.getByRole("button", { name: "Application menu", exact: true });
+  await document.locator("p").first().click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Edited.");
+  await page.keyboard.press("Tab");
+  await expect(next).toBeFocused();
+  // In a list Tab nests the item, and Esc then Tab leaves.
+  await document.getByText("Two", { exact: true }).click();
+  // On a fast machine Playwright can send Tab before ProseMirror has read the
+  // caret the click placed, which no person can do. Wait a frame so it has.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+  await page.keyboard.press("Tab");
+  await expect(document.locator("li li")).toHaveText("Two");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Tab");
+  await expect(next).toBeFocused();
+  // Esc then Shift+Tab leaves a code block for the control before the document,
+  // not for a code block or table button inside it.
+  await page.locator(".milkdown-code-block .cm-content").click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button", { name: "New document", exact: true })).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n- One\n  - Two\n\n```js\nlet x = 1;\n```\n");
+});
+
 /** Open a one-line file in the split, returning each pane's first line. */
 async function openSplit(name: string): Promise<{ file: string; documentLine: Locator; markdownLine: Locator }> {
   const file = path.join(directory, name);
@@ -881,6 +917,16 @@ test("Escape closes find after Replace all removes the last match", async () => 
     await page.keyboard.press("Escape");
     await expect(card).toBeHidden();
   }
+});
+
+test("Tab in the split moves from the document pane to the Markdown pane, then to the divider", async () => {
+  const { documentLine, markdownLine } = await openSplit("tab-split.md");
+  await documentLine.click();
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("separator", { name: "Resize Markdown split" })).toBeFocused();
+  await expect(markdownLine).toHaveText("First line.");
 });
 
 test("a file that ends in a list opens as saved", async () => {
