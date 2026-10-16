@@ -34,17 +34,12 @@ import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
 import {
   searchMilkdownPlugin,
-  runSearch,
-  moveMatch,
-  replaceCurrent,
-  replaceAll,
-  clearSearch,
-  matchCounts,
   type FindCounts,
   type FindOptions,
 } from "./findEngine";
 import { codeBlockFindHighlights } from "./findReveal";
 import { findChangeListener } from "./findChanges";
+import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { installEditorAccessibility } from "./editorAccessibility";
@@ -89,6 +84,8 @@ export class WysiwygEditor {
   /** React root that owns all content inside `fmPanel`. */
   private fmPanelRoot: Root | null = null;
   private onChange: ((markdown: string) => void) | null = null;
+  /** Told when the find matches may have changed without a find action. */
+  private onFindChange: (() => void) | null = null;
   /** The mount root and Crepe's body container, kept so `setMarkdown` can add or
    *  remove the frontmatter panel above the editor when the source changes. */
   private root: HTMLElement | null = null;
@@ -105,6 +102,21 @@ export class WysiwygEditor {
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Attributes/semantics applied to DOM owned by Crepe and embedded CodeMirror. */
   private accessibilityCleanup: (() => void) | null = null;
+  /** Bumped when Replace rewrites the frontmatter, so React draws a new table
+   *  instead of patching cells the user has typed into. */
+  private fmTableKey = 0;
+  /** Find and replace over the frontmatter table and the document (§5.13). */
+  private readonly find = new DocumentFind({
+    block: () => (this.fmPanel ? this.frontmatterBlock : null),
+    panel: () => this.fmPanel,
+    replaceBlock: (block) => {
+      this.frontmatterBlock = block;
+      this.fmTableKey += 1;
+      this.renderFrontmatter();
+      this.emitChange();
+    },
+    changed: () => this.onFindChange?.(),
+  });
 
   async mount(
     root: HTMLElement,
@@ -118,6 +130,7 @@ export class WysiwygEditor {
     }
     this.ignoreUpdates = true;
     this.onChange = cb.onChange;
+    this.onFindChange = cb.onFindChange ?? null;
     this.root = root;
     this.showFmPanel = context.getSettings().showFrontmatterPanel === true;
 
@@ -218,7 +231,7 @@ export class WysiwygEditor {
       ),
     );
     // Tell the find card when an edit changes the matches (§5.13).
-    this.crepe.editor.use(findChangeListener(() => cb.onFindChange?.()));
+    this.crepe.editor.use(findChangeListener(() => this.onFindChange?.()));
     const crepe = this.crepe;
     let createPromise: Promise<void> | null = null;
     try {
@@ -316,6 +329,8 @@ export class WysiwygEditor {
     this.frontmatterBlock = split.frontmatter;
     this.frontmatterSeparator = split.separator;
     this.syncFrontmatterPanel();
+    // Find again in a table this added; redraws of a shown table refresh on their own.
+    this.find.refresh();
     try {
       this.crepe.editor.action(replaceAllMarkdown(split.body));
       // The doc updates synchronously with the dispatch.
@@ -363,35 +378,38 @@ export class WysiwygEditor {
   }
 
   search(query: string, opts: FindOptions): FindCounts {
-    return this.withView((v) => runSearch(v, query, opts), NO_MATCHES);
+    return this.withView((v) => this.find.search(v, query, opts), NO_MATCHES);
   }
 
   findNext(): FindCounts {
-    return this.withView((v) => moveMatch(v, 1), NO_MATCHES);
+    return this.withView((v) => this.find.move(v, 1), NO_MATCHES);
   }
 
   findPrev(): FindCounts {
-    return this.withView((v) => moveMatch(v, -1), NO_MATCHES);
+    return this.withView((v) => this.find.move(v, -1), NO_MATCHES);
   }
 
   replaceCurrent(replacement: string, query: string, opts: FindOptions): FindCounts {
-    return this.withView((v) => replaceCurrent(v, replacement, query, opts), NO_MATCHES);
+    return this.withView((v) => this.find.replaceCurrent(v, replacement, query, opts), NO_MATCHES);
   }
 
   replaceAll(replacement: string, query: string, opts: FindOptions): FindCounts {
-    return this.withView((v) => replaceAll(v, replacement, query, opts), NO_MATCHES);
+    return this.withView((v) => this.find.replaceAll(v, replacement, query, opts), NO_MATCHES);
   }
 
   /** The current match and total, for a find card catching up with an edit. */
   currentCounts(): FindCounts {
-    return this.withView(matchCounts, NO_MATCHES);
+    return this.withView((v) => this.find.counts(v), NO_MATCHES);
   }
 
   clearSearch(): void {
-    this.withView((v) => clearSearch(v), undefined);
+    this.withView((v) => this.find.clear(v), undefined);
   }
 
+  /** Focus the document. While the find card's current match is in an editable
+   *  frontmatter cell, focus that cell with the match selected instead. */
   focus(): void {
+    if (this.find.focusCurrent()) return;
     this.withView((v) => v.focus(), undefined);
   }
 
@@ -436,6 +454,7 @@ export class WysiwygEditor {
       clearTimeout(this.changeTimer);
       this.changeTimer = null;
     }
+    this.find.dispose();
     this.fmPanelRoot?.unmount();
     this.fmPanelRoot = null;
     this.fmPanel = null;
@@ -497,6 +516,7 @@ export class WysiwygEditor {
     if (!this.fmPanelRoot || this.frontmatterBlock == null) return;
     this.fmPanelRoot.render(
       createElement(FrontmatterPanel, {
+        key: this.fmTableKey,
         block: this.frontmatterBlock,
         focus,
         onBlockChange: (block: string, nextFocus?: Exclude<FrontmatterFocus, null>) => {

@@ -479,29 +479,37 @@ body {
   height: 100vh;
 }
 
-/* Match highlights painted by the find card's decorations, in both views. */
-.editor-host .md-find-match {
+/* Match highlights painted by the find card's decorations, in both views. The
+   frontmatter table is outside ProseMirror, so its matches are CSS custom
+   highlights with the same names (documentFind.ts). A highlight takes the
+   colours but has no border-radius. */
+.editor-host .md-find-match,
+.editor-host ::highlight(md-find-match) {
   background: rgb(255 213 0 / 45%);
   border-radius: 2px;
 }
 
-.editor-host .md-find-current {
+.editor-host .md-find-current,
+.editor-host ::highlight(md-find-current) {
   background: rgb(255 145 0 / 70%);
 }
 
 /* On a dark page, other matches use VS Code's dark find highlight, which keeps
    light and coloured text readable. The current match is solid amber with dark
    ink, including syntax-coloured text inside it. */
-:root[data-editor-theme="dark"] .editor-host .md-find-match {
+:root[data-editor-theme="dark"] .editor-host .md-find-match,
+:root[data-editor-theme="dark"] .editor-host ::highlight(md-find-match) {
   background: rgb(234 92 0 / 33%);
 }
 
-:root[data-editor-theme="dark"] .editor-host .md-find-current {
+:root[data-editor-theme="dark"] .editor-host .md-find-current,
+:root[data-editor-theme="dark"] .editor-host ::highlight(md-find-current) {
   background: #e9a23b;
 }
 
 :root[data-editor-theme="dark"] .editor-host .md-find-current,
-:root[data-editor-theme="dark"] .editor-host .md-find-current * {
+:root[data-editor-theme="dark"] .editor-host .md-find-current *,
+:root[data-editor-theme="dark"] .editor-host ::highlight(md-find-current) {
   color: #1e1e1e;
 }
 

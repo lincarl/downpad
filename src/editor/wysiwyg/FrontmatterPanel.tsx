@@ -38,6 +38,8 @@ export interface FrontmatterPanelProps {
  * React-owned editable view of the leading YAML frontmatter block. The YAML
  * remains the source of truth; this component only projects the table model and
  * reports the minimally rewritten block to WysiwygEditor for serialization.
+ * Each cell that shows text carries data-line and data-part, so find can
+ * highlight its matches there (frontmatterFind.ts).
  */
 export function FrontmatterPanel({ block, focus, onBlockChange }: FrontmatterPanelProps) {
   const table = parseFrontmatterTable(block);
@@ -70,7 +72,7 @@ export function FrontmatterPanel({ block, focus, onBlockChange }: FrontmatterPan
     return (
       <div className="frontmatter-raw">
         <FrontmatterTab />
-        <pre className="frontmatter-code">{table.raw.replace(/\n+$/, "")}</pre>
+        <pre className="frontmatter-code" data-line={0} data-part="value">{table.raw.replace(/\n+$/, "")}</pre>
       </div>
     );
   }
@@ -257,7 +259,7 @@ function ScalarRow({
         value={field.key}
         onChange={rename}
       />
-      <EditableValue value={field.value} onChange={changeValue} />
+      <EditableValue lineIndex={field.lineIndex} value={field.value} onChange={changeValue} />
       <Actions>
         {parent && <AddToGroupButton table={table} group={parent} onBlockChange={onBlockChange} />}
         <DeleteButton table={table} field={field} onBlockChange={onBlockChange} />
@@ -302,10 +304,10 @@ interface RawRowProps extends RowProps {
 function RawRow({ table, field, onBlockChange }: RawRowProps) {
   return (
     <tr className="frontmatter-row">
-      <th scope="row" className="frontmatter-key">
+      <th scope="row" className="frontmatter-key" data-line={field.blockStart} data-part="key">
         {field.key}
       </th>
-      <td className="frontmatter-value">
+      <td className="frontmatter-value" data-line={field.blockStart} data-part="value">
         <pre className="frontmatter-code">{field.display}</pre>
       </td>
       <Actions>
@@ -347,6 +349,7 @@ function EditableKey({ cellRef, lineIndex, className, value, onChange }: Editabl
       scope="row"
       className={`${className} frontmatter-edit`}
       data-line={lineIndex}
+      data-part="key"
       contentEditable="plaintext-only"
       suppressContentEditableWarning
       spellCheck={false}
@@ -359,11 +362,12 @@ function EditableKey({ cellRef, lineIndex, className, value, onChange }: Editabl
 }
 
 interface EditableValueProps {
+  lineIndex: number;
   value: string;
   onChange: (value: string) => void;
 }
 
-function EditableValue({ value, onChange }: EditableValueProps) {
+function EditableValue({ lineIndex, value, onChange }: EditableValueProps) {
   const input = (event: FormEvent<HTMLTableCellElement>): void => {
     const cell = event.currentTarget;
     let text = cell.textContent ?? "";
@@ -378,6 +382,8 @@ function EditableValue({ value, onChange }: EditableValueProps) {
   return (
     <td
       className="frontmatter-value frontmatter-value-edit frontmatter-edit"
+      data-line={lineIndex}
+      data-part="value"
       contentEditable="plaintext-only"
       suppressContentEditableWarning
       spellCheck={false}

@@ -608,6 +608,99 @@ test("the find count follows edits made while the card is open", async () => {
   await expect(count).toHaveText("0 of 4");
 });
 
+/** The text under each find highlight the frontmatter table paints. */
+function tableHighlights(): Promise<{ match: string[]; current: string[] }> {
+  return page.evaluate(() => {
+    const texts = (name: string) => [...(CSS.highlights.get(name) ?? [])].map((range) => range.toString());
+    return { match: texts("md-find-match"), current: texts("md-find-current") };
+  });
+}
+
+test("find in the document view searches and replaces the frontmatter table", async () => {
+  const file = path.join(directory, "frontmatter-find.md");
+  await writeFile(file, '---\ntitle: Draft notes # keep\nmeta:\n  status: "draft"\ntags:\n  - draft\n---\n\nThe draft body.\n');
+  await launch(file);
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+f");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  const count = page.locator(".find-count");
+  await find.fill("draft");
+  // The table's three matches come first, as the table sits above the body.
+  await expect(count).toHaveText("1 of 4");
+  expect(await tableHighlights()).toEqual({ match: ["draft", "draft"], current: ["Draft"] });
+  await expect(page.locator(".ProseMirror .md-find-current")).toHaveCount(0);
+  for (const step of ["2 of 4", "3 of 4", "4 of 4"]) {
+    await find.press("Enter");
+    await expect(count).toHaveText(step);
+  }
+  await expect(page.locator(".ProseMirror .md-find-current")).toHaveText("draft");
+  expect((await tableHighlights()).current).toEqual([]);
+  // A match typed into a cell is painted as well.
+  const status = page
+    .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "status", exact: true }) })
+    .locator(".frontmatter-value-edit");
+  await typeAtEnd(status, " draft");
+  await expect.poll(async () => (await tableHighlights()).match).toEqual(["Draft", "draft", "draft", "draft"]);
+  // Replace all rewrites the table's lines and leaves the read-only list item.
+  await page.keyboard.press("ControlOrMeta+h");
+  await page.getByRole("textbox", { name: "Replace with" }).fill("final");
+  await page.getByRole("button", { name: "Replace all" }).click();
+  await expect(count).toHaveText("1 of 1");
+  await expect.poll(tableHighlights).toEqual({ match: [], current: ["draft"] });
+  await page.getByRole("button", { name: "Close find" }).click();
+  expect(await tableHighlights()).toEqual({ match: [], current: [] });
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toMatch(/^---\ntitle: final notes # keep\nmeta:\n {2}status: "final" final\ntags:\n {2}- draft\n---\n\n?The final body\.\n$/);
+});
+
+test("the frontmatter table's find highlights go with a layout change or a tab switch", async () => {
+  const file = path.join(directory, "frontmatter-find-clear.md");
+  await writeFile(file, "---\ntitle: Draft notes\n---\n\nThe draft body.\n");
+  await launch(file);
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("draft");
+  const count = page.locator(".find-count");
+  await expect(count).toHaveText("1 of 2");
+  expect(await tableHighlights()).toEqual({ match: [], current: ["Draft"] });
+  // The card stays open and searches the Markdown source, which has no table.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .md-find-current")).toHaveText("Draft");
+  expect(await tableHighlights()).toEqual({ match: [], current: [] });
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await expect.poll(tableHighlights).toEqual({ match: [], current: ["Draft"] });
+  // A new tab closes the card.
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page).toHaveTitle("Untitled — md-easy");
+  expect(await tableHighlights()).toEqual({ match: [], current: [] });
+});
+
+test("closing find on a frontmatter match leaves the caret there", async () => {
+  const file = path.join(directory, "frontmatter-find-close.md");
+  await writeFile(file, "---\ntitle: Draft notes\n---\n\nFirst paragraph.\n\nThe draft body.\n");
+  await launch(file);
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+f");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  const count = page.locator(".find-count");
+  await find.fill("draft");
+  await expect(count).toHaveText("1 of 2");
+  // Step past the body's match and around to the title, then close the card.
+  await find.press("Enter");
+  await expect(count).toHaveText("2 of 2");
+  await find.press("Enter");
+  await expect(count).toHaveText("1 of 2");
+  await find.press("Escape");
+  // Typing replaces the title's match, as it would a match in the document.
+  await page.keyboard.type("Final");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toMatch(/^---\ntitle: Final notes\n---\n\n?First paragraph\.\n\nThe draft body\.\n$/);
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");

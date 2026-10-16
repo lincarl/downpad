@@ -42,8 +42,9 @@ interface FindBarHandle {
  * The find card: Mervin's floating search panel over the top right of the
  * document. Ctrl+F (or the toolbar's Find button) opens it with the field
  * focused, Ctrl+H adds the replace row, and Escape or Close hides it, clears
- * the highlights and returns focus to the document. The query and options
- * survive closing, so reopening searches again.
+ * the highlights and returns focus to the document, with the current match
+ * selected when it is editable. The query and options survive closing, so
+ * reopening searches again.
  */
 export class FindBar {
   private readonly host = document.createElement("div");
@@ -162,10 +163,12 @@ const FindBarView = forwardRef<
   const runSearch = (value = query, opts = options) => apply(controller.search(value, opts));
   const close = () => {
     setMode("find");
+    // Focus first, while the editor still knows the current match, so focus
+    // lands on it.
+    controller.focusEditor();
     controller.clear();
     setCounts({ current: 0, total: 0 });
     setOpen(false);
-    controller.focusEditor();
   };
 
   useImperativeHandle(ref, () => ({
