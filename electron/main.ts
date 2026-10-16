@@ -161,10 +161,8 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "ensure_attachments_dir": return ensureAttachmentsDirectory(path(args, "docPath"), string(args, "folderName"));
     case "write_attachment": {
       const bytes = args.bytes;
-      if (!Array.isArray(bytes) || !bytes.every((byte: unknown) => typeof byte === "number" && Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
-        throw new Error("Attachment bytes must contain values from 0 to 255.");
-      }
-      return writeAttachment(path(args, "docPath"), string(args, "folderName"), string(args, "fileName"), Uint8Array.from(bytes as number[]));
+      if (!(bytes instanceof Uint8Array)) throw new Error("Attachment bytes must be a Uint8Array.");
+      return writeAttachment(path(args, "docPath"), string(args, "folderName"), string(args, "fileName"), bytes);
     }
     case "read_image_bytes": return readImage(path(args));
     case "load_settings": return config.settings();

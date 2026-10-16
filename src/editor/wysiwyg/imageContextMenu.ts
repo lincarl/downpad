@@ -68,7 +68,7 @@ async function imageBlob(src: string, ctx: WysiwygContext): Promise<Blob | null>
   const abs = resolveImagePath(src, ctx.getFilePath());
   if (!abs) return null;
   const { bytes, mime } = await readImageBytes(abs);
-  return new Blob([new Uint8Array(bytes)], { type: mime });
+  return new Blob([bytes], { type: mime });
 }
 
 async function copyImage(src: string, ctx: WysiwygContext): Promise<void> {
@@ -82,7 +82,7 @@ async function replaceImage(view: EditorView, pos: number, node: ProseNode, ctx:
   const path = await pickImageFile();
   if (!path) return;
   const { bytes, mime } = await readImageBytes(path);
-  const src = await resolveImageSrc(new Uint8Array(bytes), mime, ctx);
+  const src = await resolveImageSrc(bytes, mime, ctx);
   if (src) setImageAttrs(view, pos, node, { src });
 }
 

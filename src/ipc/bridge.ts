@@ -24,7 +24,7 @@ export interface DesktopCommandArgs {
   watch_file: { path: string };
   unwatch_file: undefined;
   ensure_attachments_dir: { docPath: string; folderName: string };
-  write_attachment: { docPath: string; folderName: string; fileName: string; bytes: number[] };
+  write_attachment: { docPath: string; folderName: string; fileName: string; bytes: Uint8Array };
   read_image_bytes: { path: string };
   get_recent_files: { limit: number | null };
   record_file_opened: { path: string; openedAtMs: number };

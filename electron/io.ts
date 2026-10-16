@@ -175,5 +175,18 @@ export function imageMime(path: string): string | undefined {
 }
 
 export async function readImage(path: string): Promise<ImageBytes> {
-  return { bytes: Array.from(await readFile(absolutePath(path))), mime: imageMime(path) ?? "application/octet-stream" };
+  const file = await readFile(absolutePath(path));
+  return { bytes: ipcBytes(file), mime: imageMime(path) ?? "application/octet-stream" };
+}
+
+/** A file's bytes ready for IPC, without copying a large file again. IPC and the
+ *  context bridge send a typed array's whole backing buffer, so a buffer that
+ *  holds exactly the file is passed on as it is, and one that `readFile` took
+ *  from Node's shared pool (a file whose size the system reports as 0) is copied,
+ *  so no other bytes from the main process reach the renderer. */
+export function ipcBytes(file: Buffer): Uint8Array<ArrayBuffer> {
+  const { buffer } = file;
+  return buffer instanceof ArrayBuffer && file.byteOffset === 0 && file.byteLength === buffer.byteLength
+    ? new Uint8Array(buffer)
+    : new Uint8Array(file);
 }
