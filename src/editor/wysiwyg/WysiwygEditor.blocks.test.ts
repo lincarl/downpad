@@ -656,6 +656,17 @@ describe("the text written for a document", () => {
     expect(editor.getMarkdown()).toBe(first);
     expect(first).toBe(markdown.replace("Alpha word", "Alpha term").replace("Beta word", "Beta term"));
   });
+
+  it("does not depend on where a join earlier writes read back was", { timeout: 60_000 }, async () => {
+    const markdown = "Alpha\n# Head\nBeta\n\n* star item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+    const { editor, view } = await open(markdown);
+    // Reading back shows that "Beta" would join "Alpha" without a blank line.
+    deleteBlock(view, "Head");
+    expect(editor.getMarkdown()).toBe(markdown.replace("# Head\n", "\n"));
+    // The same two blocks, now one block further down.
+    view.dispatch(view.state.tr.insert(0, view.state.schema.nodes.paragraph.create(null, view.state.schema.text("New top."))));
+    expect(editor.getMarkdown()).toBe(`New top.\n\n${markdown.replace("# Head\n", "\n")}`);
+  });
 });
 
 describe("a block Milkdown cannot write", () => {

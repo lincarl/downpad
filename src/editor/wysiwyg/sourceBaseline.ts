@@ -212,8 +212,10 @@ export class SourceBaseline {
   /** The last document written, and its Markdown. */
   private last: { doc: ProseNode; markdown: string } | null = null;
   /** What reading back each window found (`reads`), keyed by its text and
-   *  pieces, for the windows of this write and the one before. It only speeds
-   *  up writing, because the budget is charged for every window either way. */
+   *  pieces, for the windows of this write and the one before. That is null,
+   *  or the join at fault counted from the window's first piece. It only
+   *  speeds up writing, because the budget is charged for every window either
+   *  way. */
   private windows = new Map<string, number | null>();
   private lastWindows = new Map<string, number | null>();
 
@@ -492,13 +494,16 @@ export class SourceBaseline {
     shape.push(`${leadOf(lower, layout)}:${lowerType}`);
     if (notes.size > 0) text += `${text.endsWith("\n") ? "" : "\n"}\n${[...notes].map((label) => `[^${label}]: .`).join("\n\n")}\n`;
 
+    // The same window can sit further up or down in another write, so the
+    // join at fault is kept as counted from the window's first piece.
     const key = `${text}\u0000${shape.join(",")}`;
     let wrong = this.windows.get(key) ?? this.lastWindows.get(key);
     if (wrong === undefined) {
-      wrong = this.findWrong(window, pieces, layout, text, starts, headStart, lowerType);
+      const found = this.findWrong(window, pieces, layout, text, starts, headStart, lowerType);
+      wrong = found === null ? null : found - window.first;
     }
     this.windows.set(key, wrong);
-    return wrong;
+    return wrong === null ? null : window.first + wrong;
   }
 
   /** Read `text`, the text of `window` (see `reads`), and find the join where
