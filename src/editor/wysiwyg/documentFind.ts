@@ -27,15 +27,16 @@ import {
   revealCell,
   type FrontmatterMatch,
 } from "./frontmatterFind";
+import { setFrontmatter } from "./frontmatterHistory";
 
 /** What the table side needs from WysiwygEditor. */
 export interface FrontmatterHost {
-  /** The YAML block the table shows, or null when no table is shown. */
+  /** The YAML block the table shows, or null when no table is shown. Replace
+   *  writes a new block with `setFrontmatter`, and WysiwygEditor draws the
+   *  table again when the transaction lands. */
   block(): string | null;
   /** The element the table is drawn in. */
   panel(): HTMLElement | null;
-  /** Publish a block Replace rewrote, and draw the table again. */
-  replaceBlock(block: string): void;
   /** The table's matches were found again after it was redrawn or a cell was
    *  edited, so the find card's count may be out of date. */
   changed(): void;
@@ -101,7 +102,7 @@ export class DocumentFind {
       return this.counts(view);
     }
     const rewritten = replaceInFrontmatter(block, [match], replacement);
-    if (rewritten !== block) this.host.replaceBlock(rewritten);
+    if (rewritten !== block) view.dispatch(setFrontmatter(view.state, view.state.tr, rewritten));
     // Go on from the end of the replacement, or past a match that stayed.
     const end = { ...match, from: rewritten !== block ? match.from + replacement.length : match.to };
     this.setQuery(query, opts);
@@ -116,13 +117,14 @@ export class DocumentFind {
 
   /** Replace every match, then search again from the top. */
   replaceAll(view: EditorView, replacement: string, query: string, opts: FindOptions): FindCounts {
-    // The document first, so the table's change report already carries its edits.
-    replaceAll(view, replacement, query, opts);
     const block = this.host.block();
+    const tr = view.state.tr;
     if (block != null) {
-      const rewritten = replaceInFrontmatter(block, findInFrontmatter(block, query, opts), replacement);
-      if (rewritten !== block) this.host.replaceBlock(rewritten);
+      setFrontmatter(view.state, tr, replaceInFrontmatter(block, findInFrontmatter(block, query, opts), replacement));
     }
+    // The table's and the document's replacements in one transaction, so one
+    // undo takes back both.
+    replaceAll(view, replacement, query, opts, tr);
     return this.search(view, query, opts);
   }
 

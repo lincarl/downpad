@@ -10,6 +10,8 @@
 //   - `matchRange`, `revealCell` and `focusMatch` locate a match in the drawn
 //     table by the data-line and data-part attributes FrontmatterPanel puts on
 //     each cell.
+//   - `changedCell` and `focusCaret` put the caret back at the text an undo or
+//     redo changed in the table (frontmatterHistory.ts).
 
 import {
   isValidEditableKey,
@@ -219,6 +221,29 @@ export function replaceInFrontmatter(
   return result;
 }
 
+/**
+ * The first cell where the table drawn for `after` shows other text than the
+ * table drawn for `before`, with `from` just past the changed text. Null when
+ * `after` shows the same text, or only lost cells at the end.
+ */
+export function changedCell(before: string, after: string): FrontmatterPosition | null {
+  const was = frontmatterCells(parseFrontmatterTable(before));
+  const cells = frontmatterCells(parseFrontmatterTable(after));
+  const index = cells.findIndex(
+    (cell, i) => cell.line !== was[i]?.line || cell.part !== was[i]?.part || cell.text !== was[i]?.text,
+  );
+  if (index < 0) return null;
+  const { line, part, text } = cells[index];
+  const old = was[index]?.text ?? "";
+  // The change ends where the text both cells end with begins, but not inside
+  // the text both start with.
+  let start = 0;
+  while (start < text.length && text[start] === old[start]) start++;
+  let end = text.length;
+  for (let o = old.length; end > start && o > start && text[end - 1] === old[o - 1]; o--) end--;
+  return { line, part, from: end };
+}
+
 /** Whether `a` comes before `b` in the table, top to bottom and key before value. */
 export function isBefore(a: FrontmatterPosition, b: FrontmatterPosition): boolean {
   if (a.line !== b.line) return a.line < b.line;
@@ -280,6 +305,26 @@ export function focusMatch(panel: Element, match: FrontmatterMatch): boolean {
   const selection = window.getSelection();
   if (!cell?.isContentEditable || !range || !selection) return false;
   cell.focus({ preventScroll: true });
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+/** Focus the cell at `position`, scrolled into view if needed, with the caret
+ *  at its offset. Returns false, and changes nothing, when the table does not
+ *  show the cell or shows it read-only. */
+export function focusCaret(panel: Element, position: FrontmatterPosition): boolean {
+  const cell = cellOf(panel, position);
+  const selection = window.getSelection();
+  if (!cell?.isContentEditable || !selection) return false;
+  let range = matchRange(panel, { ...position, to: position.from });
+  if (!range) {
+    // An empty cell has no text to hold the caret.
+    range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(true);
+  }
+  cell.focus();
   selection.removeAllRanges();
   selection.addRange(range);
   return true;

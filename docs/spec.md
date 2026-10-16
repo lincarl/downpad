@@ -9,7 +9,7 @@ md-easy is a desktop Markdown editor for Windows and Linux. It is designed for p
 - Keep the rendered document and Markdown source synchronized.
 - Work with multiple documents in tabs.
 - Open, create, save, and print Markdown files using familiar desktop controls and shortcuts.
-- Find and replace text within the active document from a find card that opens over the page. In the document view this includes the keys and values in the frontmatter table. YAML that the table shows read-only, such as a list, is found but not replaced. Undo does not revert replacements in the frontmatter table.
+- Find and replace text within the active document from a find card that opens over the page. In the document view this includes the keys and values in the frontmatter table. YAML that the table shows read-only, such as a list, is found but not replaced. One undo takes back a Replace all in both the table and the document.
 
 ## Markdown support
 
@@ -21,7 +21,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 - Syntax highlighting for code blocks, and VS Code's Markdown colors in the Markdown view.
 - Inline and block math rendered with KaTeX.
 - Mermaid diagrams rendered from fenced `mermaid` blocks.
-- YAML frontmatter, editable from the document view or as source.
+- YAML frontmatter, editable from the document view or as source. In the document view, edits in the frontmatter table and in the document share one undo history, so undo and redo go through them in the order they were made.
 
 ## Files and attachments
 

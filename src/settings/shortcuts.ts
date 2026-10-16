@@ -3,7 +3,9 @@
 // (src/App.tsx), the link view (src/editor/wysiwyg/linkView.ts), Tab in the
 // document view (src/editor/wysiwyg/tabExit.ts), and the Milkdown keymaps the
 // Crepe editor installs (preset-commonmark, preset-gfm, plugin-history;
-// CodeMirror's history keymap matches for undo and redo).
+// CodeMirror's history keymap matches for undo and redo). The frontmatter table
+// runs the document's undo and redo for the same keys
+// (src/editor/wysiwyg/frontmatterHistory.ts).
 // Keep this list in step when a binding changes.
 
 export interface Shortcut {

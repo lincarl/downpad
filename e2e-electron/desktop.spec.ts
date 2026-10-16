@@ -960,6 +960,45 @@ test("a click in the split's Markdown pane closes the slash menu and leaves Ente
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\nTyped.\n\n/\n");
 });
 
+test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed the table", async () => {
+  const file = path.join(directory, "frontmatter-undo.md");
+  await writeFile(file, "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n");
+  await launch(file);
+  const title = page
+    .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) })
+    .locator(".frontmatter-value-edit");
+  const body = page.locator(".milkdown .ProseMirror p").first();
+  await typeAtEnd(title, " v2");
+  await expect(page).toHaveTitle("● frontmatter-undo.md — md-easy");
+  // The caret stays in the cell, so typing goes on there.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(title).toHaveText("Draft notes # keep");
+  await expect(page).toHaveTitle("frontmatter-undo.md — md-easy");
+  await page.keyboard.type("!");
+  await expect(title).toHaveText("Draft notes # keep!");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(title).toHaveText("Draft notes # keep");
+
+  await body.click();
+  await page.keyboard.press("ControlOrMeta+h");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("draft");
+  await page.getByRole("textbox", { name: "Replace with" }).fill("final");
+  await page.getByRole("button", { name: "Replace all" }).click();
+  await expect(title).toHaveText("final notes # keep");
+  await page.getByRole("button", { name: "Close find" }).click();
+  // One Ctrl+Z in the document takes back the table's and the body's replacements.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(title).toHaveText("Draft notes # keep");
+  await expect(body).toHaveText("The draft body.");
+  await expect(page).toHaveTitle("frontmatter-undo.md — md-easy");
+  await page.keyboard.press("ControlOrMeta+y");
+  await expect(title).toHaveText("final notes # keep");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("---\ntitle: final notes # keep\nstatus: final\n---\n\nThe final body.\n");
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { FindOptions } from "./findEngine";
 import { FrontmatterPanel } from "./FrontmatterPanel";
-import { findInFrontmatter, matchRange, replaceInFrontmatter } from "./frontmatterFind";
+import { changedCell, findInFrontmatter, matchRange, replaceInFrontmatter } from "./frontmatterFind";
 
 const opts = (over: Partial<FindOptions> = {}): FindOptions => ({
   caseSensitive: false,
@@ -63,6 +63,25 @@ describe("findInFrontmatter", () => {
       );
       cleanup();
     }
+  });
+});
+
+describe("changedCell", () => {
+  const block = "---\ntitle: Draft notes\nstatus: draft\n---\n";
+
+  it("gives the first cell with other text and the end of the change in it", () => {
+    // Text added at the end, taken back, and added in the middle.
+    expect(changedCell(block, block.replace("notes", "notes v2"))).toEqual({ line: 0, part: "value", from: 14 });
+    expect(changedCell(block.replace("notes", "notes v2"), block)).toEqual({ line: 0, part: "value", from: 11 });
+    expect(changedCell(block, block.replace("Draft", "Draft X"))).toEqual({ line: 0, part: "value", from: 8 });
+    // A renamed key and a row added before the status row.
+    expect(changedCell(block, block.replace("status", "state"))).toEqual({ line: 1, part: "key", from: 5 });
+    expect(changedCell(block, block.replace("status", "key: \nstatus"))).toEqual({ line: 1, part: "key", from: 3 });
+  });
+
+  it("gives null when no shown text changed or only the last row went", () => {
+    expect(changedCell(block, block)).toBeNull();
+    expect(changedCell(block, block.replace("status: draft\n", ""))).toBeNull();
   });
 });
 
