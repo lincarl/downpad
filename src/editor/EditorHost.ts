@@ -178,9 +178,12 @@ export class EditorHost implements FindController {
   private readonly presentWaiters = new Set<() => void>();
   /** When the user last pressed a key (`performance.now()`). */
   private lastKeyAt = -Infinity;
+  /** When the user last typed text, which a key that moves the caret does not. */
+  private lastTypedAt = -Infinity;
   /** When the user last pressed a mouse button, pen or finger down. */
   private lastPointerAt = -Infinity;
-  /** Removes the window listeners that record `lastKeyAt` and `lastPointerAt`. */
+  /** Removes the window listeners that record when the user last pressed a
+   *  key, typed and pressed a pointer. */
   private readonly stopWatchingInput: () => void;
 
   constructor(
@@ -191,13 +194,18 @@ export class EditorHost implements FindController {
     const onKey = (): void => {
       this.lastKeyAt = performance.now();
     };
+    const onTyped = (): void => {
+      this.lastTypedAt = performance.now();
+    };
     const onPointer = (): void => {
       this.lastPointerAt = performance.now();
     };
     document.addEventListener("keydown", onKey, true);
+    document.addEventListener("beforeinput", onTyped, true);
     document.addEventListener("pointerdown", onPointer, true);
     this.stopWatchingInput = () => {
       document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("beforeinput", onTyped, true);
       document.removeEventListener("pointerdown", onPointer, true);
     };
   }
@@ -325,10 +333,10 @@ export class EditorHost implements FindController {
     return document.activeElement !== aimed.focus || this.lastKeyAt > aimed.at || this.lastPointerAt > aimed.at;
   }
 
-  /** Whether the user is typing in a pane: it has focus and took a key within
+  /** Whether the user is typing in a pane: it has focus and took text within
    *  `TYPING_PAUSE_MS`. */
   private typingIn(pane: Pane): boolean {
-    return pane.el.contains(document.activeElement) && performance.now() - this.lastKeyAt < TYPING_PAUSE_MS;
+    return pane.el.contains(document.activeElement) && performance.now() - this.lastTypedAt < TYPING_PAUSE_MS;
   }
 
   /**

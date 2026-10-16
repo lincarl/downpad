@@ -1165,6 +1165,7 @@ describe("EditorHost file drops", () => {
     const typeIn = (element: HTMLElement) => {
       element.focus();
       element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "x" }));
+      element.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "x" }));
     };
 
     // The document pane puts the file at a block edge, away from the typing.
@@ -1180,6 +1181,24 @@ describe("EditorHost file drops", () => {
     await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 20, target: line })!, "[b.csv](attachments/b.csv)");
     expect(fakeEditors.movedCaret).toBe(false);
     expect(document.activeElement).toBe(line);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts the caret after a file dropped on a Markdown pane right after a key there that typed nothing", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const host = new EditorHost(root, makeStore());
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
+    line.focus();
+    // Such as Shift+End, which selects to the end of the line.
+    line.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End", shiftKey: true }));
+
+    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 20, target: line })!, "[a.csv](attachments/a.csv)");
+
+    expect(fakeEditors.movedCaret).toBe(true);
     root.remove();
     await host.dispose();
   });
