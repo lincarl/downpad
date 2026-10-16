@@ -28,6 +28,8 @@ function setAttributes(element: Element, attributes: Readonly<Record<string, str
 export function installSlashMenuAccessibility(root: HTMLElement): () => void {
   const listId = `slash-menu-${++menuCount}`;
 
+  /** Mark the menu up as a listbox, and point the editor at the highlighted
+   *  option only while the menu is open. */
   const sync = (): void => {
     const menu = root.querySelector<HTMLElement>(".milkdown-slash-menu");
     const list = menu?.querySelector(".menu-groups");
