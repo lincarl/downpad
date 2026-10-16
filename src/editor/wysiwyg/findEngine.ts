@@ -256,20 +256,21 @@ export function replaceCurrent(
   return counts(next);
 }
 
+/** Replace every match and search again. The replacements go into `tr`, a
+ *  transaction from the current state. It may already hold a change that moves
+ *  no position, such as the frontmatter table's, so one undo takes back both. */
 export function replaceAll(
   view: EditorView,
   replacement: string,
   query: string,
   opts: FindOptions,
+  tr = view.state.tr,
 ): FindCounts {
-  const s = findKey.getState(view.state);
-  if (s && s.ranges.length) {
-    const tr = view.state.tr;
-    // Replace from last to first so earlier ranges keep their positions.
-    for (let i = s.ranges.length - 1; i >= 0; i--) {
-      replaceText(tr, s.ranges[i].from, s.ranges[i].to, replacement);
-    }
-    view.dispatch(tr);
+  const ranges = findKey.getState(view.state)?.ranges ?? [];
+  // Replace from last to first so earlier ranges keep their positions.
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    replaceText(tr, ranges[i].from, ranges[i].to, replacement);
   }
+  if (tr.docChanged) view.dispatch(tr);
   return runSearch(view, query, opts);
 }

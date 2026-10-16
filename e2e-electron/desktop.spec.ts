@@ -960,6 +960,91 @@ test("a click in the split's Markdown pane closes the slash menu and leaves Ente
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\nTyped.\n\n/\n");
 });
 
+test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed the table", async () => {
+  const file = path.join(directory, "frontmatter-undo.md");
+  await writeFile(file, "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n");
+  await launch(file);
+  const title = page
+    .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) })
+    .locator(".frontmatter-value-edit");
+  const body = page.locator(".milkdown .ProseMirror p").first();
+  await typeAtEnd(title, " v2");
+  await expect(page).toHaveTitle("● frontmatter-undo.md — md-easy");
+  // The caret stays in the cell, so typing goes on there.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(title).toHaveText("Draft notes # keep");
+  await expect(page).toHaveTitle("frontmatter-undo.md — md-easy");
+  await page.keyboard.type("!");
+  await expect(title).toHaveText("Draft notes # keep!");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(title).toHaveText("Draft notes # keep");
+
+  await body.click();
+  await page.keyboard.press("ControlOrMeta+h");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("draft");
+  await page.getByRole("textbox", { name: "Replace with" }).fill("final");
+  await page.getByRole("button", { name: "Replace all" }).click();
+  await expect(title).toHaveText("final notes # keep");
+  await page.getByRole("button", { name: "Close find" }).click();
+  // One Ctrl+Z in the document takes back the table's and the body's replacements.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(title).toHaveText("Draft notes # keep");
+  await expect(body).toHaveText("The draft body.");
+  await expect(page).toHaveTitle("frontmatter-undo.md — md-easy");
+  await page.keyboard.press("ControlOrMeta+y");
+  await expect(title).toHaveText("final notes # keep");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("---\ntitle: final notes # keep\nstatus: final\n---\n\nThe final body.\n");
+});
+
+test("Undo and Redo in the native menu go through the editors' undo history", async () => {
+  const file = path.join(directory, "menu-undo.md");
+  const original = "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n";
+  await writeFile(file, original);
+  await launch(file);
+  // Keep each native menu instead of showing it, so the test can choose its items.
+  await app!.evaluate(({ Menu }) => {
+    Menu.prototype.popup = function () {
+      Reflect.set(globalThis, "shownMenu", this);
+    };
+  });
+  /** Shift+right-click `target`, which opens the native menu, and choose `label` there. */
+  const choose = async (target: Locator, label: string): Promise<void> => {
+    await app!.evaluate(() => Reflect.set(globalThis, "shownMenu", null));
+    await target.click({ button: "right", modifiers: ["Shift"] });
+    await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "shownMenu") !== null)).toBe(true);
+    await app!.evaluate(({ BrowserWindow }, wanted) => {
+      const menu: Electron.Menu = Reflect.get(globalThis, "shownMenu");
+      const window = BrowserWindow.getAllWindows()[0]!;
+      menu.items.find((item) => item.label === wanted)!.click(undefined, window, window.webContents);
+    }, label);
+  };
+  const cell = (key: string) =>
+    page.locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) }).locator(".frontmatter-value-edit");
+
+  await typeAtEnd(cell("title"), " v2");
+  await typeAtEnd(cell("status"), " b");
+  await choose(cell("status"), "Undo");
+  await expect(cell("status")).toHaveText("draft");
+  await choose(cell("status"), "Undo");
+  await expect(cell("title")).toHaveText("Draft notes # keep");
+  await expect(page).toHaveTitle("menu-undo.md — md-easy");
+  await choose(cell("title"), "Redo");
+  await expect(cell("title")).toHaveText("Draft notes # keep v2");
+
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const line = page.locator(".cm-line", { hasText: "The draft body." });
+  await typeAtEnd(line, " Typed.");
+  await choose(line, "Undo");
+  await expect(line).toHaveText("The draft body.");
+  await choose(line, "Redo");
+  await expect(line).toHaveText("The draft body. Typed.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(original.replace("# keep", "# keep v2").replace("body.", "body. Typed."));
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");

@@ -8,9 +8,10 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import type { DesktopEventPayloads } from "../src/ipc/bridge";
+import type { DesktopEventPayloads, HistoryCommand } from "../src/ipc/bridge";
 import type { DefaultHandler } from "../src/ipc/contracts";
 import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
+import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
 import { ConfigStore, RecentSearch, statFiles } from "./storage";
@@ -61,6 +62,12 @@ function emit<K extends keyof DesktopEventPayloads>(event: K, payload: DesktopEv
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() && !mainWindow.webContents.isCrashed()) {
     mainWindow.webContents.send(`md-easy:event:${event}`, payload);
   }
+}
+
+/** Ask the renderer to run Undo or Redo, chosen in a native menu, in what has
+ *  the focus. */
+function requestHistory(command: HistoryCommand): void {
+  emit("history-requested", command);
 }
 
 function requestOpen(path: string): void {
@@ -387,7 +394,8 @@ async function createWindow(): Promise<void> {
       items.push({ label: "Add to dictionary", click: () => window.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord) });
       items.push({ type: "separator" });
     }
-    items.push({ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" });
+    // Undo and Redo run the focused editor's own history (menus.ts).
+    items.push(...historyItems(requestHistory, process.platform), { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" });
     Menu.buildFromTemplate(items).popup({ window });
   });
   window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
@@ -424,7 +432,7 @@ async function createWindow(): Promise<void> {
 async function start(): Promise<void> {
   await app.whenReady();
   await config.initialize();
-  Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }, { role: "windowMenu" }]) : null);
+  Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate(macApplicationMenu(requestHistory)) : null);
   registerIpc();
   protocol.handle("md-easy-file", async (request) => {
     try {
