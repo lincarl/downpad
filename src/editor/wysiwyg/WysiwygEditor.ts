@@ -10,7 +10,9 @@
 //     history (frontmatterHistory.ts), so undo takes back table and body edits
 //     in one order.
 //   - Exact source: every top-level block the user has not changed is written
-//     as the text Crepe parsed, not Milkdown's rewrite of it (sourceBaseline.ts).
+//     as the text Crepe parsed, not Milkdown's rewrite of it. When the blocks
+//     cannot be kept apart safely, the whole body is written in Milkdown's
+//     form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
 import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
@@ -49,7 +51,7 @@ import { codeBlockFindHighlights } from "./findReveal";
 import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
-import { SourceBaseline } from "./sourceBaseline";
+import { SourceBaseline, outlinePlugin, type OutlineNode } from "./sourceBaseline";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { changedCell, focusCaret, showsBlock } from "./frontmatterFind";
 import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } from "./frontmatterHistory";
@@ -118,6 +120,9 @@ export class WysiwygEditor {
    *  writes each top-level block the user has not changed since as its exact
    *  source, and Milkdown's form only for the blocks they changed. */
   private baseline: SourceBaseline | null = null;
+  /** The outline of the last text Crepe's parser read, which `rememberSource`
+   *  hands to the baseline so the source is not parsed again. */
+  private parsed: { text: string; outline: readonly OutlineNode[] | null } | null = null;
   /** The body of a split mirror that arrived before Crepe created its view, for
    *  example while preloadImages waits for image lookups. `mount` applies it. */
   private pendingBody: string | null = null;
@@ -267,6 +272,8 @@ export class WysiwygEditor {
     // Read `$` and `~` as math and strikethrough only where Markdown tools do,
     // so prices stay text. Must follow the LaTeX feature.
     this.crepe.editor.use(mathDelimiters);
+    // Keep where each top-level node of a parsed text starts and ends.
+    this.crepe.editor.use(outlinePlugin((text, outline) => (this.parsed = { text, outline })));
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
@@ -348,22 +355,23 @@ export class WysiwygEditor {
     }, 0);
   }
 
-  /** The document as Markdown. Joins the frontmatter block, the blank lines
-   *  after it and Crepe's body, and starts the body on a new line if the block
-   *  ends without one. Milkdown leaves out the empty line Crepe keeps after a
-   *  final list, code block, quote, table, rule or image. The body keeps the
-   *  exact source of every block that still says what Crepe parsed, so opening,
-   *  mirroring or undoing back never rewrites text the user has not changed,
-   *  and an edit rewrites only the blocks it touched. A typed closing `$` or
-   *  `~` that still waits for the next character is written as the formula or
-   *  strikethrough that deciding it now would make, as Save writes it
-   *  (`decidedDoc`). */
-  getMarkdown(): string {
-    return joinFrontmatter({
-      frontmatter: this.frontmatterBlock,
-      separator: this.frontmatterSeparator,
-      body: this.bodyMarkdown(),
-    });
+  /** The document as Markdown, or null when Milkdown cannot write it. Joins
+   *  the frontmatter block, the blank lines after it and Crepe's body, and
+   *  starts the body on a new line if the block ends without one. Milkdown
+   *  leaves out the empty line Crepe keeps after a final list, code block,
+   *  quote, table, rule or image. The body keeps the exact source of every
+   *  block that still says what Crepe parsed, so opening, mirroring or undoing
+   *  back never rewrites text the user has not changed, and an edit rewrites
+   *  only the blocks it touched. When it cannot keep the file's text safely,
+   *  such as when two lists would join, it rewrites the whole body. A typed
+   *  closing `$` or `~` that still waits for the next character is written as
+   *  the formula or strikethrough that deciding it now would make, as Save
+   *  writes it (`decidedDoc`). */
+  getMarkdown(): string | null {
+    const body = this.bodyMarkdown();
+    return body == null
+      ? null
+      : joinFrontmatter({ frontmatter: this.frontmatterBlock, separator: this.frontmatterSeparator, body });
   }
 
   /** Report an edit now instead of waiting for typing to pause. A caller that
@@ -403,10 +411,10 @@ export class WysiwygEditor {
    * still shows text the block no longer has.
    *
    * The replacement is reported like an edit after a ~200ms pause
-   * (`scheduleChange`). That report carries `markdown` itself, because the body
-   * still serializes as it did right after this parse (`getMarkdown`), so the
-   * host sees no change. The mirror never writes Milkdown's rewrite back over
-   * the author's exact text.
+   * (`scheduleChange`). That report carries `markdown` itself, because every
+   * block still matches the block of the source it was parsed from
+   * (`getMarkdown`), so the host sees no change. The mirror never writes
+   * Milkdown's rewrite back over the author's exact text.
    *
    * While Crepe is still creating the editor there is no view to replace, so the
    * body waits for `mount` to apply it.
@@ -586,6 +594,7 @@ export class WysiwygEditor {
     this.root = null;
     this.crepeRoot = null;
     this.baseline = null;
+    this.parsed = null;
     this.pendingBody = null;
     const crepe = this.crepe;
     const creating = this.createPromise;
@@ -609,28 +618,28 @@ export class WysiwygEditor {
   /** Record the body Crepe just parsed, so `getMarkdown` can keep its exact
    *  text for the blocks the user does not change. */
   private rememberSource(source: string): void {
+    const parsed = this.parsed;
+    this.parsed = null;
     this.baseline =
       this.crepe?.editor.action((ctx) => {
         const remark = ctx.get(remarkCtx);
-        return new SourceBaseline(source, ctx.get(editorViewCtx).state.doc, {
-          serialize: ctx.get(serializerCtx),
-          parse: (markdown) => remark.parse(markdown),
-        });
+        const tools = { serialize: ctx.get(serializerCtx), parse: (markdown: string) => remark.parse(markdown) };
+        return new SourceBaseline(source, ctx.get(editorViewCtx).state.doc, tools, parsed?.text === source ? parsed.outline : undefined);
       }) ?? null;
   }
 
   /** Crepe's document as Markdown, with the source text of unchanged blocks,
    *  and a typed closing mark that still waits written as Save writes it
-   *  (`decidedDoc`). */
-  private bodyMarkdown(): string {
-    if (!this.crepe) return "";
+   *  (`decidedDoc`). Null when Milkdown cannot write it. */
+  private bodyMarkdown(): string | null {
+    if (!this.crepe) return null;
     try {
       return this.crepe.editor.action((ctx) => {
         const doc = decidedDoc(ctx.get(editorViewCtx));
         return this.baseline ? this.baseline.write(doc) : ctx.get(serializerCtx)(doc);
       });
     } catch {
-      return "";
+      return null;
     }
   }
 
@@ -644,9 +653,11 @@ export class WysiwygEditor {
   }
 
   /** Report the current Markdown (the exact source while the body is unchanged)
-   *  through onChange. */
+   *  through onChange. Reports nothing when Milkdown cannot write the document,
+   *  so the tab keeps the last text it had. */
   private emitChange(): void {
-    this.onChange?.(this.getMarkdown());
+    const markdown = this.getMarkdown();
+    if (markdown != null) this.onChange?.(markdown);
   }
 
   /** Project the current YAML block through the React-owned frontmatter view. */

@@ -89,7 +89,8 @@ describe("the document view's Markdown", () => {
     const { editor, onChange } = await open(SOURCE);
     replace(editor, "docs", "Docs");
     await settle();
-    expect(lastReport(onChange)).toBe("Title\n=====\n\nLine  \nnext\n\nSee [Docs](https://x.y).\n\n[d]: https://x.y\n");
+    // The definition goes with the last link that used it.
+    expect(lastReport(onChange)).toBe("Title\n=====\n\nLine  \nnext\n\nSee [Docs](https://x.y).\n");
     pressUndo();
     await settle();
     expect(lastReport(onChange)).toBe(SOURCE);

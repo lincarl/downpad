@@ -34,6 +34,13 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
+/** The editor's Markdown, which Milkdown writes for every document here. */
+function markdownOf(editor: WysiwygEditor): string {
+  const markdown = editor.getMarkdown();
+  if (markdown == null) throw new Error("Milkdown could not write the document");
+  return markdown;
+}
+
 /** Mount the document editor on `markdown`, reporting its edits to `onChange`. */
 async function open(markdown: string, onChange = vi.fn()): Promise<{ editor: WysiwygEditor; root: HTMLElement }> {
   const root = document.createElement("div");
@@ -208,7 +215,7 @@ describe("math and strikethrough delimiters", () => {
     expect(formulas(root)).toEqual(["x"]);
     expect(root.querySelectorAll(".ProseMirror > p")[1].textContent).toMatch(/^Costs \$5 and /);
     edit(editor);
-    const saved = editor.getMarkdown();
+    const saved = markdownOf(editor);
     // Whether Milkdown escapes text that ends in a space depends on its text
     // writer. Both forms open the same way.
     expect(saved).toMatch(/^Edited\.\n\nCosts \\?\$5 and \$x\$ here\.\n$/);
@@ -346,7 +353,7 @@ describe("math and strikethrough delimiters", () => {
     const { editor, root } = await open(`Edit.\n\n${markdown}`);
     expect(formulas(root)).toEqual([]);
     edit(editor);
-    const saved = editor.getMarkdown();
+    const saved = markdownOf(editor);
     // remark-math's escape for a text `$` was dropped before `_`, `[` and `~`,
     // and two such dollars then read as a formula.
     expect(saved.match(/\\?\$/g)).toEqual(Array(6).fill("\\$"));
@@ -365,7 +372,7 @@ describe("math and strikethrough delimiters", () => {
     edit(editor);
     // Right after a formula, a run of dollars reads as text.
     expect(editor.getMarkdown()).toBe(`Edited.\n\n${paragraph}\n`);
-    expect(formulas((await open(editor.getMarkdown())).root)).toEqual(math);
+    expect(formulas((await open(markdownOf(editor))).root)).toEqual(math);
   });
 
   it.each([
@@ -379,7 +386,7 @@ describe("math and strikethrough delimiters", () => {
     expect(before).toEqual(math);
     edit(editor);
     expect(editor.getMarkdown()).toBe(`Edited.\n\n${saved}\n`);
-    expect(shown((await open(editor.getMarkdown())).root)).toEqual(before);
+    expect(shown((await open(markdownOf(editor))).root)).toEqual(before);
   });
 
   it("keeps a whole Windows line ending after a backslash at the end of a formula", { timeout: 60_000 }, async () => {
@@ -387,7 +394,7 @@ describe("math and strikethrough delimiters", () => {
     expect(formulas(root)).toEqual(["a\\\r\n"]);
     edit(editor);
     expect(editor.getMarkdown()).toBe("Edited.\n\n$a\\\r\n$ b\n");
-    expect(formulas((await open(editor.getMarkdown())).root)).toEqual(["a\\\r\n"]);
+    expect(formulas((await open(markdownOf(editor))).root)).toEqual(["a\\\r\n"]);
   });
 
   it.each([
@@ -868,7 +875,7 @@ describe("math and strikethrough delimiters", () => {
     type(view, " again");
     // The split's Markdown pane mirrors its text here in one change, which
     // redo puts back whole.
-    editor.setMarkdown(editor.getMarkdown().replace("only.", "only. Done."));
+    editor.setMarkdown(markdownOf(editor).replace("only.", "only. Done."));
     moveToEnd(view, "Note");
     moveTo(view, view.state.selection.from - " only. Done.".length);
     undoThenRedo();
