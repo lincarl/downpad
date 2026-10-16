@@ -36,8 +36,8 @@ export interface FrontmatterHost {
   panel(): HTMLElement | null;
   /** Publish a block Replace rewrote, and draw the table again. */
   replaceBlock(block: string): void;
-  /** The table's matches were found again after the table changed, so the
-   *  find card's count may be out of date. */
+  /** The table's matches were found again after it was redrawn or a cell was
+   *  edited, so the find card's count may be out of date. */
   changed(): void;
 }
 
@@ -156,7 +156,6 @@ export class DocumentFind {
     this.setQuery(this.query, this.opts);
     this.current = Math.min(this.current, this.matches.length - 1);
     this.paint(false);
-    this.host.changed();
   }
 
   /** Remember the search and find it again in the table's current block. */
@@ -222,6 +221,7 @@ export class DocumentFind {
       this.frame ??= requestAnimationFrame(() => {
         this.frame = null;
         this.refresh();
+        this.host.changed();
       });
     });
     this.observer.observe(panel, { childList: true, subtree: true, characterData: true });

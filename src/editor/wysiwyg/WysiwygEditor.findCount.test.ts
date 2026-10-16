@@ -2,6 +2,7 @@
 // The find card's count follows edits made while it is open (§5.13). These
 // tests use the real document editor to check which changes it reports.
 
+import { fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
@@ -70,6 +71,23 @@ describe("find count changes in the document view", () => {
     editor.setMarkdown("Alpha zeta.\n\nOmega zeta.\n\nzeta and zeta\n");
     expect(onFindChange).toHaveBeenCalledTimes(3);
     expect(editor.currentCounts()).toEqual({ current: 1, total: 4 });
+  });
+
+  it("reports a frontmatter table edit with the new count", { timeout: 60_000 }, async () => {
+    const { editor, onFindChange } = await open("---\ntitle: zeta\n---\n\nAlpha zeta.\n");
+    expect(editor.search("zeta", opts)).toEqual({ current: 1, total: 2 });
+    const value = await vi.waitFor(() => {
+      const cell = document.querySelector<HTMLElement>(".frontmatter-value-edit");
+      if (!cell) throw new Error("The frontmatter table is not drawn yet");
+      return cell;
+    });
+    // Let the table's first drawing report, so only the edit is left to report.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    onFindChange.mockClear();
+    value.textContent = "zeta zeta";
+    fireEvent.input(value);
+    await vi.waitFor(() => expect(onFindChange).toHaveBeenCalled());
+    expect(editor.currentCounts()).toEqual({ current: 1, total: 3 });
   });
 
   it("reports nothing without a query or when only the selection moves", { timeout: 60_000 }, async () => {
