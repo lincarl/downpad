@@ -82,6 +82,33 @@ describe("FindBar", () => {
     expect(active.isOpen()).toBe(false);
   });
 
+  it("keeps focus in the card when replacing removes the last match", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const controls = controller();
+    vi.mocked(controls.search).mockReturnValue({ current: 1, total: 2 });
+    vi.mocked(controls.replaceCurrent).mockReturnValue({ current: 1, total: 1 });
+    active = new FindBar(parent, controls);
+    active.show("replace");
+    const find = parent.querySelector<HTMLInputElement>('input[placeholder="Find in document"]')!;
+    fireEvent.change(find, { target: { value: "zeta" } });
+    const [replace, replaceAll] = parent.querySelectorAll<HTMLButtonElement>(".find-btn-text");
+
+    // A match is left, so the button keeps focus.
+    replace!.focus();
+    fireEvent.click(replace!);
+    expect(document.activeElement).toBe(replace);
+
+    // No match is left, so Replace all is disabled and hands focus to the
+    // find field before the browser can drop it to the page.
+    replaceAll!.focus();
+    fireEvent.click(replaceAll!);
+    expect(replaceAll!.disabled).toBe(true);
+    expect(document.activeElement).toBe(find);
+    fireEvent.keyDown(find, { key: "Escape" });
+    expect(active.isOpen()).toBe(false);
+  });
+
   it("shows the count an edit leaves while it is open with a query", () => {
     const parent = document.createElement("div");
     document.body.append(parent);
