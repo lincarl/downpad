@@ -597,13 +597,16 @@ export const closingDelimiterGuard = $prose(() => {
             // The typed text starts a new undo step, so undoing it keeps the
             // formula or strikethrough.
             const tr = closeHistory(view.state.tr);
-            // Text typed after struck text is not struck. Marks set with the
-            // strike would be cleared by a change right after it, such as a
-            // heading's new id.
+            // Closing replaced text, which clears marks set for the next
+            // character, such as by Ctrl+B. Text typed after struck text is not
+            // struck. Marks set with the closing change would be cleared by a
+            // change right after it, such as a heading's new id.
             const strikethrough = view.state.schema.marks.strike_through;
-            if (struck && strikethrough) {
-              tr.setStoredMarks(strikethrough.removeFromSet(stored ?? view.state.selection.$from.marks()));
-            }
+            const marks =
+              struck && strikethrough
+                ? strikethrough.removeFromSet(stored ?? view.state.selection.$from.marks())
+                : stored;
+            if (marks) tr.setStoredMarks(marks);
             view.dispatch(tr);
             typeText(view, text);
             return true;

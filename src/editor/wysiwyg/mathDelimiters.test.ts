@@ -502,6 +502,22 @@ describe("math and strikethrough delimiters", () => {
     expect(strikes(reopened.root)).toEqual(["old"]);
   });
 
+  it.each([
+    ["strong", "Let $x$**bold** now.\n"],
+    ["emphasis", "Let $x$*bold* now.\n"],
+  ])("gives the text typed right after a typed formula the %s set for it", { timeout: 60_000 }, async (mark, markdown) => {
+    const { crepe, root, view } = await openCrepe();
+    type(view, "Let $x$");
+    // Ctrl+B or Ctrl+I with no selection sets the mark for the next character.
+    const { schema } = view.state;
+    view.dispatch(view.state.tr.addStoredMark(schema.marks[mark].create()));
+    type(view, "bold");
+    view.dispatch(view.state.tr.removeStoredMark(schema.marks[mark]));
+    type(view, " now.");
+    expect(formulas(root)).toEqual(["x"]);
+    expect(crepe.getMarkdown()).toBe(markdown);
+  });
+
   it("keeps a formula when the text typed after it is undone", { timeout: 60_000 }, async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
