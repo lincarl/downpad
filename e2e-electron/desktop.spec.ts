@@ -488,7 +488,7 @@ test("pasting a copy of the whole document adds no empty line", async () => {
   await intro.click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ControlOrMeta+c");
-  await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe("Intro.\n\n> Quote\n");
+  await expect.poll(clipboardText).toBe("Intro.\n\n> Quote\n");
   // The document view keeps an empty line after the final quote. The copy's
   // HTML, which a paste reads, must leave it out too.
   await typeAtEnd(intro, "\n");
