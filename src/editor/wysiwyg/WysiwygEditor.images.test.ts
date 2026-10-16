@@ -99,6 +99,19 @@ describe("the first render", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(root.querySelectorAll("img")).toHaveLength(3);
   });
+
+  it("keeps a split mirror made while it waits for answers", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockImplementation(() => new Promise(() => {}));
+    const { root, mounting } = start(DOCUMENT);
+    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalled());
+
+    // Markdown typed in the split while the document pane is still being built.
+    editor!.setMarkdown("![Block](pic.png)\n\nNew text.\n");
+    await mounting;
+
+    expect(root.querySelector(".ProseMirror p")?.textContent).toBe("New text.");
+    expect(editor!.getMarkdown()).toBe("![Block](pic.png)\n\nNew text.\n");
+  });
 });
 
 describe("a late answer", () => {
