@@ -30,8 +30,9 @@
 // does so when the source's blocks do not match the document's one for one,
 // when a changed block held a definition, when a new footnote could change how
 // a kept block reads, when indented code could end in another place than in
-// the source, or when reading the windows back would take longer than writing
-// the whole document.
+// the source, when text follows a block that read as it did only at the very
+// end of the source, or when reading the windows back would take longer than
+// writing the whole document.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { RemarkParser } from "@milkdown/kit/transformer";
@@ -433,6 +434,7 @@ export class SourceBaseline {
         gap = (above.item >= 0 ? layout.gaps[above.item] : below.item > 0 ? layout.gaps[below.item - 1] : undefined) ?? BLANK_LINE;
         fresh = below.item < 0 || itemFresh(layout, below.item);
         if (below.item >= 0 && codeMayMove(layout, below.item, above, gap)) return null;
+        if (above.item >= 0 && readsOnlyAtEnd(layout, above.item)) return null;
         const ending = endingOf(above, layout);
         if (!apart(ending, above.text, gap, below.text)) {
           // Read the file's gap back if that fits the budget. Otherwise a blank
@@ -864,6 +866,19 @@ function codeMayMove(layout: SourceLayout, k: number, above: Piece | undefined, 
   const type = above && (above.item >= 0 ? layout.items[above.item].type : above.block?.type.name);
   if (type === "blockquote") return !/\n[ \t]*\n/.test(gap);
   return type !== undefined && STAYS_OPEN.has(type);
+}
+
+/**
+ * Whether source item `k` could read another way once text follows it. A tag
+ * alone on its line, such as `<custom-tag>`, right below a paragraph line in a
+ * list, quote or footnote ends that paragraph. At the very end of a text it
+ * then reads as a block of its own, and with even a line break after it, as
+ * part of the item above. That needs the paragraph line right above, so the
+ * parser did not start afresh on the tag (`itemFresh`), and the source must
+ * end right after it.
+ */
+function readsOnlyAtEnd(layout: SourceLayout, k: number): boolean {
+  return k === layout.items.length - 1 && !layout.tail.includes("\n") && !itemFresh(layout, k);
 }
 
 /** What ends `piece` (see `Ending`), worked out once. */

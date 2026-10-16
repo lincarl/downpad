@@ -684,6 +684,18 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => deleteBlock(view, "Then:"),
       "```\nmake\n```\n\n> - empty first item\n",
     ],
+    // At the end of a file with no line break after it, a tag alone on its
+    // line right below a list item reads as its own block. With anything
+    // after it, it reads as part of the item.
+    [
+      "a tag below a list that read as its own block only at the end of the file",
+      "- one\n- two\n<custom-tag>",
+      (view: EditorView) => {
+        const { paragraph } = view.state.schema.nodes;
+        view.dispatch(view.state.tr.insert(view.state.doc.content.size, paragraph.create(null, view.state.schema.text("After."))));
+      },
+      "- one\n- two\n\n<custom-tag>\n\nAfter.\n",
+    ],
     // Milkdown writes a heading with line breaks in setext form. Starting with
     // a comment, it reads as the comment and a paragraph "===", which would
     // take in the next line.
