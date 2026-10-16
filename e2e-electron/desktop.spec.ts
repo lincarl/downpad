@@ -742,6 +742,49 @@ test("typed dollar amounts and tildes stay text while a typed formula becomes ma
     );
 });
 
+test("a character composed right after a typed closing mark is typed once and decides the mark", async () => {
+  const file = path.join(directory, "composed.md");
+  await writeFile(file, "Start.\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  /** Compose through Chromium's input method path, showing each of `marked`
+   *  in turn and then committing `committed`. */
+  const compose = async (marked: string[], committed: string) => {
+    for (const text of marked) await session.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+    await session.send("Input.insertText", { text: committed });
+  };
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Then $x$");
+  await compose(["k", "か"], "か");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await page.keyboard.type(" and ~~old~~");
+  // Striking during the composition restarted it, which typed "n" as well.
+  await compose(["n", "な"], "な");
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+  await page.keyboard.type(" end.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start. Then $x$か and ~~old~~な end.\n");
+});
+
+test("a typed closing mark is decided in a heading, by Tab in a list and by a paste", async () => {
+  const file = path.join(directory, "decided.md");
+  await writeFile(file, "# Head\n\n- item\n- next\n\nOne.\n");
+  await launch(file);
+  // Milkdown gives a heading a new id after each key, which is no edit.
+  await typeAtEnd(page.locator(heading), " $x$ and ~~old~~ end");
+  // Tab redraws the list item, which then puts the cursor back where it was.
+  await typeAtEnd(page.locator(".milkdown .ProseMirror li p").nth(1), " $y$");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type(" more");
+  await app!.evaluate(({ clipboard }) => clipboard.writeText(", small"));
+  await typeAtEnd(page.locator(".milkdown .ProseMirror > p").last(), " Let $z$");
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(3);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("# Head $x$ and ~~old~~ end\n\n- item\n  - next $y$ more\n\nOne. Let $z$, small\n");
+});
+
 test("Save right after typing writes the last edit in the document and split views", async () => {
   const file = path.join(directory, "typed.md");
   await writeFile(file, "# Typed\n\nFirst line.\n");

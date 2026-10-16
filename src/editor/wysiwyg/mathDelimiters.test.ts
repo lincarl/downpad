@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
+import { undo } from "@milkdown/kit/prose/history";
 import { undoInputRule } from "@milkdown/kit/prose/inputrules";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -19,6 +20,8 @@ vi.stubGlobal("IntersectionObserver", class {
   unobserve(): void {}
   disconnect(): void {}
 });
+// prosemirror-view's pasteText makes a ClipboardEvent, which jsdom lacks.
+vi.stubGlobal("ClipboardEvent", class extends Event {});
 
 /** Editors to destroy after each test. */
 let opened: { destroy(): Promise<unknown> }[] = [];
@@ -66,13 +69,28 @@ function type(view: EditorView, text: string): void {
   }
 }
 
-/** Commit `text` the way an input method or dead key does, which inserts it
- *  without the typing hook, then end the composition. */
-async function compose(view: EditorView, text: string): Promise<void> {
-  view.dispatch(view.state.tr.insertText(text));
+/** Start composing `text` the way an input method or dead key does. The
+ *  browser reports the text through the typing hook while `view.composing` is
+ *  set, and marks the change as part of a composition. */
+function startComposition(view: EditorView, text: string): void {
+  Object.defineProperty(view, "composing", { value: true, configurable: true });
+  const { from, to } = view.state.selection;
+  const insert = () => view.state.tr.insertText(text, from, to).setMeta("composition", 1);
+  if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, text, insert))) view.dispatch(insert());
+}
+
+/** End the composition, and wait for the timeouts that Milkdown and md-easy
+ *  set when it ends. */
+async function endComposition(view: EditorView): Promise<void> {
+  Reflect.deleteProperty(view, "composing");
   view.dom.dispatchEvent(new Event("compositionend"));
-  // Milkdown runs the typing shortcuts in a timeout after the composition ends.
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Commit `text` through a composition. */
+async function compose(view: EditorView, text: string): Promise<void> {
+  startComposition(view, text);
+  await endComposition(view);
 }
 
 /** Press `key`, running the editor's key handlers the way a keydown does. */
@@ -84,6 +102,19 @@ function press(view: EditorView, key: string): void {
 function moveTo(view: EditorView, position: number): void {
   view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, position)));
 }
+
+/** Put the cursor at the end of the first textblock whose text starts with
+ *  `start`. */
+function moveToEnd(view: EditorView, start: string): void {
+  let end = -1;
+  view.state.doc.descendants((node, pos) => {
+    if (end < 0 && node.isTextblock && node.textContent.startsWith(start)) end = pos + node.nodeSize - 1;
+  });
+  moveTo(view, end);
+}
+
+/** The struck text on screen. */
+const strikes = (root: HTMLElement) => [...root.querySelectorAll("del")].map((del) => del.textContent);
 
 /** The position of the first inline formula. */
 function formulaAt(view: EditorView): number {
@@ -315,6 +346,8 @@ describe("math and strikethrough delimiters", () => {
     ["Let $a$, $b$ and $c$.", ["a", "b", "c"], "Let $a$, $b$ and $c$.\n"],
     // The first `$` that no backslash escapes ends a formula.
     ["Try $a$$b$ now.", ["a", "b"], "Try $a$$b$ now.\n"],
+    // An escaped `$` is no part of a run of dollars.
+    ["Pay \\$$x$ now.", ["x"], "Pay \\\\\\$$x$ now.\n"],
   ])("saves typed %j so it opens with the same formulas", { timeout: 60_000 }, async (typed, math, markdown) => {
     const { crepe, root, view } = await openCrepe();
     type(view, typed);
@@ -325,6 +358,18 @@ describe("math and strikethrough delimiters", () => {
     expect(reopened.crepe.getMarkdown()).toBe(markdown);
   });
 
+  it("never pairs a typed closing `$` across a formula or with part of `$$`", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe();
+    // Crepe's shortcut replaced the formula between the marks with U+FFFC.
+    type(view, "Cost $5 and $x$ items, about 7$. Inline $$E=mc^2$$ here.");
+    expect(formulas(root)).toEqual(["x"]);
+    const saved = crepe.getMarkdown();
+    // Whether Milkdown escapes text that ends in a space depends on its text
+    // writer. Both forms open the same way.
+    expect(saved).toMatch(/^Cost \\?\$5 and \$x\$ items, about 7\\\$\. Inline \\\$\\\$E=mc\^2\\\$\\\$ here\.\n$/);
+    expect(formulas((await openCrepe(saved)).root)).toEqual(["x"]);
+  });
+
   it.each([
     // Milkdown's shortcut would strike from the first `~`, not from `~~`.
     // Whether Milkdown escapes text that ends in a space depends on its text
@@ -332,11 +377,11 @@ describe("math and strikethrough delimiters", () => {
     ["About ~5, not ~~old~~.", ["old"], /^About \\?~5, not ~~old~~\.\n$/],
     // Milkdown's shortcut never struck inside a word.
     ["Cross a~b~c out.", ["b"], /^Cross a~~b~~c out\.\n$/],
+    // A tilde inside struck text pairs with nothing after it.
+    ["It ~~takes ~5 min~~ now 10~ish.", ["takes ~5 min"], /^It ~~takes \\?~5 min~~ now 10\\~ish\.\n$/],
   ])("strikes typed %j as GFM reads it", { timeout: 60_000 }, async (typed, struck, markdown) => {
     const { crepe, root, view } = await openCrepe();
     type(view, typed);
-    /** The struck text on screen. */
-    const strikes = (root: HTMLElement) => [...root.querySelectorAll("del")].map((del) => del.textContent);
     expect(strikes(root)).toEqual(struck);
     const saved = crepe.getMarkdown();
     expect(saved).toMatch(markdown);
@@ -377,6 +422,21 @@ describe("math and strikethrough delimiters", () => {
     expect([...root.querySelectorAll("del")].map((del) => del.textContent)).toEqual(["old", "new", "gone"]);
   });
 
+  it("decides a mark that waits before a composed character once the composition ends", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe();
+    type(view, "Then $x$");
+    await compose(view, "か");
+    expect(formulas(root)).toEqual(["x"]);
+    type(view, " and ~~old~~");
+    startComposition(view, "な");
+    // Changing the text around a composition restarts it in the browser, which
+    // typed its first character twice.
+    expect(view.state.doc.textContent).toMatch(/~~old~~な$/);
+    await endComposition(view);
+    expect(strikes(root)).toEqual(["old"]);
+    expect(crepe.getMarkdown()).toBe("Then $x$か and ~~old~~な\n");
+  });
+
   it("decides a closing mark on Enter or once the cursor leaves it", { timeout: 60_000 }, async () => {
     const { crepe, root, view } = await openCrepe("Start 1\n");
     // Before an existing digit, the cursor leaving keeps it text.
@@ -403,5 +463,61 @@ describe("math and strikethrough delimiters", () => {
     const reopened = await openCrepe(saved);
     expect(formulas(reopened.root)).toEqual(["y", "z"]);
     expect(reopened.root.querySelector(".ProseMirror > p")?.textContent).toMatch(/^Start \$x\$1 /);
+  });
+
+  it("decides typed marks in a heading, after Tab in a list and after a paste", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("# Head\n\n- item\n- next\n\nOne.\n");
+    // Milkdown gives a heading a new id after each key, which is no edit.
+    moveToEnd(view, "Head");
+    type(view, " $x$ and ~~old~~ end");
+    expect(formulas(root)).toEqual(["x"]);
+    expect(strikes(root)).toEqual(["old"]);
+    moveToEnd(view, "next");
+    type(view, " $y$");
+    press(view, "Tab");
+    type(view, " more");
+    moveToEnd(view, "One.");
+    type(view, " Let $z$");
+    view.pasteText(" is small");
+    expect(formulas(root)).toEqual(["x", "y", "z"]);
+    const saved = crepe.getMarkdown();
+    expect(saved).toMatch(/^# Head \$x\$ and ~~old~~ end\n\n[*-] item\n  [*-] next \$y\$ more\n\nOne\. Let \$z\$ is small\n$/);
+    const reopened = await openCrepe(saved);
+    expect(formulas(reopened.root)).toEqual(["x", "y", "z"]);
+    expect(strikes(reopened.root)).toEqual(["old"]);
+  });
+
+  it("keeps a formula when the text typed after it is undone", { timeout: 60_000 }, async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { crepe, root, view } = await openCrepe("One.\n");
+      moveToEnd(view, "One.");
+      type(view, " Let $z$");
+      // A pause makes the next key start a new undo step.
+      vi.setSystemTime(Date.now() + 700);
+      type(view, " wrong");
+      undo(view.state, view.dispatch);
+      expect(formulas(root)).toEqual(["z"]);
+      type(view, " right $w$");
+      press(view, "Enter");
+      undo(view.state, view.dispatch);
+      expect(formulas(root)).toEqual(["z", "w"]);
+      expect(crepe.getMarkdown()).toBe("One. Let $z$ right $w$\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a mark waiting while a selection covers it, so typing replaces it", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("One.\n");
+    moveToEnd(view, "One.");
+    type(view, " $x$");
+    // Shift+Left selects the mark.
+    const { from } = view.state.selection;
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, from - 1)));
+    expect(formulas(root)).toEqual([]);
+    expect(view.state.selection.empty).toBe(false);
+    type(view, "y");
+    expect(crepe.getMarkdown()).toBe("One. \\$xy\n");
   });
 });
