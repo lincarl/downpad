@@ -19,7 +19,7 @@ import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, rema
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
-import { $prose, insert } from "@milkdown/kit/utils";
+import { $prose } from "@milkdown/kit/utils";
 import { Slice } from "@milkdown/kit/prose/model";
 import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { dropIndicatorState } from "@milkdown/kit/plugin/cursor";
@@ -63,7 +63,7 @@ import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibilit
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
-import { dropPosition, insertBlocksAt, type DropTarget } from "./fileDrop";
+import { dropPosition, insertBlocksAt, type DropTarget, insertAtSelection } from "./fileDrop";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -436,12 +436,13 @@ export class WysiwygEditor {
 
   /** Insert markdown for a dropped file (§5.4). With the target of this
    *  editor's latest drop, its blocks go in at that edge, after any file of the
-   *  same drop. Otherwise they go in at the current selection. */
+   *  same drop. Otherwise they go in at the current selection. Either way the
+   *  caret ends up after them. */
   insertMarkdown(markdown: string, target: DropTarget | null = null): void {
     if (!this.crepe || !markdown) return;
     try {
       if (target && target === this.dropTarget) this.crepe.editor.action(insertBlocksAt(markdown, target));
-      else this.crepe.editor.action(insert(markdown));
+      else this.crepe.editor.action(insertAtSelection(markdown));
     } catch {
       // Editor not ready / torn down mid-drop; ignore.
     }

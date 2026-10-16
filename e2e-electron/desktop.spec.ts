@@ -1723,6 +1723,41 @@ test("a formula typed last in the document pane is kept by the split's Markdown 
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. a $x$ raw b $y$\n");
 });
 
+/** A one-pixel PNG to drop, written as `name`, returning its path. */
+async function pngFile(name: string): Promise<string> {
+  const file = path.join(directory, name);
+  await writeFile(file, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
+  return file;
+}
+
+/** Drop files a pixel above the bottom edge of `line`, where Crepe's drop
+ *  indicator marks the edge below it. */
+async function dropBelow(line: Locator, files: string[]): Promise<void> {
+  const box = (await line.boundingBox())!;
+  await dropFiles(line, files, { x: box.width / 2, y: box.height - 2 });
+}
+
+test("typing right after a file dropped on the document goes after it and keeps it", async () => {
+  const file = path.join(directory, "type-after-drop.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await launch(file);
+  const images = page.locator(".ProseMirror .milkdown-image-block");
+  // An image between lines, then typing.
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "Second line." }), [await pngFile("middle.png")]);
+  await expect(images).toHaveCount(1);
+  await page.keyboard.type("x");
+  // An image below the text, which ends the document, then typing.
+  const pageBox = (await page.locator(".editor-column").boundingBox())!;
+  await dropFiles(page.locator(".editor-column"), [await pngFile("last.png")], { x: pageBox.width / 2, y: pageBox.height - 40 });
+  await expect(images).toHaveCount(2);
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  const image = /!\[\]\(data:image\/png;base64,[^)]+\)/.source;
+  await expect.poll(() => readFile(file, "utf8")).toMatch(new RegExp(
+    `^First line\\.\\n\\nSecond line\\.\\n\\n${image}\\n\\nxThird line\\.\\n\\n${image}\\n\\ny\\n$`,
+  ));
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

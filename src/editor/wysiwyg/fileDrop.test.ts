@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import type { Node } from "@milkdown/kit/prose/model";
+import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import { WysiwygEditor } from "./WysiwygEditor";
@@ -68,6 +69,14 @@ function place(opened: WysiwygEditor, matches: (node: Node) => boolean, top: num
 const block = (type: string, text?: string) => (node: Node) =>
   node.type.name === type && (text === undefined || node.textContent === text);
 
+/** Type `text` at the editor's selection, as a key press does. */
+function type(opened: WysiwygEditor, text: string): void {
+  const view = viewOf(opened);
+  view.dispatch(view.state.tr.insertText(text));
+}
+
+const IMAGE = "![](attachments/pic.png)";
+
 describe("a file dropped on the document", () => {
   it("goes in at the block edge nearest the drop point, after earlier files of the drop", async () => {
     const opened = await open("First line.\n\nSecond line.\n\nThird line.\n");
@@ -114,5 +123,46 @@ describe("a file dropped on the document", () => {
 
     // Inserted at the cell's edge, the link would get a new column of its own.
     expect(opened.getMarkdown()).toBe(`First line.\n\n${table}\n[a.csv](attachments/a.csv)\n`);
+  });
+});
+
+describe("the caret after a file dropped on the document", () => {
+  it("goes to the next line after an image, so typing does not replace the image", async () => {
+    const opened = await open("First line.\n\nSecond line.\n\nThird line.\n");
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("paragraph", "Second line."), 140, 170);
+    place(opened, block("paragraph", "Third line."), 180, 210);
+
+    opened.insertMarkdown(IMAGE, opened.dropTargetAt(300, 168));
+    expect(viewOf(opened).state.selection).not.toBeInstanceOf(NodeSelection);
+    type(opened, "x");
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\nSecond line.\n\n${IMAGE}\n\nxThird line.\n`);
+  });
+
+  it("goes to the empty line Crepe adds after an image that ends the document", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("paragraph", "Second line."), 140, 170);
+
+    // Below the text.
+    opened.insertMarkdown(IMAGE, opened.dropTargetAt(300, 400));
+    expect(viewOf(opened).state.selection).toBeInstanceOf(TextSelection);
+    type(opened, "x");
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\nSecond line.\n\n${IMAGE}\n\nx\n`);
+  });
+
+  it("goes after an image dropped at the caret at the end of the document", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+
+    // A drop away from the text, such as on the toolbar.
+    opened.insertMarkdown(IMAGE);
+    expect(viewOf(opened).state.selection).not.toBeInstanceOf(NodeSelection);
+    type(opened, "x");
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\nSecond line.\n\n${IMAGE}\n\nx\n`);
   });
 });

@@ -6,8 +6,9 @@
 
 import { editorViewCtx, parserCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
+import { GapCursor } from "@milkdown/kit/prose/gapcursor";
 import { Slice, type Node } from "@milkdown/kit/prose/model";
-import { Selection } from "@milkdown/kit/prose/state";
+import { Selection, TextSelection, type Transaction } from "@milkdown/kit/prose/state";
 import { dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 
@@ -63,9 +64,38 @@ function isEmptyParagraph(node: Node | null | undefined): node is Node {
   return node?.type.name === "paragraph" && node.content.size === 0;
 }
 
+/** Where the last step of a transaction ends its change, in the new document. */
+function changeEnd(tr: Transaction): number {
+  let end = 0;
+  tr.mapping.maps[tr.mapping.maps.length - 1]?.forEach((_from, _to, _newFrom, newTo) => {
+    end = newTo;
+  });
+  return end;
+}
+
+/**
+ * Put a text caret after content just inserted, which ends at `end`, so typing
+ * goes on after it. Inserted text keeps the caret right after it. After an
+ * image the caret goes to the start of the next text. With no text after it,
+ * it goes in the gap after the image, where typing starts a new line, and
+ * where Crepe adds an empty last line at the end of the document. The image is
+ * never left selected, where the next key would replace it.
+ */
+function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transaction {
+  const $end = tr.doc.resolve(end);
+  if ($end.parent.inlineContent) return tr.setSelection(TextSelection.create(tr.doc, end));
+  const before = Selection.findFrom($end, -1, true);
+  if (endsInText && before) return tr.setSelection(before);
+  const after = Selection.findFrom($end, 1, true);
+  if (after) return tr.setSelection(after);
+  const gap = $end.parent.contentMatchAt($end.index()).defaultType?.isTextblock;
+  return tr.setSelection(gap ? new GapCursor($end) : before ?? Selection.near($end));
+}
+
 /**
  * Milkdown action that inserts Markdown's blocks at a drop target, as
- * ProseMirror inserts a block dropped there, and puts the caret at their end.
+ * ProseMirror inserts a block dropped there, and puts the caret after them
+ * (`placeCaret`).
  * The blocks go in beside the blocks at that edge, never splitting one. Where
  * they cannot go, such as between table cells, they go in at the nearest
  * place outside that can hold them. An empty line at the edge takes them, as
@@ -77,7 +107,7 @@ export function insertBlocksAt(markdown: string, target: DropTarget) {
   return (ctx: Ctx): void => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
-    if (!doc) return;
+    if (!doc?.lastChild) return;
     const { tr } = view.state;
     const slice = new Slice(doc.content, 0, 0);
     const at = dropPoint(tr.doc, target.pos, slice) ?? target.pos;
@@ -94,10 +124,24 @@ export function insertBlocksAt(markdown: string, target: DropTarget) {
     // replaced range, that takes it past the inserted blocks.
     target.pos = to;
     // Take the end from the step, which can have moved the insert to fit.
-    let end = tr.mapping.map(to);
-    tr.mapping.maps[tr.mapping.maps.length - 1].forEach((_from, _to, _newFrom, newTo) => {
-      end = newTo;
-    });
-    view.dispatch(tr.setSelection(Selection.near(tr.doc.resolve(end), -1)).scrollIntoView());
+    view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
+  };
+}
+
+/**
+ * Milkdown action that inserts Markdown at the selection, as Milkdown's
+ * `insert` does, for a file dropped away from the document text (§5.4). The
+ * caret then goes after it (`placeCaret`).
+ */
+export function insertAtSelection(markdown: string) {
+  return (ctx: Ctx): void => {
+    const view = ctx.get(editorViewCtx);
+    const doc = ctx.get(parserCtx)(markdown);
+    if (!doc?.lastChild) return;
+    const { tr } = view.state;
+    const { openStart, openEnd } = tr.selection.content();
+    tr.replaceSelection(new Slice(doc.content, openStart, openEnd));
+    if (!tr.docChanged) return;
+    view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
   };
 }
