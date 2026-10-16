@@ -22,6 +22,7 @@ import { ParserState } from "@milkdown/kit/transformer";
 import { $prose, insert } from "@milkdown/kit/utils";
 import { Slice } from "@milkdown/kit/prose/model";
 import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { dropIndicatorState } from "@milkdown/kit/plugin/cursor";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -62,6 +63,7 @@ import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibilit
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
+import { dropPosition, insertBlocksAt, type DropTarget } from "./fileDrop";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -168,6 +170,9 @@ export class WysiwygEditor {
     panel: () => this.fmPanel,
     changed: () => this.onFindChange?.(),
   });
+  /** The target of the latest drop on this document. Every transaction maps its
+   *  position, so it stays at the same edge, after the files already inserted. */
+  private dropTarget: DropTarget | null = null;
 
   async mount(
     root: HTMLElement,
@@ -291,7 +296,8 @@ export class WysiwygEditor {
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
-    // to that document would never be reported.
+    // to that document would never be reported. The same plugin keeps a drop
+    // target's position in step with each edit.
     this.crepe.editor.use(
       $prose(
         () =>
@@ -299,6 +305,8 @@ export class WysiwygEditor {
             state: {
               init: () => null,
               apply: (tr) => {
+                // An insert at the target maps it past the inserted blocks.
+                if (this.dropTarget && tr.docChanged) this.dropTarget.pos = tr.mapping.map(this.dropTarget.pos);
                 // Skip the changes undo history leaves out, by the rule it uses.
                 // That is a change kept out of history (heading ids, list labels,
                 // the empty last line) or a plugin's follow-up to one, which
@@ -406,11 +414,34 @@ export class WysiwygEditor {
     this.emitChange();
   }
 
-  /** Insert markdown at the current selection (used by drag-and-drop, §5.4). */
-  insertMarkdown(markdown: string): void {
+  /** Aim a file drop at a viewport point (§5.4). The files go in at the block
+   *  edge nearest the point, which Crepe's drop indicator marked during the
+   *  drag, or at the start or end for a point above or below the document.
+   *  Returns the target for `insertMarkdown`, or null without an editor. */
+  dropTargetAt(x: number, y: number): DropTarget | null {
+    const pos = this.withView((view) => dropPosition(view, x, y), null);
+    this.dropTarget = pos === null ? null : { pos };
+    return this.dropTarget;
+  }
+
+  /** Hide Crepe's drop indicator. The app takes file drops before Crepe sees
+   *  them, so Crepe never hides it itself. */
+  hideDropIndicator(): void {
+    try {
+      this.crepe?.editor.action((ctx) => ctx.set(dropIndicatorState.key, null));
+    } catch {
+      // Editor not ready or torn down; it has no indicator to hide.
+    }
+  }
+
+  /** Insert markdown for a dropped file (§5.4). With the target of this
+   *  editor's latest drop, its blocks go in at that edge, after any file of the
+   *  same drop. Otherwise they go in at the current selection. */
+  insertMarkdown(markdown: string, target: DropTarget | null = null): void {
     if (!this.crepe || !markdown) return;
     try {
-      this.crepe.editor.action(insert(markdown));
+      if (target && target === this.dropTarget) this.crepe.editor.action(insertBlocksAt(markdown, target));
+      else this.crepe.editor.action(insert(markdown));
     } catch {
       // Editor not ready / torn down mid-drop; ignore.
     }
@@ -615,6 +646,7 @@ export class WysiwygEditor {
     this.opened = { baseline: null };
     this.parsed = null;
     this.pendingBody = null;
+    this.dropTarget = null;
     const crepe = this.crepe;
     const creating = this.createPromise;
     // Null this synchronously: all public operations become no-ops immediately,

@@ -3,7 +3,7 @@
 // window-close guard. All listener ownership stays in this service so
 // AppRuntime can dispose the group as one unit.
 
-import type { EditorHost } from "../editor/EditorHost";
+import type { DropPoint, EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
 import { sameFilePath } from "../files/pathIdentity";
 import { readFile } from "../ipc/commands";
@@ -26,7 +26,9 @@ export interface DesktopEventDependencies {
   editorHost: EditorHost;
   scheduler: SnapshotScheduler;
   run(action: () => Promise<unknown>): void;
-  handleDrop(paths: string[]): Promise<void>;
+  /** Open or embed dropped files. It reads where they go from `drop`, the
+   *  drop event, before it first awaits. */
+  handleDrop(paths: string[], drop: DropPoint): Promise<void>;
 }
 
 export class DesktopEventBindings {
@@ -146,12 +148,14 @@ export class DesktopEventBindings {
       if (!event.dataTransfer || !hasFiles(event)) return;
       event.preventDefault();
       event.stopPropagation();
+      // The editor never sees this drop, so clear the indicator it drew for it.
+      this.dependencies.editorHost.hideDropIndicator();
       const bridge = desktopBridge();
       const paths = Array.from(event.dataTransfer.files)
         .map((file) => bridge.getPathForFile(file))
         .filter((path) => path.length > 0);
       if (paths.length > 0) {
-        this.dependencies.run(() => this.dependencies.handleDrop(paths));
+        this.dependencies.run(() => this.dependencies.handleDrop(paths, event));
       }
     };
     // Capture native file drops before editor plugins upload or navigate them.

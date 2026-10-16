@@ -1612,17 +1612,76 @@ test("a reload from disk while settings rebuild the split's document view leaves
   await expect(markdownLine).toHaveText("New text from disk. Typed after.");
 });
 
-/** Drop files from the desktop onto the middle of an element, through
- *  Chromium's drag emulation, so the app gets their real paths. */
-async function dropFiles(target: Locator, files: string[]): Promise<void> {
+/** Drop files from the desktop onto an element, at `position` in its box or
+ *  in its middle, through Chromium's drag emulation, so the app gets their
+ *  real paths. */
+async function dropFiles(target: Locator, files: string[], position?: { x: number; y: number }): Promise<void> {
   const box = (await target.boundingBox())!;
+  const x = box.x + (position?.x ?? box.width / 2);
+  const y = box.y + (position?.y ?? box.height / 2);
   const cdp = await page.context().newCDPSession(page);
   const data = { items: [], files, dragOperationsMask: 1 };
   for (const type of ["dragEnter", "dragOver", "drop"] as const) {
-    await cdp.send("Input.dispatchDragEvent", { type, x: box.x + box.width / 2, y: box.y + box.height / 2, data });
+    await cdp.send("Input.dispatchDragEvent", { type, x, y, data });
   }
   await cdp.detach();
 }
+
+/** Write a small CSV file to drop, returning its path. */
+async function csvFile(name: string): Promise<string> {
+  const file = path.join(directory, name);
+  await writeFile(file, "a,b\n");
+  return file;
+}
+
+test("files dropped on the document go in where they were dropped", async () => {
+  const file = path.join(directory, "drop-on-document.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await launch(file);
+  const secondLine = page.locator(".ProseMirror p", { hasText: "Second line." });
+  const box = (await secondLine.boundingBox())!;
+  // Low on the line, where Crepe's drop indicator marks the edge below it.
+  await dropFiles(secondLine, [await csvFile("a.csv"), await csvFile("b.csv")], { x: box.width / 2, y: box.height - 2 });
+  await expect(page.locator(".ProseMirror p").nth(3)).toHaveText(/b\.csv/);
+  // The indicator goes once the files are in.
+  await expect(page.locator(".milkdown-drop-indicator")).toBeHidden();
+  // On the empty page below the text.
+  const pageBox = (await page.locator(".editor-column").boundingBox())!;
+  await dropFiles(page.locator(".editor-column"), [await csvFile("c.csv")], { x: pageBox.width / 2, y: pageBox.height - 40 });
+  await expect(page.locator(".ProseMirror p").last()).toHaveText(/c\.csv/);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "First line.\n\nSecond line.\n\n[a.csv](attachments/a.csv)\n\n[b.csv](attachments/b.csv)\n\nThird line.\n\n[c.csv](attachments/c.csv)\n",
+  );
+});
+
+test("a Markdown file dropped on the document opens without leaving the drop indicator behind", async () => {
+  const file = path.join(directory, "drop-markdown.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await writeFile(other, "# Other\n");
+  await launch(file);
+  await dropFiles(page.locator(".ProseMirror p", { hasText: "Second line." }), [other]);
+  await expect(page.locator(heading)).toHaveText("Other");
+  await page.getByRole("tab", { name: /drop-markdown\.md/ }).click();
+  await expect(page.locator(".ProseMirror p").first()).toHaveText("First line.");
+  await expect(page.locator(".milkdown-drop-indicator").first()).toBeHidden();
+});
+
+test("a file dropped on the split's document pane goes in there while the Markdown pane has focus", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("drop-on-document-pane.md", "First line.\n\nSecond line.\n");
+  await markdownLine.click();
+  const box = (await documentLine.boundingBox())!;
+  await dropFiles(documentLine, [await csvFile("notes.csv")], { x: box.width / 2, y: box.height - 2 });
+  await expect(page.locator(".editor-pane-wysiwyg .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  // The document pane has focus now, with the caret after the file.
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Typed after the drop.");
+  await page.keyboard.press("ControlOrMeta+s");
+  const saved = "First line.\n\n[notes.csv](attachments/notes.csv)\n\nTyped after the drop.\n\nSecond line.\n";
+  await expect.poll(() => readFile(file, "utf8")).toBe(saved);
+  await expect(page.locator(".editor-pane-raw .cm-line").nth(2)).toHaveText("[notes.csv](attachments/notes.csv)");
+});
 
 test("a file dropped while typing in the split's Markdown pane lands at the caret and keeps the rest as written", async () => {
   // The document view would write this heading and these bullets another way.

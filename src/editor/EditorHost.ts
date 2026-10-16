@@ -29,6 +29,7 @@ import type { DocumentViewFailure, EditorLayout } from "../state/types";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { forgetImageAnswers } from "./wysiwyg/imageView";
+import type { DropTarget } from "./wysiwyg/fileDrop";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
 import { applySpellcheck } from "./wysiwyg/spellcheck";
@@ -38,6 +39,10 @@ import type { FindCounts, FindOptions } from "./wysiwyg/findEngine";
 import { releaseFindRoom } from "./wysiwyg/findReveal";
 
 type View = "wysiwyg" | "raw";
+
+export type { DropTarget };
+/** Where a file was dropped: the viewport point and the element under it. */
+export type DropPoint = Pick<MouseEvent, "clientX" | "clientY" | "target">;
 
 interface Pane {
   tabId: string;
@@ -174,17 +179,47 @@ export class EditorHost implements FindController {
     this.windowLayout = layout;
   }
 
-  /** Insert markdown at the caret of the pane being edited (§5.4): the split's
-   *  Markdown pane while it holds focus, otherwise the document editor, or the
-   *  Markdown source in the Markdown-only view. A file drop lands here with no
-   *  click or focus on a pane, so the split catches up first and the target
+  /** Aim the files of a drop (§5.4). A drop on the document pane, or on the
+   *  page around it in the Document view, goes in at the block edge nearest
+   *  the drop point, which Crepe's drop indicator marked during the drag, or
+   *  at the start or end for a drop above or below the text. The document
+   *  pane takes focus, as after Crepe's own drops, so the inserts go there
+   *  even if the split's Markdown pane had focus. Returns null for a drop
+   *  anywhere else, such as on the Markdown pane, whose files go in at the
+   *  caret. Call it while handling the drop event. */
+  dropTarget(drop: DropPoint): DropTarget | null {
+    if (this.disposed) return null;
+    const pane = this.active();
+    const { target } = drop;
+    if (!pane?.wysiwyg || !(target instanceof Node)) return null;
+    if (!pane.el.contains(target) && !target.contains(this.root)) return null;
+    // The split catches up first, so the target is a place in the latest text.
+    this.flush();
+    const aimed = pane.wysiwyg.dropTargetAt(drop.clientX, drop.clientY);
+    pane.wysiwyg.focus();
+    return aimed;
+  }
+
+  /** Hide the drop indicator the document pane drew while files were dragged
+   *  over it. The app takes file drops before the editor sees them (§5.4). */
+  hideDropIndicator(): void {
+    if (this.disposed) return;
+    this.active()?.wysiwyg?.hideDropIndicator();
+  }
+
+  /** Insert markdown for a dropped file in the pane being edited (§5.4): the
+   *  split's Markdown pane while it holds focus, otherwise the document
+   *  editor, or the Markdown source in the Markdown-only view. The document
+   *  editor puts it at the drop's target from `dropTarget`, or at its caret
+   *  without one. The Markdown source puts it at its caret. The drop lands
+   *  here after reading the file, so the split catches up first and the target
    *  pane holds the other pane's latest edit. The Markdown pane reports the
    *  insert at once, like typing, and keeps the rest of its text as written. */
-  insertMarkdown(markdown: string): void {
+  insertMarkdown(markdown: string, target: DropTarget | null = null): void {
     if (this.disposed) return;
     this.flush();
     const pane = this.focusedSplitRaw() ?? this.active();
-    if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown);
+    if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target);
     else if (pane?.raw) pane.raw.insertText(markdown);
   }
 

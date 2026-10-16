@@ -3,7 +3,7 @@
 // actions consumed by React components.
 
 import type { Store } from "../state/store";
-import type { EditorHost } from "../editor/EditorHost";
+import type { DropPoint, DropTarget, EditorHost } from "../editor/EditorHost";
 import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
@@ -119,7 +119,7 @@ export class AppRuntime {
       editorHost: this.editorHost,
       scheduler: this.scheduler,
       run: (action) => this.run(action),
-      handleDrop: (paths) => this.handleDrop(paths),
+      handleDrop: (paths, drop) => this.handleDrop(paths, drop),
     });
 
     // Recent view (§5.8). Opening a file from it shows the editor first, then
@@ -519,23 +519,28 @@ export class AppRuntime {
 
   /**
    * Explorer drag-drop (spec §5.4): a markdown file opens (honoring the unsaved
-   * guard); image files embed at the cursor; other files are copied into the
-   * attachments folder and linked.
+   * guard); image files embed where they were dropped on the document, or at
+   * the cursor; other files are copied into the attachments folder and linked
+   * the same way.
    */
-  private async handleDrop(paths: string[]): Promise<void> {
+  private async handleDrop(paths: string[], drop: DropPoint): Promise<void> {
     // A dropped markdown file opens in its own tab (§5.19).
     const md = paths.find((p) => classifyDrop(p) === "md");
     if (md) {
       await this.files.openPath(md);
       return;
     }
-    // Image/attachment drops embed at the cursor; they need an editor to target.
-    // With no document open, create one first so the drop has somewhere to go.
+    // Image/attachment drops need an editor to target. With no document open,
+    // create one first so the drop has somewhere to go.
+    let target: DropTarget | null = null;
     if (!this.store.get().activeTabId) await this.files.newDocument();
     else if (this.store.get().view === "recent") await this.showActiveDoc();
+    // Aim now, during the drop event, while the drop point is over the text the
+    // file was dropped on. Reading the file comes after.
+    else target = this.editorHost.dropTarget(drop);
     for (const path of paths) {
-      if (classifyDrop(path) === "image") await this.embedDroppedImage(path);
-      else await this.attachDroppedFile(path);
+      if (classifyDrop(path) === "image") await this.embedDroppedImage(path, target);
+      else await this.attachDroppedFile(path, target);
     }
   }
 
@@ -548,13 +553,16 @@ export class AppRuntime {
     };
   }
 
-  private async embedDroppedImage(path: string): Promise<void> {
+  /** Embed a dropped image at the drop's target, or at the cursor without one. */
+  private async embedDroppedImage(path: string, target: DropTarget | null): Promise<void> {
     const { bytes, mime } = await readImageBytes(path);
     const src = await resolveImageSrc(bytes, mime, this.imageStoreContext());
-    if (src) this.editorHost.insertMarkdown(mdImage("", src));
+    if (src) this.editorHost.insertMarkdown(mdImage("", src), target);
   }
 
-  private async attachDroppedFile(path: string): Promise<void> {
+  /** Copy a dropped file into the attachments folder and link it at the drop's
+   *  target, or at the cursor without one. */
+  private async attachDroppedFile(path: string, target: DropTarget | null): Promise<void> {
     // Non-image files always go to attachments (§5.7), which needs a saved doc.
     if (!this.store.get().doc.filePath && !(await this.files.save())) return;
     const filePath = this.store.get().doc.filePath;
@@ -567,7 +575,7 @@ export class AppRuntime {
       name,
       bytes,
     );
-    this.editorHost.insertMarkdown(mdLink(name, rel));
+    this.editorHost.insertMarkdown(mdLink(name, rel), target);
   }
 
   /** Run a file action, surfacing failures without crashing the shell. */

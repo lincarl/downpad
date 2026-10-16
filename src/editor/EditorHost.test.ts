@@ -50,6 +50,10 @@ const fakeEditors = vi.hoisted(() => ({
   /** When each document pane build starts and ends, and when the host forgets
    *  the image answers, in order. */
   events: [] as string[],
+  /** The viewport point the document pane last aimed a drop at. */
+  droppedAt: null as [number, number] | null,
+  /** The drop target the document pane's last insert went to, if any. */
+  insertedAt: null as { pos: number } | null,
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -59,9 +63,10 @@ const MARKDOWN_COUNTS = { current: 0, total: 4 };
 vi.mock("./wysiwyg/WysiwygEditor", () => ({
   WysiwygEditor: class {
     private onChange: ((markdown: string) => void) | null = null;
+    private root: HTMLElement | null = null;
 
     async mount(
-      _root: HTMLElement,
+      root: HTMLElement,
       markdown: string,
       cb: { onChange(markdown: string): void; onFindChange?(): void },
       style: { bullet: string },
@@ -70,6 +75,7 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       fakeEditors.mounted.push({ markdown, bullet: style.bullet });
       fakeEditors.events.push(`build ${markdown}`);
       fakeEditors.duringMount?.();
+      this.root = root;
       this.onChange = cb.onChange;
       fakeEditors.wysiwygChange = cb.onChange;
       fakeEditors.wysiwygFindChange = cb.onFindChange ?? null;
@@ -90,10 +96,24 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       this.onChange?.(fakeEditors.markdown);
     }
 
+    /** Like the real editor, aim a drop at a viewport point. */
+    dropTargetAt(x: number, y: number): { pos: number } {
+      fakeEditors.droppedAt = [x, y];
+      return { pos: 7 };
+    }
+
+    /** Take focus with a caret in the pane. */
+    focus(): void {
+      if (!this.root) return;
+      const caret = this.root.querySelector("textarea") ?? this.root.appendChild(document.createElement("textarea"));
+      caret.focus();
+    }
+
     /** Like the real editor, hold the insert back until typing pauses. */
-    insertMarkdown(markdown: string): void {
+    insertMarkdown(markdown: string, target: { pos: number } | null = null): void {
       fakeEditors.markdown = `${fakeEditors.markdown}\n\n${markdown}`;
       fakeEditors.pending = true;
+      fakeEditors.insertedAt = target;
     }
 
     /** The pane now shows the mirrored text, dropping anything it held. */
@@ -219,6 +239,8 @@ beforeEach(() => {
   fakeEditors.wysiwygFindChange = null;
   fakeEditors.rawFindChange = null;
   fakeEditors.events = [];
+  fakeEditors.droppedAt = null;
+  fakeEditors.insertedAt = null;
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -950,6 +972,26 @@ describe("EditorHost changes while a document pane builds", () => {
   });
 });
 
+describe("EditorHost file drops", () => {
+  it("aims a drop on the page around the document, but not one elsewhere in the window", async () => {
+    const page = document.createElement("div");
+    const root = document.createElement("div");
+    const toolbar = document.createElement("div");
+    page.append(root);
+    document.body.append(toolbar, page);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+
+    expect(host.dropTarget({ clientX: 300, clientY: 20, target: toolbar })).toBeNull();
+    expect(fakeEditors.droppedAt).toBeNull();
+    expect(host.dropTarget({ clientX: 300, clientY: 600, target: page })).toEqual({ pos: 7 });
+    expect(fakeEditors.droppedAt).toEqual([300, 600]);
+    page.remove();
+    toolbar.remove();
+    await host.dispose();
+  });
+});
+
 describe("EditorHost flush", () => {
   it("reports typing the visible document pane has not announced yet", async () => {
     const store = makeStore();
@@ -1087,7 +1129,7 @@ describe("EditorHost split catch-up", () => {
     await host.dispose();
   });
 
-  it("puts a file dropped while the Markdown pane has focus at its caret, as written", async () => {
+  it("puts a file dropped on the Markdown pane while it has focus at its caret, as written", async () => {
     const { root, store, host } = await openSplit();
     document.body.append(root);
     const caret = document.createElement("textarea");
@@ -1096,12 +1138,36 @@ describe("EditorHost split catch-up", () => {
     fakeEditors.rawText = "Markdown text, typed";
     fakeEditors.rawChange!(fakeEditors.rawText);
 
-    host.insertMarkdown("[notes.csv](attachments/notes.csv)");
+    const target = host.dropTarget({ clientX: 600, clientY: 40, target: caret });
+    host.insertMarkdown("[notes.csv](attachments/notes.csv)", target);
 
     // The document pane would report its own form of the whole text.
     expect(store.get().doc.markdown).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
     host.flush();
     expect(fakeEditors.mirrored).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
+    expect(target).toBeNull();
+    expect(document.activeElement).toBe(caret);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on the document pane at the drop point while the Markdown pane has focus", async () => {
+    const { root, host } = await openSplit();
+    document.body.append(root);
+    const caret = document.createElement("textarea");
+    root.querySelector(".editor-pane-raw")!.append(caret);
+    caret.focus();
+    const line = document.createElement("p");
+    root.querySelector(".editor-pane-wysiwyg")!.append(line);
+
+    const target = host.dropTarget({ clientX: 40, clientY: 120, target: line });
+    host.insertMarkdown("[notes.csv](attachments/notes.csv)", target);
+
+    expect(fakeEditors.droppedAt).toEqual([40, 120]);
+    expect(fakeEditors.insertedAt).toBe(target);
+    // The document pane takes focus, so typing after the drop goes there too.
+    expect(root.querySelector(".editor-pane-wysiwyg")!.contains(document.activeElement)).toBe(true);
+    expect(fakeEditors.rawText).toBe("original markdown");
     root.remove();
     await host.dispose();
   });
