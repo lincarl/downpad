@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import { createCodeBlockCommand } from "@milkdown/kit/preset/commonmark";
-import { undo } from "@milkdown/kit/prose/history";
+import { redo, undo } from "@milkdown/kit/prose/history";
 import { undoInputRule } from "@milkdown/kit/prose/inputrules";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -672,6 +672,62 @@ describe("math and strikethrough delimiters", () => {
       undo(view.state, view.dispatch);
       expect(formulas(root)).toEqual(["z", "w"]);
       expect(crepe.getMarkdown()).toBe("One. Let $z$ right $w$\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a closing mark that redo puts back wait again, but not one that undo puts back", { timeout: 60_000 }, async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { editor, root } = await open("One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n");
+      const view = viewOf(editor);
+      // A pause makes the next change start a new undo step.
+      const pause = () => vi.setSystemTime(Date.now() + 700);
+      const undoThenRedo = () => {
+        undo(view.state, view.dispatch);
+        redo(view.state, view.dispatch);
+      };
+      moveToEnd(view, "One.");
+      type(view, " Let $x$");
+      undoThenRedo();
+      type(view, " y");
+      moveToEnd(view, "Two.");
+      type(view, " was ~old~");
+      undoThenRedo();
+      type(view, " new");
+      // Undoing the formula that leaving the editor made keeps the text.
+      moveToEnd(view, "Three.");
+      type(view, " $z$");
+      pause();
+      view.dom.dispatchEvent(new FocusEvent("blur"));
+      undo(view.state, view.dispatch);
+      type(view, " w");
+      // A digit typed after a mark keeps it text, also once a redo deletes
+      // the digit again.
+      moveToEnd(view, "Four.");
+      type(view, " $5-$1");
+      pause();
+      const end = view.state.selection.from;
+      view.dispatch(view.state.tr.delete(end - 1, end));
+      undoThenRedo();
+      type(view, " z");
+      // Two redos in a row, where the second puts back the digit that kept
+      // the first mark text, and another mark.
+      moveToEnd(view, "Five.");
+      type(view, " $a$");
+      pause();
+      type(view, "5 and $b$");
+      undo(view.state, view.dispatch);
+      undo(view.state, view.dispatch);
+      redo(view.state, view.dispatch);
+      redo(view.state, view.dispatch);
+      type(view, " c");
+      expect(formulas(root)).toEqual(["x", "b"]);
+      expect(strikes(root)).toEqual(["old"]);
+      expect(editor.getMarkdown()).toBe(
+        "One. Let $x$ y\n\nTwo. was ~~old~~ new\n\nThree. \\$z\\$ w\n\nFour. \\$5-\\$ z\n\nFive. \\$a\\$5 and $b$ c\n",
+      );
     } finally {
       vi.useRealTimers();
     }

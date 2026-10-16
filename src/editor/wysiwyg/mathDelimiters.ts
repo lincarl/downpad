@@ -17,9 +17,10 @@
 
 import type { MilkdownPlugin } from "@milkdown/kit/ctx";
 import { customInputRulesKey } from "@milkdown/kit/prose";
-import { closeHistory } from "@milkdown/kit/prose/history";
+import { closeHistory, isHistoryTransaction, redoDepth } from "@milkdown/kit/prose/history";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
 import type { Mark, Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
+import { Mapping } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { RemarkParser } from "@milkdown/kit/transformer";
 import { $prose, $remark } from "@milkdown/kit/utils";
@@ -699,6 +700,26 @@ function afterComposition(view: EditorView): void {
   if (empty && closingMark(view.state, from, "") === "wait") view.dispatch(view.state.tr.setMeta(waitingKey, from - 1));
 }
 
+/** After a redo, the change that lets a closing `$` or `~` that the redo put
+ *  back right before the cursor wait again, as it did when it was typed, or
+ *  null. `transactions` took `before` to `state`. A mark that undo puts back
+ *  stays text, so undoing the formula or strikethrough that Save or leaving
+ *  the editor made keeps the text. A mark that the redo did not put back,
+ *  such as one whose next character the redo deletes again, keeps the
+ *  decision made before. Only one mark waits, so one that an earlier redo
+ *  let wait stays text. The text typed after it kept it text then, since a
+ *  formula or strikethrough it became is put back by a redo of its own
+ *  first. */
+function waitAfterRedo(transactions: readonly Transaction[], before: EditorState, state: EditorState): Transaction | null {
+  if (!transactions.some(isHistoryTransaction) || redoDepth(state) >= redoDepth(before)) return null;
+  const { empty, from } = state.selection;
+  if (!empty || closingMark(state, from, "") !== "wait") return null;
+  const mapping = new Mapping();
+  for (const tr of transactions) mapping.appendMapping(tr.mapping);
+  // Mapped back to the document before the redo, the mark was not there.
+  return mapping.invert().mapResult(from - 1, 1).deletedAfter ? state.tr.setMeta(waitingKey, from - 1) : null;
+}
+
 /** Makes a typed `$` or `~` close math or strikethrough only where Markdown
  *  would read the same text that way. One that never could, such as after a
  *  space, stays text. One that could waits for the next character, since a `$`
@@ -707,10 +728,11 @@ function afterComposition(view: EditorView): void {
  *  leaving it, or another edit such as a paste. A cursor moved between the
  *  marks, as by a click or Left, keeps it waiting until the cursor leaves the
  *  span, so the text there can still be edited. Changes nobody typed, such as
- *  a heading's new id, leave it waiting. A `$` or `~` in a code block or
- *  inline code, or one that ends up there, is code text. Crepe's and
- *  Milkdown's typing shortcuts decided at once, and Milkdown's could strike
- *  from a different `~` than GFM. */
+ *  a heading's new id, leave it waiting, and a mark that a redo puts back
+ *  waits again. A `$` or `~` in a code block or inline code, or one that
+ *  ends up there, is code text. Crepe's and Milkdown's typing shortcuts
+ *  decided at once, and Milkdown's could strike from a different `~` than
+ *  GFM. */
 export const closingDelimiterGuard = $prose(() => {
   /** The editor's view, to tell whether a composition is running. */
   let editorView: EditorView | undefined;
@@ -792,8 +814,11 @@ export const closingDelimiterGuard = $prose(() => {
     },
     /** Decide a waiting mark once a change says so, in the same update, so
      *  views drawn for that change already see the result. Crepe's list
-     *  items restore the cursor to where it was when they were drawn. */
-    appendTransaction(_transactions, _before, state) {
+     *  items restore the cursor to where it was when they were drawn. A mark
+     *  that a redo put back waits again instead (`waitAfterRedo`). */
+    appendTransaction(transactions, before, state) {
+      const redone = waitAfterRedo(transactions, before, state);
+      if (redone) return redone;
       const waiting = waitingKey.getState(state);
       if (!waiting?.decide || editorView?.composing || keepsWaiting(state, waiting.pos)) return null;
       return decide(state, waiting.pos);
