@@ -430,6 +430,8 @@ describe("math and strikethrough delimiters", () => {
     ["Open 9~5, lunch 12~1 daily.", "Open 9\\~5, lunch 12\\~1 daily.\n"],
     ["Plan 3~5일, 7~9일.", "Plan 3\\~5일, 7\\~9일.\n"],
     ["Cross a~b~c and x~~y~~z out.", "Cross a\\~b\\~c and x\\~\\~y\\~\\~z out.\n"],
+    // Letters outside the Basic Multilingual Plane take two UTF-16 units.
+    ["Cross 𠀀~a~ and 𝑥~b~ out.", "Cross 𠀀\\~a\\~ and 𝑥\\~b\\~ out.\n"],
   ])("opens no strikethrough with a typed tilde right after a letter or digit in %j", { timeout: 60_000 }, async (typed, markdown) => {
     const { crepe, root, view } = await openCrepe();
     type(view, typed);

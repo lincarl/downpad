@@ -730,7 +730,9 @@ test("typed dollar amounts and tildes stay text while a typed formula becomes ma
   // A closing `$` waits for the next character, and Enter decides it too.
   await page.keyboard.type("Inline $E=mc^2$ math and $x$");
   await page.keyboard.press("Enter");
-  await page.keyboard.type("End.");
+  // A tilde right after a letter outside the Basic Multilingual Plane opens
+  // nothing either.
+  await page.keyboard.type("End 𝑥~a~ b.");
   await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
   await expect(page.locator(".milkdown .ProseMirror del")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+s");
@@ -738,7 +740,7 @@ test("typed dollar amounts and tildes stay text while a typed formula becomes ma
     .poll(() => readFile(file, "utf8"))
     .toBe(
       "Start. Tickets cost \\$5 for kids and \\$10, or \\$5-\\$10. Expect \\~5 to \\~10 or \\~5-\\~10 minutes.\n\n" +
-        "Inline $E=mc^2$ math and $x$\n\nEnd.\n",
+        "Inline $E=mc^2$ math and $x$\n\nEnd 𝑥\\~a\\~ b.\n",
     );
 });
 

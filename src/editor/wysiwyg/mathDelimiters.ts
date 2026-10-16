@@ -450,6 +450,13 @@ function classOf(character: string): "space" | "punctuation" | undefined {
  *  which belongs to the letter before it. */
 const isWordCharacter = (character: string): boolean => /[\p{L}\p{M}\p{N}]/u.test(character);
 
+/** The character before `index` in `text`. One outside the Basic Multilingual
+ *  Plane, such as 𝑥, takes two UTF-16 units. It is taken whole, since
+ *  Electron 44's V8 does not match such a character with a class of `\p{...}`
+ *  escapes followed by `$`. */
+const characterBefore = (text: string, index: number): string =>
+  [...text.slice(Math.max(0, index - 2), index)].at(-1) ?? "";
+
 /** Where strikethrough opens that the run of tildes at the end of `text` closes
  *  when `next` follows, or -1. GFM pairs the runs from the start of the
  *  paragraph. Each run of one or two that can close takes the nearest open run
@@ -484,7 +491,7 @@ function strikeOpening(text: string, next: string): number {
     }
     if (last) return -1;
     const opens = !after || (after === "punctuation" && before);
-    if (opens && !isWordCharacter(text.charAt(index - 1))) open.push({ index, size });
+    if (opens && !isWordCharacter(characterBefore(text, index))) open.push({ index, size });
   }
   return -1;
 }
