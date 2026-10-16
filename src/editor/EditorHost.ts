@@ -237,10 +237,15 @@ export class EditorHost implements FindController {
   }
 
   /**
-   * Insert markdown for a file of a drop (§5.4) in the pane `aimDrop` chose.
-   * It goes in at the drop's target, after the drop's earlier files, or at the
-   * pane's caret. If a tab or layout switch hid that pane since the drop, it
-   * goes in at the caret of the pane being edited.
+   * Insert markdown for a file of a drop (§5.4) into the document it was
+   * dropped on, in the pane `aimDrop` chose, even if another tab is in front
+   * now. It goes in at the drop's target, after the drop's earlier files, or
+   * at the pane's caret. If that editor is gone, as after a reload from disk,
+   * or a layout switch hid it, it goes in at the caret of the pane being
+   * edited while the same document is in front. An edit in a hidden pane of
+   * the document in front would leave the shown pane behind. Returns false,
+   * inserting nothing, when the document is closed or no longer has an
+   * editor.
    *
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
@@ -258,15 +263,17 @@ export class EditorHost implements FindController {
     const aimed = this.drops.get(drop);
     if (this.disposed || !aimed) return false;
     let { pane, target } = aimed;
-    if (pane.el.hidden) {
-      const current = this.focusedSplitRaw() ?? this.active();
+    if (!this.isLive(pane) || (pane.tabId === this.activeTabId && pane.el.hidden)) {
+      const current = drop.tabId === this.activeTabId ? this.focusedSplitRaw() ?? this.active() : null;
       if (!current) return false;
       pane = current;
       target = null;
     }
-    this.flush();
+    const shown = pane.tabId === this.activeTabId && !pane.el.hidden;
+    if (shown) this.flush();
     if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target);
     else pane.raw?.insertText(markdown, target, this.typingIn(pane));
+    if (!shown) return true;
     this.flush();
     if (aimed.onPane && !typing) {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
@@ -694,6 +701,11 @@ export class EditorHost implements FindController {
       if (pane && !pane.el.hidden && pane.el.contains(element)) return pane;
     }
     return element.contains(this.root) ? this.active() : null;
+  }
+
+  /** Whether a pane still has the editor it was built with. */
+  private isLive(pane: Pane): boolean {
+    return this.panes.get(paneKey(pane.tabId, pane.view)) === pane && (pane.wysiwyg ?? pane.raw) !== null;
   }
 
   /** Whether the user is typing in a Markdown pane, which has focus and took

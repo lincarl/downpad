@@ -1831,6 +1831,38 @@ test("a file dropped on the split's Markdown pane goes in there, where it was dr
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\nSecond line.[notes.csv](attachments/notes.csv) Typed.\n");
 });
 
+test("a file dropped on a document goes into it after another tab comes to the front", async () => {
+  const other = path.join(directory, "other.md");
+  await writeFile(other, "Other line.\n");
+  await launch(other);
+  await page.getByRole("button", { name: "Open options" }).click();
+  await page.getByRole("menuitem", { name: "New document" }).click();
+  const line = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await line.click();
+  await page.keyboard.type("Alpha line.");
+  // The untitled document asks where to save before its attachments folder
+  // exists. Hold that answer back until the other tab is in front.
+  const saved = path.join(directory, "sub", "saved.md");
+  await mkdir(path.dirname(saved));
+  await app!.evaluate(({ dialog }, filePath) => {
+    dialog.showSaveDialog = () => new Promise((resolve) => {
+      Reflect.set(globalThis, "answerSave", () => resolve({ canceled: false, filePath }));
+    });
+  }, saved);
+  await dropBelow(line, [await csvFile("notes.csv")]);
+  await expect.poll(() => app!.evaluate(() => typeof Reflect.get(globalThis, "answerSave"))).toBe("function");
+  await page.getByRole("tab", { name: /other\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first()).toHaveText("Other line.");
+  await app!.evaluate(() => (Reflect.get(globalThis, "answerSave") as () => void)());
+  await expect.poll(() => stat(path.join(directory, "sub", "attachments", "notes.csv")).then(() => true, () => false)).toBe(true);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toHaveText("Other line.");
+  await page.getByRole("tab", { name: /saved\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toBe("Alpha line.\n\n[notes.csv](attachments/notes.csv)\n");
+  expect(await readFile(other, "utf8")).toBe("Other line.\n");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

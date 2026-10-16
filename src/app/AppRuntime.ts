@@ -521,7 +521,8 @@ export class AppRuntime {
    * Explorer drag-drop (spec §5.4): a markdown file opens (honoring the unsaved
    * guard); image files embed where they were dropped on the document, or at
    * the cursor; other files are copied into the attachments folder and linked
-   * the same way.
+   * the same way. The files go into the document they were dropped on, even if
+   * another tab is in front by the time a file is read.
    */
   private async handleDrop(paths: string[], point: DropPoint): Promise<void> {
     // A dropped markdown file opens in its own tab (§5.19).
@@ -547,9 +548,21 @@ export class AppRuntime {
         else await this.attachDroppedFile(path, drop);
       }
     } finally {
-      // Each drop keeps its own target until its files are in.
       this.editorHost.releaseDrop(drop);
     }
+  }
+
+  /** The saved path of an open tab's document, or null if it is untitled or closed. */
+  private tabFilePath(tabId: string): string | null {
+    return this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
+  }
+
+  /** Save the document a drop went to, if it is untitled. Only the document in
+   *  front can be saved, so a drop on a document now behind another tab stops
+   *  here. Resolves true once the document has a path. */
+  private async saveDropDocument(drop: FileDrop): Promise<boolean> {
+    if (this.tabFilePath(drop.tabId)) return true;
+    return this.store.get().activeTabId === drop.tabId && (await this.files.save());
   }
 
   /** Context for image storage: settings, current path, and prompt-to-save. */
@@ -561,19 +574,29 @@ export class AppRuntime {
     };
   }
 
+  /** Context for storing a dropped image, with the path of the document it
+   *  was dropped on. */
+  private dropImageContext(drop: FileDrop): ImageStoreContext {
+    return {
+      getSettings: () => this.store.get().settings,
+      getFilePath: () => this.tabFilePath(drop.tabId),
+      requestSave: () => this.saveDropDocument(drop),
+    };
+  }
+
   /** Embed a dropped image where its drop goes in. */
   private async embedDroppedImage(path: string, drop: FileDrop): Promise<void> {
     const { bytes, mime } = await readImageBytes(path);
-    const src = await resolveImageSrc(bytes, mime, this.imageStoreContext());
-    if (src) await this.editorHost.insertDropped(drop, mdImage("", src));
+    const src = await resolveImageSrc(bytes, mime, this.dropImageContext(drop));
+    if (src) await this.insertDropped(drop, mdImage("", src), path);
   }
 
-  /** Copy a dropped file into the attachments folder and link it where its
-   *  drop goes in. */
+  /** Copy a dropped file into the attachments folder beside the document it
+   *  was dropped on, and link it where its drop goes in. */
   private async attachDroppedFile(path: string, drop: FileDrop): Promise<void> {
     // Non-image files always go to attachments (§5.7), which needs a saved doc.
-    if (!this.store.get().doc.filePath && !(await this.files.save())) return;
-    const filePath = this.store.get().doc.filePath;
+    if (!(await this.saveDropDocument(drop))) return;
+    const filePath = this.tabFilePath(drop.tabId);
     if (!filePath) return;
     const { bytes } = await readImageBytes(path);
     const name = baseName(path);
@@ -583,7 +606,17 @@ export class AppRuntime {
       name,
       bytes,
     );
-    await this.editorHost.insertDropped(drop, mdLink(name, rel));
+    await this.insertDropped(drop, mdLink(name, rel), path);
+  }
+
+  /** Insert a dropped file's Markdown into the document it was dropped on. If
+   *  that document is closed, or behind another tab without its editor, it
+   *  gets nothing and no other document gets it instead. A copy in the
+   *  attachments folder stays there. */
+  private async insertDropped(drop: FileDrop, markdown: string, path: string): Promise<void> {
+    if (!(await this.editorHost.insertDropped(drop, markdown))) {
+      console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on is closed or not loaded`);
+    }
   }
 
   /** Run a file action, surfacing failures without crashing the shell. */

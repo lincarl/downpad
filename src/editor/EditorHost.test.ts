@@ -1060,6 +1060,74 @@ describe("EditorHost file drops", () => {
     root.remove();
     await host.dispose();
   });
+
+  it("puts a file into the document it was dropped on after another tab comes to the front", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const first = root.querySelector<HTMLElement>(".editor-pane-wysiwyg")!;
+    const line = first.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
+    await host.reloadActiveDoc();
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+
+    expect(fakeEditors.insertedInto).toBe(first);
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a pane that a layout switch hid into the pane shown now", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await host.setLayout("markdown");
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+
+    // The hidden document pane would leave the Markdown pane, and its edits, behind.
+    expect(fakeEditors.insertedInto).toBeNull();
+    expect(store.get().doc.markdown).toBe("original markdown[a.csv](attachments/a.csv)");
+    await host.dispose();
+  });
+
+  it("puts nothing in another document once the one a file was dropped on is closed", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const drop = host.aimDrop()!;
+    store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
+    await host.reloadActiveDoc();
+    await host.discardTab("tab-1");
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(false);
+
+    expect(fakeEditors.insertedInto).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file at the caret of the document it was dropped on once that document is reloaded", async () => {
+    const root = document.createElement("div");
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    // Reload from disk builds a new editor, which has no place for the old target.
+    await host.reloadActiveDoc();
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg"));
+    expect(fakeEditors.insertedAt).toBeNull();
+    await host.dispose();
+  });
 });
 
 describe("EditorHost flush", () => {
