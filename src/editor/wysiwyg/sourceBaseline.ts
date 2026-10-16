@@ -390,6 +390,8 @@ export class SourceBaseline {
    * blank line. The rules of `apart` settle most of them. The rest are read
    * back in windows (`reads`). When a window does not read as its pieces, the
    * join where it went wrong gets a blank line and the window is read again.
+   * A few joins could change how a kept block reads in a way no window shows
+   * (`codeMayMove`, `readsOnlyAtEnd`), and make the whole body be written.
    * The budget for reading back is spent the same way whether or not a
    * window's result is cached, so a document always gets the same text.
    *
@@ -846,9 +848,10 @@ function itemFresh(layout: SourceLayout, k: number): boolean {
 }
 
 /**
- * Whether source item `k`, indented code below a new join under `above` (none
- * at the top of the body) and `gap`, could end in another place than it did
- * in the source. Reading back its first lines would not show that.
+ * Whether source item `k`, if it is indented code, could end in another place
+ * below a new join than it did in the source. `above` is the piece above the
+ * join, none at the top of the body, and `gap` the text between them. Reading
+ * back the code's first lines would not show that.
  *
  * Micromark ends indented code after its first line when that line is lazy,
  * which is when a list, quote or footnote above it is still open and the line

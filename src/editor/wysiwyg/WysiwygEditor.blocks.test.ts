@@ -627,9 +627,9 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => deleteBlock(view, "Run"),
       "> ```\n> unclosed\n> ```\n\n```\nmake\nmake install\n```\n",
     ],
-    // On a line that goes on from a paragraph or indented code above, the
-    // parser does not start a list item that does not start at 1, or an empty
-    // one, even inside a quote or list that starts on that line.
+    // On a line right after a paragraph or indented code that has not ended,
+    // the parser does not start a list item that does not start at 1, or an
+    // empty one, even inside a quote or list that starts on that line.
     [
       "a list in a quote that would read as text below indented code",
       "    make install\n\nThen:\n\n> 2. Restart the server.\n> 3. Check the logs.\n",
