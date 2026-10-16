@@ -3,6 +3,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { waitForDialogPointerInput } from "@/components/ui/dialog-test-utils";
 import { openTextPrompt } from "./TextPromptDialog";
 
 afterEach(() => {
@@ -24,6 +25,7 @@ describe("openTextPrompt", () => {
     expect((input as HTMLInputElement).selectionStart).toBe(0);
     expect((input as HTMLInputElement).selectionEnd).toBe("https://".length);
 
+    await waitForDialogPointerInput();
     await user.type(input, "example.com");
     await user.click(screen.getByRole("button", { name: "Insert" }));
 
@@ -35,7 +37,8 @@ describe("openTextPrompt", () => {
     const user = userEvent.setup();
     const result = openTextPrompt({ title: "Edit alt text", label: "Alt text" });
 
-    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitForDialogPointerInput();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(await result).toBeNull();
   });
