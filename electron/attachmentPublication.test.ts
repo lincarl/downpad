@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
-import { writeAttachment } from "./io";
+import { readImage, writeAttachment } from "./io";
 
 const temporaryDirectories: string[] = [];
 
@@ -157,4 +157,14 @@ it("propagates hard-link permission failures without falling back to a replaceme
   await expect(writeAttachment(join(directory, "note.md"), "attachments", "image.png", Uint8Array.of(1))).rejects.toBe(denied);
   expect(renaming).not.toHaveBeenCalled();
   expect(await readdir(join(directory, "attachments"))).toEqual([]);
+});
+
+it("reads an image as one Uint8Array, which IPC copies as binary", async () => {
+  const directory = await fixtureDirectory();
+  const bytes = Uint8Array.from({ length: 4096 }, (_, index) => (index * 7) % 256);
+  await writeFile(join(directory, "picture.png"), bytes);
+  const image = await readImage(join(directory, "picture.png"));
+  expect(image.bytes).toBeInstanceOf(Uint8Array);
+  expect(image.bytes).toEqual(bytes);
+  expect(image.mime).toBe("image/png");
 });

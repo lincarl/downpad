@@ -514,7 +514,7 @@ export class AppRuntime {
 
   private async embedDroppedImage(path: string): Promise<void> {
     const { bytes, mime } = await readImageBytes(path);
-    const src = await resolveImageSrc(new Uint8Array(bytes), mime, this.imageStoreContext());
+    const src = await resolveImageSrc(bytes, mime, this.imageStoreContext());
     if (src) this.editorHost.insertMarkdown(mdImage("", src));
   }
 
@@ -529,7 +529,7 @@ export class AppRuntime {
       filePath,
       this.store.get().settings.attachmentsFolderName,
       name,
-      new Uint8Array(bytes),
+      bytes,
     );
     this.editorHost.insertMarkdown(mdLink(name, rel));
   }

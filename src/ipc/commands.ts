@@ -57,8 +57,9 @@ export function writeAttachment(
   fileName: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  // A plain number array crosses the isolated preload boundary without casts.
-  return invoke("write_attachment", { docPath, folderName, fileName, bytes: Array.from(bytes) });
+  // The preload bridge and IPC copy a Uint8Array as binary. A number array
+  // took seconds for a file of a few megabytes.
+  return invoke("write_attachment", { docPath, folderName, fileName, bytes });
 }
 
 /** Read image bytes + MIME for a path (relocate / copy-image, §5.5). */

@@ -19,8 +19,8 @@ export interface FileMeta {
 
 /** Raw image bytes + MIME (guessed by extension); for relocate / copy-image (§5.5). */
 export interface ImageBytes {
-  /** Sent over IPC as a JSON number array; wrap in new Uint8Array(...) on receipt. */
-  bytes: number[];
+  /** The file's bytes, which IPC copies as binary. */
+  bytes: Uint8Array<ArrayBuffer>;
   mime: string;
 }
 

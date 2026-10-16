@@ -175,5 +175,6 @@ export function imageMime(path: string): string | undefined {
 }
 
 export async function readImage(path: string): Promise<ImageBytes> {
-  return { bytes: Array.from(await readFile(absolutePath(path))), mime: imageMime(path) ?? "application/octet-stream" };
+  const file = await readFile(absolutePath(path));
+  return { bytes: new Uint8Array(file), mime: imageMime(path) ?? "application/octet-stream" };
 }
