@@ -110,19 +110,32 @@ function showCodeBlockMatches(view: EditorView, matches: Matches | undefined): v
 export function revealMatch(view: EditorView, range: MatchRange): void {
   awaitingEditor.delete(view);
   if (revealCodeBlockMatch(view, range)) return;
-  centerIfHidden(view.dom, view.coordsAtPos(range.from, 1).top, view.coordsAtPos(range.to, -1).bottom);
+  const start = view.coordsAtPos(range.from, 1);
+  const end = view.coordsAtPos(range.to, -1);
+  centerIfHidden(view.dom, "y", start.top, end.bottom);
+  // A table wider than the page scrolls the page sideways.
+  centerIfHidden(view.dom, "x", Math.min(start.left, end.left), Math.max(start.right, end.right));
 }
 
 /**
- * Scroll the nearest scrolling ancestor of `inside` so the span from `top` to
- * `bottom` (viewport pixels) is visible. A hidden span is centred, which also
- * keeps it clear of the find card at the top.
+ * Scroll the nearest ancestor of `inside` that scrolls along `axis` so the span
+ * from `start` to `end` (viewport pixels) is visible. A hidden span is centred,
+ * which also keeps it clear of the find card at the top.
  */
-function centerIfHidden(inside: Element, top: number, bottom: number): void {
+function centerIfHidden(inside: Element, axis: "x" | "y", start: number, end: number): void {
+  const y = axis === "y";
   for (let el = inside.parentElement; el; el = el.parentElement) {
-    if (el.scrollHeight <= el.clientHeight || !/auto|scroll/.test(getComputedStyle(el).overflowY)) continue;
+    const overflow = getComputedStyle(el)[y ? "overflowY" : "overflowX"];
+    const overflows = y ? el.scrollHeight > el.clientHeight : el.scrollWidth > el.clientWidth;
+    if (!overflows || !/auto|scroll/.test(overflow)) continue;
+    // The part of the element that shows its content, without borders or scroll bars.
     const box = el.getBoundingClientRect();
-    if (top < box.top || bottom > box.bottom) el.scrollTop += (top + bottom) / 2 - (box.top + box.bottom) / 2;
+    const low = y ? box.top + el.clientTop : box.left + el.clientLeft;
+    const high = low + (y ? el.clientHeight : el.clientWidth);
+    if (start >= low && end <= high) return;
+    const by = (start + end) / 2 - (low + high) / 2;
+    if (y) el.scrollTop += by;
+    else el.scrollLeft += by;
     return;
   }
 }
@@ -141,20 +154,24 @@ function revealCodeBlockMatch(view: EditorView, range: MatchRange): boolean {
     // coordinates yet.
     const start = cm.coordsAtPos(from, 1);
     const end = cm.coordsAtPos(to, -1);
-    if (start && end) centerIfHidden(block, start.top, end.bottom);
-    // CodeMirror scrolls a long line sideways and reaches lines it has not drawn.
+    if (start && end) centerIfHidden(block, "y", start.top, end.bottom);
+    // CodeMirror scrolls a long line sideways, also the page when it is scrolled
+    // sideways, and reaches lines it has not drawn.
     const y = start && end ? "nearest" : "center";
     cm.dispatch({ effects: CodeMirror.scrollIntoView(EditorSelection.range(from, to), { y }) });
     return true;
   }
   awaitingEditor.set(view, block);
-  // Until its editor is drawn, the block shows the same text in a placeholder.
+  // Until its editor is drawn, the block shows the same text in a placeholder,
+  // which wraps long lines. Crepe draws the editor only once the block is on
+  // screen, so the page may also have to scroll sideways to it.
   const text = block.querySelector(".milkdown-code-block-placeholder code")?.firstChild;
   if (!(text instanceof Text)) return false;
   const span = document.createRange();
   span.setStart(text, from);
   span.setEnd(text, to);
   const rect = span.getBoundingClientRect();
-  centerIfHidden(block, rect.top, rect.bottom);
+  centerIfHidden(block, "y", rect.top, rect.bottom);
+  centerIfHidden(block, "x", rect.left, rect.right);
   return true;
 }

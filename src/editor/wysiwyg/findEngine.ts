@@ -182,6 +182,15 @@ function scrollToCurrent(view: EditorView, s: FindPluginState): void {
   if (!range) return;
   view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, range.from, range.to)));
   revealMatch(view, range);
+  // When ProseMirror changes the text of a drawn code block, as Replace does,
+  // the block's CodeMirror scrolls its own cursor into view in its next frame,
+  // which can take the page away from the match. CodeMirror asked for that
+  // frame first, so this callback runs after it and before the page is painted.
+  requestAnimationFrame(() => {
+    const now = view.isDestroyed ? undefined : findKey.getState(view.state);
+    const current = now?.ranges[now.current];
+    if (current) revealMatch(view, current);
+  });
 }
 
 export function runSearch(view: EditorView, query: string, opts: FindOptions): FindCounts {

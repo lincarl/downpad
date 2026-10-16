@@ -73,11 +73,11 @@ export class ScrollSync {
     b.addEventListener("scroll", this.onScroll, { passive: true });
   }
 
-  /** Ignore scrolls for a brief window — call right before a scroll the app
-   *  originates itself (e.g. when Find scrolls to a match, which happens per
-   *  keystroke during incremental search). Without this
-   *  such a scroll would be mistaken for a user gesture and jerk the other pane.
-   *  Genuine wheel/keyboard/drag scrolling a moment later still syncs. */
+  /** Ignore scrolls for a brief window. Call right before a scroll the app
+   *  starts itself, such as find scrolling to a match, which happens per
+   *  keystroke during incremental search. Without this such a scroll would be
+   *  mistaken for a user gesture and jerk the other pane. Genuine
+   *  wheel/keyboard/drag scrolling a moment later still syncs. */
   suppressNext(): void {
     this.suppressing = true;
     if (this.suppressTimer != null) clearTimeout(this.suppressTimer);
@@ -106,8 +106,8 @@ export class ScrollSync {
   }
 
   private onScroll = (e: Event): void => {
-    // An app-originated scroll (Find's scrollIntoView, etc.) — not a user gesture,
-    // so don't let it drive the other pane.
+    // A scroll the app started, such as find moving to a match, is not a user
+    // gesture, so it does not drive the other pane.
     if (this.suppressing) return;
     const src = e.currentTarget as HTMLElement;
     // Drop the echo: the other pane is driving and this scroll is the one we just
