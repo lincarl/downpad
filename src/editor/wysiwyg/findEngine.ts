@@ -161,10 +161,10 @@ export function findPlugin(onScroll?: () => void) {
           return { query: "", opts: EMPTY_OPTS, ranges: [], current: -1 };
         }
         if (tr.docChanged && prev.query) {
-          // Re-run on edits so positions stay valid.
+          // Re-run on edits so positions stay valid. With no current match (it
+          // is in the frontmatter table), an edit does not make one current.
           const ranges = searchDoc(tr.doc, prev.query, prev.opts);
-          const current = ranges.length ? Math.min(Math.max(prev.current, 0), ranges.length - 1) : -1;
-          return { ...prev, ranges, current };
+          return { ...prev, ranges, current: Math.min(prev.current, ranges.length - 1) };
         }
         return prev;
       },
@@ -209,20 +209,23 @@ function scrollToCurrent(view: EditorView, s: FindPluginState): void {
   });
 }
 
-export function runSearch(view: EditorView, query: string, opts: FindOptions): FindCounts {
+/** Search the document and select its first match, or with `select` false
+ *  leave no match current because the current one is in the frontmatter table. */
+export function runSearch(view: EditorView, query: string, opts: FindOptions, select = true): FindCounts {
   view.dispatch(view.state.tr.setMeta(findKey, { type: "search", query, opts }));
-  const s = findKey.getState(view.state);
-  if (s && s.ranges.length) scrollToCurrent(view, findKey.getState(view.state)!);
-  return counts(findKey.getState(view.state));
+  return selectMatch(view, select ? 0 : -1);
 }
 
-export function moveMatch(view: EditorView, delta: number): FindCounts {
+/** Make match `index` current, select it and scroll to it. -1 leaves no match
+ *  current and the selection where it is. */
+export function selectMatch(view: EditorView, index: number): FindCounts {
   const s = findKey.getState(view.state);
-  if (!s || !s.ranges.length) return { total: 0, current: 0 };
-  const next = (s.current + delta + s.ranges.length) % s.ranges.length;
-  view.dispatch(view.state.tr.setMeta(findKey, { type: "current", current: next }));
-  scrollToCurrent(view, findKey.getState(view.state)!);
-  return counts(findKey.getState(view.state));
+  if (s?.ranges.length && s.current !== index) {
+    view.dispatch(view.state.tr.setMeta(findKey, { type: "current", current: index }));
+  }
+  const next = findKey.getState(view.state);
+  if (next) scrollToCurrent(view, next);
+  return counts(next);
 }
 
 export function clearSearch(view: EditorView): void {
