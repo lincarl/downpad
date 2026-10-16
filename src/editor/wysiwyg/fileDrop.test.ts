@@ -76,6 +76,8 @@ function type(opened: WysiwygEditor, text: string): void {
 }
 
 const IMAGE = "![](attachments/pic.png)";
+const LINK_A = "[a.csv](attachments/a.csv)";
+const LINK_B = "[b.csv](attachments/b.csv)";
 
 describe("a file dropped on the document", () => {
   it("goes in at the block edge nearest the drop point, after earlier files of the drop", async () => {
@@ -164,5 +166,54 @@ describe("the caret after a file dropped on the document", () => {
     type(opened, "x");
 
     expect(opened.getMarkdown()).toBe(`First line.\n\nSecond line.\n\n${IMAGE}\n\nx\n`);
+  });
+});
+
+describe("a file dropped between list items", () => {
+  const LIST = "Intro.\n\n- Item 1\n- Item 2\n- Item 3\n\nOutro.\n";
+
+  /** Lay out the list's second item, its text indented 60px. */
+  async function openList(markdown = LIST, item = "Item 2"): Promise<WysiwygEditor> {
+    const opened = await open(markdown);
+    place(opened, block("list_item", item), 140, 170);
+    place(opened, block("paragraph", item), 140, 170, 60);
+    return opened;
+  }
+
+  it("on the item's edge at the bullets, splits the list there, as Crepe does for a dropped block", async () => {
+    const opened = await openList();
+
+    opened.insertMarkdown(LINK_A, opened.dropTargetAt(20, 169));
+
+    expect(opened.getMarkdown()).toBe(`Intro.\n\n- Item 1\n- Item 2\n\n${LINK_A}\n\n- Item 3\n\nOutro.\n`);
+  });
+
+  it("on the edge of the item's text, goes in as tight items of its own, in drop order", async () => {
+    const opened = await openList();
+
+    const target = opened.dropTargetAt(300, 169);
+    opened.insertMarkdown(LINK_A, target);
+    opened.insertMarkdown(LINK_B, target);
+
+    expect(opened.getMarkdown()).toBe(`Intro.\n\n- Item 1\n- Item 2\n- ${LINK_A}\n- ${LINK_B}\n- Item 3\n\nOutro.\n`);
+  });
+
+  it("numbers a new item of a numbered list in turn", async () => {
+    const opened = await openList("Intro.\n\n1. Step 1\n2. Step 2\n3. Step 3\n", "Step 1");
+
+    opened.insertMarkdown(LINK_A, opened.dropTargetAt(300, 169));
+
+    expect(opened.getMarkdown()).toBe(`Intro.\n\n1. Step 1\n2. ${LINK_A}\n3. Step 2\n4. Step 3\n`);
+  });
+
+  it("in a nested list, goes in as a nested item there and keeps the outer list tight", async () => {
+    const opened = await open("Intro.\n\n- Parent\n  - N1\n  - N2\n- Next\n\nOutro.\n");
+    place(opened, block("list_item", "N1"), 140, 170, 40);
+    place(opened, block("paragraph", "N1"), 140, 170, 80);
+
+    // At the nested bullets, between N1 and N2.
+    opened.insertMarkdown(LINK_A, opened.dropTargetAt(50, 169));
+
+    expect(opened.getMarkdown()).toBe(`Intro.\n\n- Parent\n  - N1\n  - ${LINK_A}\n  - N2\n- Next\n\nOutro.\n`);
   });
 });

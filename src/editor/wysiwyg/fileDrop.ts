@@ -7,7 +7,7 @@
 import { editorViewCtx, parserCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
 import { GapCursor } from "@milkdown/kit/prose/gapcursor";
-import { Slice, type Node } from "@milkdown/kit/prose/model";
+import { Slice, type Fragment, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Selection, TextSelection, type Transaction } from "@milkdown/kit/prose/state";
 import { dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -16,6 +16,9 @@ import type { EditorView } from "@milkdown/kit/prose/view";
  *  keeps the position in step with later edits. */
 export interface DropTarget {
   pos: number;
+  /** Set once a file of the drop went in as a list item of its own, so the
+   *  files after it go in as list items too. */
+  listItems?: boolean;
 }
 
 /**
@@ -64,6 +67,97 @@ function isEmptyParagraph(node: Node | null | undefined): node is Node {
   return node?.type.name === "paragraph" && node.content.size === 0;
 }
 
+const LISTS = new Set(["bullet_list", "ordered_list"]);
+
+/** Whether a node is a bulleted or numbered list. */
+function isList(node: Node | null | undefined): boolean {
+  return !!node && LISTS.has(node.type.name);
+}
+
+/** Whether a position is inside a table, which holds only rows and cells. */
+function inTable($pos: ResolvedPos): boolean {
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.spec.tableRole) return true;
+  }
+  return false;
+}
+
+/**
+ * The list item a drop in a list makes of `content`, and where it goes, or
+ * null where the content goes in as it is. Crepe puts a block dropped beside an
+ * item's text in that item, and one dropped between the items of a nested
+ * list in the parent item, and either way Markdown writes the list loose. So
+ * there the content becomes an item of its own: before or after the item, or
+ * at the near end of a nested list beside the text. Between the items of a
+ * list that is not inside another, Crepe splits the list and the content goes
+ * between the two halves, which stay tight, so that is left to it, unless an
+ * earlier file of the drop became an item. An image cannot start a list item,
+ * so it always goes in as Crepe puts it.
+ */
+function listItemAt($pos: ResolvedPos, content: Fragment, listItems: boolean): { pos: number; item: Node } | null {
+  const { parent, depth } = $pos;
+  let pos: number;
+  let list: Node;
+  if (isList(parent)) {
+    if (!listItems && $pos.node(depth - 1).type.name !== "list_item") return null;
+    pos = $pos.pos;
+    list = parent;
+  } else if (parent.type.name === "list_item") {
+    const { nodeBefore, nodeAfter } = $pos;
+    if (nodeAfter && isList(nodeAfter)) {
+      pos = $pos.pos + 1;
+      list = nodeAfter;
+    } else if (nodeBefore && isList(nodeBefore)) {
+      pos = $pos.pos - 1;
+      list = nodeBefore;
+    } else {
+      pos = $pos.index() === 0 ? $pos.before() : $pos.after();
+      list = $pos.node(depth - 1);
+    }
+  } else {
+    return null;
+  }
+  // Every list holds at least one item, the model for the new one. Its number
+  // or bullet follows from the list, and it is tight, as typed items are.
+  const sibling = list.firstChild;
+  if (!sibling?.type.validContent(content)) return null;
+  const item = sibling.type.create({ label: sibling.attrs.label, listType: sibling.attrs.listType, spread: false }, content);
+  return { pos, item };
+}
+
+/**
+ * Put `doc`'s blocks in at a drop target, where Crepe puts a block dropped at
+ * that edge. They go in beside the blocks there, never splitting one. A table
+ * cannot hold them, so a drop on a table puts them above or below it. An empty
+ * line at the edge takes them, as typing on it would, so Crepe's empty last
+ * line never ends up mid-document, where it would be saved as `<br />`. In a
+ * list, a link becomes a list item of its own where Crepe would make the list
+ * loose (`listItemAt`). Returns whether the document changed.
+ */
+function placeBlocks(tr: Transaction, target: DropTarget, doc: Node): boolean {
+  const { content } = doc;
+  const slice = new Slice(content, 0, 0);
+  let pos = target.pos;
+  if (inTable(tr.doc.resolve(pos))) pos = dropPoint(tr.doc, pos, slice) ?? pos;
+  const $pos = tr.doc.resolve(pos);
+  const { parent, nodeBefore, nodeAfter } = $pos;
+  const index = $pos.index();
+  const listItem = listItemAt($pos, content, target.listItems === true);
+  if (isEmptyParagraph(nodeAfter) && parent.canReplace(index, index + 1, content)) {
+    tr.replaceWith(pos, pos + nodeAfter.nodeSize, content);
+  } else if (isEmptyParagraph(nodeBefore) && parent.canReplace(index - 1, index, content)) {
+    tr.replaceWith(pos - nodeBefore.nodeSize, pos, content);
+  } else if (listItem) {
+    tr.insert(listItem.pos, listItem.item);
+    target.listItems = true;
+  } else if (content.childCount === 1 && content.firstChild) {
+    tr.replaceRangeWith(pos, pos, content.firstChild);
+  } else {
+    tr.replaceRange(pos, pos, slice);
+  }
+  return tr.docChanged;
+}
+
 /** Where the last step of a transaction ends its change, in the new document. */
 function changeEnd(tr: Transaction): number {
   let end = 0;
@@ -93,15 +187,9 @@ function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transact
 }
 
 /**
- * Milkdown action that inserts Markdown's blocks at a drop target, as
- * ProseMirror inserts a block dropped there, and puts the caret after them
- * (`placeCaret`).
- * The blocks go in beside the blocks at that edge, never splitting one. Where
- * they cannot go, such as between table cells, they go in at the nearest
- * place outside that can hold them. An empty line at the edge takes them, as
- * typing on it would, so Crepe's empty last line never ends up mid-document,
- * where it would be saved as `<br />`. The target moves past the blocks, so
- * the next file of the drop follows.
+ * Milkdown action that inserts Markdown's blocks at a drop target
+ * (`placeBlocks`) and puts the caret after them (`placeCaret`). The target
+ * moves past the blocks, so the next file of the drop follows.
  */
 export function insertBlocksAt(markdown: string, target: DropTarget) {
   return (ctx: Ctx): void => {
@@ -109,22 +197,12 @@ export function insertBlocksAt(markdown: string, target: DropTarget) {
     const doc = ctx.get(parserCtx)(markdown);
     if (!doc?.lastChild) return;
     const { tr } = view.state;
-    const slice = new Slice(doc.content, 0, 0);
-    const at = dropPoint(tr.doc, target.pos, slice) ?? target.pos;
-    const { nodeBefore, nodeAfter } = tr.doc.resolve(at);
-    let from = at;
-    let to = at;
-    if (isEmptyParagraph(nodeAfter)) to += nodeAfter.nodeSize;
-    else if (isEmptyParagraph(nodeBefore)) from -= nodeBefore.nodeSize;
-    const only = doc.childCount === 1 ? doc.firstChild : null;
-    if (only) tr.replaceRangeWith(from, to, only);
-    else tr.replaceRange(from, to, slice);
-    if (!tr.docChanged) return;
-    // The editor maps the target through this insert. From the end of the
-    // replaced range, that takes it past the inserted blocks.
-    target.pos = to;
-    // Take the end from the step, which can have moved the insert to fit.
-    view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
+    if (!placeBlocks(tr, target, doc)) return;
+    const end = changeEnd(tr);
+    // The editor maps the target through this transaction. From where the
+    // inserted blocks began, mapping takes it to their end.
+    target.pos = tr.mapping.invert().map(end);
+    view.dispatch(placeCaret(tr, end, doc.lastChild.isTextblock).scrollIntoView());
   };
 }
 
@@ -145,3 +223,4 @@ export function insertAtSelection(markdown: string) {
     view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
   };
 }
+
