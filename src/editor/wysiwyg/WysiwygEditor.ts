@@ -15,12 +15,11 @@
 //     in Milkdown's form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
 import { $prose } from "@milkdown/kit/utils";
-import { Slice } from "@milkdown/kit/prose/model";
 import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { dropIndicatorState } from "@milkdown/kit/plugin/cursor";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -68,6 +67,7 @@ import {
   insertAtSelection,
   insertBlocksAt,
   mapAcrossChange,
+  replaceKeepingSelection,
   sourceEditBetween,
   type DropTarget,
   type SourceEdit,
@@ -495,9 +495,10 @@ export class WysiwygEditor {
    * (§6.1). The frontmatter block is re-split (and its table re-rendered, added,
    * or removed as the source gains/loses a `---` block) and Crepe's body is
    * replaced. Both changes are one transaction, so an undo here takes back the
-   * block and the body together. This pane is the unfocused mirror, so the
-   * reset selection/scroll is acceptable. The table keeps its cells unless one
-   * still shows text the block no longer has.
+   * block and the body together. The caret and selection keep their place
+   * outside the change (`replaceKeepingSelection`), since the user can be
+   * typing here while a file dropped on the Markdown pane goes in there. The
+   * table keeps its cells unless one still shows text the block no longer has.
    *
    * The replacement is reported like an edit after a ~200ms pause
    * (`scheduleChange`). That report carries `markdown` itself, because every
@@ -536,17 +537,15 @@ export class WysiwygEditor {
     const before = this.withView((view) => view.state.doc, null);
     const targets = [...this.dropTargets].map((target) => ({ target, pos: target.pos }));
     try {
-      // Milkdown's replaceAll, with the frontmatter block and the blank lines
-      // after it, which setMarkdown has just stored, and the new body's
-      // baseline in the same transaction.
+      // The frontmatter block and the blank lines after it, which setMarkdown
+      // has just stored, and the new body's baseline go in the same
+      // transaction.
       const slot: BaselineSlot = { baseline: null };
-      this.crepe.editor.action((ctx) => {
-        const view = ctx.get(editorViewCtx);
-        const doc = ctx.get(parserCtx)(body);
-        const tr = view.state.tr.replace(0, view.state.doc.content.size, new Slice(doc.content, 0, 0));
-        setFrontmatter(view.state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator });
-        view.dispatch(setBaseline(view.state, tr, slot));
-      });
+      this.crepe.editor.action(
+        replaceKeepingSelection(body, (state, tr) =>
+          setBaseline(state, setFrontmatter(state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator }), slot),
+        ),
+      );
       // The doc updates synchronously with the dispatch.
       this.rememberSource(body, slot);
     } catch {

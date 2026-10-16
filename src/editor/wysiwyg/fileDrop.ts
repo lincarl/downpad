@@ -8,7 +8,7 @@ import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/ki
 import type { Ctx } from "@milkdown/kit/ctx";
 import { GapCursor } from "@milkdown/kit/prose/gapcursor";
 import { Slice, type Fragment, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
-import { Selection, TextSelection, type Transaction } from "@milkdown/kit/prose/state";
+import { Selection, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 
@@ -336,4 +336,31 @@ export function mapAcrossChange(before: Node, after: Node, pos: number): number 
     b += overlap;
   }
   return pos >= a ? pos - a + b : b;
+}
+
+/**
+ * Milkdown action that replaces the document with Markdown's, as Milkdown's
+ * `replaceAll` does for a split mirror sync, but keeps the caret and the
+ * selection where they were (`mapAcrossChange`). The user can be typing in
+ * this pane while a file dropped on the Markdown pane goes in there. `extend`
+ * can add steps to the same transaction, such as the frontmatter's.
+ */
+export function replaceKeepingSelection(
+  markdown: string,
+  extend: (state: EditorState, tr: Transaction) => Transaction = (_state, tr) => tr,
+) {
+  return (ctx: Ctx): void => {
+    const view = ctx.get(editorViewCtx);
+    const doc = ctx.get(parserCtx)(markdown);
+    if (!doc) return;
+    const { state } = view;
+    const tr = state.tr.replace(0, state.doc.content.size, new Slice(doc.content, 0, 0));
+    const { anchor, head } = state.selection;
+    const $head = tr.doc.resolve(mapAcrossChange(state.doc, tr.doc, head));
+    const selection =
+      state.selection instanceof TextSelection
+        ? TextSelection.between(tr.doc.resolve(mapAcrossChange(state.doc, tr.doc, anchor)), $head)
+        : Selection.near($head);
+    view.dispatch(extend(state, tr.setSelection(selection)));
+  };
 }

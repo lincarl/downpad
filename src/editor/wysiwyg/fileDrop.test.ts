@@ -314,6 +314,20 @@ describe("the source change for a file dropped on the split's document pane", ()
   });
 });
 
+describe("a file dropped on the split's Markdown pane while the user types in the document pane", () => {
+  it("leaves the document pane's caret where the user types when the split mirrors it", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    // At the end of "First line.".
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 12)));
+
+    opened.setMarkdown(`First line.\n\n${LINK_A}\n\nSecond line.\n`);
+    type(opened, " Typed.");
+
+    expect(opened.getMarkdown()).toBe(`First line. Typed.\n\n${LINK_A}\n\nSecond line.\n`);
+  });
+});
+
 describe("a file dropped away from the document text", () => {
   it("goes in after the selected text, such as the find card's match, not over it", async () => {
     const opened = await open("First line.\n\nSecond line.\n");
