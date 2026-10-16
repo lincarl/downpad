@@ -166,6 +166,9 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
     page.on("pageerror", (error) => errors.push(String(error)));
     await chooseOpen(file);
     const pane = page.locator(".editor-pane:not([hidden])");
+    // The welcome document stays shown until the opened file's pane is ready, and
+    // it has code blocks too, so wait for the file before looking for its block.
+    await expect(pane.locator(".ProseMirror h1").first()).toHaveText("Policy");
     // Crepe draws a code block, and its diagram, once the block is on screen.
     await pane.locator(".milkdown-code-block").last().scrollIntoViewIfNeeded();
     await expect(pane.locator(".mermaid-preview svg")).toBeVisible().catch(async (error: Error) => {
