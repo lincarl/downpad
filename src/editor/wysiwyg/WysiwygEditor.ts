@@ -599,6 +599,12 @@ export class WysiwygEditor {
    *  frontmatter cell, focus that cell with the match selected instead. */
   focus(): void {
     if (this.find.focusCurrent()) return;
+    this.focusText();
+  }
+
+  /** Focus the document text at its caret, even while the find card's current
+   *  match is in a frontmatter cell, as after a file dropped on the text. */
+  focusText(): void {
     this.withView((v) => v.focus(), undefined);
   }
 

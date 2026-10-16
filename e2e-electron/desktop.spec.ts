@@ -1758,6 +1758,25 @@ test("typing right after a file dropped on the document goes after it and keeps 
   ));
 });
 
+test("a file dropped while the find card's match is in the frontmatter table leaves the table alone", async () => {
+  const file = path.join(directory, "drop-find-frontmatter.md");
+  await writeFile(file, "---\ntitle: Review notes\n---\n\nFirst line.\n\nSecond line.\n");
+  await launch(file);
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await page.locator(".ProseMirror p", { hasText: "Second line." }).click();
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("Review");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Caption");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "---\ntitle: Review notes\n---\n\nFirst line.\n\n[notes.csv](attachments/notes.csv)\n\nCaption\n\nSecond line.\n",
+  );
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

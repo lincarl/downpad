@@ -196,7 +196,8 @@ export class EditorHost implements FindController {
     // The split catches up first, so the target is a place in the latest text.
     this.flush();
     const aimed = pane.wysiwyg.dropTargetAt(drop.clientX, drop.clientY);
-    pane.wysiwyg.focus();
+    // The text, not a frontmatter cell holding the find card's current match.
+    pane.wysiwyg.focusText();
     return aimed;
   }
 

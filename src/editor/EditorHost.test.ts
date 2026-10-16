@@ -104,8 +104,16 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
     releaseDropTarget(): void {}
 
-    /** Take focus with a caret in the pane. */
+    /** Like the real editor with the find card's current match in the
+     *  frontmatter table, focus that table's cell. */
     focus(): void {
+      if (!this.root) return;
+      const cell = this.root.querySelector("input") ?? this.root.appendChild(document.createElement("input"));
+      cell.focus();
+    }
+
+    /** Take focus with a caret in the document text. */
+    focusText(): void {
       if (!this.root) return;
       const caret = this.root.querySelector("textarea") ?? this.root.appendChild(document.createElement("textarea"));
       caret.focus();
@@ -990,6 +998,20 @@ describe("EditorHost file drops", () => {
     expect(fakeEditors.droppedAt).toEqual([300, 600]);
     page.remove();
     toolbar.remove();
+    await host.dispose();
+  });
+
+  it("focuses the document text for a drop on it, not the find card's match in the frontmatter table", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+
+    host.dropTarget({ clientX: 40, clientY: 120, target: line });
+
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    root.remove();
     await host.dispose();
   });
 });
