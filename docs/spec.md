@@ -5,7 +5,7 @@ md-easy is a desktop Markdown editor for Windows and Linux. It is designed for p
 ## Core experience
 
 - Edit Markdown in a clean WYSIWYG document view.
-- Switch between Document, Markdown, and side-by-side Split views. If the Document view cannot show a file, for example one with thousands of nested quotes, that tab opens in the Markdown view and the notice bar under the tabs says why. Try again shows the Document view once the text allows it, for example after a fix in the Markdown view. Other tabs keep the chosen view.
+- Switch between Document, Markdown, and side-by-side Split views. If the Document view cannot show a file, for example one with thousands of nested quotes, that tab opens in the Markdown view and the notice bar under the tabs says why. Try again shows the Document view once the text allows it, for example after a fix in the Markdown view. Other tabs keep the chosen view, and printing such a file prints its Markdown.
 - Keep the rendered document and Markdown source synchronized.
 - Work with multiple documents in tabs.
 - Open, create, save, and print Markdown files using familiar desktop controls and shortcuts.

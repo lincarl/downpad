@@ -44,7 +44,9 @@ import {
   type PrintVersion,
 } from "./paper";
 
-/** What is being printed. `documentNode` is a detached, already-sanitized clone. */
+/** What is being printed. `documentNode` is a detached, already-sanitized clone,
+ *  or null when md-easy could not render the document, so only the Markdown
+ *  version can print. */
 export interface PrintJob {
   markdown: string;
   documentNode: Element | null;
@@ -305,6 +307,7 @@ export class PrintWorkspace {
       summary: this.summaryText,
       status: this.statusText,
       electron: isElectron(),
+      documentRendered: this.job?.documentNode != null,
     };
     for (const listener of this.listeners) listener();
   }
@@ -358,7 +361,7 @@ export class PrintWorkspace {
     const job = this.job!;
     const geometry = pageGeometry(this.setup());
     const root = renderPrintPages({
-      version: s.printVersion,
+      version: job.documentNode ? s.printVersion : "markdown",
       documentNode: job.documentNode,
       markdown: job.markdown,
       geometry,
@@ -662,6 +665,8 @@ interface PrintWorkspaceSnapshot {
   summary: string;
   status: string;
   electron: boolean;
+  /** False when the document could not be rendered; the Markdown version prints. */
+  documentRendered: boolean;
 }
 
 interface PrintWorkspaceViewProps {
@@ -739,13 +744,16 @@ function PrintWorkspaceView({
                 ["document", "Document"],
                 ["markdown", "Markdown"],
               ]}
-              value={s.printVersion}
+              value={view.documentRendered ? s.printVersion : "markdown"}
+              disabled={view.documentRendered ? [] : ["document"]}
               onChange={(printVersion) => onUpdate({ printVersion })}
             />
             <p className="print-ws-hint m-0 mt-1.5 text-ink-soft">
-              {s.printVersion === "document"
-                ? "The formatted document, as the editor renders it."
-                : "The raw Markdown source, in a monospace face."}
+              {!view.documentRendered
+                ? "md-easy can't show this document in the Document view, so it prints the Markdown source."
+                : s.printVersion === "document"
+                  ? "The formatted document, as the editor renders it."
+                  : "The raw Markdown source, in a monospace face."}
             </p>
           </PrintGroup>
 
@@ -1023,12 +1031,15 @@ function RadioChoice<T extends string>({
   label,
   options,
   value,
+  disabled = [],
   onChange,
 }: {
   name: string;
   label?: string;
   options: ReadonlyArray<readonly [T, string]>;
   value: T;
+  /** Options shown but not available. */
+  disabled?: readonly T[];
   onChange(value: T): void;
 }) {
   return (
@@ -1038,13 +1049,17 @@ function RadioChoice<T extends string>({
       className="flex flex-wrap items-center gap-x-2 gap-y-1"
     >
       {options.map(([option, text]) => (
-        <label key={option} className="flex cursor-pointer items-center gap-1.5">
+        <label
+          key={option}
+          className="flex cursor-pointer items-center gap-1.5 has-[:disabled]:cursor-default has-[:disabled]:text-ink-disabled"
+        >
           <input
             type="radio"
             className="md-radio"
             name={name}
             value={option}
             checked={option === value}
+            disabled={disabled.includes(option)}
             onChange={() => onChange(option)}
           />
           {text}
