@@ -165,13 +165,14 @@ export class RawEditor {
    *  pane, after any file of the same drop, or else at the caret. At the caret
    *  it goes in after any selection, such as the find card's current match,
    *  and never replaces it. The caret moves after the text, unless
-   *  `keepCaret` leaves it where the user is typing. */
-  insertText(text: string, target: DropTarget | null = null, keepCaret = false): void {
+   *  `moveCaret` is off, for a user who has moved on since the drop. Then the
+   *  selection stays where it was, before text inserted at its end. */
+  insertText(text: string, target: DropTarget | null = null, moveCaret = true): void {
     if (!this.view || !text) return;
     const at = target && this.dropTargets.has(target) ? target.pos : this.view.state.selection.main.to;
     this.view.dispatch({
       changes: { from: at, insert: text },
-      ...(keepCaret ? {} : { selection: { anchor: at + text.length } }),
+      ...(moveCaret ? { selection: { anchor: at + text.length } } : {}),
     });
   }
 

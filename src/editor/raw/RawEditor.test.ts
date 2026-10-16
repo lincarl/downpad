@@ -37,6 +37,16 @@ describe("RawEditor.insertText", () => {
 
     expect(editor.getText()).toBe("First line[a.csv](attachments/a.csv)!.\n");
   });
+
+  it("leaves the selection as it was, without the file, for a user who has moved on", () => {
+    const editor = mountWithCaret("", "First line.\n");
+    editor.searchText("line", FIND);
+
+    editor.insertText("[a.csv](attachments/a.csv)", null, false);
+    typeOver(editor, "!");
+
+    expect(editor.getText()).toBe("First ![a.csv](attachments/a.csv).\n");
+  });
 });
 
 describe("RawEditor.setText", () => {

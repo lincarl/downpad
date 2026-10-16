@@ -271,6 +271,23 @@ describe("a file dropped away from the document text", () => {
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n`);
   });
 
+  it("leaves the selection where it was, without the file, for a user who has moved on", async () => {
+    const opened = await open("First line.\n\nSecond line.\n\nThird line.\n");
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("paragraph", "Second line."), 140, 170);
+    const view = viewOf(opened);
+    // "line." in "Second line.", such as the find card's match.
+    const match = () => view.state.doc.textBetween(view.state.selection.from, view.state.selection.to);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 21, 26)));
+
+    opened.insertMarkdown(LINK_A, opened.dropTargetAt(300, 128), false);
+    expect(match()).toBe("line.");
+    opened.insertMarkdown(LINK_B, null, false);
+    expect(match()).toBe("line.");
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\n${LINK_B}\n\nThird line.\n`);
+  });
+
   it("goes in after a selected image, not over it", async () => {
     const opened = await open(`First line.\n\n${IMAGE}\n\nSecond line.\n`);
     const view = viewOf(opened);

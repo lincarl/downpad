@@ -73,14 +73,19 @@ interface AimedDrop {
   target: DropTarget | null;
   /** Whether the files were dropped on the pane, which then takes focus. */
   onPane: boolean;
+  /** The element that had focus when the files were dropped. */
+  focus: Element | null;
+  /** Whether the user was typing in that element when the files were dropped. */
+  typing: boolean;
   /** When the drop happened (`performance.now()`). */
   at: number;
 }
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 const paneKey = (tabId: string, view: View): string => `${tabId} ${view}`;
-/** How long the split's Markdown pane must go without a key before a file
- *  dropped on the document pane goes in (`insertDropped`). */
+/** How long after a key the user still counts as typing. A file dropped on
+ *  the split's document pane waits for the Markdown pane to go this long
+ *  without a key (`insertDropped`). */
 const TYPING_PAUSE_MS = 1000;
 
 /** Debounce for mirroring an edit into the other split pane (§6.1). Coalesces a
@@ -175,13 +180,32 @@ export class EditorHost implements FindController {
   private readonly drops = new Map<FileDrop, AimedDrop>();
   /** Callers waiting for the next document to be shown, or a tab to close. */
   private readonly presentWaiters = new Set<() => void>();
-  /** When the user last typed in a Markdown pane (`performance.now()`). */
-  private markdownTypedAt = -Infinity;
+  /** When the user last pressed a key (`performance.now()`), and the element
+   *  that had focus then. */
+  private lastKey: { at: number; focus: Element | null } = { at: -Infinity, focus: null };
+  /** When the user last pressed a mouse button, pen or finger down. */
+  private lastPointerAt = -Infinity;
+  /** Removes the window listeners that record `lastKey` and `lastPointerAt`. */
+  private readonly stopWatchingInput: () => void;
 
   constructor(
     private readonly root: HTMLElement,
     private readonly store: Store,
-  ) {}
+  ) {
+    // Captured on the whole window, so typing in the find card counts too.
+    const onKey = (): void => {
+      this.lastKey = { at: performance.now(), focus: document.activeElement };
+    };
+    const onPointer = (): void => {
+      this.lastPointerAt = performance.now();
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    this.stopWatchingInput = () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+    };
+  }
 
   /** Wire the prompt-and-save action (FileService.save) used by image storage. */
   setSaveHandler(handler: () => Promise<boolean>): void {
@@ -234,7 +258,10 @@ export class EditorHost implements FindController {
       target = under.raw.dropTargetAt(drop.clientX, drop.clientY);
     }
     const handle: FileDrop = { tabId: pane.tabId };
-    this.drops.set(handle, { pane, target, onPane: under !== null, at: performance.now() });
+    const focus = document.activeElement;
+    const at = performance.now();
+    const typing = this.lastKey.focus === focus && at - this.lastKey.at < TYPING_PAUSE_MS;
+    this.drops.set(handle, { pane, target, onPane: under !== null, focus, typing, at });
     return handle;
   }
 
@@ -253,13 +280,14 @@ export class EditorHost implements FindController {
    *
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
-   * with the caret after the file, as after Crepe's own drops. But while the
-   * user types in the split's Markdown pane, a file dropped on the document
-   * pane waits for typing to pause, and focus stays in the Markdown pane. An
+   * with the caret after the file, as after Crepe's own drops, unless the
+   * user has moved on since the drop (`movedOn`). Then focus and the caret
+   * stay where the user is, such as typing in the find card. While the user
+   * types in the split's Markdown pane, a file dropped on the document pane
+   * waits for typing to pause, and focus stays in the Markdown pane. An
    * insert in the document pane writes the whole text in its own form, which
    * would drop a space just typed at the end of the line, and the next keys
-   * would go elsewhere. A file dropped on a Markdown pane the user is typing
-   * in leaves the caret where they type.
+   * would go elsewhere.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
     const typing = this.drops.get(drop)?.pane.wysiwyg ? this.typedInMarkdownSince(drop) : false;
@@ -275,14 +303,28 @@ export class EditorHost implements FindController {
     }
     const aimed = this.drops.get(drop)!;
     const { pane, target } = place;
-    if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target);
-    else pane.raw?.insertText(markdown, target, this.typingIn(pane));
+    const stay = !this.movedOn(aimed);
+    if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target, stay);
+    else pane.raw?.insertText(markdown, target, stay);
     this.flush();
-    if (aimed.onPane && !typing) {
+    if (aimed.onPane && stay && !typing) {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
       else pane.raw?.focus();
     }
     return true;
+  }
+
+  /** Whether the user has moved on since a drop, so a file that goes in now
+   *  leaves focus and the caret where they are. That is when focus has left
+   *  the element it was on, they clicked or pressed a key since, or they were
+   *  typing there when they dropped the files. */
+  private movedOn(aimed: AimedDrop): boolean {
+    return (
+      aimed.typing ||
+      document.activeElement !== aimed.focus ||
+      this.lastKey.at > aimed.at ||
+      this.lastPointerAt > aimed.at
+    );
   }
 
   /**
@@ -622,6 +664,7 @@ export class EditorHost implements FindController {
     if (this.disposePromise) return this.disposePromise;
 
     this.disposed = true;
+    this.stopWatchingInput();
     this.saveHandler = null;
     this.openLinkHandler = null;
     this.findChangeHandler = null;
@@ -753,21 +796,21 @@ export class EditorHost implements FindController {
   /** Whether the user is typing in a Markdown pane, which has focus and took
    *  a key within `TYPING_PAUSE_MS`. */
   private typingIn(pane: Pane | null): boolean {
-    return !!pane?.el.contains(document.activeElement) && performance.now() - this.markdownTypedAt < TYPING_PAUSE_MS;
+    return !!pane?.el.contains(document.activeElement) && performance.now() - this.lastKey.at < TYPING_PAUSE_MS;
   }
 
   /** Whether the user was typing in the split's Markdown pane when a drop
    *  happened, or typed there since. */
   private typedInMarkdownSince(drop: FileDrop): boolean {
     const raw = this.focusedSplitRaw();
-    return this.typingIn(raw) || (raw !== null && this.markdownTypedAt > (this.drops.get(drop)?.at ?? Infinity));
+    return this.typingIn(raw) || (raw !== null && this.lastKey.at > (this.drops.get(drop)?.at ?? Infinity));
   }
 
   /** Resolve once the user stops typing in the split's Markdown pane, or
    *  focus leaves it. */
   private async markdownTypingPause(): Promise<void> {
     while (!this.disposed && this.typingIn(this.focusedSplitRaw())) {
-      const left = TYPING_PAUSE_MS - (performance.now() - this.markdownTypedAt);
+      const left = TYPING_PAUSE_MS - (performance.now() - this.lastKey.at);
       await new Promise((resolve) => setTimeout(resolve, left));
     }
   }
@@ -951,11 +994,6 @@ export class EditorHost implements FindController {
     };
     el.addEventListener("pointerdown", catchUp, true);
     el.addEventListener("focusin", catchUp);
-    if (view === "raw") {
-      el.addEventListener("beforeinput", () => {
-        this.markdownTypedAt = performance.now();
-      }, true);
-    }
 
     // Bound to this tab id so a background pane writes to its own tab, never the
     // active doc. A real change advances the tab's rev (staling its other view)

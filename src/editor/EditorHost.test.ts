@@ -62,6 +62,8 @@ const fakeEditors = vi.hoisted(() => ({
   rawDroppedAt: null as [number, number] | null,
   /** The drop target the Markdown pane's last insert went to, if any. */
   rawInsertedAt: null as { pos: number } | null,
+  /** Whether the last insert in either pane moved the caret after the file. */
+  movedCaret: null as boolean | null,
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -132,11 +134,12 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
     }
 
     /** Like the real editor, hold the insert back until typing pauses. */
-    insertMarkdown(markdown: string, target: { pos: number } | null = null): void {
+    insertMarkdown(markdown: string, target: { pos: number } | null = null, moveCaret = true): void {
       fakeEditors.markdown = `${fakeEditors.markdown}\n\n${markdown}`;
       fakeEditors.pending = true;
       fakeEditors.insertedAt = target;
       fakeEditors.insertedInto = this.root;
+      fakeEditors.movedCaret = moveCaret;
     }
 
     /** The pane now shows the mirrored text, dropping anything it held. */
@@ -193,9 +196,10 @@ vi.mock("./raw/RawEditor", () => ({
 
     /** Like the real editor, add the text at the target or the caret, here
      *  the end either way, and report the edit at once. */
-    insertText(text: string, target: { pos: number } | null = null): void {
+    insertText(text: string, target: { pos: number } | null = null, moveCaret = true): void {
       fakeEditors.rawText = `${fakeEditors.rawText ?? ""}${text}`;
       fakeEditors.rawInsertedAt = target;
+      fakeEditors.movedCaret = moveCaret;
       this.onChange?.(fakeEditors.rawText);
     }
 
@@ -289,6 +293,7 @@ beforeEach(() => {
   fakeEditors.heldTargets.clear();
   fakeEditors.rawDroppedAt = null;
   fakeEditors.rawInsertedAt = null;
+  fakeEditors.movedCaret = null;
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -1083,6 +1088,51 @@ describe("EditorHost file drops", () => {
     return done;
   }
 
+  it("leaves focus and the caret where the user went while the file was read", async () => {
+    const root = document.createElement("div");
+    const find = document.createElement("input");
+    document.body.append(root, find);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    // Such as the find card, where the next keys would go into the document.
+    find.focus();
+    await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+
+    expect(document.activeElement).toBe(find);
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    expect(fakeEditors.movedCaret).toBe(false);
+    root.remove();
+    find.remove();
+    await host.dispose();
+  });
+
+  it("leaves focus and the caret alone when the user pressed a key or clicked since the drop", async () => {
+    const root = document.createElement("div");
+    const find = document.createElement("input");
+    document.body.append(root, find);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    find.focus();
+
+    for (const input of [new KeyboardEvent("keydown", { key: "S" }), new Event("pointerdown")]) {
+      const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      find.dispatchEvent(input);
+      await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+      host.releaseDrop(drop);
+
+      expect(document.activeElement).toBe(find);
+      expect(fakeEditors.movedCaret).toBe(false);
+    }
+    root.remove();
+    find.remove();
+    await host.dispose();
+  });
+
   it("puts a file dropped on a document now behind another tab where it was dropped once that document is shown", async () => {
     const root = document.createElement("div");
     const store = makeStore();
@@ -1458,7 +1508,7 @@ describe("EditorHost split catch-up", () => {
       const caret = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
       caret.focus();
       const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
-      const typeKey = () => caret.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "a" }));
+      const typeKey = () => caret.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
 
       typeKey();
       const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;

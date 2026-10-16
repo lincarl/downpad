@@ -188,22 +188,37 @@ function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transact
 }
 
 /**
- * Milkdown action that inserts Markdown's blocks at a drop target
- * (`placeBlocks`) and puts the caret after them (`placeCaret`). The target
- * moves past the blocks, so the next file of the drop follows.
+ * Leave the selection the user had before an insert, for a file that went in
+ * while they were elsewhere. An end at the insert point stays before the
+ * inserted content, so a selection never grows to take it in.
  */
-export function insertBlocksAt(markdown: string, target: DropTarget) {
+function keepSelection(tr: Transaction, selection: Selection): Transaction {
+  if (!(selection instanceof TextSelection)) return tr.setSelection(selection.map(tr.doc, tr.mapping));
+  const anchor = tr.doc.resolve(tr.mapping.map(selection.anchor, -1));
+  const head = tr.doc.resolve(tr.mapping.map(selection.head, -1));
+  return tr.setSelection(TextSelection.between(anchor, head));
+}
+
+/**
+ * Milkdown action that inserts Markdown's blocks at a drop target
+ * (`placeBlocks`) and puts the caret after them (`placeCaret`), or with
+ * `moveCaret` off leaves the selection where it was. The target moves past
+ * the blocks, so the next file of the drop follows.
+ */
+export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret = true) {
   return (ctx: Ctx): void => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
     if (!doc?.lastChild) return;
     const { tr } = view.state;
+    const { selection } = tr;
     if (!placeBlocks(tr, target, doc)) return;
     const end = changeEnd(tr);
     // The editor maps the target through this transaction. From where the
     // inserted blocks began, mapping takes it to their end.
     target.pos = tr.mapping.invert().map(end);
-    view.dispatch(placeCaret(tr, end, doc.lastChild.isTextblock).scrollIntoView());
+    if (!moveCaret) view.dispatch(keepSelection(tr, selection));
+    else view.dispatch(placeCaret(tr, end, doc.lastChild.isTextblock).scrollIntoView());
   };
 }
 
@@ -212,9 +227,9 @@ export function insertBlocksAt(markdown: string, target: DropTarget) {
  * from the document text (§5.4). A file never replaces what is selected, such
  * as the find card's current match. It goes in after the selected text, and
  * after a selected image or other block. The caret then goes after it
- * (`placeCaret`).
+ * (`placeCaret`), or with `moveCaret` off stays where it was, before the file.
  */
-export function insertAtSelection(markdown: string) {
+export function insertAtSelection(markdown: string, moveCaret = true) {
   return (ctx: Ctx): void => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
@@ -230,7 +245,8 @@ export function insertAtSelection(markdown: string) {
       return;
     }
     if (!tr.docChanged) return;
-    view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
+    if (!moveCaret) view.dispatch(keepSelection(tr, selection));
+    else view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
   };
 }
 
