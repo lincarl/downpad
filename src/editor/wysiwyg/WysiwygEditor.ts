@@ -31,6 +31,7 @@ import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
+import { codeBlockMetaSchema } from "./codeBlockMeta";
 import {
   searchMilkdownPlugin,
   runSearch,
@@ -173,6 +174,9 @@ export class WysiwygEditor {
     this.crepe.editor.use(linkViewPlugin(context));
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
+    // Keep fence info after the language, such as title="server.js". Must follow
+    // the LaTeX feature so this node spec replaces Crepe's.
+    this.crepe.editor.use(codeBlockMetaSchema);
     // WYSIWYG find/replace search state + decorations (§5.13).
     this.crepe.editor.use(searchMilkdownPlugin());
     // Report document edits once typing pauses. md-easy keeps its own timer

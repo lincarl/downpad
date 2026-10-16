@@ -17,7 +17,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 
 - Headings, paragraphs, emphasis, links, and block quotes.
 - Ordered, unordered, and task lists.
-- Tables, horizontal rules, inline code, and fenced code blocks.
+- Tables, horizontal rules, inline code, and fenced code blocks. A fence keeps the options after its language, such as `title="server.js"`, and a `latex` fence stays a fence rather than becoming a math block.
 - Syntax highlighting for code blocks, and VS Code's Markdown colors in the Markdown view.
 - Inline and block math rendered with KaTeX.
 - Mermaid diagrams rendered from fenced `mermaid` blocks.
