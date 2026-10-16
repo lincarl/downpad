@@ -674,10 +674,10 @@ test("Tab leaves the document view without typing spaces, and still nests a list
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n- One\n  - Two\n\n```js\nlet x = 1;\n```\n");
 });
 
-/** Open a one-line file in the split, returning each pane's first line. */
-async function openSplit(name: string): Promise<{ file: string; documentLine: Locator; markdownLine: Locator }> {
+/** Open a file in the split, by default one line, returning each pane's first line. */
+async function openSplit(name: string, text = "First line.\n"): Promise<{ file: string; documentLine: Locator; markdownLine: Locator }> {
   const file = path.join(directory, name);
-  await writeFile(file, "First line.\n");
+  await writeFile(file, text);
   await launch(file);
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   return {
@@ -779,20 +779,25 @@ async function dropFiles(target: Locator, files: string[]): Promise<void> {
   await cdp.detach();
 }
 
-test("a file dropped while typing in the split's Markdown pane keeps the file and the typing", async () => {
-  const { file, markdownLine } = await openSplit("drop-while-typing.md");
+test("a file dropped while typing in the split's Markdown pane lands at the caret and keeps the rest as written", async () => {
+  // The document view would write this heading and these bullets another way.
+  const text = "Title\n=====\n\n* Alpha\n* Beta\n\nFirst line.\n\n* Gamma\n";
+  const { file } = await openSplit("drop-while-typing.md", text);
+  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "First line." });
   const attachment = path.join(directory, "notes.csv");
+  const link = "[notes.csv](attachments/notes.csv)";
   await writeFile(attachment, "a,b\n");
   await markdownLine.click();
   await page.keyboard.press("End");
-  // The drop lands in the document pane between keystrokes in the Markdown pane.
+  // The drop lands between keystrokes in the Markdown pane.
   const typing = page.keyboard.type(" Typed during the drop.", { delay: 40 });
   await expect(markdownLine).toContainText("First line. Ty");
   await dropFiles(markdownLine, [attachment]);
   await typing;
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toContain("First line. Typed during the drop.");
-  expect(await readFile(file, "utf8")).toContain("[notes.csv](attachments/notes.csv)");
+  await expect.poll(() => readFile(file, "utf8")).toContain(link);
+  const saved = await readFile(file, "utf8");
+  expect(saved.replace(link, "")).toBe(text.replace("First line.", "First line. Typed during the drop."));
 });
 
 test("Print keeps a saved Markdown edit as typed", async () => {

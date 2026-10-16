@@ -118,6 +118,13 @@ vi.mock("./raw/RawEditor", () => ({
       return MARKDOWN_COUNTS;
     }
 
+    /** Like the real editor, add the text at the caret, here the end, and
+     *  report the edit at once. */
+    insertText(text: string): void {
+      fakeEditors.rawText = `${fakeEditors.rawText ?? ""}${text}`;
+      fakeEditors.rawChange?.(fakeEditors.rawText);
+    }
+
     destroy(): void {}
     onShow(): void {}
   },
@@ -505,16 +512,22 @@ describe("EditorHost split catch-up", () => {
     await host.dispose();
   });
 
-  it("gives the Markdown pane a dropped file before its next keystroke", async () => {
-    const { store, host } = await openSplit();
-    fakeEditors.markdown = "document text";
+  it("puts a file dropped while the Markdown pane has focus at its caret, as written", async () => {
+    const { root, store, host } = await openSplit();
+    document.body.append(root);
+    const caret = document.createElement("textarea");
+    root.querySelector(".editor-pane-raw")!.append(caret);
+    caret.focus();
+    fakeEditors.rawText = "Markdown text, typed";
+    fakeEditors.rawChange!(fakeEditors.rawText);
 
-    // A drop inserts into the document pane while the Markdown pane has focus.
-    host.insertMarkdown("![](image.png)");
+    host.insertMarkdown("[notes.csv](attachments/notes.csv)");
 
-    expect(fakeEditors.rawText).toBe("document text\n\n![](image.png)");
-    fakeEditors.rawChange!("document text\n\n![](image.png), then Markdown");
-    expect(store.get().doc.markdown).toBe("document text\n\n![](image.png), then Markdown");
+    // The document pane would report its own form of the whole text.
+    expect(store.get().doc.markdown).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
+    host.flush();
+    expect(fakeEditors.mirrored).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
+    root.remove();
     await host.dispose();
   });
 
@@ -523,6 +536,7 @@ describe("EditorHost split catch-up", () => {
     fakeEditors.rawChange!("newer Markdown text");
 
     host.insertMarkdown("![](image.png)");
+    host.flush();
 
     expect(store.get().doc.markdown).toBe("newer Markdown text\n\n![](image.png)");
     expect(fakeEditors.rawText).toBe("newer Markdown text\n\n![](image.png)");

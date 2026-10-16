@@ -141,17 +141,18 @@ export class EditorHost implements FindController {
     this.layout = layout;
   }
 
-  /** Insert markdown into the document editor at its current selection (§5.4).
-   *  A file drop lands here with no click or focus on the pane, so the split
-   *  catches up first, giving the document pane any newer Markdown pane edit,
-   *  and again after, giving the Markdown pane the insert before its next key. */
+  /** Insert markdown at the caret of the pane being edited (§5.4): the split's
+   *  Markdown pane while it holds focus, otherwise the document editor, or the
+   *  Markdown source in the Markdown-only view. A file drop lands here with no
+   *  click or focus on a pane, so the split catches up first and the target
+   *  pane holds the other pane's latest edit. The Markdown pane reports the
+   *  insert at once, like typing, and keeps the rest of its text as written. */
   insertMarkdown(markdown: string): void {
     if (this.disposed) return;
     this.flush();
-    const pane = this.active();
+    const pane = this.focusedSplitRaw() ?? this.active();
     if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown);
     else if (pane?.raw) pane.raw.insertText(markdown);
-    this.flush();
   }
 
   /** (Re)apply the spell-check setting to every editor under the host (§5.14). */
@@ -452,6 +453,13 @@ export class EditorHost implements FindController {
 
   private activeRaw(): RawEditor | null {
     return this.active()?.raw ?? null;
+  }
+
+  /** The split's Markdown pane when it holds focus, else null. */
+  private focusedSplitRaw(): Pane | null {
+    if (this.layout !== "split" || this.activeTabId === null) return null;
+    const pane = this.panes.get(paneKey(this.activeTabId, "raw"));
+    return pane?.el.contains(document.activeElement) ? pane : null;
   }
 
   private revOf(tabId: string): number {
