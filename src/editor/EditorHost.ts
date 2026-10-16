@@ -298,10 +298,11 @@ export class EditorHost implements FindController {
    * would skip that check and could write older text over a newer edit.
    *
    * The document pane decides a typed closing `$` or `~` that still waits
-   * before it reports. `keepTypedMark` leaves it waiting and reports it as
-   * text, for a click or focus moving into the document pane itself, where a
-   * click may land inside the text the mark closes, and for autosave, which
-   * must not change the document while the user types.
+   * before it reports. `keepTypedMark` leaves it waiting, for a click or focus
+   * moving into the document pane itself, where a click may land inside the
+   * text the mark closes, and for autosave, which must not change the
+   * document while the user types. Either way the pane reports the mark as
+   * Save writes it.
    */
   flush({ keepTypedMark = false }: { keepTypedMark?: boolean } = {}): void {
     if (this.disposed || !this.activeTabId) return;

@@ -655,14 +655,30 @@ function decide(state: EditorState, pos: number): Transaction {
   return (closing(state, pos, characterAt(state, pos + 1)) ?? state.tr).setMeta(waitingKey, null);
 }
 
+/** The change that decides a typed closing `$` or `~` that still waits, or
+ *  null when none waits or a composition runs, which decides it once it
+ *  ends. */
+function decision(view: EditorView): Transaction | null {
+  const waiting = waitingKey.getState(view.state);
+  return waiting && !view.composing ? decide(view.state, waiting.pos) : null;
+}
+
 /** Decide a typed closing `$` or `~` that still waits by the character now
  *  after it. The document editor calls this before its text is read, as for
  *  Save or a view switch, and when it loses focus, such as to the split's
- *  Markdown pane, whose edit would replace the whole text with a waiting mark
- *  as text. A composition decides the mark once it ends. */
+ *  Markdown pane. A composition decides the mark once it ends. */
 export function decideTypedMark(view: EditorView): void {
-  const waiting = waitingKey.getState(view.state);
-  if (waiting && !view.composing) dispatchClosing(view, decide(view.state, waiting.pos));
+  const tr = decision(view);
+  if (tr) dispatchClosing(view, tr);
+}
+
+/** The document as `decideTypedMark` would leave it, without changing the
+ *  editor. The document editor reports this, so the text it reports, and
+ *  autosave writes, holds what Save would write, while the mark keeps waiting
+ *  for the next character. Deciding the mark later then changes nothing in
+ *  that text, unless the next character makes it decide otherwise. */
+export function decidedDoc(view: EditorView): ProseNode {
+  return decision(view)?.doc ?? view.state.doc;
 }
 
 /** Once a composition ends, decide a mark that waited through it by the text

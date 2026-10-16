@@ -13,7 +13,7 @@
 //     Crepe parsed, not Milkdown's rewrite of it.
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { $prose, insert } from "@milkdown/kit/utils";
@@ -55,7 +55,7 @@ import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } f
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
-import { decideTypedMark, mathDelimiters } from "./mathDelimiters";
+import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -352,7 +352,9 @@ export class WysiwygEditor {
    *  final list, code block, quote, table, rule or image. A body that still
    *  serializes as it did right after Crepe parsed it is reported as that exact
    *  source, so opening, mirroring or undoing back never rewrites text the user
-   *  has not changed. */
+   *  has not changed. A typed closing `$` or `~` that still waits for the next
+   *  character is written as the formula or strikethrough that deciding it now
+   *  would make, as Save writes it (`decidedDoc`). */
   getMarkdown(): string {
     const body = this.bodyMarkdown();
     const baseline = this.baseline;
@@ -366,11 +368,12 @@ export class WysiwygEditor {
   /** Report an edit now instead of waiting for typing to pause. A caller that
    *  reads the document right away (Save) calls this first. A typed closing
    *  `$` or `~` that still waits for the next character is decided first, so
-   *  the report holds the formula or strikethrough that the file would read.
-   *  `keepTypedMark` leaves it waiting and reports it as text, for a click or
-   *  focus moving into this pane, which may put the cursor inside the text the
-   *  mark closes, and for autosave. The edit takes the usual `onChange` path,
-   *  and the pending report is cancelled. */
+   *  the editor shows the formula or strikethrough that the file holds.
+   *  `keepTypedMark` leaves it waiting, for a click or focus moving into this
+   *  pane, which may put the cursor inside the text the mark closes, and for
+   *  autosave. Either way the report holds what Save writes (`getMarkdown`).
+   *  The edit takes the usual `onChange` path, and the pending report is
+   *  cancelled. */
   reportPendingChange({ keepTypedMark = false }: { keepTypedMark?: boolean } = {}): void {
     if (!keepTypedMark) this.withView(decideTypedMark, undefined);
     if (this.changeTimer == null || this.ignoreUpdates) return;
@@ -608,11 +611,12 @@ export class WysiwygEditor {
     this.baseline = { source, settled: this.bodyMarkdown() };
   }
 
-  /** Crepe's document as Markdown. */
+  /** Crepe's document as Markdown, with a typed closing mark that still
+   *  waits written as Save writes it (`decidedDoc`). */
   private bodyMarkdown(): string {
     if (!this.crepe) return "";
     try {
-      return this.crepe.getMarkdown();
+      return this.crepe.editor.action((ctx) => ctx.get(serializerCtx)(decidedDoc(ctx.get(editorViewCtx))));
     } catch {
       return "";
     }

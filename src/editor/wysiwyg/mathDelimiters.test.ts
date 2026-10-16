@@ -628,21 +628,32 @@ describe("math and strikethrough delimiters", () => {
     expect(crepe.getMarkdown()).toBe("One. see ~~ol**X**d~~\n\nTwo. a $xy$**X**\n");
   });
 
-  it("decides a typed closing mark before the document editor reports its text", { timeout: 60_000 }, async () => {
+  it("reports a waiting closing mark as Save writes it, and decides it before Save", { timeout: 60_000 }, async () => {
     const onChange = vi.fn();
-    const { editor, root } = await open("One.\n", onChange);
+    const { editor, root } = await open("One.\n\nTwo.\n", onChange);
     const view = viewOf(editor);
     moveToEnd(view, "One.");
     type(view, " $x$");
-    // The edit is reported once typing pauses, with the waiting mark as text.
-    await vi.waitFor(() => expect(onChange).toHaveBeenLastCalledWith("One. \\$x\\$\n"));
-    // A click in the document pane itself may land inside the formula's text.
+    // The edit is reported once typing pauses, with the mark still waiting.
+    // Autosave writes that report, so closing or leaving the tab later finds
+    // nothing new to save.
+    await vi.waitFor(() => expect(onChange).toHaveBeenLastCalledWith("One. $x$\n\nTwo.\n"));
+    expect(formulas(root)).toEqual([]);
+    // A click in the document pane itself may land inside the formula's text,
+    // and autosave must not change the document while the user types.
     editor.reportPendingChange({ keepTypedMark: true });
     expect(formulas(root)).toEqual([]);
+    // A digit typed next keeps the mark text.
+    type(view, "5");
+    editor.reportPendingChange({ keepTypedMark: true });
+    expect(onChange).toHaveBeenLastCalledWith("One. \\$x\\$5\n\nTwo.\n");
+    moveToEnd(view, "Two.");
+    type(view, " was ~old~");
     // Save, a view switch or a click in the split's Markdown pane.
     editor.reportPendingChange();
-    expect(formulas(root)).toEqual(["x"]);
-    expect(onChange).toHaveBeenLastCalledWith("One. $x$\n");
+    expect(formulas(root)).toEqual([]);
+    expect(strikes(root)).toEqual(["old"]);
+    expect(onChange).toHaveBeenLastCalledWith("One. \\$x\\$5\n\nTwo. was ~~old~~\n");
   });
 
   it("keeps a formula when the text typed after it is undone", { timeout: 60_000 }, async () => {

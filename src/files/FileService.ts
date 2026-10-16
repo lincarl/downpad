@@ -28,7 +28,7 @@ export interface EditorPresenter {
    *  Use before reading the active doc, for example to save it, or leaving it.
    *  The document editor decides a typed closing `$` or `~` that waits for the
    *  next character first, unless `keepTypedMark` asks it to keep the mark
-   *  waiting and report it as text. */
+   *  waiting. Either way the active doc gets the mark as Save writes it. */
   flush(options?: { keepTypedMark?: boolean }): void;
   /** Show the active tab's document, revealing its cached editor when possible
    *  (preserves undo). Use after a pure tab switch / focusing an open file. */
@@ -144,9 +144,10 @@ export class FileService {
 
   /** Save to the current path, or fall back to Save As for an untitled buffer.
    *  `keepTypedMark` is for a save nobody asked for, such as autosave. It
-   *  saves a typed closing `$` or `~` that still waits for the next character
-   *  as text and leaves it waiting, so the save never changes the document
-   *  while the user types. */
+   *  writes a typed closing `$` or `~` that still waits for the next character
+   *  as Save would, but leaves it waiting in the editor, so the save never
+   *  changes the document while the user types, and a digit typed next still
+   *  keeps it text. */
   save(options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
     return this.queueSave(false, options);
   }

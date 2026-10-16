@@ -787,21 +787,39 @@ test("a typed closing mark is decided in a heading, by Tab in a list and by a pa
     .toBe("# Head $x$ and ~~old~~ end\n\n- item\n  - next $y$ more\n\nOne. Let $z$, small\n");
 });
 
-test("autosave in a pause leaves a typed closing mark waiting for the next character", async () => {
+test("autosave in a pause writes a typed closing mark as Save would and leaves it waiting", async () => {
   const file = path.join(directory, "autosaved.md");
-  await writeFile(file, "Start.\n");
+  await writeFile(file, "Start.\n\nNext.\n");
   await writeFile(
     path.join(directory, "profile", "settings.toml"),
     "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nautosaveEnabled = true\nautosaveIntervalSeconds = 5\n",
   );
   await launch(file);
+  // Record the unsaved-changes prompts and answer Cancel.
+  await app!.evaluate(({ dialog }) => {
+    const prompts: string[] = [];
+    Object.assign(globalThis, { prompts });
+    dialog.showMessageBox = async (...args: unknown[]) => {
+      prompts.push(String((args.at(-1) as { message?: unknown }).message));
+      return { response: 0, checkboxChecked: false };
+    };
+  });
   await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Tickets cost $5-$");
-  // Autosave writes the waiting `$` as text, and it keeps waiting.
-  await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost \\$5-\\$\n");
+  // Autosave writes what Save would, and the `$` keeps waiting, so the digit
+  // typed next still keeps it text.
+  await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost $5-$\n\nNext.\n");
   await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(0);
   await page.keyboard.type("10 each.");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("Start. Tickets cost \\$5-\\$10 each.\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext.\n");
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").nth(1), " Let $x$");
+  await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext. Let $x$\n");
+  // Closing the tab makes the formula, which autosave has already saved.
+  await expect(page).toHaveTitle("autosaved.md — md-easy");
+  await page.getByRole("tab", { name: /autosaved\.md/ }).click({ button: "middle" });
+  await expect(page.getByRole("tab", { name: /autosaved\.md/ })).toHaveCount(0);
+  expect(await app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([]);
+  expect(await readFile(file, "utf8")).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext. Let $x$\n");
 });
 
 test("Save right after typing writes the last edit in the document and split views", async () => {
@@ -1383,9 +1401,10 @@ test("a file dropped while typing in the split's Markdown pane lands at the care
 test("a formula typed last in the document pane is kept by the split's Markdown pane and a view switch", async () => {
   const { file, documentLine, markdownLine } = await openSplit("formula-last.md");
   await typeAtEnd(documentLine, " a $x$");
-  // Once typing pauses the Markdown pane shows the closing `$` as text, since
-  // it still waits for the next character.
-  await expect(markdownLine).toHaveText("First line. a \\$x\\$");
+  // Once typing pauses the Markdown pane shows the formula as Save would
+  // write it, while the closing `$` still waits for the next character.
+  await expect(markdownLine).toHaveText("First line. a $x$");
+  await expect(page.locator('.editor-pane-wysiwyg [data-type="math_inline"]')).toHaveCount(0);
   await typeAtEnd(markdownLine, " raw");
   await expect(page.locator('.editor-pane-wysiwyg [data-type="math_inline"]')).toHaveCount(1);
   await page.getByRole("radio", { name: "Document", exact: true }).click();
