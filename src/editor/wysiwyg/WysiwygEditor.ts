@@ -13,7 +13,7 @@
 import { Crepe } from "@milkdown/crepe";
 import { remarkStringifyOptionsCtx, editorViewCtx } from "@milkdown/kit/core";
 import { $prose, insert, replaceAll as replaceAllMarkdown } from "@milkdown/kit/utils";
-import { Plugin } from "@milkdown/kit/prose/state";
+import { Plugin, type Transaction } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -183,9 +183,14 @@ export class WysiwygEditor {
             state: {
               init: () => null,
               apply: (tr) => {
-                // Like the listener plugin, skip changes kept out of undo history
-                // (heading ids, list labels). They do not change the Markdown.
-                if (tr.docChanged && tr.getMeta("addToHistory") !== false) this.scheduleChange();
+                // Skip the changes undo history leaves out, by the rule it uses.
+                // That is a change kept out of history (heading ids, list labels,
+                // the empty last line) or a plugin's follow-up to one, which
+                // carries it as "appendedTransaction". They do not change the
+                // Markdown.
+                const root = tr.getMeta("appendedTransaction") as Transaction | undefined;
+                const recorded = tr.getMeta("addToHistory") !== false && root?.getMeta("addToHistory") !== false;
+                if (tr.docChanged && recorded) this.scheduleChange();
                 return null;
               },
             },
@@ -220,6 +225,13 @@ export class WysiwygEditor {
     // replaced the body and recorded its own source. Keep that one.
     if (!this.baseline) this.rememberSource(split.body);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
+    // Crepe adds an empty last line below a final list, code block, quote,
+    // table, rule or image in the first transaction after create. Make that an
+    // empty transaction kept out of undo history. Otherwise the list view's
+    // first-frame selection or the first click gets the line recorded, and the
+    // first Ctrl+Z only removes it (Crepe adds it straight back) and moves the
+    // caret.
+    this.withView((view) => view.dispatch(view.state.tr.setMeta("addToHistory", false)), undefined);
     this.enableUpdatesTimer = setTimeout(() => {
       this.enableUpdatesTimer = null;
       if (!this.destroyed && this.crepe === crepe) this.ignoreUpdates = false;
