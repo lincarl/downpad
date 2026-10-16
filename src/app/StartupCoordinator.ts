@@ -143,6 +143,8 @@ export class StartupCoordinator {
       hadBom: false,
       modifiedMs: 0,
       isDirty: true,
+      // The snapshot holds edits, and the file may have changed since.
+      savedMarkdown: null,
       frontmatterCollapsed: false,
     });
     void deleteSnapshot(snapshot.sessionId).catch(() => {});

@@ -40,6 +40,7 @@ function makeStore(): Store {
     markdown: "# Test",
     filePath: null,
     isDirty: false,
+    savedMarkdown: "# Test",
     eol: "lf" as const,
     hadBom: false,
     modifiedMs: 0,

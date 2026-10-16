@@ -89,6 +89,7 @@ export class FileService {
       hadBom: payload.hadBom,
       modifiedMs: payload.modifiedMs,
       isDirty: false,
+      savedMarkdown: payload.content,
       frontmatterCollapsed: existing?.doc.frontmatterCollapsed ?? false,
     };
     if (existing) {
@@ -175,21 +176,37 @@ export class FileService {
       if (!path || !afterDialog || afterDialog.filePath !== originalPath) return false;
     }
     if (!path) return false;
-    const meta = await writeFile(path, snapshot.markdown, snapshot.eol);
+    // Until the write settles, the file may hold the old saved text or the new
+    // one, so an edit back to either still counts as unsaved.
+    const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
+    this.store.patchDocById(tabId, { savedMarkdown: null });
+    const meta = await writeFile(path, snapshot.markdown, snapshot.eol).catch((error: unknown) => {
+      this.restoreSavedMarkdown(tabId, originalPath, previous);
+      throw error;
+    });
     this.markSaved(tabId, snapshot, originalPath, path, meta.modifiedMs);
     if (choosePath) this.recordOpened(path);
     return true;
   }
 
-  /** Apply saved metadata to its owner, keeping later edits dirty. */
+  /** Apply saved metadata to its owner, keeping later edits dirty. A change on
+   *  disk that was recorded while the write was pending, with a later mtime,
+   *  stays the file's text. */
   private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, modifiedMs: number): void {
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== originalPath) return;
-    this.store.patchDocById(tabId, {
-      filePath: path,
-      isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
-      modifiedMs,
-    });
+    const newerOnDisk = path === originalPath && current.savedMarkdown !== null && current.modifiedMs > modifiedMs;
+    this.store.patchDocById(
+      tabId,
+      newerOnDisk
+        ? { isDirty: current.markdown !== current.savedMarkdown }
+        : {
+            filePath: path,
+            isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
+            savedMarkdown: snapshot.markdown,
+            modifiedMs,
+          },
+    );
     // Requests queued during Save As follow the owner's new path, retaining
     // the content each caller asked to save.
     for (const pending of this.pendingSaves) {
@@ -199,6 +216,14 @@ export class FileService {
       this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
       if (path !== originalPath) this.watch(path);
     }
+  }
+
+  /** After a failed write, give the tab back the saved text it had before,
+   *  unless something else has recorded the file's text since. */
+  private restoreSavedMarkdown(tabId: string, originalPath: string | null, previous: string | null): void {
+    const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!current || current.filePath !== originalPath || current.savedMarkdown !== null) return;
+    this.store.patchDocById(tabId, { savedMarkdown: previous, isDirty: current.markdown !== previous });
   }
 
   /** Whether any open tab has unsaved changes (window-close guard, §5.19). */

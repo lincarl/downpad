@@ -103,6 +103,7 @@ function makeStore(): Store {
     markdown: "original markdown",
     filePath: null,
     isDirty: false,
+    savedMarkdown: "original markdown",
     eol: "lf" as const,
     hadBom: false,
     modifiedMs: 0,

@@ -22,7 +22,8 @@ export interface DesktopEventDependencies {
 }
 
 export class DesktopEventBindings {
-  private pendingChangeMs = 0;
+  /** The file's changed text and mtime while the banner offers to reload it. */
+  private pendingChange: { markdown: string; modifiedMs: number } | null = null;
   private started = false;
   private disposed = false;
   private closing = false;
@@ -52,7 +53,7 @@ export class DesktopEventBindings {
 
   /** Clear watcher state after the active document changes. */
   resetPendingChange(): void {
-    this.pendingChangeMs = 0;
+    this.pendingChange = null;
   }
 
   /** Apply the action exposed by React's external-change banner. */
@@ -62,7 +63,18 @@ export class DesktopEventBindings {
     if (id === "reload" && path) {
       run(() => files.openPath(path, { reload: true }));
     } else if (id === "keep") {
-      store.patchDoc({ modifiedMs: this.pendingChangeMs });
+      // The file holds the changed text, so the open text is unsaved unless it
+      // matches it. A Save or a later change on disk since then is newer, and
+      // already recorded what the file holds.
+      const change = this.pendingChange;
+      this.pendingChange = null;
+      if (change && change.modifiedMs > store.get().doc.modifiedMs) {
+        store.patchDoc({
+          modifiedMs: change.modifiedMs,
+          savedMarkdown: change.markdown,
+          isDirty: store.get().doc.markdown !== change.markdown,
+        });
+      }
       store.set({ banner: null });
     }
   }
@@ -90,12 +102,19 @@ export class DesktopEventBindings {
     const current = store.get().doc;
     if (!current.filePath || !sameFilePath(payload.path, current.filePath)) return;
     if (payload.modifiedMs <= current.modifiedMs) return;
+    // Reads can finish out of order. A newer change read while this one waited
+    // is what the file holds now.
+    if (this.pendingChange && this.pendingChange.modifiedMs >= payload.modifiedMs) return;
     if (onDisk === current.markdown) {
-      store.patchDoc({ modifiedMs: payload.modifiedMs });
+      // The file holds the open text, so an earlier change has nothing left to
+      // reload or keep.
+      store.patchDoc({ modifiedMs: payload.modifiedMs, savedMarkdown: onDisk, isDirty: false });
+      this.pendingChange = null;
+      if (store.get().banner?.kind === "file-changed") store.set({ banner: null });
       return;
     }
 
-    this.pendingChangeMs = payload.modifiedMs;
+    this.pendingChange = { markdown: onDisk, modifiedMs: payload.modifiedMs };
     store.set({
       banner: {
         kind: "file-changed",
