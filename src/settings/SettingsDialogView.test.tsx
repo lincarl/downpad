@@ -23,6 +23,11 @@ const checkedValue = (name: string) =>
 
 afterEach(() => cleanup());
 
+// Each test draws the whole dialog and drives it with user-event. That takes
+// about 1.3s alone, and more than the default 5s when the full suite runs on a
+// busy machine.
+vi.setConfig({ testTimeout: 20_000 });
+
 describe("SettingsDialogView accessibility", () => {
   it("describes the dialog and gives the accent picker independent button semantics", () => {
     renderDialog();
