@@ -51,6 +51,9 @@ describe("code fence info", () => {
       // A fence without info gets none, and a math block stays math.
       "```\nplain\n```",
       "$$\nE = mc^2\n$$",
+      // A LaTeX fence shows LaTeX source, so it stays a fence.
+      "```latex\n\\frac{a}{b}\n```",
+      '```latex title="a.tex"\n\\frac{a}{b}\n```',
     ].join("\n\n");
     const editor = await open(`Edit.\n\n${blocks}\n`);
     // Edit through Find and Replace, so the document is serialized anew.
@@ -73,8 +76,8 @@ describe("code fence info", () => {
       if (node.type.name === "code_block") blocks.push(node.attrs);
     });
     expect(blocks).toEqual([
-      { language: "js", meta: 'title="app.js"' },
-      { language: "", meta: "" },
+      { language: "js", meta: 'title="app.js"', fenced: true },
+      { language: "", meta: "", fenced: true },
     ]);
   });
 });
