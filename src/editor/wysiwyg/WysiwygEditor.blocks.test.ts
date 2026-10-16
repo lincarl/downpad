@@ -600,6 +600,27 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => deleteBlock(view, "Then:"),
       "Install it:\n\n```\nnpm install\n```\n\n3. Start the server\n4. Open the page\n",
     ],
+    // Below a list or quote that is still open, the parser ends indented code
+    // after its first line. That splits code that was one block, and joins
+    // code that read as two blocks only there.
+    [
+      "indented code that would split below a list",
+      "1.   Install the tools.\n2.   Build the project.\n\nRun these commands:\n\n    make\n    make install\n",
+      (view: EditorView) => deleteBlock(view, "Run these commands:"),
+      "1. Install the tools.\n2. Build the project.\n\n```\nmake\nmake install\n```\n",
+    ],
+    [
+      "indented code that read as two blocks below a list",
+      "Intro.\n\n100. Item\n\n    code one\n    code two\n",
+      (view: EditorView) => deleteBlock(view, "Item"),
+      "Intro.\n\n```\ncode one\n```\n\n```\ncode two\n```\n",
+    ],
+    [
+      "indented code that would split below a quote",
+      "> ```\n> unclosed\n## Run\n    make\n    make install\n",
+      (view: EditorView) => deleteBlock(view, "Run"),
+      "> ```\n> unclosed\n> ```\n\n```\nmake\nmake install\n```\n",
+    ],
     // Milkdown writes a heading with line breaks in setext form. Starting with
     // a comment, it reads as the comment and a paragraph "===", which would
     // take in the next line.

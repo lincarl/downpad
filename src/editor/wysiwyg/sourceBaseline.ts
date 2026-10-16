@@ -182,6 +182,9 @@ const PARSE_COST = 10;
 /** How many characters a write may always read back. That takes a few
  *  milliseconds, so short files keep every join they can. */
 const MIN_BUDGET = 2_000;
+/** The syntax tree and ProseMirror types of the blocks that stay open over
+ *  blank lines, lists and footnotes (see `codeMayMove`). */
+const STAYS_OPEN: ReadonlySet<string> = new Set(["list", "footnoteDefinition", "bullet_list", "ordered_list", "footnote_definition"]);
 /** An ATX heading line. */
 const ATX = /^#{1,6}(?:[ \t\n]|$)/;
 /** A thematic break line. */
@@ -406,7 +409,10 @@ export class SourceBaseline {
       size = 0;
     };
     // A source item that depends on the text above it, at the top of the body.
-    if (pieces[0].item >= 0 && !itemFresh(layout, pieces[0].item)) current = { first: 0, last: -1, head: 0 };
+    if (pieces[0].item >= 0 && !itemFresh(layout, pieces[0].item)) {
+      if (codeMayMove(layout, pieces[0].item, undefined, "")) return null;
+      current = { first: 0, last: -1, head: 0 };
+    }
     for (let k = 0; k + 1 < pieces.length; k++) {
       const above = pieces[k];
       const below = pieces[k + 1];
@@ -417,6 +423,7 @@ export class SourceBaseline {
       else {
         gap = (above.item >= 0 ? layout.gaps[above.item] : below.item > 0 ? layout.gaps[below.item - 1] : undefined) ?? BLANK_LINE;
         fresh = below.item < 0 || itemFresh(layout, below.item);
+        if (below.item >= 0 && codeMayMove(layout, below.item, above, gap)) return null;
         const ending = endingOf(above, layout);
         if (!apart(ending, above.text, gap, below.text)) {
           // Read the file's gap back if that fits the budget. Otherwise a blank
@@ -794,6 +801,29 @@ function itemEnding(layout: SourceLayout, k: number): Ending {
 function itemFresh(layout: SourceLayout, k: number): boolean {
   const item = layout.items[k];
   return (item.fresh ??= k === 0 || apart(itemEnding(layout, k - 1), layout.items[k - 1].text, layout.gaps[k - 1], item.text));
+}
+
+/**
+ * Whether source item `k`, indented code below a new join under `above` (none
+ * at the top of the body) and `gap`, could end in another place than it did
+ * in the source. Reading back its first lines would not show that.
+ *
+ * Micromark ends indented code after its first line when that line is lazy,
+ * which is when a list, quote or footnote above it is still open and the line
+ * neither goes on with it nor starts a new one. There, code that was one block
+ * splits, and code that read as two blocks only because of it joins up. The
+ * code's first line was not lazy in the source if the parser started afresh
+ * on it (`itemFresh`), and is not lazy here if `above` leaves nothing open. A
+ * blank line closes a quote, and starts no code. Milkdown never writes
+ * indented code, because it fences code and writes spaces at the start of a
+ * line as character references, so only source items need this.
+ */
+function codeMayMove(layout: SourceLayout, k: number, above: Piece | undefined, gap: string): boolean {
+  if (itemEnding(layout, k) !== "indented") return false;
+  if (!itemFresh(layout, k)) return true;
+  const type = above && (above.item >= 0 ? layout.items[above.item].type : above.block?.type.name);
+  if (type === "blockquote") return !/\n[ \t]*\n/.test(gap);
+  return type !== undefined && STAYS_OPEN.has(type);
 }
 
 /** What ends `piece` (see `Ending`), worked out once. */
