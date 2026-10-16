@@ -298,16 +298,22 @@ test("the document view names every image and control it shows, and hides none t
   await check("link preview");
   // Keep the table clear of the top edge, so the column handle above it stays
   // on screen.
-  await editor.locator("td").first().evaluate((cell) => cell.scrollIntoView({ block: "center" }));
-  await editor.locator("td").first().click();
-  // Crepe moves the column handle over the hovered column a moment after the
-  // pointer arrives, and its click selects that column and opens the menu.
-  // Where floating-ui puts the handle differs between machines, and on the
-  // Linux CI runner it sat outside the window, so send the click to it directly.
+  const cell = editor.locator("td").first();
+  await cell.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await cell.click();
+  // Crepe shows the column handle for the hovered column, toggles the column's
+  // menu when the handle is clicked, and hides the menu when the pointer leaves
+  // the table. Where floating-ui puts the handle differs between machines, so
+  // send the click to the handle itself, and hover and click again if a pointer
+  // event closed the menu before it could be checked.
   const colHandle = page.locator('[data-role="col-drag-handle"]');
-  await expect(colHandle).toHaveAttribute("data-show", "true");
-  await colHandle.dispatchEvent("click");
-  await expect(colHandle.locator(".button-group")).toHaveAttribute("data-show", "true");
+  const columnMenu = colHandle.locator(".button-group");
+  await expect(async () => {
+    await cell.hover();
+    await expect(colHandle).toHaveAttribute("data-show", "true", { timeout: 1000 });
+    if ((await columnMenu.getAttribute("data-show")) !== "true") await colHandle.dispatchEvent("click");
+    await expect(columnMenu).toHaveAttribute("data-show", "true", { timeout: 1000 });
+  }).toPass();
   await check("column handle");
   await lastLine.click();
   await page.keyboard.press("End");
