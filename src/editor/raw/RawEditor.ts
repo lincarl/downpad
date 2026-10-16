@@ -13,7 +13,7 @@ import {
   search,
   setSearchQuery,
 } from "@codemirror/search";
-import { base64Collapse } from "./base64Collapse";
+import { base64Collapse, inBase64Payload } from "./base64Collapse";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
@@ -25,6 +25,11 @@ export interface RawCallbacks {
 export interface RawOptions {
   /** Collapse base64 data URIs in the view (§5.3). */
   collapseBase64?: boolean;
+}
+
+/** Search test that skips the base64 data of data: URIs, so Replace all cannot corrupt an image. */
+function outsideImageData(_match: string, state: EditorState, from: number, to: number): boolean {
+  return !inBase64Payload(state.doc, from, to);
 }
 
 export class RawEditor {
@@ -106,6 +111,7 @@ export class RawEditor {
       wholeWord: opts.wholeWord,
       regexp: opts.regex,
       replace: replacement,
+      test: outsideImageData,
     });
     view.dispatch({ effects: setSearchQuery.of(searchQuery) });
     if (!query || !searchQuery.valid) return { current: 0, total: 0 };

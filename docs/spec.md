@@ -27,7 +27,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 
 Markdown files can be opened through the file picker, recent-files view, drag and drop, command-line paths, or desktop file associations. The app preserves the document's line-ending style and warns before unsaved work is lost. Opening, copying or saving a file without edits keeps its exact text. A document counts as unsaved while its text differs from the file, so undoing every edit marks it saved again. While a save is still being written, and for a recovered snapshot until it is saved, the document stays unsaved.
 
-Images can be pasted or dropped into a document. They may be embedded as base64 data or stored in an attachments folder beside the Markdown file. Other dropped files are copied to the attachments folder and inserted as links.
+Images can be pasted or dropped into a document. They may be embedded as base64 data or stored in an attachments folder beside the Markdown file. Other dropped files are copied to the attachments folder and inserted as links. Find and replace cannot damage an embedded image. The document view does not search image sources, and the Markdown view skips the base64 data of every `data:` URI, including one written as text in a code sample.
 
 An image keeps its alt text and title when the document is saved. An image on its own line can be resized in the document view, but plain Markdown has no place for the size, so the size is not saved.
 
