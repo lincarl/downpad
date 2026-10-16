@@ -281,6 +281,8 @@ test("the document view names every image and control it shows, and hides none t
     });
     for (const element of focusable.result.value as string[]) failures.add(`${state}: focusable inside aria-hidden ${element}`);
   };
+  // Crepe draws a code block, and its diagram, once the block is on screen.
+  await page.locator(".milkdown-code-block").last().scrollIntoViewIfNeeded();
   await expect(page.locator(".mermaid-preview svg")).toBeVisible();
   await check("at rest");
   await editor.locator("p").first().hover();
