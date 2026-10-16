@@ -284,6 +284,32 @@ describe("math and strikethrough delimiters", () => {
     expect(formulas((await openCrepe(markdown)).root)).toEqual(math);
   });
 
+  it.each([
+    // GFM ends a table cell at a `|` that no backslash escapes.
+    ["|x| + |y|", "$\\|x\\| + \\|y\\|$", "|x| + |y|"],
+    // No backslash may come before that `|`, so TeX's `\|` is saved as
+    // `\Vert`, which TeX reads the same.
+    ["\\|x\\|_2 + \\|\\|", "$\\Vert x\\Vert_2 + \\Vert\\Vert$", "\\Vert x\\Vert_2 + \\Vert\\Vert"],
+    // An escaped backslash escapes nothing.
+    ["a \\\\| b", "$a \\\\\\| b$", "a \\\\| b"],
+    // A cell is one line.
+    ["a\n|b|", "$a \\|b\\|$", "a |b|"],
+  ])("saves the formula %j in a table cell so the table opens with the same cells", { timeout: 60_000 }, async (value, written, math) => {
+    const { crepe, view } = await openCrepe("| a | b |\n| --- | --- |\n| c $q$ ok | d |\n");
+    view.dispatch(view.state.tr.setNodeMarkup(formulaAt(view), undefined, { value }));
+    const saved = crepe.getMarkdown();
+    expect(saved).toContain(`| c ${written} ok |`);
+    const { root } = await openCrepe(saved);
+    expect(root.querySelectorAll("th, td")).toHaveLength(4);
+    expect(formulas(root)).toEqual([math]);
+  });
+
+  it("reads `\\|` in a formula in a table cell as `|`, as GitHub does", { timeout: 60_000 }, async () => {
+    const { root } = await openCrepe("| a | b |\n| --- | --- |\n| c $\\|x\\|$ and $$\\|y\\|$$2 | $a\\\\b$ |\n\nOutside $\\|z\\|$.\n");
+    expect(root.querySelectorAll("th, td")).toHaveLength(4);
+    expect(formulas(root)).toEqual(["|x|", "|y|", "a\\\\b", "\\|z\\|"]);
+  });
+
   it("keeps the backslash of an escaped dollar before a character Markdown escapes", { timeout: 60_000 }, async () => {
     const markdown = "Read \\$_GET['a'].\\$_POST['b'], \\$[a]\\$[b] and \\$~5,\\$~6.\n";
     const { editor, root } = await open(`Edit.\n\n${markdown}`);

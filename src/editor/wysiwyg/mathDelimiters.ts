@@ -253,6 +253,18 @@ function besideFormula(node: unknown, parent: { children?: readonly { type: stri
   return index >= 0 && (siblings[index - 1]?.type === "inlineMath" || siblings[index + 1]?.type === "inlineMath");
 }
 
+/** `value` written so that a table cell holds it. GFM ends a cell at a `|`
+ *  that no backslash escapes, so a `|` is written `\|`, as remark-gfm writes
+ *  one in inline code, and GitHub, VS Code and md-easy read it back as `|`. No
+ *  backslash may come before such a `|`, so TeX's `\|` is written `\Vert`,
+ *  which TeX reads the same. A cell is one line, so line endings are written
+ *  as spaces. */
+function inTableCell(value: string): string {
+  return value.replace(/\r\n?|\n/g, " ").replace(/(\\*)\|([a-zA-Z]?)/g, (_match, backslashes: string, letter: string) =>
+    backslashes.length % 2 ? `${backslashes.slice(1)}\\Vert${letter && " "}${letter}` : `${backslashes}\\|${letter}`,
+  );
+}
+
 /** Wraps remark-math's inline math writer so every formula reads back as the
  *  same formula. remark-math alone reads it the same too, unless another formula
  *  sits right next to it. The spaces around it are left out. Where single
@@ -266,11 +278,13 @@ function besideFormula(node: unknown, parent: { children?: readonly { type: stri
  *  text, so a formula whose every `$` is escaped is fenced with single dollars
  *  there, with its line endings written as spaces too. An empty formula shows
  *  nothing and is left out, because `$$` reads as text or as the start of a
- *  math block. */
+ *  math block. A formula in a table cell keeps its `|` from ending the cell
+ *  (`inTableCell`). */
 function pandocMathWriter(write: Handle): Handle {
   return (node: { value?: string }, parent, state, info) => {
-    const value = trimMath(node.value ?? "");
-    if (!value) return "";
+    const trimmed = trimMath(node.value ?? "");
+    if (!trimmed) return "";
+    const value = state.stack.includes("tableCell") ? inTableCell(trimmed) : trimmed;
     const written: string = write({ ...node, value }, parent, state, info);
     // remark-math's fence, and the formula as it writes it between the fences.
     const size = written.search(/[^$]/);
@@ -288,12 +302,23 @@ function pandocMathWriter(write: Handle): Handle {
   };
 }
 
+/** Read a `\|` in a formula in a table cell, below `node`, as `|`, as GFM
+ *  reads it in inline code and GitHub and VS Code read it in a formula.
+ *  `inCell` says whether `node` is in a table cell. */
+function unescapeCellPipes(node: MdNode, inCell = false): void {
+  if (inCell && node.type === "inlineMath") {
+    // An escaped backslash stays as it is and escapes nothing.
+    node.value = node.value?.replace(/\\([\\|])/g, (escape, character: string) => (character === "|" ? "|" : escape));
+  }
+  node.children?.forEach((child) => unescapeCellPipes(child, inCell || node.type === "tableCell"));
+}
+
 /** Reads and writes single-dollar math by Pandoc's rules. Must follow Crepe's
  *  remark-math plugin, because micromark tries the syntax added last first, and
  *  this wraps remark-math's writer. */
 export const pandocInlineMath = $remark("mdEasyPandocInlineMath", () =>
-  /** Adds the reader, wraps remark-math's writer and escapes every `$` in
-   *  text. */
+  /** Adds the reader, wraps remark-math's writer, escapes every `$` in text
+   *  and reads `\|` in a formula in a table cell as `|`. */
   function () {
     const data = this.data();
     (data.micromarkExtensions ??= []).push({ text: { [DOLLAR]: pandocDollar } });
@@ -304,15 +329,17 @@ export const pandocInlineMath = $remark("mdEasyPandocInlineMath", () =>
       const handlers: Partial<Record<string, Handle>> = extension.handlers ?? {};
       write = handlers.inlineMath ?? write;
     }
-    if (!write) return;
-    const ours: Partial<Record<string, Handle>> = { inlineMath: pandocMathWriter(write) };
-    // remark-math escapes a `$` in text through a pattern with an `after` key,
-    // which mdast-util-to-markdown reads as a condition. It then left the `$`
-    // unescaped before a character it always escapes, so `\$_GET` was saved
-    // as `$\_GET`, and two of them read as a formula. This pattern has no
-    // condition, so a `$` in text is always escaped.
-    const unsafe: StringifyExtension["unsafe"] = [{ character: "$", inConstruct: "phrasing" }];
-    extensions.push({ handlers: ours, unsafe });
+    if (write) {
+      const ours: Partial<Record<string, Handle>> = { inlineMath: pandocMathWriter(write) };
+      // remark-math escapes a `$` in text through a pattern with an `after`
+      // key, which mdast-util-to-markdown reads as a condition. It then left
+      // the `$` unescaped before a character it always escapes, so `\$_GET`
+      // was saved as `$\_GET`, and two of them read as a formula. This
+      // pattern has no condition, so a `$` in text is always escaped.
+      const unsafe: StringifyExtension["unsafe"] = [{ character: "$", inConstruct: "phrasing" }];
+      extensions.push({ handlers: ours, unsafe });
+    }
+    return (tree: MdNode) => unescapeCellPipes(tree);
   },
 );
 
