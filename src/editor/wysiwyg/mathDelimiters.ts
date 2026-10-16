@@ -18,7 +18,7 @@ import type { MilkdownPlugin } from "@milkdown/kit/ctx";
 import { customInputRulesKey } from "@milkdown/kit/prose";
 import { closeHistory } from "@milkdown/kit/prose/history";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
-import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
+import type { Mark, Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { RemarkParser } from "@milkdown/kit/transformer";
 import { $prose, $remark } from "@milkdown/kit/utils";
@@ -371,15 +371,19 @@ function staysText(before: string, mark: "$" | "~"): boolean {
   return rest.charAt(open - 1) === "$" && !escapes(rest.slice(0, open - 1));
 }
 
-/** What typing `text` at `from` does with a closing `$` or `~`. "text" keeps it
- *  as text, "wait" decides once the next character is known, and undefined
- *  leaves the typing shortcuts to run. */
+/** Whether one of `marks` is inline code, whose text is literal. */
+const isCode = (marks: readonly Mark[] | null | undefined): boolean => marks?.some((mark) => mark.type.spec.code) ?? false;
+
+/** What typing `text` at `from` does with a closing `$` or `~`, or with no
+ *  text, what the character before `from` does. "text" keeps it as text,
+ *  "wait" decides once the next character is known, and undefined leaves the
+ *  typing shortcuts to run. */
 function closingMark(state: EditorState, from: number, text: string): "text" | "wait" | undefined {
   const $from = state.doc.resolve(from);
   if ($from.parent.type.spec.code) return undefined;
-  const before = textBefore($from) + text;
-  const mark = before.slice(-1);
+  const mark = text ? text.slice(-1) : textBefore($from).slice(-1);
   if (mark !== "$" && mark !== "~") return undefined;
+  const before = plainText($from.parent).slice(0, $from.parentOffset) + text;
   return staysText(before.slice(0, -1), mark) ? "text" : "wait";
 }
 
@@ -392,14 +396,14 @@ function characterAt(state: EditorState, pos: number): string {
 }
 
 /** The text of a textblock, one character for each position, with inline code
- *  as backticks, tildes in struck text as `^`, and other inline nodes as
- *  U+FFFC. A tilde inside struck text sits in a closed span, so it pairs with
- *  nothing, and `^` is punctuation like `~`. */
+ *  and other inline nodes as U+FFFC and tildes in struck text as `^`. A `$` or
+ *  `~` in inline code is code text, and a tilde inside struck text sits in a
+ *  closed span, so neither pairs with anything. Both stand for punctuation,
+ *  like the backticks and `~` they replace. */
 function plainText(block: ProseNode): string {
   let text = "";
   block.forEach((child) => {
-    if (!child.isText) text += "￼";
-    else if (child.marks.some((mark) => mark.type.spec.code)) text += "`".repeat(child.nodeSize);
+    if (!child.isText || isCode(child.marks)) text += "￼".repeat(child.nodeSize);
     else if (child.marks.some((mark) => mark.type.name === "strike_through")) text += (child.text ?? "").replace(/~/g, "^");
     else text += child.text ?? "";
   });
@@ -470,25 +474,27 @@ interface Span {
 
 /** The span that the waiting `$` or `~` at `pos` closes when `next`, the
  *  character after it or "" at the end of the paragraph, follows it, or null.
- *  In Pandoc a `$` closes unless a digit follows. It opens at the nearest `$`,
- *  as in Crepe's shortcut, which would also replace a formula or other inline
- *  node between the marks, which then showed and was saved as U+FFFC. In GFM
+ *  In Pandoc a `$` closes unless a digit follows. It opens at the nearest `$`
+ *  outside inline code, as in Crepe's shortcut. That shortcut would also
+ *  replace inline code, a formula or another inline node between the marks,
+ *  which then showed and was saved as U+FFFC, so none may be there. In GFM
  *  another `~` makes the run longer, and that one decides. Milkdown's shortcut
  *  paired a run of tildes with the first `~` that fits instead of the one GFM
  *  pairs it with. The text before the mark is read again, since it may have
  *  changed while the mark waited. */
 function closedSpan(state: EditorState, pos: number, next: string): Span | null {
   const $end = state.doc.resolve(pos + 1);
+  // Nothing closes in code, where a mark is code text.
+  if ($end.parent.type.spec.code || isCode($end.nodeBefore?.marks)) return null;
   const mark = state.doc.textBetween(pos, pos + 1);
+  const text = plainText($end.parent).slice(0, $end.parentOffset);
   if (mark === "$") {
-    const text = textBefore($end);
     const match = MATH_SHORTCUT.exec(text);
     const value = match?.[1] ?? "";
     if (/^\d/.test(next) || staysText(text.slice(0, -1), "$") || !value.trim() || value.includes("￼")) return null;
     return { open: $end.pos - value.length - 2, size: 1 };
   }
   if (mark !== "~" || next.startsWith("~")) return null;
-  const text = plainText($end.parent).slice(0, $end.parentOffset);
   const index = strikeOpening(text, next);
   return index < 0 ? null : { open: $end.start() + index, size: text.length - text.replace(/~+$/, "").length };
 }
@@ -522,9 +528,25 @@ function keepsWaiting(state: EditorState, pos: number): boolean {
   return span !== null && from > span.open && to <= pos;
 }
 
+/** Whether a backtick at the start of `text`, typed right after the waiting
+ *  mark at `pos`, makes Milkdown's inline code shortcut turn the text from an
+ *  earlier backtick into code, along with the mark and the span it closes. The
+ *  marks then stay code text, as in a file with the same text. A formula or
+ *  strikethrough made first ended up in the code, where the formula's text
+ *  was lost. The shortcut starts at the nearest backtick before the cursor. A
+ *  formula would be one inline node, so a backtick inside it does not count,
+ *  and the formula is made first. */
+function codeTakes(state: EditorState, pos: number, text: string): boolean {
+  const span = text.startsWith("`") ? closedSpan(state, pos, text) : null;
+  if (!span) return false;
+  const end = state.doc.textBetween(pos, pos + 1) === "$" ? span.open : pos + 1;
+  return textBefore(state.doc.resolve(end)).includes("`");
+}
+
 /** Close math or strikethrough with the waiting mark at `pos` where `next`
  *  lets it, and report whether it did. */
 function closeWaiting(view: EditorView, pos: number, next: string): boolean {
+  if (codeTakes(view.state, pos, next)) return false;
   const tr = closing(view.state, pos, next);
   if (tr) view.dispatch(tr);
   return tr !== null;
@@ -569,12 +591,8 @@ function afterComposition(view: EditorView): void {
   if (waiting && !(selection.empty && selection.from === waiting.pos + 1) && !keepsWaiting(view.state, waiting.pos)) {
     view.dispatch(decide(view.state, waiting.pos));
   }
-  const { $from, empty } = view.state.selection;
-  if (!empty || $from.parentOffset === 0) return;
-  const mark = $from.parent.textBetween($from.parentOffset - 1, $from.parentOffset, undefined, "￼");
-  if (closingMark(view.state, $from.pos - 1, mark) === "wait") {
-    view.dispatch(view.state.tr.setMeta(waitingKey, $from.pos - 1));
-  }
+  const { from, empty } = view.state.selection;
+  if (empty && closingMark(view.state, from, "") === "wait") view.dispatch(view.state.tr.setMeta(waitingKey, from - 1));
 }
 
 /** Makes a typed `$` or `~` close math or strikethrough only where Markdown
@@ -585,9 +603,10 @@ function afterComposition(view: EditorView): void {
  *  leaving it, or another edit such as a paste. A cursor moved between the
  *  marks, as by a click or Left, keeps it waiting until the cursor leaves the
  *  span, so the text there can still be edited. Changes nobody typed, such as
- *  a heading's new id, leave it waiting. Crepe's and Milkdown's typing
- *  shortcuts decided at once, and Milkdown's could strike from a different `~`
- *  than GFM. */
+ *  a heading's new id, leave it waiting. A `$` or `~` in a code block or
+ *  inline code, or one that ends up there, is code text. Crepe's and
+ *  Milkdown's typing shortcuts decided at once, and Milkdown's could strike
+ *  from a different `~` than GFM. */
 export const closingDelimiterGuard = $prose(() => {
   /** The editor's view, to tell whether a composition is running. */
   let editorView: EditorView | undefined;
@@ -605,6 +624,9 @@ export const closingDelimiterGuard = $prose(() => {
         const { pos, deleted } = tr.mapping.mapResult(waiting.pos, 1);
         const mark = after.doc.textBetween(pos, Math.min(pos + 1, after.doc.content.size));
         if (deleted || (mark !== "$" && mark !== "~")) return null;
+        // A mark that ends up in code, as when Ctrl+Alt+C makes its paragraph
+        // a code block, is code text.
+        if (after.doc.resolve(pos).parent.type.spec.code || isCode(after.doc.nodeAt(pos)?.marks)) return null;
         // Changes left out of the undo history, such as a heading's new id,
         // are nobody's edit.
         return { pos, decide: waiting.decide || tr.getMeta("addToHistory") !== false };

@@ -5,10 +5,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
+import { createCodeBlockCommand } from "@milkdown/kit/preset/commonmark";
 import { undo } from "@milkdown/kit/prose/history";
 import { undoInputRule } from "@milkdown/kit/prose/inputrules";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
+import { callCommand } from "@milkdown/kit/utils";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import { mathDelimiters } from "./mathDelimiters";
@@ -562,6 +564,40 @@ describe("math and strikethrough delimiters", () => {
     moveTo(view, 1);
     expect(strikes(root)).toEqual(["oled"]);
     expect(crepe.getMarkdown()).toBe("One. $xQ~y$ and ~~oled~~\n");
+  });
+
+  it.each([" a $x$", " a ~~x~~"])("keeps %j as code when Ctrl+Alt+C makes its paragraph a code block right after", { timeout: 60_000 }, async (typed) => {
+    const { crepe, root, view } = await openCrepe("Start.\n");
+    moveToEnd(view, "Start.");
+    type(view, typed);
+    crepe.editor.action(callCommand(createCodeBlockCommand.key));
+    expect(formulas(root)).toEqual([]);
+    expect(crepe.getMarkdown()).toBe(`\`\`\`\nStart.${typed}\n\`\`\`\n`);
+  });
+
+  it("keeps dollars and tildes typed in inline code as code text", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("Run `echo something` now.\n");
+    // Between "echo so" and "mething" in the code span.
+    moveTo(view, 12);
+    type(view, " $HOME $x$ q ~a~ b ");
+    // A code span typed around a formula or struck text, and a formula typed
+    // around a code span. A backtick inside a formula starts no code span.
+    moveToEnd(view, "Run");
+    type(view, " Use `$y$` and `~~z~~`, not $a`c`b$. Then $a`b$` end.");
+    expect(formulas(root)).toEqual(["a`b"]);
+    expect(strikes(root)).toEqual([]);
+    const saved = crepe.getMarkdown();
+    // Whether Milkdown escapes text that ends in a space depends on its text
+    // writer. Both forms open the same way.
+    expect(saved).toMatch(/^Run `echo so \$HOME \$x\$ q ~a~ b mething` now\. Use `\$y\$` and `~~z~~`, not \\\$a`c`b\\?\$\. Then \$a`b\$\\` end\.\n$/);
+    const reopened = await openCrepe(saved);
+    expect(formulas(reopened.root)).toEqual(["a`b"]);
+    expect([...reopened.root.querySelectorAll("code")].map((code) => code.textContent)).toEqual([
+      "echo so $HOME $x$ q ~a~ b mething",
+      "$y$",
+      "~~z~~",
+      "c",
+    ]);
   });
 
   it("keeps a mark waiting while a selection covers it, so typing replaces it", { timeout: 60_000 }, async () => {
