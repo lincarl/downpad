@@ -160,9 +160,17 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
       return { violations, copies };
     });
 
+    const errors: string[] = [];
+    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("pageerror", (error) => errors.push(String(error)));
     await chooseOpen(file);
     const pane = page.locator(".editor-pane:not([hidden])");
-    await expect(pane.locator(".mermaid-preview svg")).toBeVisible();
+    // Crepe draws a code block, and its diagram, once the block is on screen.
+    await pane.locator(".milkdown-code-block").last().scrollIntoViewIfNeeded();
+    await expect(pane.locator(".mermaid-preview svg")).toBeVisible().catch(async (error: Error) => {
+      const violations = await log.evaluate(({ violations }) => violations);
+      throw new Error(`${error.message}\nViolations: ${JSON.stringify(violations)}\nErrors: ${JSON.stringify(errors)}`);
+    });
     await expect(pane.locator(".katex")).toHaveCount(2);
     await expect.poll(() => pane.locator(".ProseMirror img").evaluateAll((images) => images.map((image) => image instanceof HTMLImageElement && image.naturalWidth > 0))).toEqual([true, true, true]);
     // Copy image fetches the embedded image's data: URL and converts it to PNG.
