@@ -67,6 +67,12 @@ async function chooseSave(file: string): Promise<void> {
   }, file);
 }
 
+/** The clipboard's text with line endings as "\n". Windows puts "\r\n" there. */
+async function clipboardText(): Promise<string> {
+  const text = await app!.evaluate(({ clipboard }) => clipboard.readText());
+  return text.replace(/\r\n/g, "\n");
+}
+
 test("launching a Markdown file renders formatting and relative images in an isolated renderer", async () => {
   const file = path.join(directory, "launch.md");
   // A synthetic one-pixel PNG exercises the local image protocol.
@@ -198,7 +204,7 @@ test("Save with no edit leaves a file the document view would rewrite byte-ident
   await expect(page.locator(heading)).toHaveText("Title");
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
-  await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(markdown);
+  await expect.poll(clipboardText).toBe(markdown);
   await page.keyboard.press("ControlOrMeta+s");
   // Save replaces the file, so wait for the new one before reading it.
   await expect.poll(async () => (await stat(file)).ino).not.toBe(original.ino);
@@ -259,7 +265,7 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await expect(page).toHaveTitle("● recovered.md — md-easy");
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
-  await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(markdown);
+  await expect.poll(clipboardText).toBe(markdown);
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(markdown);
   await expect(page).toHaveTitle("recovered.md — md-easy");
@@ -268,12 +274,12 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
 test("the first-run welcome document opens as saved with its exact text", async () => {
   await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = false\nhasCheckedDefaultHandler = true\n");
   // The renderer reads the copy that the build puts next to index.html.
-  const welcome = await readFile(path.join(projectRoot, "dist", "welcome.md"), "utf8");
+  const welcome = (await readFile(path.join(projectRoot, "dist", "welcome.md"), "utf8")).replace(/\r\n/g, "\n");
   await launch();
   await expect(page.locator(heading)).toContainText("Welcome to md-easy");
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
-  await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toBe(welcome);
+  await expect.poll(clipboardText).toBe(welcome);
   await expect(page).toHaveTitle("Untitled — md-easy");
 });
 
