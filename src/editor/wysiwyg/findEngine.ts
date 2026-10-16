@@ -37,14 +37,21 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** A word character in any script, as the Markdown view's whole-word search counts them. */
+const WORD = "[\\p{Alphabetic}\\p{Number}_]";
+
 /** Find non-overlapping match ranges of `query` in `text` (string offsets). */
 export function findMatchRanges(text: string, query: string, opts: FindOptions): MatchRange[] {
   if (!query) return [];
   let re: RegExp;
   try {
-    const flags = opts.caseSensitive ? "g" : "gi";
+    const flags = opts.caseSensitive ? "gu" : "giu";
     let pattern = opts.regex ? query : escapeRegExp(query);
-    if (opts.wholeWord) pattern = `\\b(?:${pattern})\\b`;
+    // A whole-word match does not continue a word on either side. JavaScript's
+    // \b only knows ASCII letters, so it split words at å, ä, ö and the like.
+    if (opts.wholeWord) {
+      pattern = `(?:(?<!${WORD})|(?!${WORD}))(?:${pattern})(?:(?!${WORD})|(?<!${WORD}))`;
+    }
     re = new RegExp(pattern, flags);
   } catch {
     return []; // invalid regex → no matches (the bar shows 0)

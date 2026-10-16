@@ -29,6 +29,24 @@ describe("findMatchRanges", () => {
     ]);
   });
 
+  it("treats letters outside ASCII as part of a word", () => {
+    const text = "Det är året. Här är m och möjlig.";
+    // Not the "är" inside "Här", and not the "m" that starts "möjlig".
+    expect(findMatchRanges(text, "är", opts({ wholeWord: true }))).toEqual([
+      { from: 4, to: 6 },
+      { from: 17, to: 19 },
+    ]);
+    expect(findMatchRanges(text, "året", opts({ wholeWord: true }))).toEqual([{ from: 7, to: 11 }]);
+    expect(findMatchRanges(text, "m", opts({ wholeWord: true }))).toEqual([{ from: 20, to: 21 }]);
+    expect(findMatchRanges(text, "möj", opts({ wholeWord: true }))).toEqual([]);
+  });
+
+  it("lets a whole-word query start or end with punctuation", () => {
+    expect(findMatchRanges("a -flag b", "-flag", opts({ wholeWord: true }))).toEqual([{ from: 2, to: 7 }]);
+    expect(findMatchRanges("x-flag", "-flag", opts({ wholeWord: true }))).toEqual([{ from: 1, to: 6 }]);
+    expect(findMatchRanges("a -flags", "-flag", opts({ wholeWord: true }))).toEqual([]);
+  });
+
   it("treats the query literally unless regex is on", () => {
     expect(findMatchRanges("a.b a-b axb", "a.b", opts())).toEqual([{ from: 0, to: 3 }]);
     // With regex, '.' matches any char → all three.
