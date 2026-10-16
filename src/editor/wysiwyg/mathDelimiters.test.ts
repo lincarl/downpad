@@ -375,8 +375,8 @@ describe("math and strikethrough delimiters", () => {
     // Whether Milkdown escapes text that ends in a space depends on its text
     // writer. Both forms open the same way.
     ["About ~5, not ~~old~~.", ["old"], /^About \\?~5, not ~~old~~\.\n$/],
-    // Milkdown's shortcut never struck inside a word.
-    ["Cross a~b~c out.", ["b"], /^Cross a~~b~~c out\.\n$/],
+    // A run right after a letter can close.
+    ["Cross ~old~ab out.", ["old"], /^Cross ~~old~~ab out\.\n$/],
     // A tilde inside struck text pairs with nothing after it.
     ["It ~~takes ~5 min~~ now 10~ish.", ["takes ~5 min"], /^It ~~takes \\?~5 min~~ now 10\\~ish\.\n$/],
   ])("strikes typed %j as GFM reads it", { timeout: 60_000 }, async (typed, struck, markdown) => {
@@ -388,6 +388,21 @@ describe("math and strikethrough delimiters", () => {
     // The saved file, and a file with the same text, open the same way.
     expect(strikes((await openCrepe(saved)).root)).toEqual(struck);
     expect(strikes((await openCrepe(typed)).root)).toEqual(struck);
+  });
+
+  it.each([
+    ["Sizes 10~20 and 30~40 cm.", "Sizes 10\\~20 and 30\\~40 cm.\n"],
+    ["Open 9~5, lunch 12~1 daily.", "Open 9\\~5, lunch 12\\~1 daily.\n"],
+    ["Plan 3~5일, 7~9일.", "Plan 3\\~5일, 7\\~9일.\n"],
+    ["Cross a~b~c and x~~y~~z out.", "Cross a\\~b\\~c and x\\~\\~y\\~\\~z out.\n"],
+  ])("opens no strikethrough with a typed tilde right after a letter or digit in %j", { timeout: 60_000 }, async (typed, markdown) => {
+    const { crepe, root, view } = await openCrepe();
+    type(view, typed);
+    // As in Milkdown's shortcut. GFM strikes some of these in a file, such as
+    // "20 and 30" in the first.
+    expect(strikes(root)).toEqual([]);
+    expect(crepe.getMarkdown()).toBe(markdown);
+    expect(strikes((await openCrepe(markdown)).root)).toEqual([]);
   });
 
   it.each([

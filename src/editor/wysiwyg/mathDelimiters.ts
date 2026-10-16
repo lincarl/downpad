@@ -8,7 +8,8 @@
 // holds a `$` no backslash escapes, ends in a backslash or comes right before
 // a digit. No run of dollars can keep those apart. A typed closing `$` or `~`
 // waits for the next character, which decides how a file with the same text
-// would read.
+// would read. Only a typed run of tildes right after a letter or digit opens
+// no strikethrough, as in Milkdown's shortcut, so "10~20 and 30~40" stays text.
 //
 // A paragraph that is only `$$...$$` is display math on GitHub, in VS Code and
 // in Obsidian. remark-math reads it as inline math, which was saved as `$...$`.
@@ -412,12 +413,19 @@ function classOf(character: string): "space" | "punctuation" | undefined {
   return /[\p{P}\p{S}]/u.test(character) ? "punctuation" : undefined;
 }
 
+/** Whether `character` is a letter or digit in any script, or a combining mark,
+ *  which belongs to the letter before it. */
+const isWordCharacter = (character: string): boolean => /[\p{L}\p{M}\p{N}]/u.test(character);
+
 /** Where strikethrough opens that the run of tildes at the end of `text` closes
  *  when `next` follows, or -1. GFM pairs the runs from the start of the
  *  paragraph. Each run of one or two that can close takes the nearest open run
  *  of its length, and the runs between them can no longer open. A run with a
  *  space after it cannot open, nor one before punctuation unless a space or
- *  punctuation comes before it, and the reverse holds for closing. */
+ *  punctuation comes before it, and the reverse holds for closing. A run right
+ *  after a letter or digit opens nothing either, as in Milkdown's shortcut, so
+ *  typed ranges such as "10~20 and 30~40" stay text, though GFM strikes them
+ *  in a file. Such a run can still close. */
 function strikeOpening(text: string, next: string): number {
   const open: { index: number; size: number }[] = [];
   for (const run of text.matchAll(/~+/g)) {
@@ -442,7 +450,8 @@ function strikeOpening(text: string, next: string): number {
       }
     }
     if (last) return -1;
-    if (!after || (after === "punctuation" && before)) open.push({ index, size });
+    const opens = !after || (after === "punctuation" && before);
+    if (opens && !isWordCharacter(text.charAt(index - 1))) open.push({ index, size });
   }
   return -1;
 }
