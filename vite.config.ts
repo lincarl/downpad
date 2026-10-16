@@ -55,7 +55,12 @@ export default defineConfig({
     allowedHosts: process.env.MD_EASY_DEV_HOSTNAME
       ? [process.env.MD_EASY_DEV_HOSTNAME]
       : [],
-    watch: { ignored: ["**/electron/**", "**/electron-dist/**", "**/release/**"] },
+    watch: {
+      // dev-temp holds scratch files, often tens of thousands of them, and
+      // watching them all runs out of the system's file watches. The path is
+      // anchored here, because a checkout can itself sit in another dev-temp.
+      ignored: ["**/electron/**", "**/electron-dist/**", "**/release/**", `${fileURLToPath(new URL("./dev-temp/", import.meta.url))}**`],
+    },
   },
   // Electron loads the packaged frontend from disk.
   build: {
