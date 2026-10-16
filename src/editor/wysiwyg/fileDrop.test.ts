@@ -69,11 +69,18 @@ function place(opened: WysiwygEditor, matches: (node: Node) => boolean, top: num
 const block = (type: string, text?: string) => (node: Node) =>
   node.type.name === type && (text === undefined || node.textContent === text);
 
-/** Type `text` at the editor's selection, as a key press does. */
+/** Type `text` at the editor's selection, as a key press does: through the
+ *  editor's text input handlers, or else as plain text with the marks there. */
 function type(opened: WysiwygEditor, text: string): void {
   const view = viewOf(opened);
-  view.dispatch(view.state.tr.insertText(text));
+  const { from, to } = view.state.selection;
+  const insert = () => view.state.tr.insertText(text, from, to);
+  if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, text, insert))) view.dispatch(insert());
 }
+
+/** Wait for the editor's node views to settle after an edit, as they have
+ *  before the next key. Some of them update the document then. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 const IMAGE = "![](attachments/pic.png)";
 const LINK_A = "[a.csv](attachments/a.csv)";
@@ -174,6 +181,7 @@ describe("the caret after a file dropped on the document", () => {
     place(opened, block("paragraph", "Second line."), 140, 170);
 
     opened.insertMarkdown(LINK_A, opened.dropTargetAt(300, 128));
+    await settle();
     type(opened, " typed");
 
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A} typed\n\nSecond line.\n`);
@@ -217,6 +225,20 @@ describe("a file dropped between list items", () => {
     expect(opened.getMarkdown()).toBe(`Intro.\n\n1. Step 1\n2. ${LINK_A}\n3. Step 2\n4. Step 3\n`);
   });
 
+  it.each([
+    ["bulleted", LIST, "Item 2", `- Item 2\n- ${LINK_A} typed\n- Item 3`],
+    ["numbered", "Intro.\n\n1. Item 1\n2. Item 2\n3. Item 3\n", "Item 2", `2. Item 2\n3. ${LINK_A} typed\n4. Item 3`],
+    ["task", "Intro.\n\n- [ ] Item 1\n- [ ] Item 2\n", "Item 1", `- [ ] Item 1\n- ${LINK_A} typed\n- [ ] Item 2`],
+  ])("keeps typing after a link that went in as an item of a %s list out of the link", async (_kind, markdown, item, expected) => {
+    const opened = await openList(markdown, item);
+
+    opened.insertMarkdown(LINK_A, opened.dropTargetAt(300, 169));
+    await settle();
+    type(opened, " typed");
+
+    expect(opened.getMarkdown()).toContain(expected);
+  });
+
   it("in a nested list, goes in as a nested item there and keeps the outer list tight", async () => {
     const opened = await open("Intro.\n\n- Parent\n  - N1\n  - N2\n- Next\n\nOutro.\n");
     place(opened, block("list_item", "N1"), 140, 170, 40);
@@ -224,8 +246,10 @@ describe("a file dropped between list items", () => {
 
     // At the nested bullets, between N1 and N2.
     opened.insertMarkdown(LINK_A, opened.dropTargetAt(50, 169));
+    await settle();
+    type(opened, " typed");
 
-    expect(opened.getMarkdown()).toBe(`Intro.\n\n- Parent\n  - N1\n  - ${LINK_A}\n  - N2\n- Next\n\nOutro.\n`);
+    expect(opened.getMarkdown()).toBe(`Intro.\n\n- Parent\n  - N1\n  - ${LINK_A} typed\n  - N2\n- Next\n\nOutro.\n`);
   });
 });
 

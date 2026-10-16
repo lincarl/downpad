@@ -63,6 +63,7 @@ import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import {
+  droppedLinkTyping,
   dropPosition,
   insertAtSelection,
   insertBlocksAt,
@@ -302,6 +303,8 @@ export class WysiwygEditor {
     // Keep which body the document came from in the editor state, so undo of
     // a split mirror sync writes the body from before it with its own text.
     this.crepe.editor.use(baselineState(this.opened));
+    // Typing right after a dropped link stays out of the link.
+    this.crepe.editor.use($prose(() => droppedLinkTyping()));
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
