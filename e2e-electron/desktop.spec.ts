@@ -502,6 +502,52 @@ test("text typed after frontmatter that ends the file starts a new line", async 
   await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: x\n---\nHello\n");
 });
 
+test("lists typed in the document view save an item nested by Tab without a blank line", async () => {
+  const file = path.join(directory, "typed-lists.md");
+  await writeFile(file, "Start.\n\nMiddle.\n");
+  await launch(file);
+  // Crepe puts the cursor back into a new list item one frame after drawing it,
+  // so wait for that frame before typing in the item.
+  const typeInNewItem = async (text: string) => {
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    await page.keyboard.type(text);
+  };
+  // A bullet list started by typing "- ".
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").filter({ hasText: "Start." }), "\n- ");
+  await typeInNewItem("A");
+  await page.keyboard.press("Enter");
+  await typeInNewItem("B");
+  await page.keyboard.press("Tab");
+  // A task list started from the slash menu.
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").filter({ hasText: "Middle." }), "\n/");
+  await page.locator(".milkdown-slash-menu li").filter({ hasText: "Task List" }).click();
+  await typeInNewItem("C");
+  await page.keyboard.press("Enter");
+  await typeInNewItem("D");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start.\n\n- A\n  - B\n\nMiddle.\n\n- [ ] C\n  - [ ] D\n");
+});
+
+test("a rule typed under a list item's text saves with a blank line before it", async () => {
+  const file = path.join(directory, "rule-in-item.md");
+  await writeFile(file, "Start.\n");
+  await launch(file);
+  // Wait for Crepe to put the cursor back into each new item, as above.
+  const nextFrame = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").filter({ hasText: "Start." }), "\n- ");
+  await nextFrame();
+  await page.keyboard.type("A");
+  await page.keyboard.press("Enter");
+  await nextFrame();
+  // Backspace makes the new item a second line of the first, where "---" adds a rule.
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("---");
+  await page.keyboard.press("ControlOrMeta+s");
+  // Without the blank line, the file would read back with "A" as a heading and no rule.
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start.\n\n- A\n\n  ---\n");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
