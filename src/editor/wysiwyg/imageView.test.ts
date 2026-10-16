@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 
 const native = vi.hoisted(() => ({
@@ -8,20 +8,30 @@ const native = vi.hoisted(() => ({
 vi.mock("../../ipc/env", () => ({ isElectron: native.isElectron }));
 vi.mock("../../ipc/bridge", () => ({ convertFileSrc: native.convertFileSrc }));
 
-import { imageBlockFeatureConfig } from "./imageView";
+import { ANSWER_WAIT_MS, forgetImageAnswers, imageBlockFeatureConfig } from "./imageView";
 
-/** Crepe's image source mapping for a document saved at `filePath`. */
-function proxyDomURL(filePath: string | null | (() => string | null)) {
+/** One document editor's image feature config, for a document saved at `filePath`. */
+function imageConfig(filePath: string | null | (() => string | null)) {
   return imageBlockFeatureConfig({ current: null }, {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: typeof filePath === "function" ? filePath : () => filePath,
     requestSave: async () => false,
-  }).proxyDomURL;
+  });
+}
+
+/** Crepe's image source mapping for a document saved at `filePath`. */
+function proxyDomURL(filePath: string | null | (() => string | null)) {
+  return imageConfig(filePath).proxyDomURL;
 }
 
 beforeEach(() => {
   native.isElectron.mockReturnValue(true);
   native.convertFileSrc.mockReset();
+  forgetImageAnswers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("proxyDomURL", () => {
@@ -77,5 +87,56 @@ describe("proxyDomURL", () => {
     filePath = "/other/a.md";
 
     expect(await proxy("pic.png")).toBe("md-easy-file:///other/pic.png");
+  });
+
+  it("gives a document editor built again the answers at once", async () => {
+    native.convertFileSrc.mockResolvedValueOnce("md-easy-file://local/image?token=t");
+    await proxyDomURL("/docs/a.md")("pic.png");
+
+    // A layout switch, a settings change or Print builds another editor.
+    expect(proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://local/image?token=t");
+    expect(native.convertFileSrc).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks about a missing image again once the document is opened again", async () => {
+    native.convertFileSrc.mockResolvedValueOnce(null);
+    expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("data:,");
+
+    forgetImageAnswers();
+    native.convertFileSrc.mockResolvedValueOnce("md-easy-file://local/image?token=t");
+
+    expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://local/image?token=t");
+  });
+});
+
+describe("preload", () => {
+  it("waits for a lookup at most ANSWER_WAIT_MS from when it was first sent", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    native.convertFileSrc.mockReturnValue(new Promise(() => {}));
+    const first = vi.fn();
+    void imageConfig("/docs/a.md").preload(["pic.png"]).then(first);
+
+    await vi.advanceTimersByTimeAsync(ANSWER_WAIT_MS - 1);
+    expect(first).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first).toHaveBeenCalled();
+
+    // An editor built later does not wait for that lookup again or send another.
+    const later = vi.fn();
+    void imageConfig("/docs/a.md").preload(["pic.png"]).then(later);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(later).toHaveBeenCalled();
+    expect(native.convertFileSrc).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles as soon as every image has an answer", async () => {
+    // No timer runs, so a wait for one would never end.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
+
+    await imageConfig("/docs/a.md").preload(["pic.png", "gone.png", "https://example.com/a.png", ""]);
+
+    expect(proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://pic");
+    expect(proxyDomURL("/docs/a.md")("gone.png")).toBe("data:,");
   });
 });

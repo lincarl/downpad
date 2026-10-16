@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Crepe's image views render a node's raw src until proxyDomURL answers, and
 // Chromium looks a raw relative src up next to md-easy's own page. These tests
-// use the real editor to check that local images start at the URL they show.
+// use the real editor to check that local images start at the URL they show
+// and that a late answer never replaces a newer one.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -17,6 +18,7 @@ vi.mock("../../ipc/bridge", async (importOriginal) => ({
 }));
 
 import { WysiwygEditor } from "./WysiwygEditor";
+import { forgetImageAnswers } from "./imageView";
 
 // Crepe's code block view watches whether it is on screen, which jsdom cannot tell.
 vi.stubGlobal("IntersectionObserver", class {
@@ -42,6 +44,7 @@ beforeEach(() => {
     },
   });
   native.convertFileSrc.mockReset();
+  forgetImageAnswers();
 });
 
 afterEach(async () => {
@@ -51,27 +54,34 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** Mount the document editor on DOCUMENT, saved at /docs/a.md. */
-async function open(): Promise<HTMLElement> {
+/** Start mounting the document editor on `markdown`, saved at /docs/a.md. */
+function start(markdown: string): { root: HTMLElement; mounting: Promise<void> } {
   const root = document.createElement("div");
   document.body.append(root);
   editor = new WysiwygEditor();
-  await editor.mount(root, DOCUMENT, { onChange: () => {} }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  const mounting = editor.mount(root, markdown, { onChange: () => {} }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => "/docs/a.md",
     requestSave: async () => false,
   });
+  return { root, mounting };
+}
+
+/** Mount the document editor on `markdown`, saved at /docs/a.md. */
+async function open(markdown: string): Promise<HTMLElement> {
+  const { root, mounting } = start(markdown);
+  await mounting;
   return root;
 }
 
 /** The src each image in the editor has now. */
 const sources = (root: HTMLElement) => [...root.querySelectorAll("img")].map((image) => image.getAttribute("src"));
 
-describe("preloadImages", () => {
-  it("shows local images at their own URL from the first render", { timeout: 60_000 }, async () => {
+describe("the first render", () => {
+  it("shows local images at their own URL", { timeout: 60_000 }, async () => {
     native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
 
-    const root = await open();
+    const root = await open(DOCUMENT);
 
     expect(sources(root)).toEqual(["md-easy-file://pic", "md-easy-file://pic", "data:,"]);
     // The raw paths would be requested next to md-easy's own page.
@@ -84,9 +94,27 @@ describe("preloadImages", () => {
     native.convertFileSrc.mockImplementation(() => new Promise(() => {}));
     const started = Date.now();
 
-    const root = await open();
+    const root = await open(DOCUMENT);
 
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(root.querySelectorAll("img")).toHaveLength(3);
+  });
+});
+
+describe("a late answer", () => {
+  it("never replaces the answer for an image's newer src", { timeout: 60_000 }, async () => {
+    let answerB: (url: string) => void = () => {};
+    native.convertFileSrc.mockImplementation((path) =>
+      path === "/docs/b.png" ? new Promise((resolve) => (answerB = resolve)) : Promise.resolve(`url ${path}`),
+    );
+    const root = await open("![](a.png)\n");
+
+    // The Markdown pane changes the path while b.png's lookup is slow, then back.
+    editor!.setMarkdown("![](b.png)\n");
+    editor!.setMarkdown("![](a.png)\n");
+    answerB("url /docs/b.png");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sources(root)).toEqual(["url /docs/a.png"]);
   });
 });

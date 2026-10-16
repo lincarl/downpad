@@ -233,7 +233,7 @@ export class WysiwygEditor {
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
     // Look up local image URLs before the first render, so none starts raw.
-    this.crepe.editor.use(preloadImages(imageConfig.proxyDomURL));
+    this.crepe.editor.use(preloadImages(imageConfig.preload));
     // WYSIWYG find/replace search state + decorations (§5.13).
     this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Tab that the editor does not use, or Esc then Tab, moves focus out.

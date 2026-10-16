@@ -26,6 +26,7 @@ import { serializerStyleFromSettings } from "../state/types";
 import type { EditorLayout } from "../state/types";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
+import { forgetImageAnswers } from "./wysiwyg/imageView";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
 import { applySpellcheck } from "./wysiwyg/spellcheck";
@@ -290,12 +291,14 @@ export class EditorHost implements FindController {
   /**
    * Show the active tab's document after its canonical string was replaced from
    * outside the editors (open / new / disk-reload). Forces a fresh
-   * rebuild (undo resets) and invalidates the tab's panes.
+   * rebuild (undo resets) and invalidates the tab's panes. Image lookups are
+   * asked again, so an image that has appeared on disk since shows.
    */
   async reloadActiveDoc(): Promise<void> {
     if (this.disposed || this.switching) return;
     this.switching = true;
     try {
+      forgetImageAnswers();
       const id = this.store.get().activeTabId;
       if (id) this.bumpRev(id); // no author → every pane of this tab is now stale
       await this.present({ rebuild: true });

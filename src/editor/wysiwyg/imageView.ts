@@ -6,9 +6,9 @@
 //      against the document dir and turned into an Electron asset URL so linked
 //      images render inline. A local image that cannot be loaded gets an empty
 //      data: URL, which fails at once, so an image block shows the missing-image
-//      placeholder and an inline image its broken-image icon. Answers are kept,
-//      so an image the editor has asked about (see preloadImages.ts) shows its
-//      URL from its first render.
+//      placeholder and an inline image its broken-image icon. Answers are kept
+//      for the window, so an image asked about before (see preloadImages.ts)
+//      shows its URL from its first render.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
 //      relocate via a file dialog (updates the node's src).
@@ -130,22 +130,73 @@ function markMissing(event: Event, viewRef: ViewRef): void {
  *  as the print preview. */
 const UNAVAILABLE_IMAGE = "data:,";
 
-/** Crepe ImageBlock feature config: render linked images + missing-image UX. */
-export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
-  // What the main process answered for each local image, by absolute path,
-  // while the answer is pending and after.
-  const answers = new Map<string, string | Promise<string>>();
-  /** Ask the main process for a local image's URL and remember the answer. */
-  const ask = (path: string): Promise<string> => {
-    const answer = convertFileSrc(path)
+/** The longest the first render of a document waits for the main process to
+ *  answer about one image, counted from when md-easy first asked about it. */
+export const ANSWER_WAIT_MS = 1000;
+
+/** A question to the main process about a local image that has no answer yet. */
+interface Lookup {
+  answer: Promise<string>;
+  /** When a first render stops waiting for it, in `performance.now()` time. */
+  waitUntil: number;
+}
+
+/** What the main process answered about each local image, by absolute path: its
+ *  URL or UNAVAILABLE_IMAGE, or the lookup while it runs. Every editor in the
+ *  window shares it, so a document editor built again, for a layout switch, a
+ *  settings change or Print, shows its images at once and never asks twice about
+ *  a slow path. The main process gives a file one URL for its lifetime. */
+const answers = new Map<string, string | Lookup>();
+
+/** Forget every answer, so the main process is asked about each image again.
+ *  Called when a document is opened or reloaded, so an image that has appeared
+ *  since shows. */
+export function forgetImageAnswers(): void {
+  answers.clear();
+}
+
+/** The answer about a local image, asking the main process if nobody has yet. */
+function lookUp(path: string): string | Lookup {
+  const known = answers.get(path);
+  if (known !== undefined) return known;
+  const lookup: Lookup = {
+    answer: convertFileSrc(path)
       .catch(() => null)
       .then((url) => {
         const shown = url ?? UNAVAILABLE_IMAGE;
-        answers.set(path, shown);
+        // Keep it unless it was forgotten meanwhile.
+        if (answers.get(path) === lookup) answers.set(path, shown);
         return shown;
+      }),
+    waitUntil: performance.now() + ANSWER_WAIT_MS,
+  };
+  answers.set(path, lookup);
+  return lookup;
+}
+
+/** Crepe ImageBlock feature config: render linked images + missing-image UX. */
+export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
+  /** The absolute path md-easy asks about for an image src, or null when the src
+   *  is not a local image. Outside Electron every src is shown as it is. */
+  const localPath = (src: string): string | null =>
+    isElectron() ? resolveImagePath(src, ctx.getFilePath()) : null;
+  /** The local paths the open document shows, kept per document and file path. */
+  let shown: { doc: ProseNode; filePath: string | null; paths: Set<string> } | null = null;
+  /** Whether an image in the open document still shows `path`. True before the
+   *  editor view exists, while every answer is for the first render. */
+  const stillShown = (path: string): boolean => {
+    const doc = viewRef.current?.state.doc;
+    if (!doc) return true;
+    const filePath = ctx.getFilePath();
+    if (shown?.doc !== doc || shown.filePath !== filePath) {
+      const paths = new Set<string>();
+      doc.descendants((node) => {
+        const src = isImageNode(node) ? localPath(imageAttrs(node).src) : null;
+        if (src) paths.add(src);
       });
-    answers.set(path, answer);
-    return answer;
+      shown = { doc, filePath, paths };
+    }
+    return shown.paths.has(path);
   };
   return {
     // Storage hook for pasted/dropped/uploaded image *files* (§5.5). Crepe's
@@ -171,14 +222,43 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
      *  that answer at once. Crepe's image views render the raw src until an
      *  asynchronous answer arrives, and Chromium requests a relative one next to
      *  md-easy's own page. preloadImages asks about a document's images before
-     *  its first render for this reason. The answers last as long as the editor,
-     *  so a missing image that appears meanwhile shows once the document is
-     *  opened again. */
+     *  its first render for this reason. Answers last until a document is opened
+     *  or reloaded, so a missing image that appears meanwhile shows then.
+     *
+     *  Crepe shows an asynchronous answer whenever it arrives, even if the view's
+     *  src has changed since. An answer for a path no image in the document shows
+     *  any more never settles, so it cannot replace a newer one. */
     proxyDomURL: (url: string): string | Promise<string> => {
       if (!url || !isElectron() || isRemoteOrData(url)) return url;
-      const abs = resolveImagePath(url, ctx.getFilePath());
-      if (!abs) return UNAVAILABLE_IMAGE;
-      return answers.get(abs) ?? ask(abs);
+      const path = localPath(url);
+      if (!path) return UNAVAILABLE_IMAGE;
+      const known = lookUp(path);
+      if (typeof known === "string") return known;
+      return known.answer.then((shownUrl) => (stillShown(path) ? shownUrl : new Promise<string>(() => {})));
+    },
+    /** Ask about images before their views exist (preloadImages). Settles once
+     *  every answer is in, or each lookup still running was sent ANSWER_WAIT_MS
+     *  ago. A lookup another editor sent earlier is waited for only that long
+     *  from when it was sent, so a slow path holds back one first render, not
+     *  every rebuild of the document editor. */
+    preload: async (srcs: readonly string[]): Promise<void> => {
+      const lookups = new Set<Lookup>();
+      for (const src of srcs) {
+        const path = localPath(src);
+        const known = path ? lookUp(path) : null;
+        if (known && typeof known !== "string") lookups.add(known);
+      }
+      const timers: Array<ReturnType<typeof setTimeout>> = [];
+      const waitFor = (lookup: Lookup): Promise<unknown> =>
+        Promise.race([
+          lookup.answer,
+          new Promise((resolve) => timers.push(setTimeout(resolve, lookup.waitUntil - performance.now()))),
+        ]);
+      try {
+        await Promise.all([...lookups].map(waitFor));
+      } finally {
+        timers.forEach(clearTimeout);
+      }
     },
     onImageLoadError: (event: Event): void => markMissing(event, viewRef),
   };

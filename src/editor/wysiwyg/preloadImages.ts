@@ -4,39 +4,30 @@
 // proxyDomURL answers. md-easy's answer for a local image comes from the main
 // process, so it arrives after that first render, and Chromium looks a relative
 // src up next to md-easy's own page in the meantime. That logs a failed load
-// and could show one of md-easy's own files. This plugin asks proxyDomURL about
-// every image in the document before the editor view is created. proxyDomURL
-// keeps its answers (imageView.ts), so each view then starts with its URL.
+// and could show one of md-easy's own files. This plugin asks about every image
+// in the document before the editor view is created. proxyDomURL keeps the
+// answers (imageView.ts), so each view then starts with its URL.
 
 import { EditorStateReady, editorStateCtx, editorViewTimerCtx } from "@milkdown/kit/core";
 import { createTimer, type MilkdownPlugin } from "@milkdown/kit/ctx";
 import { imageAttrs, isImageNode } from "./imageView";
 
-/** The longest the first render waits for answers. Past it the document shows
- *  anyway, and images still waiting show as they did before this plugin. */
-export const PRELOAD_LIMIT_MS = 1000;
-
-/** A Milkdown plugin that holds the editor view back until `proxyDomURL` has
- *  answered for the document's images, or PRELOAD_LIMIT_MS has passed. */
-export function preloadImages(proxyDomURL: (src: string) => string | Promise<string>): MilkdownPlugin {
+/** A Milkdown plugin that holds the editor view back until `preload` settles
+ *  for the document's image sources. The image feature config's `preload`
+ *  bounds the wait (ANSWER_WAIT_MS), so a slow file system cannot keep the
+ *  document from showing. */
+export function preloadImages(preload: (srcs: readonly string[]) => Promise<void>): MilkdownPlugin {
   const ImagesReady = createTimer("ImagesReady");
   return (ctx) => {
     ctx.record(ImagesReady);
     ctx.update(editorViewTimerCtx, (timers) => [...timers, ImagesReady]);
     return async () => {
       await ctx.wait(EditorStateReady);
-      const answers: Array<string | Promise<string>> = [];
+      const srcs: string[] = [];
       ctx.get(editorStateCtx).doc.descendants((node) => {
-        if (isImageNode(node)) answers.push(proxyDomURL(imageAttrs(node).src));
+        if (isImageNode(node)) srcs.push(imageAttrs(node).src);
       });
-      let limit: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        Promise.all(answers),
-        new Promise((resolve) => {
-          limit = setTimeout(resolve, PRELOAD_LIMIT_MS);
-        }),
-      ]);
-      clearTimeout(limit);
+      await preload(srcs);
       ctx.done(ImagesReady);
       return () => {
         ctx.update(editorViewTimerCtx, (timers) => timers.filter((timer) => timer !== ImagesReady));
