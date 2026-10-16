@@ -527,21 +527,56 @@ function closedSpan(state: EditorState, pos: number, next: string): Span | null 
   return index < 0 ? null : { open: $end.start() + index, size: text.length - text.replace(/~+$/, "").length };
 }
 
+/** The marks for the text typed next once `tr` closes the waiting mark at
+ *  `pos` in `state`, or null to take them from the text before the cursor.
+ *  Closing replaces text, which clears marks set for the next character, such
+ *  as by Ctrl+B, so they are set again. Right after the closing mark the text
+ *  typed next gets the marks it would have had if the mark stayed text, so it
+ *  is not struck, as in a file with the same text. Inside text that the change
+ *  strikes, the marks set for the next character are struck too. */
+function nextMarks(state: EditorState, pos: number, tr: Transaction): readonly Mark[] | null {
+  const { empty, from, $from } = state.selection;
+  const stored = state.storedMarks;
+  const strikethrough = state.schema.marks.strike_through;
+  if (!empty) return null;
+  if (!strikethrough) return stored;
+  if (from === pos + 1) {
+    return state.doc.textBetween(pos, from) === "~" ? strikethrough.removeFromSet(stored ?? $from.marks()) : stored;
+  }
+  if (!stored) return null;
+  const struck = strikethrough.isInSet(tr.doc.resolve(tr.mapping.map(from)).marks()) && !strikethrough.isInSet($from.marks());
+  return struck ? strikethrough.create().addToSet(stored) : stored;
+}
+
 /** The change that closes math or strikethrough with the waiting `$` or `~` at
- *  `pos` where `next` lets it, or null. */
+ *  `pos` where `next` lets it, or null. It sets the marks for the text typed
+ *  next (`nextMarks`). */
 function closing(state: EditorState, pos: number, next: string): Transaction | null {
   const span = closedSpan(state, pos, next);
   if (!span) return null;
   const { open, size } = span;
   const end = pos + 1;
+  let tr: Transaction;
   if (state.doc.textBetween(pos, end) === "$") {
     const node = state.schema.nodes.math_inline?.createAndFill({ value: state.doc.textBetween(open + 1, pos) });
-    return node ? state.tr.replaceRangeWith(open, end, node) : null;
+    if (!node) return null;
+    tr = state.tr.replaceRangeWith(open, end, node);
+  } else {
+    const strikethrough = state.schema.marks.strike_through;
+    if (!strikethrough) return null;
+    tr = state.tr.delete(end - size, end).delete(open, open + size).addMark(open, end - 2 * size, strikethrough.create());
   }
-  const strikethrough = state.schema.marks.strike_through;
-  if (!strikethrough) return null;
-  const tr = state.tr.delete(end - size, end).delete(open, open + size);
-  return tr.addMark(open, end - 2 * size, strikethrough.create());
+  const marks = nextMarks(state, pos, tr);
+  return marks ? tr.setStoredMarks(marks) : tr;
+}
+
+/** Dispatch `tr`, which may close a waiting mark, and set the marks it sets
+ *  for the next character again if a change made in reply, such as a
+ *  heading's new id, cleared them. */
+function dispatchClosing(view: EditorView, tr: Transaction): void {
+  const marks = tr.storedMarks;
+  view.dispatch(tr);
+  if (marks && view.state.storedMarks !== marks) view.dispatch(view.state.tr.setStoredMarks(marks));
 }
 
 /** Whether the selection keeps the waiting mark at `pos` waiting. It does
@@ -571,13 +606,16 @@ function codeTakes(state: EditorState, pos: number, text: string): boolean {
   return textBefore(state.doc.resolve(end)).includes("`");
 }
 
-/** Close math or strikethrough with the waiting mark at `pos` where `next`
- *  lets it, and report whether it did. */
+/** Close math or strikethrough with the waiting mark at `pos` where `next`,
+ *  typed or a line break, lets it, and report whether it did. `next` starts a
+ *  new undo step, so undoing it keeps the formula or strikethrough. */
 function closeWaiting(view: EditorView, pos: number, next: string): boolean {
   if (codeTakes(view.state, pos, next)) return false;
   const tr = closing(view.state, pos, next);
-  if (tr) view.dispatch(tr);
-  return tr !== null;
+  if (!tr) return false;
+  dispatchClosing(view, tr);
+  view.dispatch(closeHistory(view.state.tr));
+  return true;
 }
 
 /** Type `text` over the selection through the editor's typing hooks, as the
@@ -614,7 +652,7 @@ function decide(state: EditorState, pos: number): Transaction {
  *  as text. A composition decides the mark once it ends. */
 export function decideTypedMark(view: EditorView): void {
   const waiting = waitingKey.getState(view.state);
-  if (waiting && !view.composing) view.dispatch(decide(view.state, waiting.pos));
+  if (waiting && !view.composing) dispatchClosing(view, decide(view.state, waiting.pos));
 }
 
 /** Once a composition ends, decide a mark that waited through it by the text
@@ -629,7 +667,7 @@ function afterComposition(view: EditorView): void {
   if (waiting) {
     const { selection } = view.state;
     const kept = (selection.empty && selection.from === waiting.pos + 1) || keepsWaiting(view.state, waiting.pos);
-    if (!kept || !view.hasFocus()) view.dispatch(decide(view.state, waiting.pos));
+    if (!kept || !view.hasFocus()) dispatchClosing(view, decide(view.state, waiting.pos));
   }
   const { from, empty } = view.state.selection;
   if (empty && closingMark(view.state, from, "") === "wait") view.dispatch(view.state.tr.setMeta(waitingKey, from - 1));
@@ -682,27 +720,9 @@ export const closingDelimiterGuard = $prose(() => {
         // character twice, so marks are decided once it ends.
         if (view.composing) return false;
         const waiting = waitingKey.getState(view.state);
-        if (waiting?.pos === from - 1 && from === to) {
-          const stored = view.state.storedMarks;
-          const struck = view.state.doc.textBetween(waiting.pos, from) === "~";
-          if (closeWaiting(view, waiting.pos, text)) {
-            // The typed text starts a new undo step, so undoing it keeps the
-            // formula or strikethrough.
-            const tr = closeHistory(view.state.tr);
-            // Closing replaced text, which clears marks set for the next
-            // character, such as by Ctrl+B. Text typed after struck text is not
-            // struck. Marks set with the closing change would be cleared by a
-            // change right after it, such as a heading's new id.
-            const strikethrough = view.state.schema.marks.strike_through;
-            const marks =
-              struck && strikethrough
-                ? strikethrough.removeFromSet(stored ?? view.state.selection.$from.marks())
-                : stored;
-            if (marks) tr.setStoredMarks(marks);
-            view.dispatch(tr);
-            typeText(view, text);
-            return true;
-          }
+        if (waiting?.pos === from - 1 && from === to && closeWaiting(view, waiting.pos, text)) {
+          typeText(view, text);
+          return true;
         }
         const decision = closingMark(view.state, from, text);
         if (!decision) return false;
@@ -720,10 +740,7 @@ export const closingDelimiterGuard = $prose(() => {
       handleKeyDown(view, event) {
         const waiting = waitingKey.getState(view.state);
         const { empty, from } = view.state.selection;
-        if (event.key === "Enter" && waiting?.pos === from - 1 && empty && closeWaiting(view, waiting.pos, "\n")) {
-          // Enter starts a new undo step, so undoing it keeps the formula.
-          view.dispatch(closeHistory(view.state.tr));
-        }
+        if (event.key === "Enter" && waiting?.pos === from - 1 && empty) closeWaiting(view, waiting.pos, "\n");
         return false;
       },
       handleDOMEvents: {

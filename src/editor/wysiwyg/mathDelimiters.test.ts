@@ -410,6 +410,8 @@ describe("math and strikethrough delimiters", () => {
     ["Cross ~old~ab out.", ["old"], /^Cross ~~old~~ab out\.\n$/],
     // A tilde inside struck text pairs with nothing after it.
     ["It ~~takes ~5 min~~ now 10~ish.", ["takes ~5 min"], /^It ~~takes \\?~5 min~~ now 10\\~ish\.\n$/],
+    // The text typed after the closing run is outside the italic text too.
+    ["Cross ~*old*~ out.", ["old"], /^Cross \*~~old~~\* out\.\n$/],
   ])("strikes typed %j as GFM reads it", { timeout: 60_000 }, async (typed, struck, markdown) => {
     const { crepe, root, view } = await openCrepe();
     type(view, typed);
@@ -559,6 +561,64 @@ describe("math and strikethrough delimiters", () => {
     view.dom.dispatchEvent(new FocusEvent("blur"));
     expect(formulas(root)).toEqual(["x", "y"]);
     expect(crepe.getMarkdown()).toBe("One. $x$ and ~~old~~ $y$\n");
+  });
+
+  it("types the text after a mark decided by leaving the editor outside the strikethrough and with the marks set for it", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("# Head\n\nOne.\n");
+    // Save, Find, a view or tab switch and the split's Markdown pane decide
+    // the mark the same way.
+    const leave = () => view.dom.dispatchEvent(new FocusEvent("blur"));
+    moveToEnd(view, "One.");
+    type(view, " Not ~~old~~");
+    leave();
+    type(view, " but new, see ~a~");
+    leave();
+    type(view, ", b and $x$");
+    // Ctrl+B with no selection sets bold for the next character.
+    view.dispatch(view.state.tr.addStoredMark(view.state.schema.marks.strong.create()));
+    leave();
+    type(view, "bold");
+    // The heading's new id is a second change, which cleared those marks.
+    moveToEnd(view, "Head");
+    type(view, " ~~old~~");
+    leave();
+    type(view, " new");
+    expect(strikes(root)).toEqual(["old", "old", "a"]);
+    expect(crepe.getMarkdown()).toBe("# Head ~~old~~ new\n\nOne. Not ~~old~~ but new, see ~~a~~, b and $x$**bold**\n");
+  });
+
+  it("types the text after a closing tilde outside the strikethrough after Left and End", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("One.\n");
+    moveToEnd(view, "One.");
+    type(view, " see ~a~");
+    // The mark waits while the cursor is inside the span, and End decides it.
+    const end = view.state.selection.from;
+    moveTo(view, end - 1);
+    moveTo(view, end);
+    type(view, ", b");
+    expect(strikes(root)).toEqual(["a"]);
+    expect(crepe.getMarkdown()).toBe("One. see ~~a~~, b\n");
+  });
+
+  it("keeps bold set inside the text a mark closes when leaving the editor decides the mark", { timeout: 60_000 }, async () => {
+    const { crepe, view } = await openCrepe("One.\n\nTwo.\n");
+    const leave = () => view.dom.dispatchEvent(new FocusEvent("blur"));
+    const bold = () => view.dispatch(view.state.tr.addStoredMark(view.state.schema.marks.strong.create()));
+    moveToEnd(view, "One.");
+    type(view, " see ~old~");
+    // Between "ol" and "d", where the text typed next is struck too.
+    moveTo(view, view.state.selection.from - 2);
+    bold();
+    leave();
+    type(view, "X");
+    moveToEnd(view, "Two.");
+    type(view, " a $xy$");
+    // Between x and y, which the formula takes, so the text goes after it.
+    moveTo(view, view.state.selection.from - 2);
+    bold();
+    leave();
+    type(view, "X");
+    expect(crepe.getMarkdown()).toBe("One. see ~~ol**X**d~~\n\nTwo. a $xy$**X**\n");
   });
 
   it("decides a typed closing mark before the document editor reports its text", { timeout: 60_000 }, async () => {
