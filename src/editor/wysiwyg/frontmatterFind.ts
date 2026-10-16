@@ -49,6 +49,18 @@ interface FrontmatterCell {
   write?: (text: string) => string | null;
 }
 
+/** Write `key` as the new name of a field at a level whose keys are `siblings`,
+ *  or return null when it would not stay a valid key or would repeat a sibling's
+ *  key, which YAML does not allow. `siblings` follows each rename. */
+function renameKey(key: string, current: string, siblings: Set<string>, rename: (key: string) => string): string | null {
+  const next = key.trim();
+  if (!isValidEditableKey(key) || /\s#/.test(next)) return null;
+  if (next !== current && siblings.has(next)) return null;
+  siblings.delete(current);
+  siblings.add(next);
+  return rename(next);
+}
+
 /** The cells FrontmatterPanel draws for `table`, top to bottom. */
 function frontmatterCells(table: FrontmatterTable): FrontmatterCell[] {
   if (table.fields.length === 0) {
@@ -56,17 +68,17 @@ function frontmatterCells(table: FrontmatterTable): FrontmatterCell[] {
     return table.raw.trim() ? [{ line: 0, part: "value", text: table.raw.replace(/\n+$/, "") }] : [];
   }
   const cells: FrontmatterCell[] = [];
-  const scalar = (field: FmScalar): void => {
+  const scalar = (field: FmScalar, siblings: Set<string>): void => {
     cells.push(
       {
         line: field.lineIndex,
         part: "key",
         text: field.key,
-        write: (key) => {
-          if (!isValidEditableKey(key)) return null;
-          field.key = key.trim();
-          return rewriteScalar(table, field);
-        },
+        write: (key) =>
+          renameKey(key, field.key, siblings, (next) => {
+            field.key = next;
+            return rewriteScalar(table, field);
+          }),
       },
       {
         line: field.lineIndex,
@@ -79,21 +91,23 @@ function frontmatterCells(table: FrontmatterTable): FrontmatterCell[] {
       },
     );
   };
+  const topLevel = new Set(table.fields.map((field) => field.key));
   for (const field of table.fields) {
     if (field.kind === "scalar") {
-      scalar(field);
+      scalar(field, topLevel);
     } else if (field.kind === "group") {
       cells.push({
         line: field.headerIndex,
         part: "key",
         text: field.key,
-        write: (key) => {
-          if (!isValidEditableKey(key)) return null;
-          field.key = key.trim();
-          return rewriteGroupKey(table, field);
-        },
+        write: (key) =>
+          renameKey(key, field.key, topLevel, (next) => {
+            field.key = next;
+            return rewriteGroupKey(table, field);
+          }),
       });
-      field.children.forEach(scalar);
+      const children = new Set(field.children.map((child) => child.key));
+      field.children.forEach((child) => scalar(child, children));
     } else {
       cells.push(
         { line: field.blockStart, part: "key", text: field.key },
@@ -102,6 +116,54 @@ function frontmatterCells(table: FrontmatterTable): FrontmatterCell[] {
     }
   }
   return cells;
+}
+
+/** A value cell's text split into the YAML scalar and what follows it on the
+ *  line, which is empty or spaces and a comment. */
+function splitValue(text: string): { scalar: string; rest: string } {
+  const quote = text[0];
+  if (quote === '"' || quote === "'") {
+    const end = closingQuote(text, quote);
+    return end < 0 ? { scalar: text, rest: "" } : { scalar: text.slice(0, end + 1), rest: text.slice(end + 1) };
+  }
+  const comment = /\s#/.exec(text);
+  const scalar = (comment ? text.slice(0, comment.index) : text).replace(/\s+$/, "");
+  return { scalar, rest: text.slice(scalar.length) };
+}
+
+/** Index of the quote that closes a scalar opened by `quote` at index 0, or -1. */
+function closingQuote(text: string, quote: string): number {
+  for (let i = 1; i < text.length; i++) {
+    if (quote === '"' && text[i] === "\\") i++;
+    else if (quote === "'" && text[i] === "'" && text[i + 1] === "'") i++;
+    else if (text[i] === quote) return i;
+  }
+  return -1;
+}
+
+/** Whether YAML reads `scalar`, written unquoted after `key: `, as that text. */
+function isPlainScalar(scalar: string): boolean {
+  if (/^[,[\]{}#&*!|>'"%@`]/.test(scalar) || /^[-?:](\s|$)/.test(scalar)) return false;
+  return !/:(\s|$)/.test(scalar) && !/\s#/.test(scalar);
+}
+
+/**
+ * Whether replacing `matches` in a value cell's `text` with `replacement`
+ * leaves a line YAML reads the same way: the scalar changes only where it
+ * matched, a quoted scalar stays closed by its own quote, an unquoted one gains
+ * no comment, `: ` or leading indicator, and a comment stays a comment.
+ */
+function keepsValueShape(text: string, matches: readonly FrontmatterMatch[], replacement: string): boolean {
+  const before = splitValue(text);
+  const end = before.scalar.length;
+  if (matches.some((m) => m.from < end && m.to > end)) return false;
+  const expected = matches
+    .filter((m) => m.to <= end)
+    .reduceRight((current, m) => current.slice(0, m.from) + replacement + current.slice(m.to), before.scalar);
+  const after = splitValue(matches.reduceRight((current, m) => current.slice(0, m.from) + replacement + current.slice(m.to), text));
+  if (after.scalar !== expected || (before.rest === "") !== (after.rest === "")) return false;
+  const quoted = before.scalar[0] === '"' || before.scalar[0] === "'";
+  return quoted || !isPlainScalar(before.scalar) || isPlainScalar(after.scalar);
 }
 
 /** Matches of `query` in the frontmatter table drawn for `block`, top to bottom. */
@@ -115,9 +177,10 @@ export function findInFrontmatter(block: string, query: string, opts: FindOption
 /**
  * Replace `matches` (from `findInFrontmatter` on the same block) with
  * `replacement` and return the rewritten block. Only the lines of changed keys
- * and values are rewritten. Matches in read-only rows, and key edits that would
- * not stay a valid key, are left as they are. Returns `block` itself when
- * nothing changed.
+ * and values are rewritten. Matches in read-only rows are left as they are, and
+ * so are edits YAML would read differently: a key that would stop being a key
+ * or repeat a sibling's key, and a value whose comment, quotes or plain text
+ * would change shape. Returns `block` itself when nothing changed.
  */
 export function replaceInFrontmatter(
   block: string,
@@ -129,6 +192,7 @@ export function replaceInFrontmatter(
   for (const cell of frontmatterCells(table)) {
     const inCell = matches.filter((m) => m.line === cell.line && m.part === cell.part);
     if (!cell.write || inCell.length === 0) continue;
+    if (cell.part === "value" && !keepsValueShape(cell.text, inCell, replacement)) continue;
     // From the last match back, so earlier offsets stay valid.
     const text = inCell.reduceRight(
       (current, m) => current.slice(0, m.from) + replacement + current.slice(m.to),

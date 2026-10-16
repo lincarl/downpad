@@ -91,8 +91,48 @@ describe("replaceInFrontmatter", () => {
     const block = "---\nname: name\n---\n";
     const found = findInFrontmatter(block, "name", opts());
     expect(found.map((m) => m.part)).toEqual(["key", "value"]);
-    expect(replaceInFrontmatter(block, found, "a: b")).toBe("---\nname: a: b\n---\n");
+    expect(replaceInFrontmatter(block, found, "full name")).toBe("---\nfull name: full name\n---\n");
     expect(replaceInFrontmatter(block, found, "")).toBe("---\nname: \n---\n");
+    expect(replaceInFrontmatter(block, found, "a #b")).toBe(block);
+  });
+
+  it("leaves a key that would repeat a sibling's key, also one renamed in the same pass", () => {
+    const block = "---\ndraft: a\ndrafts: b\ngroup:\n  ax: 1\n  bx: 2\n---\n";
+    const keys = (query: string, over: Partial<FindOptions> = {}) =>
+      findInFrontmatter(block, query, opts(over)).filter((m) => m.part === "key");
+    expect(replaceInFrontmatter(block, keys("drafts"), "draft")).toBe(block);
+    expect(replaceInFrontmatter(block, keys("[ab]x", { regex: true }), "k")).toBe(
+      "---\ndraft: a\ndrafts: b\ngroup:\n  k: 1\n  bx: 2\n---\n",
+    );
+    // The same key may appear at another level.
+    expect(replaceInFrontmatter(block, keys("ax"), "draft")).toBe(block.replace("  ax:", "  draft:"));
+  });
+
+  it.each([
+    ["adds a comment", "title: Draft notes", "notes", "new # note"],
+    ["adds a key separator", "title: Draft notes", "notes", "a: b"],
+    ["ends the text in a colon", "title: Draft notes", "notes", "x:"],
+    ["starts with an indicator", "title: notes", "notes", "*alias"],
+    ["moves a comment into the text", "title: Draft notes # keep", "Draft", "A # B"],
+    ["closes a quoted value early", 'status: "draft"', "draft", 'a "b'],
+    ["closes a single-quoted value early", "status: 'draft'", "draft", "it's"],
+  ])("leaves a value when the replacement %s", (_name, line, query, replacement) => {
+    const block = `---\n${line}\n---\n`;
+    const found = findInFrontmatter(block, query, opts()).filter((m) => m.part === "value");
+    expect(found).not.toEqual([]);
+    expect(replaceInFrontmatter(block, found, replacement)).toBe(block);
+  });
+
+  it.each([
+    ["inside a comment", "title: Draft notes # keep", "keep", "kept", "title: Draft notes # kept"],
+    ["inside quotes, with characters plain text cannot hold", 'status: "draft"', "draft", "a: b # c", 'status: "a: b # c"'],
+    ["with an escaped quote", 'status: "draft"', "draft", 'say \\"hi\\"', 'status: "say \\"hi\\""'],
+    ["with a doubled single quote", "status: 'draft'", "draft", "it''s", "status: 'it''s'"],
+    ["with a hash that starts no comment", "title: notes", "notes", "C#", "title: C#"],
+  ])("replaces a value %s", (_name, line, query, replacement, expected) => {
+    const block = `---\n${line}\n---\n`;
+    const found = findInFrontmatter(block, query, opts()).filter((m) => m.part === "value");
+    expect(replaceInFrontmatter(block, found, replacement)).toBe(`---\n${expected}\n---\n`);
   });
 
   it("replaces only the matches it is given", () => {
