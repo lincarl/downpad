@@ -107,6 +107,23 @@ test("launching a Markdown file renders formatting and relative images in an iso
   await page.screenshot({ path: path.join(directory, "electron-open.png") });
 });
 
+test("a missing local image shows its placeholder without handler errors or failed loads in print", async () => {
+  const file = path.join(directory, "missing-image.md");
+  await writeFile(file, "# Missing image\n\n![Gone](missing.png)\n");
+  await launch();
+  const errors: string[] = [];
+  app!.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  await chooseOpen(file);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
+  // The printed copy must not look the path up next to md-easy's own page.
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  const printed = page.locator(".print-page img");
+  await expect(printed).toHaveCount(1);
+  await expect.poll(() => printed.evaluateAll((images) => images.every((image) => image instanceof HTMLImageElement && image.complete))).toBe(true);
+  expect(errors).toEqual([]);
+});
+
 test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");

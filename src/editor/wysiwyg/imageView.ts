@@ -4,7 +4,9 @@
 //   1. proxyDomURL — map a markdown `src` to something the WebView can load:
 //      data:/http: pass through; a relative/absolute file path is resolved
 //      against the document dir and turned into an Electron asset URL so linked
-//      images render inline.
+//      images render inline. A local image that cannot be loaded gets an empty
+//      data: URL, which fails at once, so an image block shows the missing-image
+//      placeholder and an inline image its broken-image icon.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
 //      relocate via a file dialog (updates the node's src).
@@ -119,6 +121,13 @@ function markMissing(event: Event, viewRef: ViewRef): void {
   }
 }
 
+/** The src shown for a local image md-easy cannot load. It fails at once without a
+ *  request or a console message, so an image block shows the missing-image
+ *  placeholder and an inline image its broken-image icon. The raw path would be
+ *  looked up next to md-easy's own page, again by every copy of the document such
+ *  as the print preview. */
+const UNAVAILABLE_IMAGE = "data:,";
+
 /** Crepe ImageBlock feature config: render linked images + missing-image UX. */
 export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
   return {
@@ -134,14 +143,17 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
       // src empty so nothing dangling (a blob URL) is written.
       return src ?? "";
     },
+    /** Map a Markdown image src to a URL the page can load, for block and inline
+     *  images. URLs such as http:, data: and file: pass through, as does every src
+     *  outside Electron. An empty src stays empty so Crepe shows its upload input.
+     *  A local path the main process does not authorize (missing, not an image, or
+     *  otherwise refused), or one relative to a document that is not saved yet,
+     *  becomes UNAVAILABLE_IMAGE. */
     proxyDomURL: async (url: string): Promise<string> => {
-      try {
-        if (!isElectron() || isRemoteOrData(url)) return url;
-        const abs = resolveImagePath(url, ctx.getFilePath());
-        return abs ? await convertFileSrc(abs) : url;
-      } catch {
-        return url;
-      }
+      if (!url || !isElectron() || isRemoteOrData(url)) return url;
+      const abs = resolveImagePath(url, ctx.getFilePath());
+      const authorized = abs ? await convertFileSrc(abs).catch(() => null) : null;
+      return authorized ?? UNAVAILABLE_IMAGE;
     },
     onImageLoadError: (event: Event): void => markMissing(event, viewRef),
   };

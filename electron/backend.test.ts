@@ -481,16 +481,16 @@ describe("Desktop page and image access", () => {
     await writeFile(image, Uint8Array.of(1));
     await writeFile(external, Uint8Array.of(2));
     const access = new ImageAccess();
-    const authorized = new URL(await access.imageUrl(image));
+    const authorized = new URL((await access.imageUrl(image))!);
     expect(await access.resolveImage(authorized.searchParams.get("token")!)).toBe(image);
     await expect(access.resolveImage("invented-token")).rejects.toThrow("not been authorized");
     await expect(access.resolveImage(external)).rejects.toThrow("not been authorized");
-    const shared = new URL(await access.imageUrl(external));
+    const shared = new URL((await access.imageUrl(external))!);
     expect(await access.resolveImage(shared.searchParams.get("token")!)).toBe(external);
     if (process.platform !== "win32") {
       const linked = join(documentDirectory, "linked.png");
       await symlink(external, linked);
-      const linkedUrl = new URL(await access.imageUrl(linked));
+      const linkedUrl = new URL((await access.imageUrl(linked))!);
       expect(await access.resolveImage(linkedUrl.searchParams.get("token")!)).toBe(external);
       await rm(external);
       await symlink(image, external);
@@ -499,5 +499,16 @@ describe("Desktop page and image access", () => {
     const unsafe = join(documentDirectory, "script.js");
     await writeFile(unsafe, "alert(1)");
     await expect(access.imageUrl(unsafe)).rejects.toThrow("Only local images");
+  });
+
+  it("answers a missing image with null and still rejects invalid paths", async () => {
+    const directory = await fixtureDirectory();
+    const image = join(directory, "image.png");
+    await writeFile(image, Uint8Array.of(1));
+    const access = new ImageAccess();
+    // A rejection here would make Electron log a handler error for every missing image.
+    await expect(access.imageUrl(join(directory, "missing.png"))).resolves.toBeNull();
+    await expect(access.imageUrl(join(image, "child.png"))).resolves.toBeNull();
+    await expect(access.imageUrl("relative.png")).rejects.toThrow("absolute file path");
   });
 });
