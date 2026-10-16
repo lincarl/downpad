@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Replace in the document view, with the real editor: Replace moves on to the
-// next match.
+// next match, and an autolink's target follows its text.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -61,5 +61,20 @@ describe("replace in the document view", () => {
     editor.search("cat", opts);
     expect(editor.replaceCurrent("cats", "cat", opts)).toEqual({ current: 2, total: 2 });
     expect(currentBlock()).toBe("cat two");
+  });
+
+  it("changes an autolink's target along with its text", { timeout: 60_000 }, async () => {
+    const editor = await open(
+      "Mail <support@example.com> or see <https://example.com/example> and www.example.net.\n\n" +
+        "Read [the example guide](https://example.com/guide) or [https://example.com](https://mirror.org).\n",
+    );
+    expect(editor.search("example", opts)).toEqual({ current: 1, total: 6 });
+    editor.replaceCurrent("sample", "example", opts);
+    editor.replaceAll("sample", "example", opts);
+    // Links whose text is not their target keep the target.
+    expect(editor.getMarkdown()).toBe(
+      "Mail <support@sample.com> or see <https://sample.com/sample> and [www.sample.net](http://www.sample.net).\n\n" +
+        "Read [the sample guide](https://example.com/guide) or [https://sample.com](https://mirror.org).\n",
+    );
   });
 });

@@ -15,6 +15,7 @@ import type { EditorView } from "@milkdown/kit/prose/view";
 import type { EditorState } from "@milkdown/kit/prose/state";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { codeBlockMatchesView, revealMatch } from "./findReveal";
+import { replaceText } from "./autolinkReplace";
 
 export interface FindOptions {
   caseSensitive: boolean;
@@ -234,7 +235,7 @@ export function replaceCurrent(
   if (!range) return runSearch(view, query, opts);
   // Search again and carry on with the match after the replacement, so the
   // next Replace does not go back to the first match.
-  const tr = view.state.tr.insertText(replacement, range.from, range.to);
+  const tr = replaceText(view.state.tr, range.from, range.to, replacement);
   view.dispatch(tr.setMeta(findKey, { type: "search", query, opts, from: tr.mapping.map(range.to) }));
   const next = findKey.getState(view.state)!;
   scrollToCurrent(view, next);
@@ -252,7 +253,7 @@ export function replaceAll(
     const tr = view.state.tr;
     // Replace from last to first so earlier ranges keep their positions.
     for (let i = s.ranges.length - 1; i >= 0; i--) {
-      tr.insertText(replacement, s.ranges[i].from, s.ranges[i].to);
+      replaceText(tr, s.ranges[i].from, s.ranges[i].to, replacement);
     }
     view.dispatch(tr);
   }
