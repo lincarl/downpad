@@ -243,7 +243,8 @@ export class EditorHost implements FindController {
    * dropped on, in the pane `aimDrop` chose, at the drop's target after the
    * drop's earlier files, or at the pane's caret. A file only goes into a
    * document that is in front. One dropped on a document that is behind
-   * another tab by now waits until that document is shown again. If by then
+   * another tab by now waits until that document is shown again, and the
+   * document counts as unsaved meanwhile. If by then
    * the pane it was dropped on is gone, hidden or behind the document's
    * latest edit, as after a reload from disk, a layout switch, an edit in the
    * other view, or after the editor was dropped from memory, it goes in at the
@@ -266,6 +267,9 @@ export class EditorHost implements FindController {
     let place = this.dropPlace(drop);
     while (!place) {
       if (this.disposed || !this.drops.has(drop) || !this.hasTab(drop.tabId)) return false;
+      // The waiting file is an unsaved change, so closing the document or the
+      // window asks first.
+      this.store.patchDocById(drop.tabId, { isDirty: true });
       await this.nextPresent();
       place = this.dropPlace(drop);
     }

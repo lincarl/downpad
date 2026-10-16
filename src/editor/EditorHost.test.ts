@@ -1104,6 +1104,25 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
+  it("marks a background document unsaved as soon as a file dropped on it is read", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+
+    // Closing the window right now asks before the file is lost.
+    expect(store.get().tabs[0]!.doc.isDirty).toBe(true);
+    expect(store.get().doc.isDirty).toBe(false);
+    await showFirstTab(store, host);
+    expect(await inserted).toBe(true);
+    await host.dispose();
+  });
+
   it("keeps a background document's newer edit when a file dropped on its stale Markdown pane is read", async () => {
     const root = document.createElement("div");
     const store = makeStore();
