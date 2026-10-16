@@ -121,11 +121,24 @@ export class WysiwygEditor {
    *  a new table instead of patching cells the user has typed into. */
   private fmTableKey = 0;
   /** The cell the last keystroke in the table went to, its undo run, the
-   *  editor state it left and its time. The next keystroke joins that run
-   *  while all of them still hold. */
-  private typing: { cell: Element; run: string; state: EditorState; time: number } | null = null;
+   *  editor state it left, its time and the input method composition it was
+   *  part of. The next keystroke joins that run while all of them still hold,
+   *  or while it is part of the same composition. */
+  private typing: {
+    cell: Element;
+    run: string;
+    state: EditorState;
+    time: number;
+    composition: number | null;
+  } | null = null;
   /** Counts runs of typing in the table, to give each its own id. */
   private typingRuns = 0;
+  /** Counts input method compositions in the table, to give each its own id. */
+  private compositions = 0;
+  /** The composition in progress in the table, or null between compositions.
+   *  Chromium reports the text a composition commits before it ends it, so
+   *  the commit is part of the composition too. */
+  private composition: number | null = null;
   /** Find and replace over the frontmatter table and the document (§5.13). */
   private readonly find = new DocumentFind({
     block: () => (this.fmPanel ? this.frontmatterBlock : null),
@@ -389,6 +402,10 @@ export class WysiwygEditor {
         // Ctrl+Z and Ctrl+Y anywhere in the table run the document's undo and redo.
         panel.addEventListener("keydown", this.tableHistory);
         panel.addEventListener("beforeinput", this.tableHistory);
+        // An input method composition is one undo step, however long the
+        // user waits before choosing the text (recordTableEdit).
+        panel.addEventListener("compositionstart", () => (this.composition = ++this.compositions));
+        panel.addEventListener("compositionend", () => (this.composition = null));
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);
       }
@@ -571,19 +588,25 @@ export class WysiwygEditor {
   /** Put a table edit that set the block to `block` in the undo history. A
    *  keystroke (`typed`) joins the undo step of the ones before it in the same
    *  cell until typing pauses or anything else changes, as typing in the
-   *  document does. */
+   *  document does. The edits of one input method composition stay in one
+   *  step even when the user pauses before choosing the text. */
   private recordTableEdit(view: EditorView, block: string, typed: boolean): void {
     const tr = setFrontmatter(view.state, view.state.tr, block);
     const cell = typed ? document.activeElement : null;
+    const composition = cell ? this.composition : null;
     const last = this.typing;
-    const joins = cell && last?.cell === cell && last.state === view.state && tr.time - last.time < UNDO_GROUP_MS;
+    const joins =
+      cell &&
+      last?.cell === cell &&
+      last.state === view.state &&
+      ((composition !== null && composition === last.composition) || tr.time - last.time < UNDO_GROUP_MS);
     const run = joins ? last.run : `frontmatter-${++this.typingRuns}`;
     // The history groups changes that carry the same composition id, which is
     // how ProseMirror keeps the keystrokes of an input method together. A
     // step in the table has no position next to the last change, so without
     // the id every keystroke would be its own undo step.
     view.dispatch(tr.setMeta("composition", run));
-    this.typing = cell ? { cell, run, state: view.state, time: tr.time } : null;
+    this.typing = cell ? { cell, run, state: view.state, time: tr.time, composition } : null;
   }
 
   /** Show a frontmatter block that undo, redo or Replace has put in the editor

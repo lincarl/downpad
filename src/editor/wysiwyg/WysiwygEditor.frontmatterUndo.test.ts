@@ -121,6 +121,37 @@ describe("undo in the frontmatter table", () => {
     expect(onChange.mock.lastCall?.[0]).toBe(FILE);
   });
 
+  it("keeps an input method composition in one step when the user pauses before choosing the text", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open();
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+    const title = cell(0, "value");
+    title.focus();
+    /** Compose `steps` at the end of the title cell, each a reading or the
+     *  chosen text and the time it is typed, in Chromium's order of events. */
+    const compose = (steps: ReadonlyArray<readonly [string, number]>): void => {
+      title.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const original = title.textContent;
+      for (const [text, time] of steps) {
+        clock.mockReturnValue(start + time);
+        title.textContent = original + text;
+        title.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true, data: text }));
+      }
+      title.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: steps.at(-1)![0] }));
+    };
+    // "nihon", then a pause before choosing 日本.
+    compose([["に", 0], ["にほ", 150], ["にほん", 300], ["日本", 1500]]);
+    // A second composition after a pause.
+    compose([["ご", 3000], ["語", 3100]]);
+    expect(reported(editor, onChange)).toBe(FILE.replace("# keep", "# keep日本語"));
+
+    // Each composition is one step, and its undo leaves no reading behind.
+    press(title, "z");
+    expect(onChange.mock.lastCall?.[0]).toBe(FILE.replace("# keep", "# keep日本"));
+    press(document.activeElement!, "z");
+    expect(onChange.mock.lastCall?.[0]).toBe(FILE);
+  });
+
   it("takes back table and body edits in the order they were made, from either place", { timeout: 60_000 }, async () => {
     const { editor, onChange } = await open();
     type(cell(0, "value"), " v2");
