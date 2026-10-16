@@ -722,15 +722,24 @@ test("typed dollar amounts and tildes stay text while a typed formula becomes ma
   const file = path.join(directory, "prices.md");
   await writeFile(file, "Start.\n");
   await launch(file);
-  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Tickets cost $5 for kids and $10. Expect ~5 to ~10 minutes.");
+  await typeAtEnd(
+    page.locator(".milkdown .ProseMirror p").first(),
+    " Tickets cost $5 for kids and $10, or $5-$10. Expect ~5 to ~10 or ~5-~10 minutes.",
+  );
   await page.keyboard.press("Enter");
-  await page.keyboard.type("Inline $E=mc^2$ math.");
-  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  // A closing `$` waits for the next character, and Enter decides it too.
+  await page.keyboard.type("Inline $E=mc^2$ math and $x$");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("End.");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
   await expect(page.locator(".milkdown .ProseMirror del")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+s");
   await expect
     .poll(() => readFile(file, "utf8"))
-    .toBe("Start. Tickets cost \\$5 for kids and \\$10. Expect \\~5 to \\~10 minutes.\n\nInline $E=mc^2$ math.\n");
+    .toBe(
+      "Start. Tickets cost \\$5 for kids and \\$10, or \\$5-\\$10. Expect \\~5 to \\~10 or \\~5-\\~10 minutes.\n\n" +
+        "Inline $E=mc^2$ math and $x$\n\nEnd.\n",
+    );
 });
 
 test("Save right after typing writes the last edit in the document and split views", async () => {
