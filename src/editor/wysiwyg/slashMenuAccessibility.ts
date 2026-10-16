@@ -23,7 +23,7 @@ function setAttributes(element: Element, attributes: Readonly<Record<string, str
  * Keep the slash menu inside `root` exposed as a listbox, and keep the main
  * editor's aria-activedescendant on its highlighted option while it is open.
  * Follows the menu as Crepe re-renders, opens and closes it. Returns a function
- * that stops watching.
+ * that stops watching and takes those attributes off the editor.
  */
 export function installSlashMenuAccessibility(root: HTMLElement): () => void {
   const listId = `slash-menu-${++menuCount}`;
@@ -72,5 +72,10 @@ export function installSlashMenuAccessibility(root: HTMLElement): () => void {
     attributes: true,
     attributeFilter: ["class", "data-show", "data-index"],
   });
-  return () => observer.disconnect();
+  return () => {
+    observer.disconnect();
+    // Nothing would clear these once the watching stops.
+    const editor = root.querySelector(".milkdown > .ProseMirror");
+    if (editor) setAttributes(editor, { "aria-controls": null, "aria-activedescendant": null });
+  };
 }

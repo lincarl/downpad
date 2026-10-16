@@ -103,6 +103,18 @@ describe("installSlashMenuAccessibility", () => {
     expect(editor.hasAttribute("aria-controls")).toBe(false);
   });
 
+  it("takes its attributes off the editor when it stops, even with the menu open", async () => {
+    const root = crepeRoot();
+    const stop = installSlashMenuAccessibility(root);
+    root.querySelector<HTMLElement>(".milkdown-slash-menu")!.dataset.show = "true";
+    await observed();
+    const editor = root.querySelector(".ProseMirror")!;
+    expect(editor.getAttribute("aria-activedescendant")).not.toBeNull();
+    stop();
+    expect(editor.hasAttribute("aria-controls")).toBe(false);
+    expect(editor.hasAttribute("aria-activedescendant")).toBe(false);
+  });
+
   it("gives each editor's menu its own ids", () => {
     const first = crepeRoot();
     const second = crepeRoot();
