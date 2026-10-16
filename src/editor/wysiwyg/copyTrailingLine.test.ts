@@ -92,6 +92,14 @@ describe("copying the whole document", () => {
     expect(clipboard.get("text/html")).toMatch(htmlEnd);
   });
 
+  it("keeps an empty last line typed after a paragraph", { timeout: 60_000 }, async () => {
+    // Crepe adds no line after a paragraph, so this one carries a copied line break.
+    const editable = await open("Intro.\n\n<br />\n");
+    expect(editable.lastElementChild?.textContent).toBe("");
+    const clipboard = copyAll(editable);
+    expect(clipboard.get("text/html")).toMatch(/<p><\/p>$/);
+  });
+
   it("keeps a last paragraph", { timeout: 60_000 }, async () => {
     const clipboard = copyAll(await open("Intro.\n\nLast line.\n"));
     expect(clipboard.get("text/plain")).toBe("Intro.\n\nLast line.\n");
