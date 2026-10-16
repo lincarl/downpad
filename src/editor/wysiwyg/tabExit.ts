@@ -41,8 +41,8 @@ function codeBlockTools(target: Element): HTMLElement[] {
   return block ? Array.from(block.querySelectorAll<HTMLElement>(".language-button, .tools-button-group > button")) : [];
 }
 
-/** Whether Crepe's slash menu is open in `container`. While open it reads Enter
- *  and the arrow keys from the whole window, so focus must not leave under it. */
+/** Whether Crepe's slash menu is open in `container`. Tab stays in the
+ *  document while it is. */
 function slashMenuOpen(container: HTMLElement): boolean {
   return container.querySelector('.milkdown-slash-menu[data-show="true"]') !== null;
 }
