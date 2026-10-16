@@ -297,8 +297,14 @@ test("the document view names every image and control it shows, and hides none t
   await expect(page.locator(".milkdown-link-preview")).toHaveAttribute("data-show", "true");
   await check("link preview");
   await editor.locator("td").first().click();
-  await page.locator('[data-role="col-drag-handle"]').click({ force: true });
-  await expect(page.locator('[data-role="col-drag-handle"] .button-group')).toHaveAttribute("data-show", "true");
+  // Crepe moves the column handle over the hovered column a moment after the
+  // pointer arrives, so a click can land where the handle was before.
+  const colHandle = page.locator('[data-role="col-drag-handle"]');
+  await expect(colHandle).toHaveAttribute("data-show", "true");
+  await expect(async () => {
+    await colHandle.click({ force: true });
+    await expect(colHandle.locator(".button-group")).toHaveAttribute("data-show", "true", { timeout: 1000 });
+  }).toPass();
   await check("column handle");
   await lastLine.click();
   await page.keyboard.press("End");
