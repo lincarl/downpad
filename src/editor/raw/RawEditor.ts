@@ -93,8 +93,11 @@ export class RawEditor {
     this.view.focus();
   }
 
-  /** Drive CodeMirror's search state from the application's find card. */
-  searchText(query: string, opts: FindOptions, replacement = ""): FindCounts {
+  /**
+   * Drive CodeMirror's search state from the application's find card. When no
+   * match is selected, select the first one, unless `selectFirst` is false.
+   */
+  searchText(query: string, opts: FindOptions, replacement = "", selectFirst = true): FindCounts {
     const view = this.view;
     if (!view) return { current: 0, total: 0 };
     const searchQuery = new SearchQuery({
@@ -114,6 +117,7 @@ export class RawEditor {
       ({ from, to }) => selection.from === from && selection.to === to,
     );
     if (current < 0) {
+      if (!selectFirst) return { current: 0, total: matches.length };
       current = 0;
       const first = matches[0];
       view.dispatch({
@@ -136,9 +140,14 @@ export class RawEditor {
     return this.currentCounts();
   }
 
+  /**
+   * Replace the selected match and select the next one. With no match
+   * selected, only select the next match after the caret, so the user sees
+   * what the next Replace changes.
+   */
   replaceCurrent(replacement: string, query: string, opts: FindOptions): FindCounts {
     if (!this.view) return { current: 0, total: 0 };
-    this.searchText(query, opts, replacement);
+    if (!this.searchText(query, opts, replacement, false).total) return { current: 0, total: 0 };
     const before = this.view.state.doc;
     replaceNextMatch(this.view);
     // CodeMirror leaves the replacement selected. Move on to the next match, as

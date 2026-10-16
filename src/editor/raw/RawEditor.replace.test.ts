@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-// Replace in the Markdown view: Replace moves on to the next match instead of
-// going back to the first one.
+// Replace in the Markdown view. Replace moves on to the next match instead of
+// going back to the first one, and with the caret off a match it selects the
+// next match first.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { EditorView } from "@codemirror/view";
 import { RawEditor } from "./RawEditor";
 import type { FindOptions } from "../wysiwyg/findEngine";
 
@@ -41,6 +43,32 @@ describe("replace in the Markdown view", () => {
     // After the last match it wraps to the first.
     expect(editor.replaceCurrent("BETA", "alpha", opts)).toEqual({ current: 1, total: 2 });
     expect(currentLine()).toBe("# Heading alpha");
+  });
+
+  it("selects the next match after the caret before it replaces anything", () => {
+    const text = "# Heading alpha\n\nalpha one\n\nalpha two\n\nplain line\n\nalpha four\n";
+    const editor = open(text);
+    editor.searchText("alpha", opts);
+    editor.findNext();
+    expect(editor.findNext()).toEqual({ current: 3, total: 4 });
+
+    // A click on "plain line" puts the caret on no match.
+    const view = EditorView.findFromDOM(document.querySelector<HTMLElement>(".cm-editor")!)!;
+    view.dispatch({ selection: { anchor: text.indexOf("plain line") } });
+    expect(editor.replaceCurrent("BETA", "alpha", opts)).toEqual({ current: 4, total: 4 });
+    expect(editor.getText()).toBe(text);
+    expect(currentLine()).toBe("alpha four");
+
+    expect(editor.replaceCurrent("BETA", "alpha", opts)).toEqual({ current: 1, total: 3 });
+    expect(editor.getText()).toBe(text.replace("alpha four", "BETA four"));
+  });
+
+  it("does nothing without a query", () => {
+    const editor = open("alpha one\n");
+    expect(editor.replaceCurrent("BETA", "", opts)).toEqual({ current: 0, total: 0 });
+    expect(editor.getText()).toBe("alpha one\n");
+    // CodeMirror's own search panel stays closed. The find card replaces it.
+    expect(document.querySelector(".cm-search")).toBeNull();
   });
 
   it("skips a replacement that contains the query", () => {
