@@ -7,6 +7,8 @@ import type {} from "../src/ipc/bridge";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const heading = ".milkdown .ProseMirror h1";
+/** A synthetic one-pixel PNG, to exercise the local image protocol. */
+const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
 let directory: string;
 let app: ElectronApplication | undefined;
 let page: Page;
@@ -76,8 +78,7 @@ async function clipboardText(): Promise<string> {
 
 test("launching a Markdown file renders formatting and relative images in an isolated renderer", async () => {
   const file = path.join(directory, "launch.md");
-  // A synthetic one-pixel PNG exercises the local image protocol.
-  await writeFile(path.join(directory, "image.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
   await writeFile(file, "# Electron Markdown\n\nA **formatted** document.\n\n| Feature | Result |\n| --- | --- |\n| Open | Works |\n\n![Local image](image.png)\n");
   await launch(file);
   await expect(page.locator(heading)).toHaveText("Electron Markdown");
@@ -165,6 +166,9 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
     page.on("pageerror", (error) => errors.push(String(error)));
     await chooseOpen(file);
     const pane = page.locator(".editor-pane:not([hidden])");
+    // The welcome document stays shown until the opened file's pane is ready, and
+    // it has code blocks too, so wait for the file before looking for its block.
+    await expect(pane.locator(".ProseMirror h1").first()).toHaveText("Policy");
     // Crepe draws a code block, and its diagram, once the block is on screen.
     await pane.locator(".milkdown-code-block").last().scrollIntoViewIfNeeded();
     await expect(pane.locator(".mermaid-preview svg")).toBeVisible().catch(async (error: Error) => {
@@ -207,6 +211,21 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
   } finally {
     server.close();
   }
+});
+
+test("opening a file with local images makes no failed loads", async () => {
+  const file = path.join(directory, "images.md");
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
+  await writeFile(file, "# Images\n\n![Block](image.png)\n\n![Missing](missing.png)\n\nInline ![inline](image.png) and ![gone](gone.png).\n");
+  await launch();
+  const errors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  await chooseOpen(file);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
+  const loaded = () => page.locator(".ProseMirror img").evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0).length);
+  await expect.poll(loaded).toBe(2);
+  // Each image starts at its own URL, never at its path next to md-easy's page.
+  expect(errors).toEqual([]);
 });
 
 test("the packaged app ignores a remote development URL override", async () => {

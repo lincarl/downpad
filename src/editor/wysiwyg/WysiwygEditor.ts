@@ -37,6 +37,7 @@ import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
+import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
   type FindCounts,
@@ -114,6 +115,9 @@ export class WysiwygEditor {
    *  that way, the user has not changed it, so `getMarkdown` reports the exact
    *  source instead of Milkdown's rewrite of it. */
   private baseline: { source: string; settled: string } | null = null;
+  /** The body of a split mirror that arrived before Crepe created its view, for
+   *  example while preloadImages waits for image lookups. `mount` applies it. */
+  private pendingBody: string | null = null;
   /** Pending report of document edits, set while typing has not paused yet. */
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Attributes/semantics applied to DOM owned by Crepe and embedded CodeMirror. */
@@ -185,6 +189,7 @@ export class WysiwygEditor {
     // Shared holder so the missing-image handler (a Crepe feature config) can
     // reach the live EditorView captured by the image context-menu plugin.
     const viewRef: ViewRef = { current: null };
+    const imageConfig = imageBlockFeatureConfig(viewRef, context);
     this.crepe = new Crepe({
       root: crepeRoot,
       // Crepe only ever sees the body (the frontmatter, if any, is split off above);
@@ -198,7 +203,7 @@ export class WysiwygEditor {
           extensions: [codeBlockFindHighlights],
         },
         // Display linked images + missing-image placeholder/relocate (§5.5).
-        [Crepe.Feature.ImageBlock]: imageBlockFeatureConfig(viewRef, context),
+        [Crepe.Feature.ImageBlock]: imageConfig,
         // Crepe's default empty-line hint is "Please enter...".
         [Crepe.Feature.Placeholder]: { text: "Type / for blocks" },
       },
@@ -230,6 +235,8 @@ export class WysiwygEditor {
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
+    // Look up local image URLs before the first render, so none starts raw.
+    this.crepe.editor.use(preloadImages(imageConfig.preload));
     // WYSIWYG find/replace search state + decorations (§5.13).
     this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Tab that the editor does not use, or Esc then Tab, moves focus out.
@@ -297,9 +304,12 @@ export class WysiwygEditor {
     // asynchronous Crepe create is in flight. Never arm callbacks for that dead
     // instance; destroy() already owns/awaits its terminal cleanup.
     if (this.destroyed || this.crepe !== crepe) return;
-    // A split mirror sync that landed while Crepe was creating has already
-    // replaced the body and recorded its own source. Keep that one.
-    if (!this.baseline) this.rememberSource(split.body);
+    // A split mirror that landed while Crepe was creating replaces the body now
+    // and records its own source. Otherwise remember the source just opened.
+    const mirrored = this.pendingBody;
+    this.pendingBody = null;
+    if (mirrored !== null) this.replaceBody(mirrored);
+    else this.rememberSource(split.body);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
     // Crepe adds an empty last line below a final list, code block, quote,
     // table, rule or image in the first transaction after create. Make that an
@@ -365,6 +375,9 @@ export class WysiwygEditor {
    * still serializes as it did right after this parse (`getMarkdown`), so the
    * host sees no change. The mirror never writes Milkdown's rewrite back over
    * the author's exact text.
+   *
+   * While Crepe is still creating the editor there is no view to replace, so the
+   * body waits for `mount` to apply it.
    */
   setMarkdown(markdown: string): void {
     if (!this.crepe) return;
@@ -384,17 +397,24 @@ export class WysiwygEditor {
     }
     // Find again in a table this added; redraws of a shown table refresh on their own.
     this.find.refresh();
+    if (this.createPromise) this.pendingBody = split.body;
+    else this.replaceBody(split.body);
+  }
+
+  /** Replace Crepe's body and remember its source (see `setMarkdown`). */
+  private replaceBody(body: string): void {
+    if (!this.crepe) return;
     try {
-      // Milkdown's replaceAll, with the block and the blank lines after it in
-      // the same transaction.
+      // Milkdown's replaceAll, with the frontmatter block and the blank lines
+      // after it, which setMarkdown has just stored, in the same transaction.
       this.crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
-        const body = ctx.get(parserCtx)(split.body);
-        const tr = view.state.tr.replace(0, view.state.doc.content.size, new Slice(body.content, 0, 0));
-        view.dispatch(setFrontmatter(view.state, tr, { block: split.frontmatter, separator: split.separator }));
+        const doc = ctx.get(parserCtx)(body);
+        const tr = view.state.tr.replace(0, view.state.doc.content.size, new Slice(doc.content, 0, 0));
+        view.dispatch(setFrontmatter(view.state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator }));
       });
       // The doc updates synchronously with the dispatch.
-      this.rememberSource(split.body);
+      this.rememberSource(body);
     } catch {
       // Editor torn down mid-sync; ignore.
     }
@@ -534,6 +554,7 @@ export class WysiwygEditor {
     this.root = null;
     this.crepeRoot = null;
     this.baseline = null;
+    this.pendingBody = null;
     const crepe = this.crepe;
     const creating = this.createPromise;
     // Null this synchronously: all public operations become no-ops immediately,
