@@ -9,7 +9,7 @@
 //   - `findReveal` shows matches inside code blocks and scrolls to the current one.
 
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
+import { Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { EditorState } from "@milkdown/kit/prose/state";
@@ -217,14 +217,20 @@ export function runSearch(view: EditorView, query: string, opts: FindOptions, se
 }
 
 /** Make match `index` current, select it and scroll to it. -1 leaves no match
- *  current and the selection where it is. */
+ *  current and collapses the selection to its end, so a match the user stepped
+ *  past does not stay selected for the next keystroke to replace. */
 export function selectMatch(view: EditorView, index: number): FindCounts {
   const s = findKey.getState(view.state);
   if (s?.ranges.length && s.current !== index) {
     view.dispatch(view.state.tr.setMeta(findKey, { type: "current", current: index }));
   }
   const next = findKey.getState(view.state);
-  if (next) scrollToCurrent(view, next);
+  const { selection } = view.state;
+  if (index < 0 && !selection.empty) {
+    view.dispatch(view.state.tr.setSelection(Selection.near(selection.$to)));
+  } else if (next) {
+    scrollToCurrent(view, next);
+  }
   return counts(next);
 }
 

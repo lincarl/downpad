@@ -4,7 +4,8 @@
 // decorations. This class keeps the table's matches and paints them with the
 // CSS Custom Highlight API under the same names, md-find-match and
 // md-find-current, so app.css gives both the same colours. While the current
-// match is in the table, no document match is current.
+// match is in the table, no document match is current and no document text is
+// selected.
 
 import type { EditorView } from "@milkdown/kit/prose/view";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./findEngine";
 import {
   findInFrontmatter,
+  focusMatch,
   isBefore,
   matchRange,
   replaceInFrontmatter,
@@ -89,6 +91,8 @@ export class DocumentFind {
     if (!match || block == null) {
       // findEngine replaces the document's match and searches the document
       // again. With no document match left, the table's first comes next.
+      // ProseMirror's insertText has collapsed the document's selection, so no
+      // text stays selected.
       replaceCurrent(view, replacement, query, opts);
       this.setQuery(query, opts);
       const documentMatches = findKey.getState(view.state)?.ranges.length ?? 0;
@@ -120,6 +124,16 @@ export class DocumentFind {
       if (rewritten !== block) this.host.replaceBlock(rewritten);
     }
     return this.search(view, query, opts);
+  }
+
+  /** Put the caret on the table's current match with its text selected, the
+   *  way ProseMirror keeps a document match selected. Returns false when the
+   *  current match is not in an editable cell of the drawn table. */
+  focusCurrent(): boolean {
+    const panel = this.host.panel();
+    const match = this.matches[this.current];
+    if (!panel || !match) return false;
+    return focusMatch(panel, match);
   }
 
   /** Forget the search and remove every highlight. */

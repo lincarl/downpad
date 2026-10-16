@@ -7,8 +7,9 @@
 //   - `replaceInFrontmatter` writes replaced keys and values back through the
 //     table's own one-line rewrites, so the rest of the YAML keeps its form.
 //     Read-only rows (lists, deeper nesting) are found but never replaced.
-//   - `matchRange` and `revealCell` locate a match in the drawn table by the
-//     data-line and data-part attributes FrontmatterPanel puts on each cell.
+//   - `matchRange`, `revealCell` and `focusMatch` locate a match in the drawn
+//     table by the data-line and data-part attributes FrontmatterPanel puts on
+//     each cell.
 
 import {
   isValidEditableKey,
@@ -188,4 +189,18 @@ export function revealCell(panel: Element, match: FrontmatterPosition): void {
   }
   // jsdom has no scrollIntoView, so the call is optional.
   cell.scrollIntoView?.({ block: "center", inline: "nearest" });
+}
+
+/** Focus the cell that shows `match` and select the match, so the next
+ *  keystroke replaces it. Returns false, and changes nothing, when the table
+ *  does not show the match or shows it read-only. */
+export function focusMatch(panel: Element, match: FrontmatterMatch): boolean {
+  const cell = cellOf(panel, match);
+  const range = matchRange(panel, match);
+  const selection = window.getSelection();
+  if (!cell?.isContentEditable || !range || !selection) return false;
+  cell.focus({ preventScroll: true });
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
 }

@@ -24,6 +24,15 @@ Object.assign(Range.prototype, {
   getBoundingClientRect: () => new DOMRect(),
 });
 
+// jsdom has no isContentEditable. The table's cells are editable exactly when
+// they carry the contenteditable attribute.
+Object.defineProperty(HTMLElement.prototype, "isContentEditable", {
+  configurable: true,
+  get(this: HTMLElement) {
+    return this.hasAttribute("contenteditable");
+  },
+});
+
 // jsdom has no CSS Custom Highlight API. The stand-in keeps the registry, so
 // the tests can read which text each highlight covers.
 class FakeHighlight extends Set<AbstractRange> {}
@@ -143,6 +152,32 @@ describe("document view find with a frontmatter table", () => {
     editor.insertMarkdown("Another draft.");
     expect(documentCurrent()).toEqual([]);
     expect(painted("md-find-current")).toEqual(["Draft"]);
+  });
+
+  it("puts the caret on a table match when the card closes, and leaves no document text selected", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open(FILE);
+    editor.search("draft", OPTS);
+    // Step back to the body's match, which selects it, then on into the table.
+    expect(editor.findPrev()).toEqual({ total: 4, current: 4 });
+    expect(editor.findNext()).toEqual({ total: 4, current: 1 });
+    // What the find card does on Escape.
+    editor.focus();
+    editor.clearSearch();
+    expect(document.activeElement).toBe(document.querySelector('[data-line="0"][data-part="value"]'));
+    expect(window.getSelection()?.toString()).toBe("Draft");
+    // Text that reaches the document goes to a caret instead of over the body's match.
+    editor.insertMarkdown("X");
+    editor.reportPendingChange();
+    expect(splitFrontmatter(String(onChange.mock.lastCall?.[0])).body).toContain("The draft");
+  });
+
+  it("returns focus to the document when the current table match is read-only", { timeout: 60_000 }, async () => {
+    const { editor } = await open(FILE);
+    editor.search("draft", OPTS);
+    expect(editor.findNext()).toEqual({ total: 4, current: 2 });
+    expect(editor.findNext()).toEqual({ total: 4, current: 3 });
+    editor.focus();
+    expect(document.activeElement).toBe(document.querySelector(".ProseMirror"));
   });
 
   it("removes the table's highlights when the search is cleared or the editor closes", { timeout: 60_000 }, async () => {

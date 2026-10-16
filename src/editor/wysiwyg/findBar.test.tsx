@@ -56,6 +56,11 @@ describe("FindBar", () => {
     expect(active.isOpen()).toBe(false);
     expect(controls.clear).toHaveBeenCalledOnce();
     expect(controls.focusEditor).toHaveBeenCalledOnce();
+    // Focus goes back before the search is cleared, while the editor still
+    // knows which match is current.
+    expect(vi.mocked(controls.focusEditor).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(controls.clear).mock.invocationCallOrder[0],
+    );
     expect(openChanges).toEqual([true, false]);
   });
 

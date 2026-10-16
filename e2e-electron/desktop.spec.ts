@@ -677,6 +677,30 @@ test("the frontmatter table's find highlights go with a layout change or a tab s
   expect(await tableHighlights()).toEqual({ match: [], current: [] });
 });
 
+test("closing find on a frontmatter match leaves the caret there", async () => {
+  const file = path.join(directory, "frontmatter-find-close.md");
+  await writeFile(file, "---\ntitle: Draft notes\n---\n\nFirst paragraph.\n\nThe draft body.\n");
+  await launch(file);
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+f");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  const count = page.locator(".find-count");
+  await find.fill("draft");
+  await expect(count).toHaveText("1 of 2");
+  // Step past the body's match and around to the title, then close the card.
+  await find.press("Enter");
+  await expect(count).toHaveText("2 of 2");
+  await find.press("Enter");
+  await expect(count).toHaveText("1 of 2");
+  await find.press("Escape");
+  // Typing replaces the title's match, as it would a match in the document.
+  await page.keyboard.type("Final");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toMatch(/^---\ntitle: Final notes\n---\n\n?First paragraph\.\n\nThe draft body\.\n$/);
+});
+
 test("a file that ends in a list opens as saved", async () => {
   const file = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n- Last item\n");

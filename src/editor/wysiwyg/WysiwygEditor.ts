@@ -406,7 +406,10 @@ export class WysiwygEditor {
     this.withView((v) => this.find.clear(v), undefined);
   }
 
+  /** Focus the document. While the find card's current match is in an editable
+   *  frontmatter cell, focus that cell with the match selected instead. */
   focus(): void {
+    if (this.find.focusCurrent()) return;
     this.withView((v) => v.focus(), undefined);
   }
 
