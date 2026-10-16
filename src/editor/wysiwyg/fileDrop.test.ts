@@ -364,6 +364,29 @@ describe("a file dropped away from the document text", () => {
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n`);
   });
 
+  it("joins the line after a match inside it, without splitting the line", async () => {
+    const opened = await open("Alpha beta gamma.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    // "beta", such as the find card's match.
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 7, 11)));
+
+    opened.insertMarkdown(LINK_A);
+    type(opened, "!");
+
+    // Split, the rest of the line would start with a space, saved as "&#x20;".
+    expect(opened.getMarkdown()).toBe(`Alpha beta${LINK_A}! gamma.\n\nSecond line.\n`);
+  });
+
+  it("puts an image dropped at a caret inside a line after that line", async () => {
+    const opened = await open("Alpha beta gamma.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 11)));
+
+    opened.insertMarkdown(IMAGE);
+
+    expect(opened.getMarkdown()).toBe(`Alpha beta gamma.\n\n${IMAGE}\n\nSecond line.\n`);
+  });
+
   it("leaves the selection where it was, without the file, for a user who has moved on", async () => {
     const opened = await open("First line.\n\nSecond line.\n\nThird line.\n");
     place(opened, block("paragraph", "First line."), 100, 130);

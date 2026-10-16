@@ -262,12 +262,23 @@ export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret =
   };
 }
 
+/** Whether a position is inside the text of a line, away from both ends,
+ *  where a block put in would split the line. */
+function insideText($pos: ResolvedPos): boolean {
+  const { parent, parentOffset } = $pos;
+  return parent.inlineContent && !parent.type.spec.code && parentOffset > 0 && parentOffset < parent.content.size;
+}
+
 /**
  * Milkdown action that inserts Markdown at the caret, for a file dropped away
  * from the document text (§5.4). A file never replaces what is selected, such
  * as the find card's current match. It goes in after the selected text, and
- * after a selected image or other block. The caret then goes after it
- * (`placeCaret`), or with `moveCaret` off stays where it was, before the file.
+ * after a selected image or other block. Inside a line, a link joins the line
+ * there, and an image goes in after the line, so the line is never split and
+ * its rest never starts with a space, which Markdown would drop. At either end
+ * of a line a file goes in as a block before or after it. The caret then goes
+ * after the file (`placeCaret`), or with `moveCaret` off stays where it was,
+ * before the file.
  */
 export function insertAtSelection(markdown: string, moveCaret = true) {
   return (ctx: Ctx): void => {
@@ -277,10 +288,13 @@ export function insertAtSelection(markdown: string, moveCaret = true) {
     const { tr } = view.state;
     const { selection } = tr;
     if (selection instanceof TextSelection) {
-      if (!selection.empty) tr.setSelection(TextSelection.create(tr.doc, selection.to));
-      // As Milkdown's `insert` does, so a one-line file joins the caret's line.
-      const { openStart, openEnd } = tr.selection.content();
-      tr.replaceSelection(new Slice(doc.content, openStart, openEnd));
+      const { $to } = selection;
+      const inside = insideText($to);
+      const joins = inside && doc.childCount === 1 && doc.firstChild?.type.name === "paragraph";
+      tr.setSelection(TextSelection.create(tr.doc, inside && !joins ? $to.end() : $to.pos));
+      // Open, the paragraph's text goes into the line. Closed, it is a block.
+      const depth = joins ? 1 : 0;
+      tr.replaceSelection(new Slice(doc.content, depth, depth));
     } else if (!placeBlocks(tr, { pos: selection.to }, doc)) {
       return;
     }
