@@ -22,6 +22,8 @@ Each open document has one canonical Markdown string. The document and source ed
 - Markdown view exposes the source directly. It parses GitHub Flavored Markdown with a leading YAML frontmatter block, and colors it with VS Code's default Markdown and YAML token colors (Light+ and Dark+).
 - Split view shows both and synchronizes changes between them.
 
+Opening a document never changes its text. The document view reports the exact source it was given until the user edits the body there, and an edit there writes the body in Milkdown's Markdown style.
+
 Each tab owns its own document state, including its path, content, save status, and line-ending style. The active tab is bound to the visible editor views.
 
 Milkdown and CodeMirror manage their own editor DOM and lifecycles. React owns the surrounding application interface, including tabs, toolbars, dialogs, settings, recent files, and print views.

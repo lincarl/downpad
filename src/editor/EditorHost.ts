@@ -24,7 +24,7 @@
 import type { Store } from "../state/store";
 import { serializerStyleFromSettings } from "../state/types";
 import type { EditorLayout } from "../state/types";
-import { applyEditorMarkdownForTab, reconcileEditorMarkdownForTab } from "../document/DocumentModel";
+import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
@@ -82,8 +82,12 @@ export class EditorHost implements FindController {
   /** Which editor panes are shown — document only, the split, or Markdown only
    *  (§6.1). Mirrors `AppState.editorLayout`. */
   private layout: EditorLayout = "document";
-  /** Set while a mirror sync writes into a pane, so that pane's resulting change
-   *  callback is ignored (it would otherwise echo back and clobber the author). */
+  /** Set while a mirror sync writes into a pane, so a change report made during
+   *  the write is ignored (the Markdown pane also suppresses its own). The
+   *  document pane reports a sync about 200ms later, after this is reset. That
+   *  report carries the exact mirrored text (`WysiwygEditor.getMarkdown`), so it
+   *  changes nothing, and `onChange` drops it if a newer Markdown edit landed
+   *  first. */
   private applyingSync = false;
   /** Pending debounced mirror sync and the pane whose edit it mirrors. */
   private pendingSync: { timer: ReturnType<typeof setTimeout>; source: Pane } | null = null;
@@ -231,10 +235,9 @@ export class EditorHost implements FindController {
    * now, so the tab's canonical string holds every edit and both visible panes
    * show it. Markdown pane edits are reported as they happen.
    *
-   * Edits only ever arrive through a pane's change report. Never read a pane's
-   * text here: a pane the split has mirrored into holds its own normalized form
-   * of the canonical string, and writing that back would rewrite the user's
-   * Markdown and mark the tab unsaved.
+   * Edits only ever arrive through a pane's change report, which the host
+   * drops when the document pane lags the tab. Never read a pane's text here,
+   * which would skip that check and could write older text over a newer edit.
    */
   flush(): void {
     if (this.disposed || !this.activeTabId) return;
@@ -263,7 +266,7 @@ export class EditorHost implements FindController {
 
   /**
    * Show the active tab's document after its canonical string was replaced from
-   * outside the editors (open / new / disk-reload / recovery). Forces a fresh
+   * outside the editors (open / new / disk-reload). Forces a fresh
    * rebuild (undo resets) and invalidates the tab's panes.
    */
   async reloadActiveDoc(): Promise<void> {
@@ -373,7 +376,7 @@ export class EditorHost implements FindController {
    *   synchronously before the returned promise waits for Crepe destruction;
    * - repeated calls return the same cleanup promise;
    * - an in-flight `buildPane` observes `disposed` after its await and cannot
-   *   reconcile markdown or reattach itself.
+   *   reattach itself.
    *
    * The host removes only DOM it owns. It deliberately does not call
    * `root.replaceChildren()`, so an old Strict-Mode cleanup cannot erase a newer
@@ -453,11 +456,9 @@ export class EditorHost implements FindController {
     const showWysiwyg = this.layout !== "markdown";
     const showRaw = this.layout !== "document";
 
-    // Build the document (WYSIWYG) pane first when it's shown: a fresh build
-    // reconciles the canonical to its settled serialization (and bumps the rev),
-    // so a Markdown pane built next mirrors that settled form rather than
-    // diverging. In the Markdown-only view the document pane isn't built at all,
-    // so the raw source shows the canonical (the file's exact bytes) untouched.
+    // Building a pane never changes the tab's text, because the document pane
+    // reports its exact source until the user edits it. In the Markdown-only
+    // view the document pane isn't built at all.
     const wysiwygPane = showWysiwyg ? await this.ensurePane(id, "wysiwyg", rebuild) : null;
     if (this.disposed || this.store.get().activeTabId !== id || (showWysiwyg && !wysiwygPane)) {
       return;
@@ -545,9 +546,10 @@ export class EditorHost implements FindController {
     this.panes.set(paneKey(tabId, view), pane);
 
     // Bound to this tab id so a background pane writes to its own tab, never the
-    // active doc; a real change advances the tab's rev (staling its other view)
-    // and — in split — mirrors into the other visible pane. Changes caused by our
-    // own mirror sync are ignored (applyingSync) so they can't echo back.
+    // active doc. A real change advances the tab's rev (staling its other view)
+    // and, in the split, mirrors into the other visible pane. A report made
+    // during our own mirror sync is ignored (applyingSync). The document pane's
+    // later report of a sync carries the mirrored text, so it changes nothing.
     const onChange = (m: string): void => {
       if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
         return;
@@ -581,23 +583,11 @@ export class EditorHost implements FindController {
         throw err;
       }
       // Disposal or another rebuild may have removed this pane while Crepe was
-      // creating. Its teardown has already been initiated; most importantly, do
-      // not reconcile its now-abandoned serialization into the canonical store.
+      // creating. Its teardown has already been initiated; never show it.
       if (this.disposed || this.panes.get(paneKey(tabId, view)) !== pane) return null;
       if (!this.hasTab(tabId)) {
         await this.destroyPane(pane).catch(() => {});
         return null;
-      }
-      // A WYSIWYG round-trip normalizes markdown, so the editor's serialization of
-      // freshly-loaded content differs from the on-disk canonical even with no
-      // edits (the trailing newline alone trips it for most files). Adopt that
-      // settled form as the canonical baseline now, WITHOUT dirtying, so a later
-      // report that changes nothing in the Markdown (an image resize, say)
-      // matches it and never raises a false unsaved-changes warning. Bumping the rev
-      // (this pane as author) keeps it in sync and stales the tab's other view so
-      // that view rebuilds from the settled form rather than diverging.
-      if (reconcileEditorMarkdownForTab(this.store, tabId, editor.getMarkdown())) {
-        this.bumpRev(tabId, pane);
       }
     } else {
       const editor = new RawEditor();
@@ -648,8 +638,11 @@ export class EditorHost implements FindController {
   }
 
   /** Push the current canonical into the sibling (non-authoring) pane so the split
-   *  stays in sync. `applyingSync` makes the sibling's resulting change callback a
-   *  no-op, so this can never loop or clobber the author. */
+   *  stays in sync. `applyingSync` ignores any report made while the panes are
+   *  written. The document pane reports about 200ms later with the exact
+   *  canonical text, which changes nothing, and `onChange` drops that report if
+   *  a newer Markdown edit landed first. So a sync never loops or clobbers the
+   *  author. */
   private runSync(source: Pane): void {
     if (this.disposed || this.layout !== "split" || source.tabId !== this.activeTabId) return;
     const otherView: View = source.view === "wysiwyg" ? "raw" : "wysiwyg";

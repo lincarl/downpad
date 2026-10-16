@@ -68,9 +68,13 @@ describe("the empty line Crepe keeps at the end", () => {
     expect(differing(onChange, markdown)).toEqual([]);
   });
 
-  it("drops only the last of two empty lines at the end", { timeout: 60_000 }, async () => {
+  it("drops only the last of two empty lines at the end of an edited file", { timeout: 60_000 }, async () => {
     const { editor } = await open("Hello\n\n<br />\n\n<br />\n");
-    expect(editor.getMarkdown()).toBe("Hello\n\n<br />\n");
+    // An unedited file keeps its exact text, so edit it first.
+    const options = { caseSensitive: true, wholeWord: false, regex: false };
+    editor.search("Hello", options);
+    editor.replaceAll("Hi", "Hello", options);
+    expect(editor.getMarkdown()).toBe("Hi\n\n<br />\n");
   });
 
   it("mirrors a split edit that ends in a list without an extra blank line", { timeout: 60_000 }, async () => {
@@ -79,6 +83,6 @@ describe("the empty line Crepe keeps at the end", () => {
     editor.setMarkdown("First line.\n\n- Last item\n");
     expect(editor.getMarkdown()).toBe("First line.\n\n- Last item\n");
     await settle();
-    expect(onChange).not.toHaveBeenCalled();
+    expect(differing(onChange, "First line.\n\n- Last item\n")).toEqual([]);
   });
 });

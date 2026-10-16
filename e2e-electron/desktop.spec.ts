@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WebPreferences } from "electron";
 import type {} from "../src/ipc/bridge";
@@ -65,6 +65,12 @@ async function chooseSave(file: string): Promise<void> {
   await app!.evaluate(({ dialog }, selectedFile) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: selectedFile });
   }, file);
+}
+
+/** The clipboard's text with line endings as "\n". Windows puts "\r\n" there. */
+async function clipboardText(): Promise<string> {
+  const text = await app!.evaluate(({ clipboard }) => clipboard.readText());
+  return text.replace(/\r\n/g, "\n");
 }
 
 test("launching a Markdown file renders formatting and relative images in an isolated renderer", async () => {
@@ -186,6 +192,95 @@ test("Save right after typing writes the last edit in the document and split vie
   await expect.poll(() => readFile(file, "utf8")).toBe("# Typed\n\nFirst line. Saved at once. Split too.\n");
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("First line. Saved at once. Split too.");
   await expect(page).toHaveTitle("typed.md — md-easy");
+});
+
+test("Save with no edit leaves a file the document view would rewrite byte-identical", async () => {
+  const file = path.join(directory, "unedited.md");
+  // The document view writes this as "# Title\n\nLine\\\nnext\n\nSee [docs](https://x.y).\n".
+  const markdown = "Title\n=====\n\nLine  \nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n";
+  await writeFile(file, markdown);
+  const original = await stat(file);
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Title");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
+  await expect.poll(clipboardText).toBe(markdown);
+  await page.keyboard.press("ControlOrMeta+s");
+  // Save replaces the file, so wait for the new one before reading it.
+  await expect.poll(async () => (await stat(file)).ino).not.toBe(original.ino);
+  expect(await readFile(file, "utf8")).toBe(markdown);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("=====");
+  await expect(page).toHaveTitle("unedited.md — md-easy");
+});
+
+test("launching with a file builds its document editor once", async () => {
+  const launched = path.join(directory, "launched.md");
+  const later = path.join(directory, "later.md");
+  await writeFile(launched, "# Launched file\n");
+  await writeFile(later, "# Later file\n");
+  await launch();
+  // As in the reload test below, settle the first renderer's file listener.
+  await page.evaluate(async () => {
+    window.mdEasy!.listen("open-file-requested", () => {});
+    await window.mdEasy!.invoke("settings_path");
+  });
+  // Count document editors from the start of a reloaded renderer, which reads
+  // the first queued file as its launch argument.
+  const session = await page.context().newCDPSession(page);
+  await session.send("Page.enable");
+  await session.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: "window.editorBuilds = 0; new MutationObserver((records) => { for (const record of records) for (const node of record.addedNodes) if (node instanceof Element && node.classList.contains('crepe-root')) window.editorBuilds++; }).observe(document, { childList: true, subtree: true });",
+  });
+  const reloaded = page.waitForEvent("domcontentloaded");
+  await app!.evaluate(({ app, BrowserWindow }, paths) => {
+    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
+    contents.once("did-start-navigation", (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      for (const filePath of paths) app.emit("open-file", { preventDefault: () => {} }, filePath);
+    });
+    contents.reload();
+  }, [launched, later]);
+  await reloaded;
+  // The second file arrives only after startup has finished, so any second
+  // build of the launched file has happened by the time it shows.
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Later file");
+  // One build for each file.
+  expect(await page.evaluate(() => Reflect.get(window, "editorBuilds"))).toBe(2);
+});
+
+test("Open recovered shows a snapshot's exact text as unsaved", async () => {
+  const file = path.join(directory, "recovered.md");
+  await writeFile(file, "# Before the crash\n");
+  // The document view writes this as "# Title\n\nLine\\\nnext\n\nSee [docs](https://x.y).\n".
+  const markdown = "Title\n=====\n\nLine  \nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n";
+  const recovery = path.join(directory, "profile", "recovery");
+  await mkdir(recovery);
+  const snapshot = { sessionId: "earlier-session", savedAt: new Date().toISOString(), filePath: file, markdown, isDirty: true };
+  await writeFile(path.join(recovery, "earlier-session.json"), JSON.stringify(snapshot));
+  await launch();
+  // Startup only fills the tab, so the editor must still be built for it.
+  await page.getByRole("button", { name: "Open recovered", exact: true }).click();
+  await expect(page.locator(heading)).toHaveText("Title");
+  await expect(page).toHaveTitle("● recovered.md — md-easy");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
+  await expect.poll(clipboardText).toBe(markdown);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(markdown);
+  await expect(page).toHaveTitle("recovered.md — md-easy");
+});
+
+test("the first-run welcome document opens as saved with its exact text", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = false\nhasCheckedDefaultHandler = true\n");
+  // The renderer reads the copy that the build puts next to index.html.
+  const welcome = (await readFile(path.join(projectRoot, "dist", "welcome.md"), "utf8")).replace(/\r\n/g, "\n");
+  await launch();
+  await expect(page.locator(heading)).toContainText("Welcome to md-easy");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
+  await expect.poll(clipboardText).toBe(welcome);
+  await expect(page).toHaveTitle("Untitled — md-easy");
 });
 
 test("an undo right after Save marks the document unsaved again", async () => {

@@ -248,7 +248,10 @@ export class AppRuntime {
     if (this.disposed) return;
     if (landOnEditor && this.store.get().activeTabId) {
       this.store.set({ view: "wysiwyg" });
-      await this.editorHost.reloadActiveDoc();
+      // A launch argument or a recovered file's original was already shown by
+      // openPath. A recovered snapshot, the welcome document and the browser
+      // seed only filled the tab, so this builds it.
+      await this.editorHost.showActiveDoc();
       this.files.watchActive();
     } else {
       // Returning user (or nothing to open) → Recent view, no tabs, no editor.

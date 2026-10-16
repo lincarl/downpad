@@ -1,11 +1,13 @@
 // WYSIWYG view: a lifecycle wrapper around Milkdown's Crepe editor, treated as
 // a *view* over the canonical markdown string (docs/design.md §4).
 //
-// Two responsibilities beyond hosting Crepe:
+// Three responsibilities beyond hosting Crepe:
 //   - Serializer style (§5.16): configure remark-stringify options from settings.
 //   - Frontmatter (§5.17): a leading `---` YAML block is split off and projected
 //     through a React-owned editable table above the editor; Crepe only sees the
 //     body, and the block is re-joined losslessly on serialize.
+//   - Exact source: until the user changes the body, it is reported as the text
+//     Crepe parsed, not Milkdown's rewrite of it.
 
 import { Crepe } from "@milkdown/crepe";
 import { remarkStringifyOptionsCtx, editorViewCtx } from "@milkdown/kit/core";
@@ -77,10 +79,11 @@ export class WysiwygEditor {
   /** Whether a frontmatter table should be shown (the showFrontmatterPanel
    *  setting, captured at mount). */
   private showFmPanel = false;
-  /** The settled markdown last pushed in by `setMarkdown` (split mirror sync). The
-   *  delayed change report it causes is dropped while the content still equals
-   *  it, so mirroring never re-serializes the author's exact text (§6.1). */
-  private syncedMarkdown: string | null = null;
+  /** The body Crepe last parsed (at mount or `setMarkdown`) and Milkdown's
+   *  serialization of it right after parsing. While the body still serializes
+   *  that way, the user has not changed it, so `getMarkdown` reports the exact
+   *  source instead of Milkdown's rewrite of it. */
+  private baseline: { source: string; settled: string } | null = null;
   /** Pending report of document edits, set while typing has not paused yet. */
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Attributes/semantics applied to DOM owned by Crepe and embedded CodeMirror. */
@@ -206,6 +209,9 @@ export class WysiwygEditor {
     // asynchronous Crepe create is in flight. Never arm callbacks for that dead
     // instance; destroy() already owns/awaits its terminal cleanup.
     if (this.destroyed || this.crepe !== crepe) return;
+    // A split mirror sync that landed while Crepe was creating has already
+    // replaced the body and recorded its own source. Keep that one.
+    if (!this.baseline) this.rememberSource(split.body);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
     this.enableUpdatesTimer = setTimeout(() => {
       this.enableUpdatesTimer = null;
@@ -215,10 +221,13 @@ export class WysiwygEditor {
 
   /** Canonical markdown: frontmatter block (if any) + Crepe's serialized body.
    *  Milkdown leaves out the empty line Crepe keeps after a final list, code
-   *  block, quote, table, rule or image. */
+   *  block, quote, table, rule or image. A body that still serializes as it did
+   *  right after Crepe parsed it is reported as that exact source, so opening,
+   *  mirroring or undoing back never rewrites text the user has not changed. */
   getMarkdown(): string {
     const body = this.bodyMarkdown();
-    return joinFrontmatter(this.frontmatterBlock, body);
+    const baseline = this.baseline;
+    return joinFrontmatter(this.frontmatterBlock, baseline && body === baseline.settled ? baseline.source : body);
   }
 
   /** Report an edit now instead of waiting for typing to pause. A caller that
@@ -248,13 +257,11 @@ export class WysiwygEditor {
    * to Crepe via `replaceAll`. This pane is the unfocused mirror, so the reset
    * selection/scroll is acceptable.
    *
-   * Edits are reported only after a ~200ms pause (`scheduleChange`), so the
-   * report for this replacement fires well after this returns — a short
-   * `ignoreUpdates` window can't suppress it. Instead we record the editor's *settled* serialization of what we
-   * just set as `syncedMarkdown`; `emitChange` drops the eventual echo when the
-   * content still equals it. That keeps the mirror from writing its normalized
-   * re-serialization back over the author's exact text (which would clobber the
-   * raw pane mid-edit and needlessly reformat it).
+   * The replacement is reported like an edit after a ~200ms pause
+   * (`scheduleChange`). That report carries `markdown` itself, because the body
+   * still serializes as it did right after this parse (`getMarkdown`), so the
+   * host sees no change. The mirror never writes Milkdown's rewrite back over
+   * the author's exact text.
    */
   setMarkdown(markdown: string): void {
     if (!this.crepe) return;
@@ -263,9 +270,8 @@ export class WysiwygEditor {
     this.syncFrontmatterPanel();
     try {
       this.crepe.editor.action(replaceAllMarkdown(split.body));
-      // The doc updates synchronously with the dispatch, so getMarkdown() now
-      // reflects the settled form the delayed change report will emit.
-      this.syncedMarkdown = this.getMarkdown();
+      // The doc updates synchronously with the dispatch.
+      this.rememberSource(split.body);
     } catch {
       // Editor torn down mid-sync; ignore.
     }
@@ -383,7 +389,7 @@ export class WysiwygEditor {
     this.frontmatterBlock = null;
     this.root = null;
     this.crepeRoot = null;
-    this.syncedMarkdown = null;
+    this.baseline = null;
     const crepe = this.crepe;
     const creating = this.createPromise;
     // Null this synchronously: all public operations become no-ops immediately,
@@ -399,6 +405,12 @@ export class WysiwygEditor {
       pruneMermaidPreviews();
     })();
     return this.destroyPromise;
+  }
+
+  /** Record the body Crepe just parsed, and how Milkdown writes it back, so
+   *  `getMarkdown` can report that exact source until the body changes. */
+  private rememberSource(source: string): void {
+    this.baseline = { source, settled: this.bodyMarkdown() };
   }
 
   /** Crepe's document as Markdown. */
@@ -420,14 +432,10 @@ export class WysiwygEditor {
     }, CHANGE_DEBOUNCE_MS);
   }
 
+  /** Report the current Markdown (the exact source while the body is unchanged)
+   *  through onChange. */
   private emitChange(): void {
-    const md = this.getMarkdown();
-    // Drop the debounced echo of a programmatic mirror sync: the editor still
-    // holds exactly what we set, so this isn't a user edit (§6.1). Once the user
-    // actually changes the content, md diverges and the edit flows through.
-    if (md === this.syncedMarkdown) return;
-    this.syncedMarkdown = null;
-    this.onChange?.(md);
+    this.onChange?.(this.getMarkdown());
   }
 
   /** Project the current YAML block through the React-owned frontmatter view. */

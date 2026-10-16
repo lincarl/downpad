@@ -23,7 +23,8 @@ const fakeEditors = vi.hoisted(() => ({
   destroyPromise: Promise.resolve() as Promise<void>,
   mountCalls: 0,
   destroyCalls: 0,
-  markdown: "settled markdown",
+  /** What the document pane writes, its own form of the tab's text or typing. */
+  markdown: "document pane's form",
   /** Whether the document pane holds typing it has not reported yet. */
   pending: false,
   reportCalls: 0,
@@ -136,7 +137,7 @@ beforeEach(() => {
   fakeEditors.destroyPromise = Promise.resolve();
   fakeEditors.mountCalls = 0;
   fakeEditors.destroyCalls = 0;
-  fakeEditors.markdown = "settled markdown";
+  fakeEditors.markdown = "document pane's form";
   fakeEditors.pending = false;
   fakeEditors.reportCalls = 0;
   fakeEditors.mirrored = null;
@@ -146,7 +147,7 @@ beforeEach(() => {
 });
 
 describe("EditorHost terminal disposal", () => {
-  it("silences and detaches an in-flight build without reconciling its markdown", async () => {
+  it("silences and detaches an in-flight build, leaving its tab's markdown alone", async () => {
     const mount = deferred();
     const destroy = deferred();
     fakeEditors.mountPromise = mount.promise;
@@ -181,8 +182,8 @@ describe("EditorHost terminal disposal", () => {
 
     mount.resolve();
     await presenting;
-    // A dead WYSIWYG build must not reconcile its settled serialization over
-    // the canonical document after React has disposed its host.
+    // A dead WYSIWYG build must not write over the canonical document after
+    // React has disposed its host.
     expect(store.get().doc.markdown).toBe("original markdown");
     expect(store.get().doc.isDirty).toBe(false);
     expect(disposeSettled).toBe(false);
@@ -292,17 +293,31 @@ describe("EditorHost split divider", () => {
   });
 });
 
+describe("EditorHost build", () => {
+  it("opens both split panes on the tab's exact text", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+
+    // The document pane writes the text its own way, but nothing was edited.
+    expect(store.get().doc).toMatchObject({ markdown: "original markdown", isDirty: false });
+    expect(fakeEditors.rawText).toBe("original markdown");
+    await host.dispose();
+  });
+});
+
 describe("EditorHost flush", () => {
   it("reports typing the visible document pane has not announced yet", async () => {
     const store = makeStore();
     const host = new EditorHost(document.createElement("div"), store);
     await host.reloadActiveDoc();
-    fakeEditors.markdown = "settled markdown, typed just now";
+    fakeEditors.markdown = "original markdown, typed just now";
     fakeEditors.pending = true;
 
     host.flush();
 
-    expect(store.get().doc).toMatchObject({ markdown: "settled markdown, typed just now", isDirty: true });
+    expect(store.get().doc).toMatchObject({ markdown: "original markdown, typed just now", isDirty: true });
     await host.dispose();
   });
 
@@ -311,12 +326,12 @@ describe("EditorHost flush", () => {
     const host = new EditorHost(document.createElement("div"), store);
     host.initLayout("split");
     await host.reloadActiveDoc();
-    fakeEditors.markdown = "settled markdown, typed just now";
+    fakeEditors.markdown = "original markdown, typed just now";
     fakeEditors.pending = true;
 
     host.flush();
 
-    expect(fakeEditors.rawText).toBe("settled markdown, typed just now");
+    expect(fakeEditors.rawText).toBe("original markdown, typed just now");
     await host.dispose();
   });
 
@@ -341,12 +356,11 @@ describe("EditorHost flush", () => {
     const store = makeStore();
     const host = new EditorHost(document.createElement("div"), store);
     await host.reloadActiveDoc();
-    // The document pane serializes differently now, with no edit to report.
-    fakeEditors.markdown = "settled markdown, written another way";
 
+    // The document pane serializes differently, with no edit to report.
     host.flush();
 
-    expect(store.get().doc).toMatchObject({ markdown: "settled markdown", isDirty: false });
+    expect(store.get().doc).toMatchObject({ markdown: "original markdown", isDirty: false });
     await host.dispose();
   });
 
@@ -361,7 +375,7 @@ describe("EditorHost flush", () => {
     host.flush();
 
     expect(fakeEditors.pending).toBe(true);
-    expect(store.get().doc.markdown).toBe("settled markdown");
+    expect(store.get().doc.markdown).toBe("original markdown");
     await host.dispose();
   });
 
