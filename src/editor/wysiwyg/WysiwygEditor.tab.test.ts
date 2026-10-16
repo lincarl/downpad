@@ -104,20 +104,23 @@ describe("Tab in the document view", () => {
   });
 
   it("stays on the first list item and the last table cell", { timeout: 60_000 }, async () => {
-    const { editor, view, before, after } = await open("- One\n- Two\n\n| a | b |\n| - | - |\n| 1 | 2 |\n");
+    const { editor, view } = await open("- One\n- Two\n\n| a | b |\n| - | - |\n| 1 | 2 |\n");
     place(view, "Two", 3);
     type(view, " edited");
     // The keys are used up, so the browser does not move focus to a control
-    // inside the document either.
+    // inside the document either. Leaving would use them up too, so check
+    // focus after each key, before `place` focuses the editor again.
     place(view, "One", 3);
     expect(press(view.dom, "Tab")).toBe(true);
+    expect(document.activeElement).toBe(view.dom);
     place(view, "2", 1);
     expect(press(view.dom, "Tab")).toBe(true);
+    expect(document.activeElement).toBe(view.dom);
     expect(cellText(view)).toBe("2");
     place(view, "a");
     expect(press(view.dom, "Tab", true)).toBe(true);
+    expect(document.activeElement).toBe(view.dom);
     expect(cellText(view)).toBe("a");
-    expect([before, after]).not.toContain(document.activeElement);
     expect(editor.getMarkdown()).toBe("- One\n- Two edited\n\n| a | b |\n| - | - |\n| 1 | 2 |\n");
   });
 
