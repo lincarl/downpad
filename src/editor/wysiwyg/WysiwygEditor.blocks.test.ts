@@ -616,6 +616,12 @@ describe("an edit near text that reads as it does only where it is", () => {
       "Intro.\n\n```\ncode one\n```\n\n```\ncode two\n```\n",
     ],
     [
+      "indented code that read as two blocks below a list, left at the top",
+      "100. Item\n\n    code one\n    code two\n",
+      (view: EditorView) => deleteBlock(view, "Item"),
+      "```\ncode one\n```\n\n```\ncode two\n```\n",
+    ],
+    [
       "indented code that would split below a quote",
       "> ```\n> unclosed\n## Run\n    make\n    make install\n",
       (view: EditorView) => deleteBlock(view, "Run"),
@@ -629,6 +635,27 @@ describe("an edit near text that reads as it does only where it is", () => {
       "    make install\n\nThen:\n\n> 2. Restart the server.\n> 3. Check the logs.\n",
       (view: EditorView) => deleteBlock(view, "Then:"),
       "```\nmake install\n```\n\n> 2. Restart the server.\n> 3. Check the logs.\n",
+    ],
+    [
+      "a list in a quote that would read as text between indented code and a new paragraph",
+      "    make install\n\nThen:\n\n> 2. Restart the server.\n## Next\n",
+      (view: EditorView) => {
+        deleteBlock(view, "Then:");
+        const { from, to } = blockWith(view, "Next");
+        view.dispatch(view.state.tr.setBlockType(from, to, view.state.schema.nodes.paragraph));
+      },
+      "```\nmake install\n```\n\n> 2. Restart the server.\n\nNext\n",
+    ],
+    [
+      "a new list in a quote that would read as text below indented code",
+      "    make install\n\nThen:\n",
+      (view: EditorView) => {
+        const { from, to } = blockWith(view, "Then:");
+        const { blockquote, ordered_list: list, list_item: item, paragraph } = view.state.schema.nodes;
+        const steps = list.create({ order: 2 }, item.create(null, paragraph.create(null, view.state.schema.text("Restart the server."))));
+        view.dispatch(view.state.tr.replaceWith(from, to, blockquote.create(null, steps)));
+      },
+      "```\nmake install\n```\n\n> 2. Restart the server.\n",
     ],
     [
       "text in a quote that reads as text only below indented code",
