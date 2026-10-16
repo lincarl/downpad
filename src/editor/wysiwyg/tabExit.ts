@@ -2,8 +2,9 @@
 // previous cell) and code blocks (indent) keep their own Tab keys. A Tab that
 // nothing in the editor uses moves focus out of the document instead of
 // trapping it, and Esc then Tab leaves from anywhere in it, as CodeMirror does
-// in code blocks. Tab also stays in the document while the slash menu is
-// open, and Esc closes the menu.
+// in code blocks. In a code block, Esc then Tab first reaches the block's own
+// language and Copy buttons, and Tab from the last of them leaves. Tab also
+// stays in the document while the slash menu is open, and Esc closes the menu.
 
 import { rootDOMCtx } from "@milkdown/kit/core";
 import { Plugin } from "@milkdown/kit/prose/state";
@@ -33,6 +34,13 @@ function inTabContainer(view: EditorView): boolean {
   return false;
 }
 
+/** The language and Copy buttons of the code block that holds `target`, in Tab
+ *  order, or none outside a code block. */
+function codeBlockTools(target: Element): HTMLElement[] {
+  const block = target.closest(".milkdown-code-block");
+  return block ? Array.from(block.querySelectorAll<HTMLElement>(".language-button, .tools-button-group > button")) : [];
+}
+
 /** Whether Crepe's slash menu is open in `container`. While open it reads Enter
  *  and the arrow keys from the whole window, so focus must not leave under it. */
 function slashMenuOpen(container: HTMLElement): boolean {
@@ -56,7 +64,18 @@ function installTabExit(container: HTMLElement, view: EditorView): () => void {
     event.preventDefault();
     focusPast(container, event.shiftKey);
   };
-  /** Note when Esc was pressed, and leave on a Tab that follows it. */
+  /** Move between a code block's buttons, back into its code before the first
+   *  and out of the document after the last. */
+  const moveInTools = (event: KeyboardEvent, tools: HTMLElement[], at: number): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = at + (event.shiftKey ? -1 : 1);
+    if (next >= tools.length) focusPast(container, false);
+    else if (next >= 0) tools[next].focus();
+    else tools[0].closest(".milkdown-code-block")?.querySelector<HTMLElement>(".cm-content")?.focus();
+  };
+  /** Note when Esc was pressed, and leave on a Tab that follows it. A code
+   *  block's buttons come first after Esc in its code. */
   const capture = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
       escapedAt = Date.now();
@@ -65,7 +84,12 @@ function installTabExit(container: HTMLElement, view: EditorView): () => void {
     if (MODIFIER_KEYS.has(event.key)) return;
     const escaped = Date.now() - escapedAt <= ESCAPE_WINDOW_MS;
     escapedAt = -Infinity;
-    if (!escaped || !isTab(event) || !inText(event.target)) return;
+    if (!isTab(event) || !(event.target instanceof HTMLElement)) return;
+    const tools = codeBlockTools(event.target);
+    const at = tools.indexOf(event.target);
+    if (at >= 0) return moveInTools(event, tools, at);
+    if (!escaped || !inText(event.target)) return;
+    if (!event.shiftKey && tools.length > 0 && event.target.matches(".cm-content")) return moveInTools(event, tools, -1);
     event.stopPropagation();
     leave(event);
   };

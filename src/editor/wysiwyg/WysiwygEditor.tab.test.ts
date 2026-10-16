@@ -168,7 +168,7 @@ describe("Tab in the document view", () => {
     expect(document.activeElement).toBe(after);
   });
 
-  it("still indents code on Tab, and leaves a code block after Esc", { timeout: 60_000 }, async () => {
+  it("still indents code on Tab, and leaves a code block through its buttons after Esc", { timeout: 60_000 }, async () => {
     const { editor, view, before, after } = await open("Intro.\n\n```js\nlet x = 1;\n```\n");
     const code = await vi.waitFor(() => {
       const found = view.dom.querySelector<HTMLElement>(".cm-content");
@@ -179,9 +179,20 @@ describe("Tab in the document view", () => {
     code.focus();
     press(code, "Tab");
     expect(editor.getMarkdown()).toBe("Intro.\n\n```js\n  let x = 1;\n```\n");
+    // Esc then Tab reaches the block's language and Copy buttons before leaving.
+    const language = view.dom.querySelector<HTMLElement>(".milkdown-code-block .language-button")!;
+    const copy = view.dom.querySelector<HTMLElement>(".milkdown-code-block .tools-button-group > button")!;
     press(code, "Escape");
     press(code, "Tab");
+    expect(document.activeElement).toBe(language);
+    press(language, "Tab");
+    expect(document.activeElement).toBe(copy);
+    press(copy, "Tab");
     expect(document.activeElement).toBe(after);
+    // Shift+Tab goes back from the buttons into the code, and out before the document.
+    language.focus();
+    press(language, "Tab", true);
+    expect(document.activeElement).toBe(code);
     press(code, "Escape");
     press(code, "Tab", true);
     expect(document.activeElement).toBe(before);
