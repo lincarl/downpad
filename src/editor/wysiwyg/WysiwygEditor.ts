@@ -42,6 +42,7 @@ import {
   type FindCounts,
   type FindOptions,
 } from "./findEngine";
+import { codeBlockFindHighlights } from "./findReveal";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { installEditorAccessibility } from "./editorAccessibility";
@@ -53,6 +54,9 @@ import { splitFrontmatter, joinFrontmatter } from "../../document/frontmatter";
 
 export interface WysiwygCallbacks {
   onChange: (markdown: string) => void;
+  /** Called right before find scrolls the document to a match, which can be
+   *  after the find step that asked for it has returned. */
+  onFindScroll?: () => void;
 }
 
 export class WysiwygEditor {
@@ -144,8 +148,12 @@ export class WysiwygEditor {
       // split.body === initial when there is no frontmatter.
       defaultValue: split.body,
       featureConfigs: {
-        // Render ```mermaid code blocks as diagrams below the source (§5.2).
-        [Crepe.Feature.CodeMirror]: { renderPreview: renderMermaidPreview },
+        // Render ```mermaid code blocks as diagrams below the source (§5.2), and
+        // show the find card's matches inside code blocks (§5.13).
+        [Crepe.Feature.CodeMirror]: {
+          renderPreview: renderMermaidPreview,
+          extensions: [codeBlockFindHighlights],
+        },
         // Display linked images + missing-image placeholder/relocate (§5.5).
         [Crepe.Feature.ImageBlock]: imageBlockFeatureConfig(viewRef, context),
         // Crepe's default empty-line hint is "Please enter...".
@@ -178,7 +186,7 @@ export class WysiwygEditor {
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
     // WYSIWYG find/replace search state + decorations (§5.13).
-    this.crepe.editor.use(searchMilkdownPlugin());
+    this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
