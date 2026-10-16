@@ -69,7 +69,7 @@ async function open(markdown: string, settings: Settings = DEFAULT_SETTINGS): Pr
   });
   // React draws the table after the mount. On a busy machine that can take
   // longer than any fixed wait, so wait for the table itself.
-  if (settings.showFrontmatterPanel !== false && markdown.startsWith("---")) {
+  if (settings.showFrontmatterPanel !== false && splitFrontmatter(markdown).frontmatter !== null) {
     await vi.waitFor(() => expect(root.querySelector("[data-line]")).not.toBeNull());
   }
   await settle();
