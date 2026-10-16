@@ -73,8 +73,16 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       this.onChange?.(fakeEditors.markdown);
     }
 
+    /** Like the real editor, hold the insert back until typing pauses. */
+    insertMarkdown(markdown: string): void {
+      fakeEditors.markdown = `${fakeEditors.markdown}\n\n${markdown}`;
+      fakeEditors.pending = true;
+    }
+
+    /** The pane now shows the mirrored text, dropping anything it held. */
     setMarkdown(markdown: string): void {
       fakeEditors.mirrored = markdown;
+      fakeEditors.markdown = markdown;
     }
 
     currentCounts() {
@@ -494,6 +502,30 @@ describe("EditorHost split catch-up", () => {
     control.dispatchEvent(new Event("pointerdown", { bubbles: true }));
 
     expect(fakeEditors.mirrored).toBe("newer Markdown text");
+    await host.dispose();
+  });
+
+  it("gives the Markdown pane a dropped file before its next keystroke", async () => {
+    const { store, host } = await openSplit();
+    fakeEditors.markdown = "document text";
+
+    // A drop inserts into the document pane while the Markdown pane has focus.
+    host.insertMarkdown("![](image.png)");
+
+    expect(fakeEditors.rawText).toBe("document text\n\n![](image.png)");
+    fakeEditors.rawChange!("document text\n\n![](image.png), then Markdown");
+    expect(store.get().doc.markdown).toBe("document text\n\n![](image.png), then Markdown");
+    await host.dispose();
+  });
+
+  it("drops a file into a document pane that holds the latest Markdown edit", async () => {
+    const { store, host } = await openSplit();
+    fakeEditors.rawChange!("newer Markdown text");
+
+    host.insertMarkdown("![](image.png)");
+
+    expect(store.get().doc.markdown).toBe("newer Markdown text\n\n![](image.png)");
+    expect(fakeEditors.rawText).toBe("newer Markdown text\n\n![](image.png)");
     await host.dispose();
   });
 

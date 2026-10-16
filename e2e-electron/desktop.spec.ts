@@ -767,6 +767,34 @@ test("typing in the split's document pane right after the Markdown pane keeps bo
   await expect(markdownLine).toHaveText("First line. Markdown. Document.");
 });
 
+/** Drop files from the desktop onto the middle of an element, through
+ *  Chromium's drag emulation, so the app gets their real paths. */
+async function dropFiles(target: Locator, files: string[]): Promise<void> {
+  const box = (await target.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  const data = { items: [], files, dragOperationsMask: 1 };
+  for (const type of ["dragEnter", "dragOver", "drop"] as const) {
+    await cdp.send("Input.dispatchDragEvent", { type, x: box.x + box.width / 2, y: box.y + box.height / 2, data });
+  }
+  await cdp.detach();
+}
+
+test("a file dropped while typing in the split's Markdown pane keeps the file and the typing", async () => {
+  const { file, markdownLine } = await openSplit("drop-while-typing.md");
+  const attachment = path.join(directory, "notes.csv");
+  await writeFile(attachment, "a,b\n");
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  // The drop lands in the document pane between keystrokes in the Markdown pane.
+  const typing = page.keyboard.type(" Typed during the drop.", { delay: 40 });
+  await expect(markdownLine).toContainText("First line. Ty");
+  await dropFiles(markdownLine, [attachment]);
+  await typing;
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toContain("First line. Typed during the drop.");
+  expect(await readFile(file, "utf8")).toContain("[notes.csv](attachments/notes.csv)");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

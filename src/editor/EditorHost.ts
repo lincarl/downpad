@@ -141,12 +141,17 @@ export class EditorHost implements FindController {
     this.layout = layout;
   }
 
-  /** Insert markdown into the document editor at its current selection (§5.4). */
+  /** Insert markdown into the document editor at its current selection (§5.4).
+   *  A file drop lands here with no click or focus on the pane, so the split
+   *  catches up first, giving the document pane any newer Markdown pane edit,
+   *  and again after, giving the Markdown pane the insert before its next key. */
   insertMarkdown(markdown: string): void {
     if (this.disposed) return;
+    this.flush();
     const pane = this.active();
     if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown);
     else if (pane?.raw) pane.raw.insertText(markdown);
+    this.flush();
   }
 
   /** (Re)apply the spell-check setting to every editor under the host (§5.14). */
@@ -246,7 +251,7 @@ export class EditorHost implements FindController {
   /**
    * Bring the active tab up to date before something reads it, leaves it, or
    * types into it: Save, Print, Copy as Markdown, a close prompt, a tab or
-   * layout switch, or a click or focus moving into a split pane.
+   * layout switch, a file drop, or a click or focus moving into a split pane.
    * The document editor reports typing after a ~200ms pause, and the split
    * mirrors each edit into its other pane after a further delay. This does both
    * now, so the tab's canonical string holds every edit and both visible panes
