@@ -1,5 +1,6 @@
 import { listItemBlockConfig } from "@milkdown/kit/component/list-item-block";
 import type { Ctx } from "@milkdown/kit/ctx";
+import { installSlashMenuAccessibility } from "./slashMenuAccessibility";
 
 /** Crepe controls that only a pointer can use. Each has a keyboard route or
  *  none. "/" opens the block menu that the handle's + opens, the arrow keys
@@ -49,7 +50,7 @@ function apply(scope: Element): void {
 
 /**
  * Normalize accessibility attributes on DOM rendered by Crepe and its embedded
- * CodeMirror instances. These nodes are owned by third-party editor views, so
+ * CodeMirror instances, including the slash menu. These nodes are owned by third-party editor views, so
  * React cannot express the attributes directly. Elements added later get the
  * same attributes, and so does an element whose role Crepe's views set again
  * when they reuse it. Returns a function that stops watching.
@@ -65,7 +66,11 @@ export function installEditorAccessibility(root: HTMLElement): () => void {
     }
   });
   observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["role"] });
-  return () => observer.disconnect();
+  const stopSlashMenu = installSlashMenuAccessibility(root);
+  return () => {
+    observer.disconnect();
+    stopSlashMenu();
+  };
 }
 
 /** Give an SVG icon an image role and a name. */

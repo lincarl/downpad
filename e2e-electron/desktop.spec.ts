@@ -377,6 +377,34 @@ test("a toolbar tooltip stays open while the pointer is over it", async () => {
   await expect(tooltip).toBeHidden();
 });
 
+test("the slash menu tells screen readers which block is highlighted", async () => {
+  const file = path.join(directory, "slash.md");
+  await writeFile(file, "First line.\n");
+  await launch(file);
+  const cdp = await page.context().newCDPSession(page);
+  /** The option Chromium reports as the document editor's active descendant. */
+  const activeOption = async (): Promise<string | null> => {
+    const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+    const editor = nodes.find((node) => node.role?.value === "textbox" && node.name?.value === "Document editor");
+    const target = editor?.properties?.find((property) => property.name === "activedescendant")?.value.relatedNodes?.[0];
+    const option = target && nodes.find((node) => node.backendDOMNodeId === target.backendDOMNodeId);
+    return option ? `${option.role?.value} ${option.name?.value}` : null;
+  };
+  await page.locator(".milkdown .ProseMirror p").first().click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  // Focus stays in the document while the arrow keys move the menu's highlight.
+  await page.keyboard.type("/");
+  await expect(page.getByRole("listbox", { name: "Insert block" })).toBeVisible();
+  await expect.poll(activeOption).toBe("option Text");
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(activeOption).toBe("option Heading 1");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox", { name: "Insert block" })).toBeHidden();
+  await expect.poll(activeOption).toBeNull();
+  await expect(page.locator(".milkdown > .ProseMirror")).not.toHaveAttribute("aria-controls");
+});
+
 test("native Open, edit, Save, and external file reload use actual files", async () => {
   const file = path.join(directory, "opened.md");
   await writeFile(file, "# Opened from dialog\r\n\r\nOriginal text.\r\n");
