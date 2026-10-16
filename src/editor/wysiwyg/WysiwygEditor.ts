@@ -5,7 +5,8 @@
 //   - Serializer style (§5.16): configure remark-stringify options from settings.
 //   - Frontmatter (§5.17): a leading `---` YAML block is split off and projected
 //     through a React-owned editable table above the editor; Crepe only sees the
-//     body, and the block is re-joined losslessly on serialize.
+//     body, and the block and the blank lines after it are written back
+//     unchanged on serialize.
 //   - Exact source: until the user changes the body, it is reported as the text
 //     Crepe parsed, not Milkdown's rewrite of it.
 
@@ -65,8 +66,12 @@ export class WysiwygEditor {
    *  teardown in that gap cannot turn updates back on afterwards. */
   private enableUpdatesTimer: ReturnType<typeof setTimeout> | null = null;
   private ignoreUpdates = true;
-  /** Full frontmatter block (incl. delimiters + trailing newline), or null. */
+  /** The frontmatter block with both delimiters and, unless it ends the file,
+   *  the newline after it. Null without frontmatter. */
   private frontmatterBlock: string | null = null;
+  /** The blank lines between the frontmatter block and the body. Crepe never
+   *  sees them, so they are kept here and written back as they were. */
+  private frontmatterSeparator = "";
   /** Stable host element for the React-owned frontmatter table. */
   private fmPanel: HTMLElement | null = null;
   /** React root that owns all content inside `fmPanel`. */
@@ -106,13 +111,15 @@ export class WysiwygEditor {
 
     // Frontmatter (§5.17): a leading `---` YAML block is ALWAYS split off and kept
     // verbatim (Crepe never sees it, so it can't mangle the YAML into headings).
-    // The block is re-joined losslessly on serialize. When showFrontmatterPanel is
-    // on (the default) it's shown above the editor as a VS Code-style editable
-    // key/value table; scalar edits patch the YAML line-for-line, so the file's
-    // formatting is preserved. With the setting off, the YAML is hidden here but
-    // still preserved and editable in the Markdown view.
+    // It and the blank lines after it are written back unchanged on serialize.
+    // When showFrontmatterPanel is on (the default) it's shown above the editor
+    // as a VS Code-style editable key/value table; scalar edits patch the YAML
+    // line-for-line, so the file's formatting is preserved. With the setting
+    // off, the YAML is hidden here but still preserved and editable in the
+    // Markdown view.
     const split = splitFrontmatter(initial);
     this.frontmatterBlock = split.frontmatter;
+    this.frontmatterSeparator = split.separator;
     if (split.frontmatter && this.showFmPanel) {
       this.fmPanel = document.createElement("div");
       this.fmPanel.className = "frontmatter-table-wrap";
@@ -219,15 +226,21 @@ export class WysiwygEditor {
     }, 0);
   }
 
-  /** Canonical markdown: frontmatter block (if any) + Crepe's serialized body.
-   *  Milkdown leaves out the empty line Crepe keeps after a final list, code
-   *  block, quote, table, rule or image. A body that still serializes as it did
-   *  right after Crepe parsed it is reported as that exact source, so opening,
-   *  mirroring or undoing back never rewrites text the user has not changed. */
+  /** The document as Markdown. Joins the frontmatter block, the blank lines
+   *  after it and Crepe's body, and starts the body on a new line if the block
+   *  ends without one. Milkdown leaves out the empty line Crepe keeps after a
+   *  final list, code block, quote, table, rule or image. A body that still
+   *  serializes as it did right after Crepe parsed it is reported as that exact
+   *  source, so opening, mirroring or undoing back never rewrites text the user
+   *  has not changed. */
   getMarkdown(): string {
     const body = this.bodyMarkdown();
     const baseline = this.baseline;
-    return joinFrontmatter(this.frontmatterBlock, baseline && body === baseline.settled ? baseline.source : body);
+    return joinFrontmatter({
+      frontmatter: this.frontmatterBlock,
+      separator: this.frontmatterSeparator,
+      body: baseline && body === baseline.settled ? baseline.source : body,
+    });
   }
 
   /** Report an edit now instead of waiting for typing to pause. A caller that
@@ -267,6 +280,7 @@ export class WysiwygEditor {
     if (!this.crepe) return;
     const split = splitFrontmatter(markdown);
     this.frontmatterBlock = split.frontmatter;
+    this.frontmatterSeparator = split.separator;
     this.syncFrontmatterPanel();
     try {
       this.crepe.editor.action(replaceAllMarkdown(split.body));
@@ -387,6 +401,7 @@ export class WysiwygEditor {
     this.fmPanelRoot = null;
     this.fmPanel = null;
     this.frontmatterBlock = null;
+    this.frontmatterSeparator = "";
     this.root = null;
     this.crepeRoot = null;
     this.baseline = null;

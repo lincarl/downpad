@@ -483,6 +483,25 @@ test("the document page fills the window for a short document", async () => {
   expect(Math.round(bottoms.page)).toBe(Math.round(bottoms.view));
 });
 
+test("an edit in the document view keeps the blank line after the frontmatter", async () => {
+  const file = path.join(directory, "frontmatter.md");
+  await writeFile(file, "---\ntitle: x\n---\n\nFirst line.\n");
+  await launch(file);
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Typed.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: x\n---\n\nFirst line. Typed.\n");
+});
+
+test("text typed after frontmatter that ends the file starts a new line", async () => {
+  const file = path.join(directory, "frontmatter-only.md");
+  // Saved without a final newline, as some editors do.
+  await writeFile(file, "---\ntitle: x\n---");
+  await launch(file);
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), "Hello");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: x\n---\nHello\n");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
