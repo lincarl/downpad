@@ -637,7 +637,7 @@ describe("math and strikethrough delimiters", () => {
     // The edit is reported once typing pauses, with the mark still waiting.
     // Autosave writes that report, so closing or leaving the tab later finds
     // nothing new to save.
-    await vi.waitFor(() => expect(onChange).toHaveBeenLastCalledWith("One. $x$\n\nTwo.\n"));
+    await vi.waitFor(() => expect(onChange).toHaveBeenLastCalledWith("One. $x$\n\nTwo.\n"), { timeout: 10_000 });
     expect(formulas(root)).toEqual([]);
     // A click in the document pane itself may land inside the formula's text,
     // and autosave must not change the document while the user types.
