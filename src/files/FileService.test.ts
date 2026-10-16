@@ -100,6 +100,23 @@ describe("saving document snapshots", () => {
     expect(store.get().doc).toMatchObject({ savedMarkdown: "# Edited\n", isDirty: true });
   });
 
+  it("keeps a newer change on disk recorded while the save was written", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "# Saved\n");
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saving = files.save();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledWith(filePath, "# Saved\n", "lf"));
+    // More typing, and another program writes that same text after this save.
+    applyEditorMarkdownForTab(store, tabId, "# Typed later\n");
+    store.patchDocById(tabId, { savedMarkdown: "# Typed later\n", modifiedMs: 300, isDirty: false });
+    write.resolve({ modifiedMs: 200 });
+
+    expect(await saving).toBe(true);
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Typed later\n", modifiedMs: 300, isDirty: false });
+  });
+
   it("restores the saved text when the write fails", async () => {
     const { store, files } = setup();
     const tabId = store.get().activeTabId!;

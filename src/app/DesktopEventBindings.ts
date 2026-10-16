@@ -102,6 +102,9 @@ export class DesktopEventBindings {
     const current = store.get().doc;
     if (!current.filePath || !sameFilePath(payload.path, current.filePath)) return;
     if (payload.modifiedMs <= current.modifiedMs) return;
+    // Reads can finish out of order. A newer change read while this one waited
+    // is what the file holds now.
+    if (this.pendingChange && this.pendingChange.modifiedMs >= payload.modifiedMs) return;
     if (onDisk === current.markdown) {
       // The file holds the open text, so an earlier change has nothing left to
       // reload or keep.

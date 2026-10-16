@@ -189,16 +189,24 @@ export class FileService {
     return true;
   }
 
-  /** Apply saved metadata to its owner, keeping later edits dirty. */
+  /** Apply saved metadata to its owner, keeping later edits dirty. A change on
+   *  disk that was recorded while the write was pending, with a later mtime,
+   *  stays the file's text. */
   private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, modifiedMs: number): void {
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== originalPath) return;
-    this.store.patchDocById(tabId, {
-      filePath: path,
-      isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
-      savedMarkdown: snapshot.markdown,
-      modifiedMs,
-    });
+    const newerOnDisk = path === originalPath && current.savedMarkdown !== null && current.modifiedMs > modifiedMs;
+    this.store.patchDocById(
+      tabId,
+      newerOnDisk
+        ? { isDirty: current.markdown !== current.savedMarkdown }
+        : {
+            filePath: path,
+            isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
+            savedMarkdown: snapshot.markdown,
+            modifiedMs,
+          },
+    );
     // Requests queued during Save As follow the owner's new path, retaining
     // the content each caller asked to save.
     for (const pending of this.pendingSaves) {

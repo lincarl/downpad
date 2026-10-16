@@ -214,6 +214,21 @@ describe("a file that changed on disk", () => {
     expect(store.get().doc).toMatchObject({ modifiedMs: 300, savedMarkdown: "# Mine\n", isDirty: false });
   });
 
+  it("keeps a newer change when an older read finishes after it", async () => {
+    // The read for the change at 200 waits until the change at 300 is read.
+    let finishOlderRead!: (payload: FilePayload) => void;
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => { finishOlderRead = resolve; }));
+    await vi.waitFor(() => expect(events.fileChanged).not.toBeNull());
+    events.fileChanged!({ path: filePath, modifiedMs: 200 });
+    await changeOnDisk("# Theirs\n", 300);
+    finishOlderRead({ content: "# Mine\n", eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: 7 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.get().banner?.kind).toBe("file-changed");
+    bindings.handleBannerAction("keep");
+    expect(store.get().doc).toMatchObject({ modifiedMs: 300, savedMarkdown: "# Theirs\n", isDirty: true });
+  });
+
   it("drops the banner and leaves the document saved when the file changes back", async () => {
     await changeOnDisk("# Theirs\n");
     expect(store.get().banner?.kind).toBe("file-changed");
