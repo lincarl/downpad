@@ -3,15 +3,37 @@
 // click to expand. A replacing widget hides just the base64 payload; clicking it
 // (or moving the selection into it) expands that occurrence. Gated by the
 // `collapseBase64InRawView` setting (the extension is only added when enabled).
+//
+// Find in the Markdown view skips every base64 payload, collapsed or not
+// (`inBase64Payload`). The data is not text anyone searches for, the document
+// view never matches it, and Replace all would corrupt the image.
 
 import { ViewPlugin, Decoration, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
-import { StateEffect, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { StateEffect, RangeSetBuilder, type Extension, type Text } from "@codemirror/state";
 import { formatSize } from "../../document/docSize";
 
-// data: URI with a base64 payload long enough to be worth collapsing.
-const DATA_URI = /data:[\w.+-]*\/?[\w.+-]*;base64,([A-Za-z0-9+/=]{64,})/g;
+// data: URI with a base64 payload.
+const DATA_URI = /data:[\w.+-]*\/?[\w.+-]*;base64,([A-Za-z0-9+/=]+)/g;
+/** Shorter payloads are not worth collapsing. */
+const MIN_COLLAPSED = 64;
 
 const expandEffect = StateEffect.define<number>();
+
+/** Base64 payload ranges per document version, for find. */
+const payloads = new WeakMap<Text, Array<[number, number]>>();
+
+/** Whether `from`..`to` overlaps the base64 payload of a data URI in `doc`. */
+export function inBase64Payload(doc: Text, from: number, to: number): boolean {
+  let ranges = payloads.get(doc);
+  if (!ranges) {
+    ranges = [...doc.toString().matchAll(DATA_URI)].map((m) => {
+      const end = m.index + m[0].length;
+      return [end - m[1].length, end];
+    });
+    payloads.set(doc, ranges);
+  }
+  return ranges.some(([start, end]) => from < end && to > start);
+}
 
 class CollapsedWidget extends WidgetType {
   constructor(
@@ -81,6 +103,7 @@ export function base64Collapse(): Extension {
           let m: RegExpExecArray | null;
           while ((m = DATA_URI.exec(text)) !== null) {
             const payload = m[1];
+            if (payload.length < MIN_COLLAPSED) continue;
             const payloadStart = from + m.index + (m[0].length - payload.length);
             const payloadEnd = from + m.index + m[0].length;
             if (this.expanded.has(payloadStart)) continue;
