@@ -731,7 +731,7 @@ function DocumentTab({
       { label: "Copy file path", icon: FileCopyIcon, disabled: !path, separatorBefore: true, run: () => { if (path) runtime?.copyText(path); } },
       { label: "Copy folder path", icon: FolderCopyIcon, disabled: !folder, run: () => { if (folder) runtime?.copyText(folder); } },
       { label: "Close all tabs", icon: X, separatorBefore: true, run: () => runtime?.closeEveryTab() },
-    ]);
+    ], "Tab");
   };
   return (
     <button

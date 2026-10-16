@@ -47,7 +47,8 @@ export function installDocumentContextMenu(actions: DocumentMenuActions): () => 
     if (e.shiftKey) return;
     e.preventDefault();
     const target = editableAt(e.target as Node | null);
-    showContextMenu(e.clientX, e.clientY, buildItems(target, actions));
+    // Over text the menu holds the editing commands, elsewhere only document actions.
+    showContextMenu(e.clientX, e.clientY, buildItems(target, actions), target ? "Edit" : "Document");
   };
   window.addEventListener("contextmenu", onContextMenu);
   return () => {

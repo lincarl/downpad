@@ -553,6 +553,6 @@ export class RecentView {
         run: () => void this.cb.copy(entry.path),
       },
       { label: "Copy folder path", icon: FolderCopyIcon, run: () => void this.cb.copy(folder) },
-    ]);
+    ], "Recent file");
   }
 }

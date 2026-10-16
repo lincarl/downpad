@@ -159,7 +159,7 @@ export function imageContextMenuPlugin(viewRef: ViewRef, ctx: WysiwygContext) {
               const found = imageNodeAtPos(view, at.inside >= 0 ? at.inside : at.pos);
               if (!found) return false;
               event.preventDefault();
-              showContextMenu(event.clientX, event.clientY, buildItems(view, found.node, found.pos, ctx));
+              showContextMenu(event.clientX, event.clientY, buildItems(view, found.node, found.pos, ctx), "Image");
               return true;
             },
           },
