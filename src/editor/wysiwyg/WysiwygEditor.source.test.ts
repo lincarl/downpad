@@ -66,7 +66,8 @@ function pressUndo(): void {
 }
 
 // A setext heading, a hard break and a reference link. Milkdown writes this as
-// "# Title\n\nLine\\\nnext\n\nSee [docs](https://x.y).\n".
+// "# Title\n\nLine\\\nnext\n\nSee [docs](https://x.y).\n". An edit rewrites
+// only the block it changes (WysiwygEditor.blocks.test.ts).
 const SOURCE = "Title\n=====\n\nLine  \nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n";
 
 describe("the document view's Markdown", () => {
@@ -84,11 +85,11 @@ describe("the document view's Markdown", () => {
     expect(differing(onChange, SOURCE)).toEqual([]);
   });
 
-  it("is Milkdown's form after an edit, and the exact text again after undo", { timeout: 60_000 }, async () => {
+  it("is Milkdown's form for an edited block, and the exact text again after undo", { timeout: 60_000 }, async () => {
     const { editor, onChange } = await open(SOURCE);
     replace(editor, "docs", "Docs");
     await settle();
-    expect(lastReport(onChange)).toBe("# Title\n\nLine\\\nnext\n\nSee [Docs](https://x.y).\n");
+    expect(lastReport(onChange)).toBe("Title\n=====\n\nLine  \nnext\n\nSee [Docs](https://x.y).\n\n[d]: https://x.y\n");
     pressUndo();
     await settle();
     expect(lastReport(onChange)).toBe(SOURCE);
@@ -111,7 +112,7 @@ describe("the document view's Markdown", () => {
     expect(differing(onChange, SOURCE)).toEqual([]);
     replace(editor, "Line", "First line");
     await settle();
-    expect(lastReport(onChange)).toBe("# Title\n\nFirst line\\\nnext\n\nSee [docs](https://x.y).\n");
+    expect(lastReport(onChange)).toBe("Title\n=====\n\nFirst line\\\nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n");
   });
 
   it("is the exact text the split mirror set while the editor was opening", { timeout: 60_000 }, async () => {

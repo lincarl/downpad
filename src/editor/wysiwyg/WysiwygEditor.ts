@@ -9,11 +9,11 @@
 //     unchanged on serialize. Each change to them is a step in Crepe's undo
 //     history (frontmatterHistory.ts), so undo takes back table and body edits
 //     in one order.
-//   - Exact source: until the user changes the body, it is reported as the text
-//     Crepe parsed, not Milkdown's rewrite of it.
+//   - Exact source: every top-level block the user has not changed is written
+//     as the text Crepe parsed, not Milkdown's rewrite of it (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { $prose, insert } from "@milkdown/kit/utils";
@@ -49,6 +49,7 @@ import { codeBlockFindHighlights } from "./findReveal";
 import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
+import { SourceBaseline } from "./sourceBaseline";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { changedCell, focusCaret, showsBlock } from "./frontmatterFind";
 import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } from "./frontmatterHistory";
@@ -113,11 +114,10 @@ export class WysiwygEditor {
   /** Whether a frontmatter table should be shown (the showFrontmatterPanel
    *  setting, captured at mount). */
   private showFmPanel = false;
-  /** The body Crepe last parsed (at mount or `setMarkdown`) and Milkdown's
-   *  serialization of it right after parsing. While the body still serializes
-   *  that way, the user has not changed it, so `getMarkdown` reports the exact
-   *  source instead of Milkdown's rewrite of it. */
-  private baseline: { source: string; settled: string } | null = null;
+  /** The body Crepe last parsed (at mount or `setMarkdown`). `getMarkdown`
+   *  writes each top-level block the user has not changed since as its exact
+   *  source, and Milkdown's form only for the blocks they changed. */
+  private baseline: SourceBaseline | null = null;
   /** The body of a split mirror that arrived before Crepe created its view, for
    *  example while preloadImages waits for image lookups. `mount` applies it. */
   private pendingBody: string | null = null;
@@ -351,19 +351,18 @@ export class WysiwygEditor {
   /** The document as Markdown. Joins the frontmatter block, the blank lines
    *  after it and Crepe's body, and starts the body on a new line if the block
    *  ends without one. Milkdown leaves out the empty line Crepe keeps after a
-   *  final list, code block, quote, table, rule or image. A body that still
-   *  serializes as it did right after Crepe parsed it is reported as that exact
-   *  source, so opening, mirroring or undoing back never rewrites text the user
-   *  has not changed. A typed closing `$` or `~` that still waits for the next
-   *  character is written as the formula or strikethrough that deciding it now
-   *  would make, as Save writes it (`decidedDoc`). */
+   *  final list, code block, quote, table, rule or image. The body keeps the
+   *  exact source of every block that still says what Crepe parsed, so opening,
+   *  mirroring or undoing back never rewrites text the user has not changed,
+   *  and an edit rewrites only the blocks it touched. A typed closing `$` or
+   *  `~` that still waits for the next character is written as the formula or
+   *  strikethrough that deciding it now would make, as Save writes it
+   *  (`decidedDoc`). */
   getMarkdown(): string {
-    const body = this.bodyMarkdown();
-    const baseline = this.baseline;
     return joinFrontmatter({
       frontmatter: this.frontmatterBlock,
       separator: this.frontmatterSeparator,
-      body: baseline && body === baseline.settled ? baseline.source : body,
+      body: this.bodyMarkdown(),
     });
   }
 
@@ -607,18 +606,29 @@ export class WysiwygEditor {
     return this.destroyPromise;
   }
 
-  /** Record the body Crepe just parsed, and how Milkdown writes it back, so
-   *  `getMarkdown` can report that exact source until the body changes. */
+  /** Record the body Crepe just parsed, so `getMarkdown` can keep its exact
+   *  text for the blocks the user does not change. */
   private rememberSource(source: string): void {
-    this.baseline = { source, settled: this.bodyMarkdown() };
+    this.baseline =
+      this.crepe?.editor.action((ctx) => {
+        const remark = ctx.get(remarkCtx);
+        return new SourceBaseline(source, ctx.get(editorViewCtx).state.doc, {
+          serialize: ctx.get(serializerCtx),
+          parse: (markdown) => remark.parse(markdown),
+        });
+      }) ?? null;
   }
 
-  /** Crepe's document as Markdown, with a typed closing mark that still
-   *  waits written as Save writes it (`decidedDoc`). */
+  /** Crepe's document as Markdown, with the source text of unchanged blocks,
+   *  and a typed closing mark that still waits written as Save writes it
+   *  (`decidedDoc`). */
   private bodyMarkdown(): string {
     if (!this.crepe) return "";
     try {
-      return this.crepe.editor.action((ctx) => ctx.get(serializerCtx)(decidedDoc(ctx.get(editorViewCtx))));
+      return this.crepe.editor.action((ctx) => {
+        const doc = decidedDoc(ctx.get(editorViewCtx));
+        return this.baseline ? this.baseline.write(doc) : ctx.get(serializerCtx)(doc);
+      });
     } catch {
       return "";
     }
