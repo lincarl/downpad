@@ -8,7 +8,8 @@
 // collapsed or not (`inBase64Payload`). The data is not text anyone searches
 // for, and Replace all would corrupt the image. That includes a data: URI
 // written as text, such as in a code sample, which the document view still
-// searches.
+// searches. A file dropped on the payload goes in after the image instead
+// (`pastBase64Payload`).
 
 import { ViewPlugin, Decoration, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { StateEffect, RangeSetBuilder, type Extension, type Text } from "@codemirror/state";
@@ -27,8 +28,8 @@ const expandEffect = StateEffect.define<number>();
 /** Base64 payload ranges per document version, for find. */
 const payloads = new WeakMap<Text, Array<[number, number]>>();
 
-/** Whether `from`..`to` overlaps the base64 payload of a data URI in `doc`. */
-export function inBase64Payload(doc: Text, from: number, to: number): boolean {
+/** The base64 payload range of every data URI in `doc`. */
+function payloadRanges(doc: Text): Array<[number, number]> {
   let ranges = payloads.get(doc);
   if (!ranges) {
     ranges = [...doc.toString().matchAll(ANY_DATA_URI)].map((m) => {
@@ -37,7 +38,27 @@ export function inBase64Payload(doc: Text, from: number, to: number): boolean {
     });
     payloads.set(doc, ranges);
   }
-  return ranges.some(([start, end]) => from < end && to > start);
+  return ranges;
+}
+
+/** Whether `from`..`to` overlaps the base64 payload of a data URI in `doc`. */
+export function inBase64Payload(doc: Text, from: number, to: number): boolean {
+  return payloadRanges(doc).some(([start, end]) => from < end && to > start);
+}
+
+/**
+ * A position moved out of the base64 payload of a data URI it is in or at
+ * either edge of, to after the image's closing `)`, or to the end of the
+ * payload if no `)` follows on its line. A file dropped on a collapsed
+ * image's chip would otherwise go into the data, since the chip covers the
+ * payload and a drop on it finds one of its edges.
+ */
+export function pastBase64Payload(doc: Text, pos: number): number {
+  const payload = payloadRanges(doc).find(([start, end]) => pos >= start && pos <= end);
+  if (!payload) return pos;
+  const line = doc.lineAt(payload[1]);
+  const close = line.text.indexOf(")", payload[1] - line.from);
+  return close < 0 ? payload[1] : line.from + close + 1;
 }
 
 class CollapsedWidget extends WidgetType {

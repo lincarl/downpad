@@ -2,7 +2,8 @@
 // Find in the Markdown view never matches base64 image data, collapsed or not,
 // so Replace all cannot corrupt an embedded image.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EditorView } from "@codemirror/view";
 import { RawEditor } from "./RawEditor";
 import type { FindOptions } from "../wysiwyg/findEngine";
 
@@ -64,5 +65,35 @@ describe("find in the Markdown view", () => {
     const editor = open(`Visible kq.\n\n${png}\n`);
     expect(editor.searchText("pasted", opts)).toEqual({ current: 1, total: 1 });
     expect(editor.searchText("image/png", opts)).toEqual({ current: 1, total: 1 });
+  });
+});
+
+describe("a file dropped on base64 image data in the Markdown view", () => {
+  const LINK = "[a.csv](attachments/a.csv)";
+  const titled = `![pasted](data:image/png;base64,${pngData} "Title")`;
+
+  /** Drop LINK where the pane finds the text position `offset` into the image's data. */
+  function dropInData(image: string, offset: (dataStart: number, dataEnd: number) => number): string {
+    const text = `First line.\n\n${image} After.\n`;
+    const opened = open(text);
+    const dataStart = text.indexOf(pngData);
+    const { view } = opened as unknown as { view: EditorView };
+    // The collapsed chip covers the data, so the pane finds one of its ends.
+    vi.spyOn(view, "posAtCoords").mockReturnValue(offset(dataStart, dataStart + pngData.length));
+    opened.insertText(LINK, opened.dropTargetAt(10, 10));
+    opened.insertText("!");
+    return opened.getText();
+  }
+
+  it.each([
+    ["at the start of the data", (start: number) => start],
+    ["inside the data", (start: number) => start + 20],
+    ["at the end of the data", (_start: number, end: number) => end],
+  ])("goes in after the image, %s, and so does the next key", (_where, offset) => {
+    expect(dropInData(png, offset)).toBe(`First line.\n\n${png}${LINK}! After.\n`);
+  });
+
+  it("goes in after an image with a title", () => {
+    expect(dropInData(titled, (start) => start)).toBe(`First line.\n\n${titled}${LINK}! After.\n`);
   });
 });

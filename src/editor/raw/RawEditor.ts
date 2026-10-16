@@ -13,7 +13,7 @@ import {
   search,
   setSearchQuery,
 } from "@codemirror/search";
-import { base64Collapse, inBase64Payload } from "./base64Collapse";
+import { base64Collapse, inBase64Payload, pastBase64Payload } from "./base64Collapse";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
@@ -146,12 +146,14 @@ export class RawEditor {
     }
   }
 
-  /** Aim a file drop at the text position nearest a viewport point (§5.4).
-   *  Returns the target for `insertText`, which the pane keeps in step with
-   *  edits until `releaseDropTarget`, or null without an editor. */
+  /** Aim a file drop at the text position nearest a viewport point (§5.4),
+   *  but never inside an image's base64 data (`pastBase64Payload`). Returns
+   *  the target for `insertText`, which the pane keeps in step with edits
+   *  until `releaseDropTarget`, or null without an editor. */
   dropTargetAt(x: number, y: number): DropTarget | null {
     if (!this.view) return null;
-    const target: DropTarget = { pos: this.view.posAtCoords({ x, y }, false) };
+    const { doc } = this.view.state;
+    const target: DropTarget = { pos: pastBase64Payload(doc, this.view.posAtCoords({ x, y }, false)) };
     this.dropTargets.add(target);
     return target;
   }
