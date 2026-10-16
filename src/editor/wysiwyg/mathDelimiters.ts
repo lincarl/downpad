@@ -456,46 +456,70 @@ function strikeOpening(text: string, next: string): number {
   return -1;
 }
 
-/** The change that strikes the text the run of tildes before `$end` closes
- *  when `next` follows it, or null. Milkdown's shortcut paired the run with the
- *  first `~` that fits instead of the one GFM pairs it with. */
-function strike(state: EditorState, $end: ResolvedPos, next: string): Transaction | null {
-  const strikethrough = state.schema.marks.strike_through;
-  const text = plainText($end.parent).slice(0, $end.parentOffset);
-  const index = strikeOpening(text, next);
-  if (!strikethrough || index < 0) return null;
-  const size = text.length - text.replace(/~+$/, "").length;
-  const open = $end.start() + index;
-  const close = $end.pos - size;
-  const tr = state.tr.delete(close, $end.pos).delete(open, open + size);
-  return tr.addMark(open, close - size, strikethrough.create());
-}
-
 /** Crepe's typing shortcut for inline math, which reads the text before the
  *  cursor with other inline nodes as U+FFFC. */
 const MATH_SHORTCUT = /(?:\$)([^$]+)(?:\$)$/;
 
-/** The change that turns the text from the nearest `$` up to the `$` before
- *  `$end` into a formula, as Crepe's typing shortcut does, or null. The
- *  shortcut would also replace a formula or other inline node between the
- *  marks, which then showed and was saved as U+FFFC. */
-function formula(state: EditorState, $end: ResolvedPos): Transaction | null {
-  const math = state.schema.nodes.math_inline;
-  const match = MATH_SHORTCUT.exec(textBefore($end));
-  const value = match?.[1] ?? "";
-  if (!math || !match || !value.trim() || value.includes("￼")) return null;
-  const node = math.createAndFill({ value });
-  return node && state.tr.replaceRangeWith($end.pos - match[0].length, $end.pos, node);
+/** The text that a waiting mark closes: from `open`, where its opening `$` or
+ *  run of tildes starts, to the waiting mark, which ends its closing run.
+ *  `size` is the length of each run. */
+interface Span {
+  open: number;
+  size: number;
+}
+
+/** The span that the waiting `$` or `~` at `pos` closes when `next`, the
+ *  character after it or "" at the end of the paragraph, follows it, or null.
+ *  In Pandoc a `$` closes unless a digit follows. It opens at the nearest `$`,
+ *  as in Crepe's shortcut, which would also replace a formula or other inline
+ *  node between the marks, which then showed and was saved as U+FFFC. In GFM
+ *  another `~` makes the run longer, and that one decides. Milkdown's shortcut
+ *  paired a run of tildes with the first `~` that fits instead of the one GFM
+ *  pairs it with. The text before the mark is read again, since it may have
+ *  changed while the mark waited. */
+function closedSpan(state: EditorState, pos: number, next: string): Span | null {
+  const $end = state.doc.resolve(pos + 1);
+  const mark = state.doc.textBetween(pos, pos + 1);
+  if (mark === "$") {
+    const text = textBefore($end);
+    const match = MATH_SHORTCUT.exec(text);
+    const value = match?.[1] ?? "";
+    if (/^\d/.test(next) || staysText(text.slice(0, -1), "$") || !value.trim() || value.includes("￼")) return null;
+    return { open: $end.pos - value.length - 2, size: 1 };
+  }
+  if (mark !== "~" || next.startsWith("~")) return null;
+  const text = plainText($end.parent).slice(0, $end.parentOffset);
+  const index = strikeOpening(text, next);
+  return index < 0 ? null : { open: $end.start() + index, size: text.length - text.replace(/~+$/, "").length };
 }
 
 /** The change that closes math or strikethrough with the waiting `$` or `~` at
- *  `pos` where `next`, the character after it or "" at the end of the
- *  paragraph, lets it, or null. In Pandoc a `$` closes unless a digit follows.
- *  In GFM another `~` makes the run longer, and that one decides. */
+ *  `pos` where `next` lets it, or null. */
 function closing(state: EditorState, pos: number, next: string): Transaction | null {
-  const $end = state.doc.resolve(pos + 1);
-  if (state.doc.textBetween(pos, pos + 1) === "$") return /^\d/.test(next) ? null : formula(state, $end);
-  return next.startsWith("~") ? null : strike(state, $end, next);
+  const span = closedSpan(state, pos, next);
+  if (!span) return null;
+  const { open, size } = span;
+  const end = pos + 1;
+  if (state.doc.textBetween(pos, end) === "$") {
+    const node = state.schema.nodes.math_inline?.createAndFill({ value: state.doc.textBetween(open + 1, pos) });
+    return node ? state.tr.replaceRangeWith(open, end, node) : null;
+  }
+  const strikethrough = state.schema.marks.strike_through;
+  if (!strikethrough) return null;
+  const tr = state.tr.delete(end - size, end).delete(open, open + size);
+  return tr.addMark(open, end - 2 * size, strikethrough.create());
+}
+
+/** Whether the selection keeps the waiting mark at `pos` waiting. It does
+ *  while it covers the mark, as after Shift+Left, so typing replaces the mark,
+ *  and while it lies between the marks of the span the mark closes, as after a
+ *  click or Left there, so the text can be edited before it becomes a formula
+ *  or struck. */
+function keepsWaiting(state: EditorState, pos: number): boolean {
+  const { from, to, empty } = state.selection;
+  if (!empty && from <= pos && to > pos) return true;
+  const span = closedSpan(state, pos, characterAt(state, pos + 1));
+  return span !== null && from > span.open && to <= pos;
 }
 
 /** Close math or strikethrough with the waiting mark at `pos` where `next`
@@ -516,7 +540,8 @@ function typeText(view: EditorView, text: string): void {
 
 /** A typed closing `$` or `~` that waits for the next character. `decide` is
  *  set once a change other than typing right after it, such as a paste or the
- *  cursor leaving, means the character now after it decides. */
+ *  cursor moving, means the character now after it decides, once the
+ *  selection no longer keeps it waiting (`keepsWaiting`). */
 interface Waiting {
   pos: number;
   decide: boolean;
@@ -539,9 +564,11 @@ function afterComposition(view: EditorView): void {
   if (view.isDestroyed) return;
   const waiting = waitingKey.getState(view.state);
   // A composition that put nothing after the mark, such as a cancelled one,
-  // leaves it waiting.
+  // leaves it waiting, and so does one between the marks of its span.
   const { selection } = view.state;
-  if (waiting && (!selection.empty || selection.from !== waiting.pos + 1)) view.dispatch(decide(view.state, waiting.pos));
+  if (waiting && !(selection.empty && selection.from === waiting.pos + 1) && !keepsWaiting(view.state, waiting.pos)) {
+    view.dispatch(decide(view.state, waiting.pos));
+  }
   const { $from, empty } = view.state.selection;
   if (!empty || $from.parentOffset === 0) return;
   const mark = $from.parent.textBetween($from.parentOffset - 1, $from.parentOffset, undefined, "￼");
@@ -555,9 +582,12 @@ function afterComposition(view: EditorView): void {
  *  space, stays text. One that could waits for the next character, since a `$`
  *  right before a digit, or a `~` after punctuation and before a letter, closes
  *  nothing. The next character typed decides, and so does Enter, the cursor
- *  leaving it, or another edit such as a paste. Changes nobody typed, such as a
- *  heading's new id, leave it waiting. Crepe's and Milkdown's typing shortcuts
- *  decided at once, and Milkdown's could strike from a different `~` than GFM. */
+ *  leaving it, or another edit such as a paste. A cursor moved between the
+ *  marks, as by a click or Left, keeps it waiting until the cursor leaves the
+ *  span, so the text there can still be edited. Changes nobody typed, such as
+ *  a heading's new id, leave it waiting. Crepe's and Milkdown's typing
+ *  shortcuts decided at once, and Milkdown's could strike from a different `~`
+ *  than GFM. */
 export const closingDelimiterGuard = $prose(() => {
   /** The editor's view, to tell whether a composition is running. */
   let editorView: EditorView | undefined;
@@ -614,8 +644,13 @@ export const closingDelimiterGuard = $prose(() => {
         }
         const decision = closingMark(view.state, from, text);
         if (!decision) return false;
+        // A `$` typed inside a formula that a `$` waits to close closes it
+        // first, so it waits instead. A `~` there is part of the formula, and
+        // the reverse holds inside struck text.
+        const inside =
+          waiting && view.state.doc.textBetween(waiting.pos, waiting.pos + 1) !== text.slice(-1) && keepsWaiting(view.state, waiting.pos);
         const tr = deflt();
-        view.dispatch(decision === "wait" ? tr.setMeta(waitingKey, from + text.length - 1) : tr);
+        view.dispatch(decision === "wait" && !inside ? tr.setMeta(waitingKey, from + text.length - 1) : tr);
         return true;
       },
       /** Close a waiting mark on Enter, since a line break after the mark ends
@@ -649,11 +684,7 @@ export const closingDelimiterGuard = $prose(() => {
      *  items restore the cursor to where it was when they were drawn. */
     appendTransaction(_transactions, _before, state) {
       const waiting = waitingKey.getState(state);
-      if (!waiting?.decide || editorView?.composing) return null;
-      // A selection over the mark, as after Shift+Left, keeps it waiting, so
-      // typing replaces the mark.
-      const { from, to, empty } = state.selection;
-      if (!empty && from <= waiting.pos && to > waiting.pos) return null;
+      if (!waiting?.decide || editorView?.composing || keepsWaiting(state, waiting.pos)) return null;
       return decide(state, waiting.pos);
     },
     /** Block Milkdown's shortcuts for a closing mark that stays text or

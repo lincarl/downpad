@@ -539,6 +539,31 @@ describe("math and strikethrough delimiters", () => {
     }
   });
 
+  it("keeps a closing mark waiting while the cursor is inside the text it closes", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe("One.\n");
+    moveToEnd(view, "One.");
+    type(view, " $xy$");
+    let end = view.state.selection.from;
+    // Left puts the cursor before the closing `$`, and a click between x and y.
+    moveTo(view, end - 1);
+    moveTo(view, end - 2);
+    // A `~` typed there is part of the formula.
+    type(view, "Q~");
+    expect(formulas(root)).toEqual([]);
+    expect(view.state.doc.textContent).toBe("One. $xQ~y$");
+    // Leaving the span decides the mark.
+    moveTo(view, end + 2);
+    expect(formulas(root)).toEqual(["xQ~y"]);
+    type(view, " and ~~old~~");
+    end = view.state.selection.from;
+    moveTo(view, end - 3);
+    type(view, "e");
+    expect(strikes(root)).toEqual([]);
+    moveTo(view, 1);
+    expect(strikes(root)).toEqual(["oled"]);
+    expect(crepe.getMarkdown()).toBe("One. $xQ~y$ and ~~oled~~\n");
+  });
+
   it("keeps a mark waiting while a selection covers it, so typing replaces it", { timeout: 60_000 }, async () => {
     const { crepe, root, view } = await openCrepe("One.\n");
     moveToEnd(view, "One.");
