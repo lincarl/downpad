@@ -167,6 +167,17 @@ describe("the caret after a file dropped on the document", () => {
 
     expect(opened.getMarkdown()).toBe(`First line.\n\nSecond line.\n\n${IMAGE}\n\nx\n`);
   });
+
+  it("stays after a dropped link without extending it", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("paragraph", "Second line."), 140, 170);
+
+    opened.insertMarkdown(LINK_A, opened.dropTargetAt(300, 128));
+    type(opened, " typed");
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A} typed\n\nSecond line.\n`);
+  });
 });
 
 describe("a file dropped between list items", () => {
@@ -232,5 +243,18 @@ describe("drops whose files are still being read", () => {
     opened.insertMarkdown(LINK_A, first);
 
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\nThird line.\n\n${LINK_B}\n`);
+  });
+
+  it("keeps a drop's place when the split mirrors a Markdown edit into the document", async () => {
+    const opened = await open("First line.\n\nSecond line.\n\nThird line.\n");
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("paragraph", "Second line."), 140, 170);
+
+    const target = opened.dropTargetAt(300, 128);
+    // Typed in the Markdown pane while the file is read.
+    opened.setMarkdown("First line.\n\nSecond line.\n\nThird line. Typed.\n");
+    opened.insertMarkdown(LINK_A, target);
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\nThird line. Typed.\n`);
   });
 });

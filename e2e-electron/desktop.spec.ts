@@ -1746,6 +1746,10 @@ test("typing right after a file dropped on the document goes after it and keeps 
   await dropBelow(page.locator(".ProseMirror p", { hasText: "Second line." }), [await pngFile("middle.png")]);
   await expect(images).toHaveCount(1);
   await page.keyboard.type("x");
+  // A link, then typing, which stays out of the link.
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.type(" typed");
   // An image below the text, which ends the document, then typing.
   const pageBox = (await page.locator(".editor-column").boundingBox())!;
   await dropFiles(page.locator(".editor-column"), [await pngFile("last.png")], { x: pageBox.width / 2, y: pageBox.height - 40 });
@@ -1754,7 +1758,7 @@ test("typing right after a file dropped on the document goes after it and keeps 
   await page.keyboard.press("ControlOrMeta+s");
   const image = /!\[\]\(data:image\/png;base64,[^)]+\)/.source;
   await expect.poll(() => readFile(file, "utf8")).toMatch(new RegExp(
-    `^First line\\.\\n\\nSecond line\\.\\n\\n${image}\\n\\nxThird line\\.\\n\\n${image}\\n\\ny\\n$`,
+    `^First line\\.\\n\\n\\[notes\\.csv\\]\\(attachments/notes\\.csv\\) typed\\n\\nSecond line\\.\\n\\n${image}\\n\\nxThird line\\.\\n\\n${image}\\n\\ny\\n$`,
   ));
 });
 
@@ -1774,6 +1778,25 @@ test("a file dropped while the find card's match is in the frontmatter table lea
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(
     "---\ntitle: Review notes\n---\n\nFirst line.\n\n[notes.csv](attachments/notes.csv)\n\nCaption\n\nSecond line.\n",
+  );
+});
+
+test("typing in the split's Markdown pane across a drop on the document pane stays in the Markdown pane", async () => {
+  const { file } = await openSplit("type-across-drop.md", "First line.\n\nSecond line.\n\nThird line.\n");
+  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Third line." });
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  const typing = page.keyboard.type(" Typed during the drop.", { delay: 40 });
+  await expect(markdownLine).toContainText("Third line. Ty");
+  await dropBelow(page.locator(".editor-pane-wysiwyg .ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  await typing;
+  // The file goes in once typing pauses, and focus stays in the Markdown pane.
+  await expect(page.locator(".editor-pane-raw .cm-line").nth(2)).toHaveText("[notes.csv](attachments/notes.csv)");
+  await page.keyboard.type(" More.");
+  await expect(markdownLine).toHaveText("Third line. Typed during the drop. More.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "First line.\n\n[notes.csv](attachments/notes.csv)\n\nSecond line.\n\nThird line. Typed during the drop. More.\n",
   );
 });
 

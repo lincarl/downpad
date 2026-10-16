@@ -63,7 +63,7 @@ import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibilit
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
-import { dropPosition, insertBlocksAt, type DropTarget, insertAtSelection } from "./fileDrop";
+import { dropPosition, insertBlocksAt, type DropTarget, insertAtSelection, mapAcrossChange } from "./fileDrop";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -500,6 +500,8 @@ export class WysiwygEditor {
   /** Replace Crepe's body and remember its source (see `setMarkdown`). */
   private replaceBody(body: string): void {
     if (!this.crepe) return;
+    const before = this.withView((view) => view.state.doc, null);
+    const targets = [...this.dropTargets].map((target) => ({ target, pos: target.pos }));
     try {
       // Milkdown's replaceAll, with the frontmatter block and the blank lines
       // after it, which setMarkdown has just stored, and the new body's
@@ -517,6 +519,10 @@ export class WysiwygEditor {
     } catch {
       // Editor torn down mid-sync; ignore.
     }
+    // A file dropped on this pane while the other one was edited still goes
+    // in where it was dropped.
+    const after = this.withView((view) => view.state.doc, null);
+    if (before && after) for (const { target, pos } of targets) target.pos = mapAcrossChange(before, after, pos);
   }
 
   /** Bring the frontmatter table into line with the current `frontmatterBlock`

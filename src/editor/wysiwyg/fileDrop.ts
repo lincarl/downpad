@@ -169,17 +169,18 @@ function changeEnd(tr: Transaction): number {
 
 /**
  * Put a text caret after content just inserted, which ends at `end`, so typing
- * goes on after it. Inserted text keeps the caret right after it. After an
- * image the caret goes to the start of the next text. With no text after it,
- * it goes in the gap after the image, where typing starts a new line, and
- * where Crepe adds an empty last line at the end of the document. The image is
- * never left selected, where the next key would replace it.
+ * goes on after it. Inserted text keeps the caret right after it, without the
+ * marks of that text, so typing does not extend a dropped link. After an image
+ * the caret goes to the start of the next text. With no text after it, it goes
+ * in the gap after the image, where typing starts a new line, and where Crepe
+ * adds an empty last line at the end of the document. The image is never left
+ * selected, where the next key would replace it.
  */
 function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transaction {
   const $end = tr.doc.resolve(end);
-  if ($end.parent.inlineContent) return tr.setSelection(TextSelection.create(tr.doc, end));
+  if ($end.parent.inlineContent) return tr.setSelection(TextSelection.create(tr.doc, end)).setStoredMarks([]);
   const before = Selection.findFrom($end, -1, true);
-  if (endsInText && before) return tr.setSelection(before);
+  if (endsInText && before) return tr.setSelection(before).setStoredMarks([]);
   const after = Selection.findFrom($end, 1, true);
   if (after) return tr.setSelection(after);
   const gap = $end.parent.contentMatchAt($end.index()).defaultType?.isTextblock;
@@ -224,3 +225,25 @@ export function insertAtSelection(markdown: string) {
   };
 }
 
+/**
+ * Map a position from `before` to `after`, two versions of a document that
+ * differ in one run of content, as a split mirror sync leaves them when it
+ * replaces the whole document. A position before the run stays, one after it
+ * moves with the content after it, and one inside it goes to the end of the
+ * new run. Mapping through the replacement itself would move every position to
+ * the end of the document.
+ */
+export function mapAcrossChange(before: Node, after: Node, pos: number): number {
+  const start = before.content.findDiffStart(after.content);
+  if (start == null || pos <= start) return pos;
+  const end = before.content.findDiffEnd(after.content);
+  if (!end) return pos;
+  let { a, b } = end;
+  // Repeated content can put the ends of the run before its start.
+  const overlap = start - Math.min(a, b);
+  if (overlap > 0) {
+    a += overlap;
+    b += overlap;
+  }
+  return pos >= a ? pos - a + b : b;
+}

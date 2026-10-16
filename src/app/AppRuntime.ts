@@ -3,7 +3,7 @@
 // actions consumed by React components.
 
 import type { Store } from "../state/store";
-import type { DropPoint, DropTarget, EditorHost } from "../editor/EditorHost";
+import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
 import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
@@ -523,29 +523,32 @@ export class AppRuntime {
    * the cursor; other files are copied into the attachments folder and linked
    * the same way.
    */
-  private async handleDrop(paths: string[], drop: DropPoint): Promise<void> {
+  private async handleDrop(paths: string[], point: DropPoint): Promise<void> {
     // A dropped markdown file opens in its own tab (§5.19).
     const md = paths.find((p) => classifyDrop(p) === "md");
     if (md) {
       await this.files.openPath(md);
       return;
     }
-    // Image/attachment drops need an editor to target. With no document open,
-    // create one first so the drop has somewhere to go.
-    let target: DropTarget | null = null;
-    if (!this.store.get().activeTabId) await this.files.newDocument();
-    else if (this.store.get().view === "recent") await this.showActiveDoc();
     // Aim now, during the drop event, while the drop point is over the text the
-    // file was dropped on. Reading the file comes after.
-    else target = this.editorHost.dropTarget(drop);
+    // file was dropped on. Reading the file comes after. With no document open,
+    // create one first so the drop has somewhere to go, and from the Recent
+    // view show the document. The files then go in at its caret.
+    const { activeTabId, view } = this.store.get();
+    let drop: FileDrop | null = null;
+    if (!activeTabId) await this.files.newDocument();
+    else if (view === "recent") await this.showActiveDoc();
+    else drop = this.editorHost.aimDrop(point);
+    drop ??= this.editorHost.aimDrop();
+    if (!drop) return;
     try {
       for (const path of paths) {
-        if (classifyDrop(path) === "image") await this.embedDroppedImage(path, target);
-        else await this.attachDroppedFile(path, target);
+        if (classifyDrop(path) === "image") await this.embedDroppedImage(path, drop);
+        else await this.attachDroppedFile(path, drop);
       }
     } finally {
       // Each drop keeps its own target until its files are in.
-      if (target) this.editorHost.releaseDropTarget(target);
+      this.editorHost.releaseDrop(drop);
     }
   }
 
@@ -558,16 +561,16 @@ export class AppRuntime {
     };
   }
 
-  /** Embed a dropped image at the drop's target, or at the cursor without one. */
-  private async embedDroppedImage(path: string, target: DropTarget | null): Promise<void> {
+  /** Embed a dropped image where its drop goes in. */
+  private async embedDroppedImage(path: string, drop: FileDrop): Promise<void> {
     const { bytes, mime } = await readImageBytes(path);
     const src = await resolveImageSrc(bytes, mime, this.imageStoreContext());
-    if (src) this.editorHost.insertMarkdown(mdImage("", src), target);
+    if (src) await this.editorHost.insertDropped(drop, mdImage("", src));
   }
 
-  /** Copy a dropped file into the attachments folder and link it at the drop's
-   *  target, or at the cursor without one. */
-  private async attachDroppedFile(path: string, target: DropTarget | null): Promise<void> {
+  /** Copy a dropped file into the attachments folder and link it where its
+   *  drop goes in. */
+  private async attachDroppedFile(path: string, drop: FileDrop): Promise<void> {
     // Non-image files always go to attachments (§5.7), which needs a saved doc.
     if (!this.store.get().doc.filePath && !(await this.files.save())) return;
     const filePath = this.store.get().doc.filePath;
@@ -580,7 +583,7 @@ export class AppRuntime {
       name,
       bytes,
     );
-    this.editorHost.insertMarkdown(mdLink(name, rel), target);
+    await this.editorHost.insertDropped(drop, mdLink(name, rel));
   }
 
   /** Run a file action, surfacing failures without crashing the shell. */
