@@ -4,7 +4,7 @@
 // blocks there. md-easy takes file drops before Crepe sees them, so it finds
 // that edge the same way and inserts the file's Markdown there itself.
 
-import { editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
 import { GapCursor } from "@milkdown/kit/prose/gapcursor";
 import { Slice, type Fragment, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
@@ -248,6 +248,71 @@ export function insertAtSelection(markdown: string, moveCaret = true) {
     if (!moveCaret) view.dispatch(keepSelection(tr, selection));
     else view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
   };
+}
+
+/** A change to Markdown source text, as offsets into it. */
+export interface SourceEdit {
+  from: number;
+  to: number;
+  insert: string;
+  /** Which side of text inserted at a caret the caret stays on: -1 before
+   *  the text, 1 after it. */
+  assoc: -1 | 1;
+}
+
+/** Where each top-level block of a Markdown body is in its text, as remark
+ *  parses it. Link reference definitions are left out, since the document
+ *  has no block for them. Null if remark gives a block no position. */
+function sourceBlocks(ctx: Ctx, body: string): Array<{ start: number; end: number }> | null {
+  const blocks: Array<{ start: number; end: number }> = [];
+  for (const node of ctx.get(remarkCtx).parse(body).children) {
+    if (node.type === "definition") continue;
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return null;
+    blocks.push({ start, end });
+  }
+  return blocks;
+}
+
+/**
+ * The change to a document's Markdown source that matches one insert into the
+ * document, which turned `before`, parsed from `body`, into `after`. The
+ * split's Markdown pane makes it while the user types there, so the rest of
+ * the source stays as written instead of in Milkdown's form. The top-level
+ * blocks the insert changed are written in Milkdown's form. Null when the
+ * source's top-level blocks do not line up with the document's, as for an
+ * empty body.
+ */
+export function sourceEditBetween(ctx: Ctx, before: Node, after: Node, body: string): SourceEdit | null {
+  const blocks = sourceBlocks(ctx, body);
+  if (!blocks?.length) return null;
+  // Crepe's empty last line has no source.
+  const lastLine = blocks.length === before.childCount - 1 && isEmptyParagraph(before.lastChild);
+  if (blocks.length !== before.childCount - (lastLine ? 1 : 0)) return null;
+  // The insert turned blocks start to end of `before` into start to afterEnd of `after`.
+  let start = 0;
+  while (start < before.childCount && start < after.childCount && before.child(start).eq(after.child(start))) start += 1;
+  let end = before.childCount;
+  let afterEnd = after.childCount;
+  while (end > start && afterEnd > start && before.child(end - 1).eq(after.child(afterEnd - 1))) {
+    end -= 1;
+    afterEnd -= 1;
+  }
+  const written: Node[] = [];
+  for (let index = start; index < afterEnd; index += 1) written.push(after.child(index));
+  const text = ctx.get(serializerCtx)(after.type.create(null, written)).replace(/\n+$/, "");
+  if (!text) return null;
+  const replaced = Math.min(end, blocks.length);
+  if (start < replaced) {
+    return { from: blocks[start].start, to: blocks[replaced - 1].end, insert: text, assoc: -1 };
+  }
+  // New blocks go in after the block before them, or before the first block.
+  // A caret at the end of the block before stays there, and one at the start
+  // of the first block stays with it.
+  if (start === 0) return { from: blocks[0].start, to: blocks[0].start, insert: `${text}\n\n`, assoc: 1 };
+  const previousEnd = blocks[start - 1].end;
+  return { from: previousEnd, to: previousEnd, insert: `\n\n${text}`, assoc: -1 };
 }
 
 /**

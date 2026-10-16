@@ -49,6 +49,33 @@ describe("RawEditor.insertText", () => {
   });
 });
 
+describe("RawEditor.applyDropEdit", () => {
+  const LINK = "[a.csv](attachments/a.csv)";
+
+  it("keeps the caret where the user types, on either side of the file", () => {
+    // Typing at the end of the line the file goes in after.
+    const end = mountWithCaret("First line.", "\n\nSecond line.\n");
+    end.applyDropEdit({ from: 11, to: 11, insert: `\n\n${LINK}`, assoc: -1 });
+    end.insertText(" Typed.");
+    expect(end.getText()).toBe(`First line. Typed.\n\n${LINK}\n\nSecond line.\n`);
+
+    // Typing at the start of the first line, which the file goes in before.
+    const start = mountWithCaret("", "First line.\n");
+    start.applyDropEdit({ from: 0, to: 0, insert: `${LINK}\n\n`, assoc: 1 });
+    start.insertText("Typed. ");
+    expect(start.getText()).toBe(`${LINK}\n\nTyped. First line.\n`);
+  });
+
+  it("replaces only the part of a rewritten block that changed, so a caret in it keeps its place", () => {
+    const editor = mountWithCaret("- a", "\n- b\n");
+
+    editor.applyDropEdit({ from: 0, to: 7, insert: `- a\n- ${LINK}\n- b`, assoc: -1 });
+    editor.insertText("x");
+
+    expect(editor.getText()).toBe(`- ax\n- ${LINK}\n- b\n`);
+  });
+});
+
 describe("RawEditor.setText", () => {
   it.each([
     ["adds text before it", "First line.", "![](a.png)\n\nFirst line.\n", "![](a.png)\n\nFirst line. Typed.\n"],

@@ -63,7 +63,15 @@ import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibilit
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
-import { dropPosition, insertBlocksAt, type DropTarget, insertAtSelection, mapAcrossChange } from "./fileDrop";
+import {
+  dropPosition,
+  insertAtSelection,
+  insertBlocksAt,
+  mapAcrossChange,
+  sourceEditBetween,
+  type DropTarget,
+  type SourceEdit,
+} from "./fileDrop";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -455,6 +463,30 @@ export class WysiwygEditor {
       else this.crepe.editor.action(insertAtSelection(markdown, moveCaret));
     } catch {
       // Editor not ready / torn down mid-drop; ignore.
+    }
+  }
+
+  /**
+   * Insert a dropped file at the target of a drop on this pane, as
+   * `insertMarkdown` does but leaving the caret, and return the change to
+   * `source`, the Markdown this pane shows, that puts the file in the same
+   * place (§5.4). The split's Markdown pane makes that change while the user
+   * types there. This pane's own report would write the whole text in its own
+   * form under their caret. Null when the pane cannot tell where the file
+   * goes in the source, or nothing went in.
+   */
+  insertMarkdownWithSource(markdown: string, target: DropTarget, source: string): SourceEdit | null {
+    const before = this.withView((view) => view.state.doc, null);
+    this.insertMarkdown(markdown, target, false);
+    const after = this.withView((view) => view.state.doc, null);
+    if (!this.crepe || !before || !after || before === after) return null;
+    const { body } = splitFrontmatter(source);
+    const offset = source.length - body.length;
+    try {
+      const edit = this.crepe.editor.action((ctx) => sourceEditBetween(ctx, before, after, body));
+      return edit && { ...edit, from: edit.from + offset, to: edit.to + offset };
+    } catch {
+      return null;
     }
   }
 

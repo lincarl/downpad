@@ -1668,19 +1668,23 @@ test("a Markdown file dropped on the document opens without leaving the drop ind
   await expect(page.locator(".milkdown-drop-indicator").first()).toBeHidden();
 });
 
-test("a file dropped on the split's document pane goes in there while the Markdown pane has focus", async () => {
-  const { file, documentLine, markdownLine } = await openSplit("drop-on-document-pane.md", "First line.\n\nSecond line.\n");
+test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
+  // The document view would write this heading and these bullets another way.
+  const text = "Title\n=====\n\n* Alpha\n* Beta\n\nFirst line.\n\nSecond line.\n";
+  const { file } = await openSplit("drop-on-document-pane.md", text);
+  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
   await markdownLine.click();
-  const box = (await documentLine.boundingBox())!;
-  await dropFiles(documentLine, [await csvFile("notes.csv")], { x: box.width / 2, y: box.height - 2 });
+  await page.keyboard.press("End");
+  await dropBelow(page.locator(".editor-pane-wysiwyg .ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  const link = "[notes.csv](attachments/notes.csv)";
   await expect(page.locator(".editor-pane-wysiwyg .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
-  // The document pane has focus now, with the caret after the file.
-  await page.keyboard.press("Enter");
-  await page.keyboard.type("Typed after the drop.");
+  await expect(page.locator(".editor-pane-raw .cm-line", { hasText: "notes.csv" })).toHaveText(link);
+  // Focus and the caret stay in the Markdown pane.
+  await page.keyboard.type(" Typed.");
   await page.keyboard.press("ControlOrMeta+s");
-  const saved = "First line.\n\n[notes.csv](attachments/notes.csv)\n\nTyped after the drop.\n\nSecond line.\n";
-  await expect.poll(() => readFile(file, "utf8")).toBe(saved);
-  await expect(page.locator(".editor-pane-raw .cm-line").nth(2)).toHaveText("[notes.csv](attachments/notes.csv)");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    text.replace("First line.\n", `First line.\n\n${link}\n`).replace("Second line.", "Second line. Typed."),
+  );
 });
 
 test("a file dropped while typing in the split's Markdown pane lands at the caret and keeps the rest as written", async () => {
@@ -1781,22 +1785,27 @@ test("a file dropped while the find card's match is in the frontmatter table lea
   );
 });
 
-test("typing in the split's Markdown pane across a drop on the document pane stays in the Markdown pane", async () => {
-  const { file } = await openSplit("type-across-drop.md", "First line.\n\nSecond line.\n\nThird line.\n");
-  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Third line." });
+test("typing in the split's Markdown pane across a drop on the document pane stays in the Markdown pane as typed", async () => {
+  // The document view would write this heading and these bullets another way.
+  const text = "Title\n=====\n\n* Alpha\n\nFirst line.\n\nSecond line.\n\n* Gamma\n";
+  const { file } = await openSplit("type-across-drop.md", text);
+  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
   await markdownLine.click();
   await page.keyboard.press("End");
-  const typing = page.keyboard.type(" Typed during the drop.", { delay: 40 });
-  await expect(markdownLine).toContainText("Third line. Ty");
+  // Ends in a space, which the document view would not keep at the end of a line.
+  const typing = page.keyboard.type(" Typed during the drop ", { delay: 40 });
+  await expect(markdownLine).toContainText("Second line. Ty");
   await dropBelow(page.locator(".editor-pane-wysiwyg .ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
   await typing;
-  // The file goes in once typing pauses, and focus stays in the Markdown pane.
-  await expect(page.locator(".editor-pane-raw .cm-line").nth(2)).toHaveText("[notes.csv](attachments/notes.csv)");
-  await page.keyboard.type(" More.");
-  await expect(markdownLine).toHaveText("Third line. Typed during the drop. More.");
+  const link = "[notes.csv](attachments/notes.csv)";
+  await expect(page.locator(".editor-pane-raw .cm-line", { hasText: "notes.csv" })).toHaveText(link);
+  // A pause, then more typing, which goes on where it was.
+  await page.waitForTimeout(1500);
+  await page.keyboard.type("and after.");
+  await expect(markdownLine).toHaveText("Second line. Typed during the drop and after.");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(
-    "First line.\n\n[notes.csv](attachments/notes.csv)\n\nSecond line.\n\nThird line. Typed during the drop. More.\n",
+    text.replace("First line.\n", `First line.\n\n${link}\n`).replace("Second line.", "Second line. Typed during the drop and after."),
   );
 });
 

@@ -259,6 +259,61 @@ describe("drops whose files are still being read", () => {
   });
 });
 
+describe("the source change for a file dropped on the split's document pane", () => {
+  /** Drop LINK_A at a point, and return the source changed as the Markdown
+   *  pane changes it. Checks the document pane reads that source back as the
+   *  document it now holds. */
+  function dropInSource(opened: WysiwygEditor, source: string, x: number, y: number): string {
+    const edit = opened.insertMarkdownWithSource(LINK_A, opened.dropTargetAt(x, y)!, source);
+    if (!edit) throw new Error("No source change");
+    const changed = source.slice(0, edit.from) + edit.insert + source.slice(edit.to);
+    const shown = viewOf(opened).state.doc;
+    opened.setMarkdown(changed);
+    expect(viewOf(opened).state.doc.toString()).toBe(shown.toString());
+    return changed;
+  }
+
+  // The document view would write this heading and these bullets another way.
+  const SOURCE = "Title\n=====\n\n* Alpha\n* Beta\n\nFirst line.\n\nSecond line.\n";
+
+  it("adds the file between blocks and keeps the rest as written", async () => {
+    const opened = await open(SOURCE);
+    place(opened, block("heading"), 90, 110);
+    place(opened, block("bullet_list"), 115, 150);
+    place(opened, block("paragraph", "First line."), 160, 190);
+    place(opened, block("paragraph", "Second line."), 200, 230);
+
+    expect(dropInSource(opened, SOURCE, 300, 188)).toBe(SOURCE.replace("First line.\n", `First line.\n\n${LINK_A}\n`));
+  });
+
+  it("adds the file at the start and the end of the text, after the frontmatter", async () => {
+    const source = `---\ntitle: x\n---\n\n${SOURCE}`;
+    const above = await open(source);
+    expect(dropInSource(above, source, 300, 40)).toBe(source.replace("Title\n", `${LINK_A}\n\nTitle\n`));
+    await above.destroy();
+
+    const below = await open(source);
+    expect(dropInSource(below, source, 300, 400)).toBe(`${source}\n${LINK_A}\n`);
+  });
+
+  it("writes a list a file joins as an item in the document view's form", async () => {
+    const source = "Intro.\n\n* Item 1\n* Item 2\n\nOutro.\n";
+    const opened = await open(source);
+    place(opened, block("list_item", "Item 1"), 140, 170);
+    place(opened, block("paragraph", "Item 1"), 140, 170, 60);
+
+    expect(dropInSource(opened, source, 300, 169)).toBe(`Intro.\n\n- Item 1\n- ${LINK_A}\n- Item 2\n\nOutro.\n`);
+  });
+
+  it("finds no source change for a document with no text", async () => {
+    const opened = await open("");
+
+    expect(opened.insertMarkdownWithSource(LINK_A, opened.dropTargetAt(300, 400)!, "")).toBeNull();
+    // The file still goes into the document.
+    expect(opened.getMarkdown()).toBe(`${LINK_A}\n`);
+  });
+});
+
 describe("a file dropped away from the document text", () => {
   it("goes in after the selected text, such as the find card's match, not over it", async () => {
     const opened = await open("First line.\n\nSecond line.\n");

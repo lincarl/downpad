@@ -18,7 +18,7 @@ import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
 import { codeMirrorSpan, revealSpan } from "../wysiwyg/findReveal";
-import type { DropTarget } from "../wysiwyg/fileDrop";
+import type { DropTarget, SourceEdit } from "../wysiwyg/fileDrop";
 
 /** How long edits and caret moves must pause before the find card recounts.
  *  Counting after an edit walks the whole document, which takes about 200ms
@@ -174,6 +174,19 @@ export class RawEditor {
       changes: { from: at, insert: text },
       ...(moveCaret ? { selection: { anchor: at + text.length } } : {}),
     });
+  }
+
+  /** Make the change that puts a file dropped on the split's document pane
+   *  into this pane's text while the user types here (§5.4). It is reported,
+   *  mirrored and undone like typing. Only the part that differs from the
+   *  text is replaced, so a caret outside it keeps its place, and a caret
+   *  right where text goes in stays on the side the change gives. */
+  applyDropEdit({ from, to, insert, assoc }: SourceEdit): void {
+    if (!this.view) return;
+    const { state } = this.view;
+    const part = changedRange(state.sliceDoc(from, to), insert);
+    const changes = state.changes({ from: from + part.from, to: from + part.to, insert: part.insert });
+    this.view.dispatch({ changes, selection: state.selection.map(changes, assoc) });
   }
 
   /**

@@ -83,9 +83,8 @@ interface AimedDrop {
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 const paneKey = (tabId: string, view: View): string => `${tabId} ${view}`;
-/** How long after a key the user still counts as typing. A file dropped on
- *  the split's document pane waits for the Markdown pane to go this long
- *  without a key (`insertDropped`). */
+/** How long after a key the user still counts as typing, for a drop
+ *  (`AimedDrop.typing`). */
 const TYPING_PAUSE_MS = 1000;
 
 /** Debounce for mirroring an edit into the other split pane (§6.1). Coalesces a
@@ -268,30 +267,29 @@ export class EditorHost implements FindController {
   /**
    * Insert markdown for a file of a drop (§5.4) into the document it was
    * dropped on, in the pane `aimDrop` chose, at the drop's target after the
-   * drop's earlier files, or at the pane's caret. A file only goes into a
-   * document that is in front. One dropped on a document that is behind
-   * another tab by now waits until that document is shown again, and the
-   * document counts as unsaved meanwhile. If by then
-   * the pane it was dropped on is gone, hidden or behind the document's
-   * latest edit, as after a reload from disk, a layout switch, an edit in the
-   * other view, or after the editor was dropped from memory, it goes in at the
-   * caret of the pane being edited. Resolves false, inserting nothing, once
-   * the document is closed.
+   * drop's earlier files, or at the caret of the pane being edited. A file
+   * only goes into a document that is in front. One dropped on a document
+   * that is behind another tab by now waits until that document is shown
+   * again, and the document counts as unsaved meanwhile. If by then the pane
+   * it was dropped on is gone, hidden or behind the document's latest edit,
+   * as after a reload from disk, a layout switch, an edit in the other view,
+   * or after the editor was dropped from memory, it goes in at the caret of
+   * the pane being edited. Resolves false, inserting nothing, once the
+   * document is closed.
    *
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
    * with the caret after the file, as after Crepe's own drops, unless the
    * user has moved on since the drop (`movedOn`). Then focus and the caret
-   * stay where the user is, such as typing in the find card. While the user
-   * types in the split's Markdown pane, a file dropped on the document pane
-   * waits for typing to pause, and focus stays in the Markdown pane. An
-   * insert in the document pane writes the whole text in its own form, which
-   * would drop a space just typed at the end of the line, and the next keys
-   * would go elsewhere.
+   * stay where the user is, such as typing in the find card.
+   *
+   * While the split's Markdown pane has focus, a file dropped on the
+   * document pane goes into the Markdown pane too, at the place in the source
+   * that matches the drop point, and focus stays there. The document pane
+   * then mirrors it as it mirrors typing. An insert reported by the document
+   * pane would write the whole text in its own form under the user's caret.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
-    const typing = this.drops.get(drop)?.pane.wysiwyg ? this.typedInMarkdownSince(drop) : false;
-    if (typing) await this.markdownTypingPause();
     let place = this.dropPlace(drop);
     while (!place) {
       if (this.disposed || !this.drops.has(drop) || !this.hasTab(drop.tabId)) return false;
@@ -303,11 +301,20 @@ export class EditorHost implements FindController {
     }
     const aimed = this.drops.get(drop)!;
     const { pane, target } = place;
+    const typedIn = this.focusedSplitRaw()?.raw;
+    if (pane.wysiwyg && target && typedIn) {
+      // If the source edit cannot be found, the document pane's own report
+      // rewrites the Markdown pane, as for any edit there.
+      const edit = pane.wysiwyg.insertMarkdownWithSource(markdown, target, typedIn.getText());
+      if (edit) typedIn.applyDropEdit(edit);
+      this.flush();
+      return true;
+    }
     const stay = !this.movedOn(aimed);
     if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target, stay);
     else pane.raw?.insertText(markdown, target, stay);
     this.flush();
-    if (aimed.onPane && stay && !typing) {
+    if (aimed.onPane && stay) {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
       else pane.raw?.focus();
     }
@@ -330,15 +337,16 @@ export class EditorHost implements FindController {
   /**
    * Where the next file of a drop goes in now, after the split catches up.
    * That is the drop's target in the pane it was dropped on, while that pane
-   * is shown and holds its document's latest edit. Otherwise it is the caret
-   * of the pane being edited. Null while the drop's document is not in front,
-   * or its editor is still being built.
+   * is shown and holds its document's latest edit. Otherwise, as for a drop
+   * away from the text, it is the caret of the pane being edited now. Null
+   * while the drop's document is not in front, or its editor is still being
+   * built.
    */
   private dropPlace(drop: FileDrop): { pane: Pane; target: DropTarget | null } | null {
     const aimed = this.drops.get(drop);
     if (this.disposed || !aimed || drop.tabId !== this.activeTabId) return null;
     this.flush();
-    if (this.usable(aimed.pane)) return { pane: aimed.pane, target: aimed.target };
+    if (aimed.target && this.usable(aimed.pane)) return { pane: aimed.pane, target: aimed.target };
     const pane = this.focusedSplitRaw() ?? this.active();
     return pane && this.usable(pane) ? { pane, target: null } : null;
   }
@@ -791,28 +799,6 @@ export class EditorHost implements FindController {
   /** Whether a pane still has the editor it was built with. */
   private isLive(pane: Pane): boolean {
     return this.panes.get(paneKey(pane.tabId, pane.view)) === pane && (pane.wysiwyg ?? pane.raw) !== null;
-  }
-
-  /** Whether the user is typing in a Markdown pane, which has focus and took
-   *  a key within `TYPING_PAUSE_MS`. */
-  private typingIn(pane: Pane | null): boolean {
-    return !!pane?.el.contains(document.activeElement) && performance.now() - this.lastKey.at < TYPING_PAUSE_MS;
-  }
-
-  /** Whether the user was typing in the split's Markdown pane when a drop
-   *  happened, or typed there since. */
-  private typedInMarkdownSince(drop: FileDrop): boolean {
-    const raw = this.focusedSplitRaw();
-    return this.typingIn(raw) || (raw !== null && this.lastKey.at > (this.drops.get(drop)?.at ?? Infinity));
-  }
-
-  /** Resolve once the user stops typing in the split's Markdown pane, or
-   *  focus leaves it. */
-  private async markdownTypingPause(): Promise<void> {
-    while (!this.disposed && this.typingIn(this.focusedSplitRaw())) {
-      const left = TYPING_PAUSE_MS - (performance.now() - this.lastKey.at);
-      await new Promise((resolve) => setTimeout(resolve, left));
-    }
   }
 
   /** The split's Markdown pane when it holds focus, else null. */
