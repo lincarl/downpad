@@ -8,8 +8,9 @@
 // holds a `$` no backslash escapes, ends in a backslash or comes right before
 // a digit. No run of dollars can keep those apart. A typed closing `$` or `~`
 // waits for the next character, which decides how a file with the same text
-// would read. Only a typed run of tildes right after a letter or digit opens
-// no strikethrough, as in Milkdown's shortcut, so "10~20 and 30~40" stays text.
+// would read. The one exception is a typed run of tildes right after a letter
+// or digit, which opens no strikethrough, as in Milkdown's shortcut, so typed
+// "10~20 and 30~40" stays text while GFM strikes it in a file.
 //
 // A paragraph that is only `$$...$$` is display math on GitHub, in VS Code and
 // in Obsidian. remark-math reads it as inline math, which was saved as `$...$`.
