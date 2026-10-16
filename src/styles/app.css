@@ -720,6 +720,13 @@ body {
   text-transform: none;
 }
 
+/* Crepe shows a code block's tools only while the pointer is over the block.
+   Show a tool that has keyboard focus too, as it looks on hover. */
+.editor-host .milkdown .milkdown-code-block .language-button:focus-visible,
+.editor-host .milkdown .milkdown-code-block .tools-button-group > button:focus-visible {
+  opacity: 1;
+}
+
 /* Markdown tables size to their content (§6.2). prosemirror-tables ships
    `table-layout: fixed; width: 100%`, which stretches every table across the page
    and gives each column an equal share regardless of what is in it — a two-column

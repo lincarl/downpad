@@ -42,7 +42,7 @@ import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
-import { installEditorAccessibility } from "./editorAccessibility";
+import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -183,6 +183,8 @@ export class WysiwygEditor {
     this.crepe.editor.config((ctx) => {
       ctx.update(remarkStringifyOptionsCtx, (prev) => stringifyOptions(prev, style));
     });
+    // Tell screen readers whether each task is done.
+    this.crepe.editor.config(labelTaskBoxes);
     // Keep standalone images' alt text, which Crepe overwrites with its resize
     // ratio. Must follow the ImageBlock feature so this node spec replaces Crepe's.
     this.crepe.editor.use(imageBlockAltSchema);

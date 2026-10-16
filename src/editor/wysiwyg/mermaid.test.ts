@@ -61,6 +61,23 @@ describe("renderMermaidPreview", () => {
     expect(apply).toHaveBeenCalledTimes(3);
   });
 
+  it("names the diagram unless its source gives it a title", async () => {
+    const plain = previewPanel();
+    plain.apply(renderMermaidPreview("mermaid", "graph LR\n  A --> B", plain.apply));
+    await settle();
+    expect(plain.host.querySelector("svg")?.getAttribute("aria-label")).toBe("Mermaid diagram");
+
+    // Mermaid names a diagram with an accTitle through aria-labelledby.
+    mermaid.render.mockImplementationOnce(async (id: string) => ({
+      svg: `<svg id="${id}" aria-labelledby="chart-title-${id}"><title id="chart-title-${id}">Flow</title></svg>`,
+    }));
+    const titled = previewPanel();
+    titled.apply(renderMermaidPreview("mermaid", "graph LR\n  accTitle: Flow\n  A --> B", titled.apply));
+    await settle();
+    expect(titled.host.querySelector("svg")?.getAttribute("aria-labelledby")).toMatch(/^chart-title-/);
+    expect(titled.host.querySelector("svg")?.hasAttribute("aria-label")).toBe(false);
+  });
+
   it("shows only the newest render when the theme changes mid-render", async () => {
     document.documentElement.dataset.editorTheme = "light";
     const { host, apply } = previewPanel();

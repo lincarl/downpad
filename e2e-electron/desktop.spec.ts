@@ -219,6 +219,119 @@ test("the packaged app ignores a remote development URL override", async () => {
   expect(await app!.evaluate(({ app }) => app.isPackaged)).toBe(true);
 });
 
+/** Roles a screen reader announces by name. */
+const NAMED_ROLES = new Set([
+  "button", "checkbox", "combobox", "graphics-document", "image", "link", "listbox", "menu", "menuitem",
+  "navigation", "option", "radio", "searchbox", "slider", "switch", "tab", "textbox",
+]);
+
+test("the document view names every image and control it shows", async () => {
+  const file = path.join(directory, "names.md");
+  await writeFile(path.join(directory, "image.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
+  await writeFile(file, [
+    "# Names",
+    "A [link](https://example.com) and math $E = mc^2$ in a line.",
+    "- One\n- Two",
+    "- [ ] Open task\n- [x] Done task",
+    "```js\nlet x = 1;\n```",
+    "| a | b |\n| - | - |\n| 1 | 2 |",
+    '![Pixel](image.png "Caption")',
+    "```mermaid\ngraph TD; A-->B;\n```",
+    "Last line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  const editor = page.locator(".milkdown > .ProseMirror");
+  const lastLine = editor.locator("p").filter({ hasText: "Last line." });
+  const unnamed = new Set<string>();
+  /** Record the images and controls in the document view that have no
+   *  accessible name in Chromium's tree while the view is in `state`. Each is
+   *  its role and the element with its two nearest ancestors, such as
+   *  "image svg < span.milkdown-icon < button.copy-button". */
+  const check = async (state: string) => {
+    const { result } = await session.send("Runtime.evaluate", { expression: "document.querySelector('.crepe-root')" });
+    const { nodes } = await session.send("Accessibility.queryAXTree", { objectId: result.objectId });
+    for (const node of nodes) {
+      const role = String(node.role?.value ?? "");
+      if (node.ignored || !NAMED_ROLES.has(role) || String(node.name?.value ?? "").trim()) continue;
+      const { object } = await session.send("DOM.resolveNode", { backendNodeId: node.backendDOMNodeId });
+      const described = await session.send("Runtime.callFunctionOn", {
+        objectId: object.objectId,
+        returnByValue: true,
+        functionDeclaration: `function () {
+          const parts = [];
+          for (let el = this; el && parts.length < 3; el = el.parentElement) {
+            parts.push(el.tagName.toLowerCase() + [...el.classList].map((name) => "." + name).join(""));
+          }
+          return parts.join(" < ");
+        }`,
+      });
+      unnamed.add(`${state}: ${role} ${String(described.result.value)}`);
+    }
+  };
+  await expect(page.locator(".mermaid-preview svg")).toBeVisible();
+  await check("at rest");
+  await editor.locator("p").first().hover();
+  await expect(page.locator(".milkdown-block-handle")).toHaveAttribute("data-show", "true");
+  await check("block handle");
+  await page.locator(".milkdown-code-block").first().hover();
+  await page.locator(".milkdown-code-block .language-button").first().click();
+  await expect(page.locator(".language-list [aria-selected]").first()).toBeVisible();
+  await check("language picker");
+  await lastLine.click();
+  await editor.locator("a").hover();
+  await expect(page.locator(".milkdown-link-preview")).toHaveAttribute("data-show", "true");
+  await check("link preview");
+  await editor.locator("td").first().click();
+  await page.locator('[data-role="col-drag-handle"]').click({ force: true });
+  await expect(page.locator('[data-role="col-drag-handle"] .button-group')).toHaveAttribute("data-show", "true");
+  await check("column handle");
+  await lastLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Shift+Home");
+  await expect(page.locator(".milkdown-toolbar")).toHaveAttribute("data-show", "true");
+  await check("selection toolbar");
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/");
+  await expect(page.locator(".milkdown-slash-menu")).toHaveAttribute("data-show", "true");
+  await check("slash menu");
+  await page.keyboard.type("image");
+  await expect(page.locator(".milkdown-slash-menu li.hover")).toHaveText("Image");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".milkdown-image-block .link-input-area")).toBeVisible();
+  await check("empty image");
+  await editor.locator(".katex").click();
+  await expect(page.locator(".milkdown-latex-inline-edit")).toHaveAttribute("data-show", "true");
+  await check("math field");
+  expect([...unnamed]).toEqual([]);
+});
+
+test("keyboard focus shows a code block's tools and skips the table's pointer controls", async () => {
+  const file = path.join(directory, "focus.md");
+  await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nLast line.\n");
+  await launch(file);
+  /** Click into the code, move the pointer off the block, and leave by keyboard.
+   *  After Escape, CodeMirror lets the next Tab move focus. */
+  const leaveCode = async (key: string) => {
+    await page.locator(".milkdown-code-block .cm-content").click();
+    await page.locator(".milkdown > .ProseMirror > p").filter({ hasText: "Last line." }).hover();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press(key);
+  };
+  await leaveCode("Shift+Tab");
+  const copy = page.locator(".milkdown-code-block .copy-button");
+  await expect(copy).toBeFocused();
+  await expect(copy).toHaveCSS("opacity", "1");
+  await page.keyboard.press("Shift+Tab");
+  const language = page.locator(".milkdown-code-block .language-button");
+  await expect(language).toBeFocused();
+  await expect(language).toHaveCSS("opacity", "1");
+  // The table's buttons are invisible until hovered and do nothing from the keyboard.
+  await leaveCode("Tab");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".milkdown-table-block") === null)).toBe(true);
+});
+
 test("a toolbar tooltip lets a click through to Recent", async () => {
   const file = path.join(directory, "tooltip.md");
   await writeFile(file, "# Tooltip\n");
