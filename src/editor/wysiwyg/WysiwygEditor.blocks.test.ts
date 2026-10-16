@@ -8,6 +8,7 @@ import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { closeHistory, undo } from "@milkdown/kit/prose/history";
+import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -75,6 +76,24 @@ function blockWith(view: EditorView, text: string): { from: number; to: number; 
 function deleteBlock(view: EditorView, text: string): void {
   const { from, to } = blockWith(view, text);
   view.dispatch(view.state.tr.delete(from, to));
+}
+
+/** Insert an empty paragraph below the top-level block that holds `text`, as
+ *  Enter twice at the end of a list leaves. */
+function emptyLineBelow(view: EditorView, text: string): void {
+  view.dispatch(view.state.tr.insert(blockWith(view, text).to, view.state.schema.nodes.paragraph.create()));
+}
+
+/** Type `text` at the start of the block that starts with `start`, key by key,
+ *  so Crepe's input rules run as they do for a user. */
+function typeAtStart(view: EditorView, start: string, text: string): void {
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, after(view, start) - start.length)));
+  for (const char of text) {
+    const { from, to } = view.state.selection;
+    /** The plain insert, for when no input rule handles the key. */
+    const insert = () => view.state.tr.insertText(char, from, to);
+    if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, char, insert))) view.dispatch(insert());
+  }
 }
 
 // A file with much that Milkdown writes in its own way, such as a setext
@@ -337,6 +356,92 @@ describe("a join between a changed block and the file's text", () => {
       },
       "Install\n\n    npm install\n\n    npm start\n\nEnd.\n",
     ],
+    // Right under a definition, a list that does not start at 1, indented code
+    // and an HTML block that starts with a tag would read as a paragraph.
+    [
+      "a list that starts at 3 under a definition",
+      "See [docs][d].\n\n[d]: https://example.com\n## Steps\n3. third\n4. fourth\n",
+      (view: EditorView) => deleteBlock(view, "Steps"),
+      "See [docs][d].\n\n[d]: https://example.com\n\n3. third\n4. fourth\n",
+    ],
+    [
+      "indented code under a definition",
+      "Install the [tool][t].\n\n[t]: https://example.com/tool\n## Setup\n    npm install tool\n    npm start\n",
+      (view: EditorView) => deleteBlock(view, "Setup"),
+      "Install the [tool][t].\n\n[t]: https://example.com/tool\n\n    npm install tool\n    npm start\n",
+    ],
+    [
+      "an HTML block under a definition",
+      "See [docs][d].\n\n[d]: https://example.com\n## Note\n<custom-note>\n*not emphasis*\n</custom-note>\n",
+      (view: EditorView) => deleteBlock(view, "Note"),
+      "See [docs][d].\n\n[d]: https://example.com\n\n<custom-note>\n*not emphasis*\n</custom-note>\n",
+    ],
+    // The edited paragraph writes its link inline, so the definition right
+    // above the list goes, and the one above it is left there.
+    [
+      "a list that starts at 3 under the definition left when another goes",
+      "# Upgrade\n\nRead the [release notes][notes] first.\n\nBack up with the [backup tool][backup].\n\n[notes]: https://example.com/notes\n[backup]: https://example.com/backup\n\n3. Stop the server\n4. Install the update\n\nDone.\n",
+      (view: EditorView) => typeAfter(view, "Back up", " now"),
+      "# Upgrade\n\nRead the [release notes][notes] first.\n\nBack up now with the [backup tool](https://example.com/backup).\n\n[notes]: https://example.com/notes\n\n3. Stop the server\n4. Install the update\n\nDone.\n",
+    ],
+    [
+      "indented code under the definition left when another goes",
+      "Use [a] here.\n\nAnd [b] there.\n\n[a]: https://a.example\n[b]: https://b.example\n\n    npm install\n    npm start\n",
+      (view: EditorView) => typeAfter(view, "there", " now"),
+      "Use [a] here.\n\nAnd [b](https://b.example) there now.\n\n[a]: https://a.example\n\n    npm install\n    npm start\n",
+    ],
+    // Under the definition, the list would read as a paragraph, and with a
+    // blank line above it, it would take in the paragraph the heading became.
+    [
+      "a list between a definition and a new paragraph",
+      "See [docs][d].\n\n[d]: https://example.com\n## Steps\n3. third\n4. fourth\n## After\n\nEnd.\n",
+      (view: EditorView) => {
+        deleteBlock(view, "Steps");
+        const { from, to } = blockWith(view, "After");
+        view.dispatch(view.state.tr.setBlockType(from, to, view.state.schema.nodes.paragraph));
+      },
+      "See [docs][d].\n\n[d]: https://example.com\n\n3. third\n4. fourth\n\nAfter\n\nEnd.\n",
+    ],
+    // A new list between a definition and a paragraph, which would read as a
+    // paragraph under the definition.
+    [
+      "a new list under a definition",
+      "See [docs][d].\n\n[d]: https://example.com\n## Old\nNext line.\n",
+      (view: EditorView) => {
+        const { from, to } = blockWith(view, "Old");
+        const { ordered_list: list, list_item: item, paragraph } = view.state.schema.nodes;
+        view.dispatch(view.state.tr.replaceWith(from, to, list.create({ order: 3 }, item.create(null, paragraph.create(null, view.state.schema.text("Old"))))));
+      },
+      "See [docs][d].\n\n[d]: https://example.com\n\n3. Old\n\nNext line.\n",
+    ],
+    // A list, quote or footnote would take in an empty line below it.
+    [
+      "an empty line where a heading was under a list",
+      "- one\n- two\n# Head\n\nText.\n",
+      (view: EditorView) => {
+        const { from, to } = blockWith(view, "Head");
+        view.dispatch(view.state.tr.replaceWith(from, to, view.state.schema.nodes.paragraph.create()));
+      },
+      "- one\n- two\n\n<br />\n\nText.\n",
+    ],
+    [
+      "an empty line under a list",
+      "# Notes\n\n- Buy milk\n- Call Ann\n## Later\n\nText.\n",
+      (view: EditorView) => emptyLineBelow(view, "Call Ann"),
+      "# Notes\n\n- Buy milk\n- Call Ann\n\n<br />\n\n## Later\n\nText.\n",
+    ],
+    [
+      "an empty line under a quote",
+      "> A quote.\n## Next\n\nText.\n",
+      (view: EditorView) => emptyLineBelow(view, "A quote."),
+      "> A quote.\n\n<br />\n\n## Next\n\nText.\n",
+    ],
+    [
+      "an empty line under a footnote",
+      "Text[^1].\n\n[^1]: The note.\n## Next\n",
+      (view: EditorView) => emptyLineBelow(view, "The note."),
+      "Text[^1].\n\n[^1]: The note.\n\n<br />\n\n## Next\n",
+    ],
   ])("gets a blank line when the file's line break would join %s", { timeout: 60_000 }, async (_name, markdown, edit, expected) => {
     const { editor, view } = await open(markdown);
     edit(view);
@@ -407,6 +512,111 @@ describe("an edit that the file's text cannot keep", () => {
     // Rewriting the quote would drop the definition the paragraph below uses.
     typeAfter(view, "Quote", "d");
     expect(editor.getMarkdown()).toBe("> Quoted [a](https://q.y).\n\nAlso [b](https://q.y).\n");
+  });
+});
+
+describe("an edit near text that reads as it does only where it is", () => {
+  it.each([
+    // Under the definition, these lines are a paragraph. Once the definition
+    // goes, they would read as a list and as indented code.
+    [
+      "a paragraph that looks like a list under a definition the edit leaves out",
+      "Intro uses [a] there.\n\n[a]: https://a.example\n2. Second line\n\nEnd.\n",
+      (view: EditorView) => typeAfter(view, "there", " now"),
+      "Intro uses [a](https://a.example) there now.\n\n2\\. Second line\n\nEnd.\n",
+    ],
+    // The rules show nothing above joins these lines, but they read as a
+    // paragraph only under the definition, which the edit leaves out.
+    [
+      "a paragraph that looks like a list under a new heading",
+      "Intro uses [a] there.\n\n[a]: https://a.example\n2. Second line\n\nEnd.\n",
+      (view: EditorView) => {
+        const { from, to } = blockWith(view, "Intro uses");
+        view.dispatch(view.state.tr.setBlockType(from, to, view.state.schema.nodes.heading, { level: 1 }));
+      },
+      "# Intro uses [a](https://a.example) there.\n\n2\\. Second line\n\nEnd.\n",
+    ],
+    [
+      "a paragraph that looks like a list, left at the top",
+      "Intro uses [a] there.\n\n[a]: https://a.example\n2. Second line\n\nEnd.\n",
+      (view: EditorView) => deleteBlock(view, "Intro uses"),
+      "2\\. Second line\n\nEnd.\n",
+    ],
+    [
+      "a paragraph that looks like code under a definition the edit leaves out",
+      "Intro uses [a] there.\n\n[a]: https://a.example\n    not code\n\nEnd.\n",
+      (view: EditorView) => typeAfter(view, "there", " now"),
+      "Intro uses [a](https://a.example) there now.\n\nnot code\n\nEnd.\n",
+    ],
+    // Below indented code, even after a blank line, the parser reads a list
+    // that does not start at 1 as a paragraph. Milkdown writes the code fenced.
+    [
+      "a list typed below indented code",
+      "Install it:\n\n    npm install\n\nStart the server.\n",
+      (view: EditorView) => typeAtStart(view, "Start the server", "3. "),
+      "Install it:\n\n```\nnpm install\n```\n\n3. Start the server.\n",
+    ],
+    [
+      "a list that the edit leaves below indented code",
+      "Install it:\n\n    npm install\n\nThen:\n\n3. Start the server\n4. Open the page\n",
+      (view: EditorView) => deleteBlock(view, "Then:"),
+      "Install it:\n\n```\nnpm install\n```\n\n3. Start the server\n4. Open the page\n",
+    ],
+    // Milkdown writes a heading with line breaks in setext form. Starting with
+    // a comment, it reads as the comment and a paragraph "===", which would
+    // take in the next line.
+    [
+      "a heading made of a comment",
+      "Intro.\n\n<!--\nTODO: check\n-->\nText after the comment.\n",
+      (view: EditorView) => {
+        const { from } = blockWith(view, "Intro.");
+        const at = from + view.state.doc.child(0).nodeSize + 1;
+        view.dispatch(view.state.tr.setBlockType(at, at, view.state.schema.nodes.heading, { level: 1 }));
+      },
+      "Intro.\n\n<!--\nTODO: check\n-->\n===\n\nText after the comment.\n",
+    ],
+  ])("writes the whole body in Milkdown's form for %s", { timeout: 60_000 }, async (_name, markdown, edit, expected) => {
+    const { editor, crepe, view } = await open(markdown);
+    edit(view);
+    expect(editor.getMarkdown()).toBe(expected);
+    expect(expected).toBe(crepe.editor.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc)));
+  });
+});
+
+describe("a new footnote", () => {
+  it("writes the whole body in Milkdown's form when it could turn text in a kept block into a reference", { timeout: 60_000 }, async () => {
+    const { editor, crepe, view } = await open("Text with [^new] in it.\n\nEnd.\n");
+    const { footnote_definition: definition, paragraph } = view.state.schema.nodes;
+    const note = definition.create({ label: "new" }, paragraph.create(null, view.state.schema.text("Note.")));
+    view.dispatch(view.state.tr.insert(blockWith(view, "End.").to, note));
+    const milkdown = crepe.editor.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc));
+    expect(milkdown).toContain("\\[^new]");
+    expect(editor.getMarkdown()).toBe(milkdown);
+  });
+});
+
+describe("the text written for a document", () => {
+  it("does not depend on which joins earlier writes read back", { timeout: 60_000 }, async () => {
+    /** Forty list items of an HTML list. */
+    const rows = (tag: string) => Array.from({ length: 40 }, (_, i) => `  <li>${tag} entry number ${i} with some text</li>`).join("\n");
+    const markdown = `# Page\n\n<ul class="one">\n${rows("first")}\n</ul>\n\nAlpha word here.\n\n<ul class="two">\n${rows("second")}\n</ul>\n\nBeta word here.\n\n* End item\n`;
+    const { editor, view } = await open(markdown);
+    // Change both paragraphs in one transaction, as Replace all does.
+    const tr = view.state.tr;
+    for (const word of ["Beta word", "Alpha word"]) {
+      const at = after(view, word);
+      tr.insertText("term", at - 4, at);
+    }
+    view.dispatch(tr);
+    const first = editor.getMarkdown();
+    const replaced = view.state.doc;
+    view.dispatch(closeHistory(view.state.tr));
+    typeAfter(view, "End item", "!");
+    editor.getMarkdown();
+    undo(view.state, view.dispatch);
+    expect(view.state.doc.eq(replaced)).toBe(true);
+    expect(editor.getMarkdown()).toBe(first);
+    expect(first).toBe(markdown.replace("Alpha word", "Alpha term").replace("Beta word", "Beta term"));
   });
 });
 

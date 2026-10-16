@@ -12,19 +12,31 @@
 // were. Link reference definitions, which the document view does not show,
 // stay while a block that keeps its source text uses them.
 //
-// It writes Milkdown's form of the whole document instead whenever it cannot be
-// sure the result reads back as the document. That is when the source's blocks
-// do not match the document's one for one, when two blocks written next to
-// each other would read back as one (two lists, for example), or when a changed
-// block held a definition. It also does so when checking the new joins between
-// blocks would take longer than writing the whole document.
+// Every place where two pieces meet that were not neighbours in the source is
+// checked before the text is used. Rules that follow from how the parser ends
+// each kind of block settle most of them without reading anything back. A
+// blank line after a paragraph, for example, always starts a new block. Where
+// the rules cannot tell, the pieces around the join are read back with Crepe's
+// own parser, in a window that starts where the text above cannot change how
+// it reads and ends with the first lines of the piece below. The window must
+// read as exactly the pieces it holds. Each source block must be the same kind
+// of node over the same text. Each block Milkdown wrote must be the document's
+// block in Milkdown's form, or read as that form reads on its own, as it would
+// in Milkdown's form of the whole document.
+//
+// It writes Milkdown's form of the whole document instead whenever a window
+// does not read back that way, even with blank lines at its joins. It also
+// does so when the source's blocks do not match the document's one for one,
+// when a changed block held a definition, when a new footnote could change how
+// a kept block reads, or when reading the windows back would take longer than
+// writing the whole document.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { RemarkParser } from "@milkdown/kit/transformer";
 import { $remark } from "@milkdown/kit/utils";
 
 /** remark's syntax tree of a Markdown text. */
-type MdRoot = ReturnType<RemarkParser["parse"]>;
+export type MdRoot = ReturnType<RemarkParser["parse"]>;
 /** The parts of a syntax tree node the outline reads. */
 interface MdNode {
   type: string;
@@ -40,6 +52,9 @@ export interface MarkdownTools {
   /** Reads Markdown without Milkdown's transforms, so every node keeps its
    *  place in the text and definitions stay in the tree. */
   parse: (markdown: string) => MdRoot;
+  /** Turns a tree that `parse` read from `markdown` into a document, with
+   *  Milkdown's transforms, as opening a file does. May change the tree. */
+  toDoc: (tree: MdRoot, markdown: string) => ProseNode;
 }
 
 /** A top-level node of a Markdown text, as remark's parser read it. */
@@ -51,22 +66,50 @@ export interface OutlineNode {
   end: number;
   /** For a link reference definition, the label references match it by. */
   label?: string;
+  /** For a footnote definition, the label its references use. */
+  footnote?: string;
   /** The labels of the definitions its links and images use. */
   uses: readonly string[];
   /** Whether a definition sits inside it, which is lost if it is rewritten. */
   holdsDefinition: boolean;
 }
 
+/**
+ * What ends a block, which tells what may follow it with no reading back
+ * (see `apart`).
+ *
+ * - "line": its last line, such as a heading, a rule, a closed fence or an
+ *   HTML block with its end marker on its last line.
+ * - "blank": a blank line or an ATX heading, such as a paragraph, table, quote
+ *   or definition.
+ * - "html": only a blank line, as for an HTML block that starts with a tag.
+ * - "list": a blank line and a line at column 0 that is not an item of its
+ *   kind, or an ATX heading.
+ * - "footnote": a blank line and a line at column 0, or an ATX heading.
+ * - "indented": only an ATX heading. After indented code, the parser reads an
+ *   ordered list that does not start at 1 as a paragraph, even past blank
+ *   lines.
+ * - "open": nothing the rules know of, such as a fence left open.
+ */
+export type Ending = "line" | "blank" | "html" | "list" | "footnote" | "indented" | "open";
+
 /** A top-level node of the source. */
 interface SourceItem {
   /** Its text, from the start of its first line, so it keeps its indent. */
   text: string;
   type: string;
+  /** How far into its first line its node starts. */
+  lead: number;
   /** For a link reference definition, its label. The document view does not
    *  show definitions, so the user cannot change them there. */
   label?: string;
   uses: readonly string[];
   holdsDefinition: boolean;
+  /** What ends it, worked out when a join needs it (`itemEnding`). */
+  ending?: Ending;
+  /** Whether it read in the source as it reads at the start of a text, worked
+   *  out when a join needs it (`itemFresh`). */
+  fresh?: boolean;
 }
 
 /** The source body split into its top-level nodes and the blank text around them. */
@@ -83,14 +126,29 @@ interface SourceLayout {
   blockItems: number[];
   /** Every label a source item uses. */
   used: ReadonlySet<string>;
+  /** The labels of the source's footnote definitions. */
+  footnotes: ReadonlySet<string>;
 }
 
 /** A piece of the body being written, either a source item or a block in
- *  Milkdown's form (`item` -1). `type` is the syntax tree type it reads as. */
+ *  Milkdown's form (`item` -1), which then has the document `block` it stands for. */
 interface Piece {
   text: string;
   item: number;
-  type: string;
+  block?: ProseNode;
+  /** What ends it, worked out when a join needs it (`endingOf`). */
+  ending?: Ending;
+}
+
+/** A run of joins the rules could not settle, read back together (see
+ *  `join`). The pieces `first` to `last` are read in full, and the piece
+ *  `head` below them by its first lines. With no full pieces, it reads back
+ *  only the first lines of a source item that the rules show starts afresh,
+ *  but that read another way in the source. */
+interface Window {
+  first: number;
+  last: number;
+  head: number;
 }
 
 /** The ProseMirror blocks each top-level syntax tree node can become in Crepe.
@@ -109,32 +167,28 @@ const BECOMES: Readonly<Record<string, readonly string[]>> = {
   footnoteDefinition: ["footnote_definition"],
 };
 
-/** The syntax tree node Milkdown writes each kind of top-level block as. */
-const WRITTEN_AS: Readonly<Record<string, string>> = {
-  paragraph: "paragraph",
-  "image-block": "paragraph",
-  heading: "heading",
-  hr: "thematicBreak",
-  blockquote: "blockquote",
-  bullet_list: "list",
-  ordered_list: "list",
-  code_block: "code",
-  table: "table",
-  footnote_definition: "footnoteDefinition",
-};
-
 /** Text that holds only spaces, tabs and line breaks. */
 const BLANK = /^[ \t\r\n]*$/;
 /** How Milkdown separates two blocks. */
 const BLANK_LINE = "\n\n";
 /** The largest table `alignBlocks` fills. */
 const MAX_CELLS = 1 << 20;
-/** How much longer remark takes to read a character than Milkdown takes to
- *  write one. Measured at 2 to 4 times on files of 34 to 343 KB. */
-const PARSE_COST = 3;
+/** How much longer reading a character back takes than writing one, at most.
+ *  Measured at 2 to 4 times for prose and lists and up to 10 times for tables
+ *  in files of 34 to 343 KB. */
+const PARSE_COST = 10;
 /** How many characters a write may always read back. That takes a few
  *  milliseconds, so short files keep every join they can. */
 const MIN_BUDGET = 2_000;
+/** An ATX heading line. */
+const ATX = /^#{1,6}(?:[ \t\n]|$)/;
+/** A thematic break line. */
+const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+/** The opening line of a fenced code or math block. */
+const FENCE = /^ {0,3}(`{3,}|~{3,}|\${2,})/;
+/** How a line that can only be paragraph text starts, which is with a letter,
+ *  a digit or a character no other block starts with (see `plainLine`). */
+const PLAIN_START = /^[\p{L}\p{N}\\("'!&*_`~]/u;
 
 /** The body Crepe parsed, which writes later states of the document with the
  *  source text of every top-level block that still says the same. */
@@ -148,19 +202,18 @@ export class SourceBaseline {
   private readonly keys = new WeakMap<ProseNode, string>();
   /** Each compared block's type and text, which differ when blocks differ. */
   private readonly texts = new WeakMap<ProseNode, string>();
+  /** The node type the first lines of each block Milkdown wrote read as. */
+  private readonly firstTypes = new WeakMap<ProseNode, string>();
   /** The source split into its nodes, made at the first edit. Null when its
    *  blocks do not match the baseline document's. */
   private layout: SourceLayout | null | undefined;
   /** The last document written, and its Markdown. */
   private last: { doc: ProseNode; markdown: string } | null = null;
-  /** Whether the pieces of a junction read back apart, keyed by the text read,
-   *  for the junctions of this write and the one before. A write then reads
-   *  back only the junctions its edit added. */
-  private junctions = new Map<string, boolean>();
-  private lastJunctions = new Map<string, boolean>();
-  /** How many characters this write may still read back before that costs
-   *  more than writing the whole document. */
-  private budget = 0;
+  /** What reading back each window found (`reads`), keyed by its text and
+   *  pieces, for the windows of this write and the one before. It only speeds
+   *  up writing, because the budget is charged for every window either way. */
+  private windows = new Map<string, number | null>();
+  private lastWindows = new Map<string, number | null>();
 
   /**
    * Remember `source` as the text Crepe just parsed into `doc`. `outline` is
@@ -179,8 +232,8 @@ export class SourceBaseline {
   /** `doc` as Markdown. That is the exact source while the document still says
    *  the same, and otherwise the source text of each unchanged block with
    *  Milkdown's form of the rest. Milkdown's form of the whole document when
-   *  the blocks cannot be kept apart safely or cheaply. Throws if Milkdown
-   *  cannot write the document. */
+   *  that text cannot be shown to read back as the document, or not cheaply.
+   *  Throws if Milkdown cannot write the document. */
   write(doc: ProseNode): string {
     if (this.last?.doc !== doc) this.last = { doc, markdown: this.compose(doc) };
     return this.last.markdown;
@@ -221,7 +274,14 @@ export class SourceBaseline {
     for (let i = 0; i <= blocks.length; i++) {
       if (i < blocks.length && pairs[i] < 0) continue;
       const baseTo = i < blocks.length ? pairs[i] : before.length;
-      if (i > from && baseTo > baseFrom) {
+      if (i - from === 1 && baseTo - baseFrom === 1) {
+        // One block in place of one, as typing in it leaves. One of another
+        // size says something else, which tells without reading its text.
+        const [block, other] = [blocks[from], before[baseFrom]];
+        if (block.content.size === other.content.size && this.text(block) === this.text(other) && this.same(block, other)) {
+          pairs[from] = baseFrom;
+        }
+      } else if (i > from && baseTo > baseFrom) {
         const current = blocks.slice(from, i);
         const baseline = before.slice(baseFrom, baseTo);
         const found = alignBlocks(
@@ -243,9 +303,8 @@ export class SourceBaseline {
   private keepUnchanged(blocks: readonly ProseNode[], pairs: readonly number[]): string | null {
     const layout = this.sourceLayout();
     if (!layout) return null;
-    this.lastJunctions = this.junctions;
-    this.junctions = new Map();
-    this.budget = Math.max(this.source.length / PARSE_COST, MIN_BUDGET);
+    this.lastWindows = this.windows;
+    this.windows = new Map();
 
     // A definition stays while a block that keeps its source text uses it.
     // One that nothing in the source used stays while any block keeps its
@@ -255,18 +314,10 @@ export class SourceBaseline {
     const keepsDefinition = (item: SourceItem): boolean =>
       kept.length > 0 && item.label !== undefined && (keptUses.has(item.label) || !layout.used.has(item.label));
 
-    const parts: string[] = [];
-    let above: Piece | null = null;
-    /** Write `piece` below the last one. False if no gap keeps them apart. */
-    const put = (piece: Piece): boolean => {
-      if (above) {
-        const gap = this.gapBetween(layout, above, piece);
-        if (gap == null) return false;
-        parts.push(gap);
-      }
-      parts.push(piece.text);
-      above = piece;
-      return true;
+    const pieces: Piece[] = [];
+    /** Write source item `item`. */
+    const keep = (item: number): void => {
+      pieces.push({ text: layout.items[item].text, item });
     };
     // The first source item not written or passed yet.
     let next = 0;
@@ -277,7 +328,7 @@ export class SourceBaseline {
       for (; next < end; next++) {
         const item = layout.items[next];
         if (item.holdsDefinition) return false;
-        if (keepsDefinition(item) && !put({ text: item.text, item: next, type: item.type })) return false;
+        if (keepsDefinition(item)) keep(next);
       }
       return true;
     };
@@ -291,8 +342,8 @@ export class SourceBaseline {
     for (const [index, pair] of pairs.entries()) {
       if (pair >= 0) {
         const item = layout.blockItems[pair];
-        const { text, type } = layout.items[item];
-        if (!passTo(item) || !put({ text, item, type })) return null;
+        if (!passTo(item)) return null;
+        keep(item);
         next = item + 1;
         continue;
       }
@@ -301,11 +352,224 @@ export class SourceBaseline {
       let removed = next;
       while (removed < anchors[index] && layout.items[removed].type === "definition") removed++;
       if (removed < anchors[index] && !passTo(removed + 1)) return null;
-      const text = this.key(blocks[index]).replace(/\n$/, "");
-      if (text && !put({ text, item: -1, type: WRITTEN_AS[blocks[index].type.name] ?? "" })) return null;
+      const block = blocks[index];
+      const text = this.key(block).replace(/\n$/, "");
+      if (text) pieces.push({ text, item: -1, block });
     }
     if (!passTo(layout.items.length)) return null;
-    return parts.length > 0 ? layout.lead + parts.join("") + layout.tail : "";
+    if (pieces.length === 0) return "";
+    if (addsFootnote(pieces, layout)) return null;
+    const gaps = this.join(pieces, layout);
+    if (!gaps) return null;
+    return layout.lead + pieces.map((piece, k) => piece.text + (gaps[k] ?? "")).join("") + layout.tail;
+  }
+
+  /**
+   * The text between each two of `pieces`, or null when the body cannot be
+   * shown to read back as its pieces, or not cheaply.
+   *
+   * Two source items that were neighbours keep the source's text between
+   * them. Other joins get the source's gap on the side of a source item, or a
+   * blank line. The rules of `apart` settle most of them. The rest are read
+   * back in windows (`reads`). When a window does not read as its pieces, the
+   * join where it went wrong gets a blank line and the window is read again.
+   * The budget for reading back is spent the same way whether or not a
+   * window's result is cached, so a document always gets the same text.
+   *
+   * A window starts at the top of the body, below a join the rules settle,
+   * where the parser starts afresh as it does in the window, or below a join
+   * the source had. There the parser is in the state the source left, and the
+   * window's first piece must still read as its source item, which shows that
+   * state does not change it. A window ends with the first lines of a piece
+   * whose own join below is settled or from the source, so the text after it
+   * cannot change how the window reads.
+   */
+  private join(pieces: readonly Piece[], layout: SourceLayout): string[] | null {
+    const budget = Math.max(this.source.length / PARSE_COST, MIN_BUDGET);
+    const gaps: string[] = [];
+    const windows: Window[] = [];
+    let spent = 0;
+    // The window being built, and how much of it is known so far.
+    let current: Window | null = null;
+    let size = 0;
+    /** End the window being built with piece `lower`. */
+    const end = (lower: number): void => {
+      if (!current) return;
+      current.head = lower;
+      spent += size + headCost(pieces[lower]);
+      windows.push(current);
+      current = null;
+      size = 0;
+    };
+    // A source item that depends on the text above it, at the top of the body.
+    if (pieces[0].item >= 0 && !itemFresh(layout, pieces[0].item)) current = { first: 0, last: -1, head: 0 };
+    for (let k = 0; k + 1 < pieces.length; k++) {
+      const above = pieces[k];
+      const below = pieces[k + 1];
+      let gap: string;
+      let open = false;
+      let fresh = true;
+      if (above.item >= 0 && below.item === above.item + 1) gap = layout.gaps[above.item];
+      else {
+        gap = (above.item >= 0 ? layout.gaps[above.item] : below.item > 0 ? layout.gaps[below.item - 1] : undefined) ?? BLANK_LINE;
+        fresh = below.item < 0 || itemFresh(layout, below.item);
+        const ending = endingOf(above, layout);
+        if (!apart(ending, above.text, gap, below.text)) {
+          // Read the file's gap back if that fits the budget. Otherwise a blank
+          // line, if the rules show that it keeps the pieces apart.
+          if (spent + size + pieceCost(above) + gap.length + headCost(below) <= budget) open = true;
+          else if (apart(ending, above.text, BLANK_LINE, below.text)) gap = BLANK_LINE;
+          else return null;
+        }
+      }
+      gaps.push(gap);
+      if (open) {
+        current ??= { first: k, last: k - 1, head: k + 1 };
+        current.last = k;
+        size += pieceCost(above) + gap.length;
+      } else {
+        end(k);
+        // The rules show the parser starts afresh here, but the source item
+        // below read differently in the source, so read its first lines back.
+        if (!fresh) current = { first: k + 1, last: k, head: k + 1 };
+      }
+    }
+    end(pieces.length - 1);
+    if (spent > budget) return null;
+
+    for (const window of windows) {
+      // Each join of the window gets a blank line at most once.
+      for (let wrong = this.reads(window, pieces, gaps, layout); wrong !== null; wrong = this.reads(window, pieces, gaps, layout)) {
+        if (wrong < window.first || gaps[wrong] === BLANK_LINE) return null;
+        gaps[wrong] = BLANK_LINE;
+        spent += windowCost(window, pieces, gaps);
+        if (spent > budget) return null;
+      }
+    }
+    return gaps;
+  }
+
+  /**
+   * Null when `window` reads back as its pieces, joined by `gaps`. Otherwise
+   * the index of the join it went wrong at. That is `window.first - 1`, the
+   * join above the window, when its first piece reads wrongly from its start.
+   *
+   * Each source item read in full must be one node of its source type over its
+   * exact text. Each block Milkdown wrote must read as that document block in
+   * Milkdown's form, or as that form reads on its own (`readsAs`). The first
+   * node of the head piece must start where it starts and be of the type it
+   * has in the source, or that its first lines have on their own. A node that
+   * starts at the same place over the same text, as the same kind of node,
+   * reads the same, so the rest of the head piece reads as it should too.
+   */
+  private reads(window: Window, pieces: readonly Piece[], gaps: readonly string[], layout: SourceLayout): number | null {
+    let text = "";
+    const starts: number[] = [];
+    const notes = new Set<string>();
+    const shape: string[] = [];
+    for (let k = window.first; k <= window.last; k++) {
+      const piece = pieces[k];
+      starts.push(text.length);
+      text += piece.text + gaps[k];
+      shape.push(`${piece.text.length}:${piece.item >= 0 ? `${layout.items[piece.item].type}@${layout.items[piece.item].lead}` : "w"}`);
+      // A footnote reference reads as one only where its definition is, so
+      // stand-ins are added below.
+      piece.block?.descendants((node) => {
+        if (node.type.name === "footnote_reference") notes.add(String(node.attrs.label));
+      });
+    }
+    const lower = pieces[window.head];
+    const headStart = text.length;
+    const lines = head(lower.text);
+    // End the head as the body goes on after it, so a container cannot take in
+    // its line only because the text ends there.
+    text +=
+      lines +
+      (lines.length < lower.text.length ? "\n" : window.head + 1 < pieces.length ? firstLine(gaps[window.head]) : layout.tail);
+    const lowerType = this.firstType(lower, layout);
+    shape.push(`${leadOf(lower, layout)}:${lowerType}`);
+    if (notes.size > 0) text += `${text.endsWith("\n") ? "" : "\n"}\n${[...notes].map((label) => `[^${label}]: .`).join("\n\n")}\n`;
+
+    const key = `${text}\u0000${shape.join(",")}`;
+    let wrong = this.windows.get(key) ?? this.lastWindows.get(key);
+    if (wrong === undefined) {
+      wrong = this.findWrong(window, pieces, layout, text, starts, headStart, lowerType);
+    }
+    this.windows.set(key, wrong);
+    return wrong;
+  }
+
+  /** Read `text`, the text of `window` (see `reads`), and find the join where
+   *  it does not read as its pieces, or null. `starts` holds where each full
+   *  piece starts in it, and `headStart` where the head piece starts. */
+  private findWrong(
+    window: Window,
+    pieces: readonly Piece[],
+    layout: SourceLayout,
+    text: string,
+    starts: readonly number[],
+    headStart: number,
+    lowerType: string,
+  ): number | null {
+    const tree = this.tools.parse(text);
+    const nodes = tree.children;
+    let i = 0;
+    for (let k = window.first; k <= window.last; k++) {
+      const piece = pieces[k];
+      const start = starts[k - window.first];
+      const end = start + piece.text.length;
+      const own: MdRoot["children"] = [];
+      while (i < nodes.length && startOf(nodes[i]) < end) own.push(nodes[i++]);
+      const first = own[0];
+      const last = own[own.length - 1];
+      // A piece that does not start a node where it starts, or starts another
+      // kind of node there, was changed by the join above it. One that runs on
+      // past its end took in the text below it.
+      if (piece.item >= 0) {
+        const item = layout.items[piece.item];
+        if (!first || startOf(first) !== start + item.lead || first.type !== item.type) return k - 1;
+        if (own.length !== 1 || first.position?.end.offset !== end) return k;
+      } else {
+        if (!first || startOf(first) < start || startOf(first) > start + indentOf(piece.text)) return k - 1;
+        if ((last.position?.end.offset ?? Infinity) > end) return k;
+        if (!piece.block || !this.readsAs(tree, own, text, piece)) return k - 1;
+      }
+    }
+    const node = nodes[i];
+    const lead = leadOf(pieces[window.head], layout);
+    const start = node ? startOf(node) : -1;
+    const fits = lead >= 0 ? start === headStart + lead : start >= headStart && start <= headStart + indentOf(pieces[window.head].text);
+    return node && fits && node.type === lowerType ? null : window.head - 1;
+  }
+
+  /**
+   * Whether `nodes`, read from `text` (`tree`), are the document block of
+   * `piece` in Milkdown's form, or read as that form does on its own. The
+   * second holds where Milkdown's form of a block does not read back as the
+   * block, such as a paragraph that starts with a space. Writing the whole
+   * body would save that block the same way.
+   */
+  private readsAs(tree: MdRoot, nodes: MdRoot["children"], text: string, piece: Piece): boolean {
+    const { block } = piece;
+    if (!block) return false;
+    const read = childrenOf(this.tools.toDoc({ ...tree, children: nodes }, text));
+    if (read.length === 1 && (read[0].eq(block) || this.key(read[0]) === this.key(block))) return true;
+    const alone = `${piece.text}\n`;
+    const own = childrenOf(this.tools.toDoc(this.tools.parse(alone), alone));
+    return read.length === own.length && read.every((node, k) => this.key(node) === this.key(own[k]));
+  }
+
+  /** The node type the first lines of `piece` read as: its source type, or
+   *  for a block Milkdown wrote, the type they have on their own. */
+  private firstType(piece: Piece, layout: SourceLayout): string {
+    if (piece.item >= 0) return layout.items[piece.item].type;
+    const { block } = piece;
+    let type = block && this.firstTypes.get(block);
+    if (type === undefined) {
+      type = this.tools.parse(`${head(piece.text)}\n`).children[0]?.type ?? "";
+      if (block) this.firstTypes.set(block, type);
+    }
+    return type;
   }
 
   /** The source split into its nodes, made once. Null when it cannot be. */
@@ -320,38 +584,6 @@ export class SourceBaseline {
       this.outline = null;
     }
     return this.layout;
-  }
-
-  /** The text between `above` and `below`. That is the source's own when they
-   *  were neighbours there. Otherwise it is the source's gap on the side of a
-   *  source item, if that keeps them apart, or else a blank line. Null when
-   *  neither keeps them apart, or when telling would take too long. */
-  private gapBetween(layout: SourceLayout, above: Piece, below: Piece): string | null {
-    if (above.item >= 0 && below.item === above.item + 1) return layout.gaps[above.item];
-    const near = above.item >= 0 ? layout.gaps[above.item] : below.item > 0 ? layout.gaps[below.item - 1] : undefined;
-    const tries = near != null && near !== BLANK_LINE ? [near, BLANK_LINE] : [BLANK_LINE];
-    return tries.find((gap) => startsApart(above, gap, below) ?? this.readsApart(above.text, gap, below.text)) ?? null;
-  }
-
-  /** Whether `above` and `below`, joined by `gap`, read back as two nodes, the
-   *  second starting where `below` starts (after its own indent). Only the
-   *  first lines of `below` are read, which decide that. Undefined when this
-   *  write has no budget left for reading them. */
-  private readsApart(above: string, gap: string, below: string): boolean | undefined {
-    const boundary = above.length + gap.length;
-    const text = above + gap + head(below);
-    const key = `${boundary}:${text}`;
-    let apart = this.junctions.get(key) ?? this.lastJunctions.get(key);
-    if (apart === undefined) {
-      if (text.length > this.budget) return undefined;
-      this.budget -= text.length;
-      const nodes = this.tools.parse(text).children;
-      const start = nodes[1]?.position?.start.offset ?? -1;
-      const indent = below.length - below.replace(/^[ \t]+/, "").length;
-      apart = nodes.length === 2 && start >= boundary && start <= boundary + indent;
-    }
-    this.junctions.set(key, apart);
-    return apart;
   }
 
   /** Whether two blocks say the same, which is when Milkdown writes them the
@@ -426,6 +658,7 @@ export function outlineOf(tree: MdNode): OutlineNode[] | null {
       start,
       end,
       label: node.type === "definition" ? node.identifier : undefined,
+      footnote: node.type === "footnoteDefinition" ? node.identifier : undefined,
       uses: [...uses],
       holdsDefinition,
     });
@@ -509,38 +742,57 @@ export function increasingRun(found: readonly number[]): number[] {
 }
 
 /**
- * Whether `below` starts a node of its own on its first line after `above`
- * and `gap`, as far as the kind of each piece tells. Undefined when only
- * reading them back can tell.
- *
- * A heading, a rule or a closed fence ends on its last line. A blank line ends
- * a paragraph, table, quote or definition. A list, footnote or indented code
- * also needs the next line to start at column 0, and a list goes on when that
- * line is an item of its kind. An ATX heading at column 0 ends all of these.
+ * Whether the parser, after reading `above`, a block that ends as `ending`,
+ * and then `gap`, starts afresh on the first line of `below`, so that `above`
+ * reads as it does on its own and `below` as it does at the start of a text. False when only reading them back
+ * can tell. Each rule follows from how micromark ends the block above (see
+ * `Ending`). An ATX heading line starts a heading even where other blocks
+ * cannot start, and ends every block except HTML and an open fence.
  */
-function startsApart(above: Piece, gap: string, below: Piece): boolean | undefined {
+export function apart(ending: Ending, above: string, gap: string, below: string): boolean {
   const blankLine = /\n[ \t]*\n/.test(gap);
-  const flush = !/^[ \t]/.test(below.text);
-  const heading = flush && /^#{1,6}(?:[ \t\n]|$)/.test(below.text);
-  switch (ending(above)) {
+  const flush = !/^[ \t]/.test(below);
+  const heading = flush && ATX.test(below);
+  switch (ending) {
     case "line":
       return true;
     case "blank":
-      return blankLine || heading || undefined;
-    case "flush":
-      if (heading) return true;
-      if (!blankLine || !flush) return undefined;
-      if (above.type !== "list" || markerOf(below.text) !== markerOf(above.text)) return true;
-      // Below a list, a list with the same kind of marker is more of its items.
-      return below.type === "list" ? false : undefined;
+      return blankLine || heading;
+    case "html":
+      return blankLine;
+    case "list":
+      // A list goes on with an item of its kind, or an indented line.
+      return heading || (blankLine && flush && markerOf(below) !== markerOf(above));
+    case "footnote":
+      return heading || (blankLine && flush);
+    case "indented":
+      return heading;
     default:
-      return undefined;
+      return false;
   }
 }
 
-/** What ends a piece (see `startsApart`). An HTML block or an open fence can
- *  run on past blank lines, so only a read-back tells. */
-function ending({ type, text }: Piece): "line" | "blank" | "flush" | "open" {
+/** What ends source item `k` (see `Ending`), worked out once. */
+function itemEnding(layout: SourceLayout, k: number): Ending {
+  const item = layout.items[k];
+  return (item.ending ??= sourceEnding(item.type, item.text));
+}
+
+/** Whether source item `k` read in the source as it reads at the start of a
+ *  text, worked out once. The first item starts the text. Each other did if
+ *  the rules show the parser started afresh above it. */
+function itemFresh(layout: SourceLayout, k: number): boolean {
+  const item = layout.items[k];
+  return (item.fresh ??= k === 0 || apart(itemEnding(layout, k - 1), layout.items[k - 1].text, layout.gaps[k - 1], item.text));
+}
+
+/** What ends `piece` (see `Ending`), worked out once. */
+function endingOf(piece: Piece, layout: SourceLayout): Ending {
+  return (piece.ending ??= piece.item >= 0 ? itemEnding(layout, piece.item) : writtenEnding(piece.text));
+}
+
+/** What ends a source item of syntax tree type `type` (see `Ending`). */
+function sourceEnding(type: string, text: string): Ending {
   switch (type) {
     case "heading":
     case "thematicBreak":
@@ -548,29 +800,127 @@ function ending({ type, text }: Piece): "line" | "blank" | "flush" | "open" {
     case "code":
     case "math":
       if (closedFence(text)) return "line";
-      return /^ {0,3}(?:`{3}|~{3}|\${2})/.test(text) ? "open" : "flush";
+      return FENCE.test(text) ? "open" : "indented";
     case "paragraph":
-      // Written Markdown that starts like HTML or math could open a block.
-      return /^[<$]/.test(text) ? "open" : "blank";
     case "table":
     case "blockquote":
     case "definition":
       return "blank";
+    case "html":
+      return htmlEnding(text);
     case "list":
+      return "list";
     case "footnoteDefinition":
-      return "flush";
+      return "footnote";
     default:
       return "open";
   }
 }
 
-/** Whether `text` is a fenced code or math block that ends with its closing fence. */
+/**
+ * What ends `text`, a block in Milkdown's form, as far as its lines show (see
+ * `Ending`). Only forms the parser cannot read another way get a rule. These
+ * are a one-line ATX heading or rule, a closed fence, the empty line
+ * `<br />`, lines that all start a table row or a quote, paragraph lines
+ * (`plainLine`), and lists and footnotes whose lines all stay inside them.
+ * Anything else, such as a paragraph that starts like HTML or a setext
+ * heading, is "open".
+ */
+export function writtenEnding(text: string): Ending {
+  if (!text.includes("\n") && (ATX.test(text) || RULE.test(text))) return "line";
+  if (closedFence(text)) return "line";
+  if (text === "<br />") return "html";
+  // Every line starts a table row, or every line a quote.
+  if ((text.startsWith("|") && !/\n(?!\|)/.test(text)) || (text.startsWith(">") && !/\n(?!>)/.test(text))) return "blank";
+  if (everyLine(text, plainLine)) return "blank";
+  if (listLines(text)) return "list";
+  // Every line after the first is blank or indented four spaces.
+  if (/^\[\^[^\]\n]+\]:/.test(text) && !/\n(?!\n| {4})/.test(text)) return "footnote";
+  return "open";
+}
+
+/** Whether `test` holds for every line of `text`. */
+function everyLine(text: string, test: (line: string) => boolean): boolean {
+  for (let start = 0; ; ) {
+    const end = text.indexOf("\n", start);
+    if (!test(text.slice(start, end < 0 ? text.length : end))) return false;
+    if (end < 0) return true;
+    start = end + 1;
+  }
+}
+
+/** Whether `line` can only be text in a paragraph, wherever it is in one. */
+function plainLine(line: string): boolean {
+  return (
+    PLAIN_START.test(line) &&
+    !/^\d{1,9}[.)](?:[ \t]|$)/.test(line) &&
+    !/^[*+-](?:[ \t]|$)/.test(line) &&
+    !RULE.test(line) &&
+    !/^(?:`{3,}|~{3,})/.test(line)
+  );
+}
+
+/** Whether `text` is one list: items of its first line's kind at column 0,
+ *  and other lines blank or indented at least as far as their item's text. */
+function listLines(text: string): boolean {
+  let marker: string | undefined;
+  let size = 0;
+  return everyLine(text, (line) => {
+    if (line === "") return marker !== undefined;
+    if (line.startsWith(" ") || line.startsWith("\t")) return marker !== undefined && line.length - line.replace(/^ +/, "").length >= size;
+    // An item of the list's kind, and not a rule.
+    const kind = markerOf(line);
+    if (kind === undefined || (marker !== undefined && kind !== marker) || RULE.test(line)) return false;
+    marker = kind;
+    size = itemSize(line);
+    return true;
+  });
+}
+
+/** How far the text of the list item that `line` starts is indented. Infinite
+ *  when tabs make that unclear. */
+function itemSize(line: string): number {
+  const item = /^(\d{1,9}[.)]|[*+-])([ \t]*)/.exec(line);
+  if (!item || item[2].includes("\t")) return Infinity;
+  const spaces = item[2].length;
+  // An empty item, or one whose text is indented code, has its text one space in.
+  return item[1].length + (spaces >= 1 && spaces <= 4 && line.length > item[0].length ? spaces : 1);
+}
+
+/** What ends an HTML block (see `Ending`). One that starts with `<script`,
+ *  `<pre`, `<style`, `<textarea`, `<!--`, `<?`, `<!` or `<![CDATA[` ends on
+ *  the line with its end marker, so it ends on its last line if the marker is
+ *  there. Any other ends at a blank line. */
+function htmlEnding(text: string): Ending {
+  const kinds: ReadonlyArray<readonly [RegExp, RegExp]> = [
+    [/^ {0,3}<(?:script|pre|style|textarea)(?=[\s>]|$)/i, /<\/(?:script|pre|style|textarea)>/i],
+    [/^ {0,3}<!--/, /-->/],
+    [/^ {0,3}<\?/, /\?>/],
+    [/^ {0,3}<!\[CDATA\[/, /\]\]>/],
+    [/^ {0,3}<![A-Za-z]/, />/],
+  ];
+  for (const [start, end] of kinds) {
+    const open = start.exec(text);
+    if (!open) continue;
+    // On a one-line block, the marker must come after the opener.
+    return end.test(text.slice(Math.max(text.lastIndexOf("\n") + 1, open[0].length))) ? "line" : "open";
+  }
+  return "html";
+}
+
+/** Whether `text` is a fenced code or math block that ends with its closing
+ *  fence, and only there. */
 function closedFence(text: string): boolean {
-  const open = /^ {0,3}(`{3,}|~{3,}|\${2,})/.exec(text);
-  const last = text.lastIndexOf("\n");
-  if (!open || last < 0) return false;
-  const close = /^ {0,3}(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(text.slice(last + 1));
-  return !!close && close[1][0] === open[1][0] && close[1].length >= open[1].length;
+  const open = FENCE.exec(text);
+  if (!open) return false;
+  const lines = text.split("\n");
+  if (lines.length < 2) return false;
+  /** Whether `line` closes the fence that `text` opens. */
+  const closes = (line: string): boolean => {
+    const close = /^ {0,3}(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(line);
+    return !!close && close[1][0] === open[1][0] && close[1].length >= open[1].length;
+  };
+  return closes(lines[lines.length - 1]) && !lines.slice(1, -1).some(closes);
 }
 
 /** The kind of list item the first line of `text` starts, which is its bullet
@@ -581,15 +931,72 @@ function markerOf(text: string): string | undefined {
 }
 
 /** The first two lines of `text`, or only the first when a blank line follows
- *  it. They decide where a block that starts `text` starts, because the parser
- *  looks at most one line ahead, for a setext underline or a table's delimiter
- *  row. */
+ *  it. They decide what node starts `text` and where, because the parser looks
+ *  at most one line ahead, for a setext underline or a table's delimiter row. */
 function head(text: string): string {
   const first = text.indexOf("\n");
   if (first < 0) return text;
   const second = text.indexOf("\n", first + 1);
   const end = second < 0 ? text.length : second;
   return BLANK.test(text.slice(first + 1, end)) ? text.slice(0, first) : text.slice(0, end);
+}
+
+/** `text` up to and with its first line break, or all of it without one. */
+function firstLine(text: string): string {
+  const end = text.indexOf("\n");
+  return end < 0 ? text : text.slice(0, end + 1);
+}
+
+/** The spaces and tabs that start `text`. */
+function indentOf(text: string): number {
+  return text.length - text.replace(/^[ \t]+/, "").length;
+}
+
+/** How far into its first line the node of source item `piece` starts, or -1
+ *  for a block Milkdown wrote. */
+function leadOf(piece: Piece, layout: SourceLayout): number {
+  return piece.item >= 0 ? layout.items[piece.item].lead : -1;
+}
+
+/** Where a syntax tree node starts in its text. */
+function startOf(node: MdNode): number {
+  return node.position?.start.offset ?? -1;
+}
+
+/** What reading `piece` in full adds to a window's cost. A block Milkdown
+ *  wrote is also turned into a document and written again. */
+function pieceCost(piece: Piece): number {
+  return piece.text.length * (piece.item < 0 ? 2 : 1);
+}
+
+/** What reading the first lines of `piece` adds to a window's cost. */
+function headCost(piece: Piece): number {
+  return head(piece.text).length + 1;
+}
+
+/** What reading `window` back costs, in characters. */
+function windowCost(window: Window, pieces: readonly Piece[], gaps: readonly string[]): number {
+  let cost = headCost(pieces[window.head]);
+  for (let k = window.first; k <= window.last; k++) cost += pieceCost(pieces[k]) + gaps[k].length;
+  return cost;
+}
+
+/**
+ * Whether a new footnote could change how a kept block reads. Text such as
+ * `[^note]` reads as a footnote reference only where a definition with that
+ * label exists. A footnote definition Milkdown wrote with a label the source
+ * did not define could turn such text in a source block into a reference.
+ */
+function addsFootnote(pieces: readonly Piece[], layout: SourceLayout): boolean {
+  const added = pieces.some(
+    ({ block }) => block?.type.name === "footnote_definition" && !layout.footnotes.has(footnoteLabel(String(block.attrs.label))),
+  );
+  return added && pieces.some((piece) => piece.item >= 0 && piece.text.includes("[^"));
+}
+
+/** A footnote label as the parser compares it. */
+function footnoteLabel(label: string): string {
+  return label.replace(/[\t\n\r ]+/g, " ").trim().toLowerCase();
 }
 
 /**
@@ -603,6 +1010,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
   const gaps: string[] = [];
   const blockItems: number[] = [];
   const used = new Set<string>();
+  const footnotes = new Set<string>();
   let lead = "";
   let end = 0;
   for (const node of outline) {
@@ -617,9 +1025,12 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       blockItems.push(items.length);
     }
     for (const label of node.uses) used.add(label);
+    if (node.footnote !== undefined) footnotes.add(footnoteLabel(node.footnote));
+    const text = source.slice(start, node.end);
     items.push({
-      text: source.slice(start, node.end),
+      text,
       type: node.type,
+      lead: node.start - start,
       label: node.label,
       uses: node.uses,
       holdsDefinition: node.holdsDefinition,
@@ -632,7 +1043,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
   // line to type on. It has no source.
   const typingLine = blocks.length === blockItems.length + 1 && isEmptyParagraph(blocks[blocks.length - 1]);
   if (blocks.length !== blockItems.length && !typingLine) return null;
-  return { lead, items, gaps, tail, blockItems, used };
+  return { lead, items, gaps, tail, blockItems, used, footnotes };
 }
 
 /** The top-level blocks of `doc`. */

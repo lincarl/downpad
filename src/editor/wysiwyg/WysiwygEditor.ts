@@ -10,14 +10,15 @@
 //     history (frontmatterHistory.ts), so undo takes back table and body edits
 //     in one order.
 //   - Exact source: every top-level block the user has not changed is written
-//     as the text Crepe parsed, not Milkdown's rewrite of it. When the blocks
-//     cannot be kept apart safely, the whole body is written in Milkdown's
-//     form, as before (sourceBaseline.ts).
+//     as the text Crepe parsed, not Milkdown's rewrite of it. When that text
+//     cannot be shown to read back as the document, the whole body is written
+//     in Milkdown's form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
+import { ParserState } from "@milkdown/kit/transformer";
 import { $prose, insert } from "@milkdown/kit/utils";
 import { Slice } from "@milkdown/kit/prose/model";
 import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
@@ -51,7 +52,7 @@ import { codeBlockFindHighlights } from "./findReveal";
 import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
-import { SourceBaseline, outlinePlugin, type OutlineNode } from "./sourceBaseline";
+import { SourceBaseline, outlinePlugin, type MarkdownTools, type OutlineNode } from "./sourceBaseline";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { changedCell, focusCaret, showsBlock } from "./frontmatterFind";
 import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } from "./frontmatterHistory";
@@ -362,11 +363,11 @@ export class WysiwygEditor {
    *  quote, table, rule or image. The body keeps the exact source of every
    *  block that still says what Crepe parsed, so opening, mirroring or undoing
    *  back never rewrites text the user has not changed, and an edit rewrites
-   *  only the blocks it touched. When it cannot keep the file's text safely,
-   *  such as when two lists would join, it rewrites the whole body. A typed
-   *  closing `$` or `~` that still waits for the next character is written as
-   *  the formula or strikethrough that deciding it now would make, as Save
-   *  writes it (`decidedDoc`). */
+   *  only the blocks it touched. When it cannot show that the file's text
+   *  reads back as the document, such as when two lists would join, it
+   *  rewrites the whole body. A typed closing `$` or `~` that still waits for
+   *  the next character is written as the formula or strikethrough that
+   *  deciding it now would make, as Save writes it (`decidedDoc`). */
   getMarkdown(): string | null {
     const body = this.bodyMarkdown();
     return body == null
@@ -623,7 +624,14 @@ export class WysiwygEditor {
     this.baseline =
       this.crepe?.editor.action((ctx) => {
         const remark = ctx.get(remarkCtx);
-        const tools = { serialize: ctx.get(serializerCtx), parse: (markdown: string) => remark.parse(markdown) };
+        const schema = ctx.get(schemaCtx);
+        const tools: MarkdownTools = {
+          serialize: ctx.get(serializerCtx),
+          parse: (markdown) => remark.parse(markdown),
+          // What Milkdown's parser does after reading the text. The parser
+          // state takes the transformed tree as a plain object.
+          toDoc: (tree, markdown) => new ParserState(schema).next({ ...remark.runSync(tree, markdown) }).toDoc(),
+        };
         return new SourceBaseline(source, ctx.get(editorViewCtx).state.doc, tools, parsed?.text === source ? parsed.outline : undefined);
       }) ?? null;
   }
