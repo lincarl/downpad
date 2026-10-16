@@ -173,6 +173,8 @@ export class EditorHost implements FindController {
   private findChangeHandler: (() => void) | null = null;
   /** The drops whose files are not all in yet, by the handle `aimDrop` gave. */
   private readonly drops = new Map<FileDrop, AimedDrop>();
+  /** Callers waiting for the next document to be shown, or a tab to close. */
+  private readonly presentWaiters = new Set<() => void>();
   /** When the user last typed in a Markdown pane (`performance.now()`). */
   private markdownTypedAt = -Infinity;
 
@@ -238,14 +240,15 @@ export class EditorHost implements FindController {
 
   /**
    * Insert markdown for a file of a drop (§5.4) into the document it was
-   * dropped on, in the pane `aimDrop` chose, even if another tab is in front
-   * now. It goes in at the drop's target, after the drop's earlier files, or
-   * at the pane's caret. If that editor is gone, as after a reload from disk,
-   * or a layout switch hid it, it goes in at the caret of the pane being
-   * edited while the same document is in front. An edit in a hidden pane of
-   * the document in front would leave the shown pane behind. Returns false,
-   * inserting nothing, when the document is closed or no longer has an
-   * editor.
+   * dropped on, in the pane `aimDrop` chose, at the drop's target after the
+   * drop's earlier files, or at the pane's caret. A file only goes into a
+   * document that is in front. One dropped on a document that is behind
+   * another tab by now waits until that document is shown again. If by then
+   * the pane it was dropped on is gone, hidden or behind the document's
+   * latest edit, as after a reload from disk, a layout switch, an edit in the
+   * other view, or after the editor was dropped from memory, it goes in at the
+   * caret of the pane being edited. Resolves false, inserting nothing, once
+   * the document is closed.
    *
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
@@ -260,26 +263,58 @@ export class EditorHost implements FindController {
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
     const typing = this.drops.get(drop)?.pane.wysiwyg ? this.typedInMarkdownSince(drop) : false;
     if (typing) await this.markdownTypingPause();
-    const aimed = this.drops.get(drop);
-    if (this.disposed || !aimed) return false;
-    let { pane, target } = aimed;
-    if (!this.isLive(pane) || (pane.tabId === this.activeTabId && pane.el.hidden)) {
-      const current = drop.tabId === this.activeTabId ? this.focusedSplitRaw() ?? this.active() : null;
-      if (!current) return false;
-      pane = current;
-      target = null;
+    let place = this.dropPlace(drop);
+    while (!place) {
+      if (this.disposed || !this.drops.has(drop) || !this.hasTab(drop.tabId)) return false;
+      await this.nextPresent();
+      place = this.dropPlace(drop);
     }
-    const shown = pane.tabId === this.activeTabId && !pane.el.hidden;
-    if (shown) this.flush();
+    const aimed = this.drops.get(drop)!;
+    const { pane, target } = place;
     if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target);
     else pane.raw?.insertText(markdown, target, this.typingIn(pane));
-    if (!shown) return true;
     this.flush();
     if (aimed.onPane && !typing) {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
       else pane.raw?.focus();
     }
     return true;
+  }
+
+  /**
+   * Where the next file of a drop goes in now, after the split catches up.
+   * That is the drop's target in the pane it was dropped on, while that pane
+   * is shown and holds its document's latest edit. Otherwise it is the caret
+   * of the pane being edited. Null while the drop's document is not in front,
+   * or its editor is still being built.
+   */
+  private dropPlace(drop: FileDrop): { pane: Pane; target: DropTarget | null } | null {
+    const aimed = this.drops.get(drop);
+    if (this.disposed || !aimed || drop.tabId !== this.activeTabId) return null;
+    this.flush();
+    if (this.usable(aimed.pane)) return { pane: aimed.pane, target: aimed.target };
+    const pane = this.focusedSplitRaw() ?? this.active();
+    return pane && this.usable(pane) ? { pane, target: null } : null;
+  }
+
+  /** Whether a pane can take an insert: it is live, shown, and holds its
+   *  tab's latest edit. An edit in a hidden pane would leave the shown one
+   *  behind, and one in a pane that lags its tab would write older text over
+   *  the tab. */
+  private usable(pane: Pane): boolean {
+    return this.isLive(pane) && !pane.el.hidden && pane.syncedRev === this.revOf(pane.tabId);
+  }
+
+  /** Resolve once a document is next shown, or a tab is closed. */
+  private nextPresent(): Promise<void> {
+    return new Promise((resolve) => this.presentWaiters.add(resolve));
+  }
+
+  /** Let every `nextPresent` caller check again. */
+  private wakePresentWaiters(): void {
+    const waiters = [...this.presentWaiters];
+    this.presentWaiters.clear();
+    for (const wake of waiters) wake();
   }
 
   /** End a drop once its files are in, or it failed. */
@@ -532,6 +567,8 @@ export class EditorHost implements FindController {
     this.replacedTabs.delete(tabId);
     this.tabMru = this.tabMru.filter((t) => t !== tabId);
     if (this.activeTabId === tabId) this.activeTabId = null;
+    // A file waiting for this document now goes nowhere.
+    this.wakePresentWaiters();
   }
 
   /** Tear every editor down — used when the last tab closes (§5.19). */
@@ -552,7 +589,7 @@ export class EditorHost implements FindController {
       this.root.style.removeProperty("--split-left");
       this.activeTabId = null;
       this.currentView = null;
-    });
+    }).finally(() => this.wakePresentWaiters());
   }
 
   /** Evict retained panes beyond the configured limit — used when the user lowers
@@ -585,6 +622,7 @@ export class EditorHost implements FindController {
     this.openLinkHandler = null;
     this.findChangeHandler = null;
     this.drops.clear();
+    this.wakePresentWaiters();
     this.cancelSync();
     this.scrollSync.disconnect();
     this.endDrag();
@@ -821,6 +859,8 @@ export class EditorHost implements FindController {
     // current pair on every reveal, and disconnects whenever it isn't the split.
     this.syncScroll(wysiwygPane, rawPane);
     record();
+    // A file dropped on this document while it was behind goes in now.
+    this.wakePresentWaiters();
 
     await this.enforceLru();
   }

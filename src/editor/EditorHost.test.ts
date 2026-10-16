@@ -161,9 +161,11 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 vi.mock("./raw/RawEditor", () => ({
   RawEditor: class {
     private root: HTMLElement | null = null;
+    private onChange: ((text: string) => void) | null = null;
 
     mount(root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }): void {
       this.root = root;
+      this.onChange = cb.onChange;
       fakeEditors.rawText = text;
       fakeEditors.rawChange = cb.onChange;
       fakeEditors.rawFindChange = cb.onFindChange ?? null;
@@ -194,7 +196,7 @@ vi.mock("./raw/RawEditor", () => ({
     insertText(text: string, target: { pos: number } | null = null): void {
       fakeEditors.rawText = `${fakeEditors.rawText ?? ""}${text}`;
       fakeEditors.rawInsertedAt = target;
-      fakeEditors.rawChange?.(fakeEditors.rawText);
+      this.onChange?.(fakeEditors.rawText);
     }
 
     /** Take focus with a caret in the pane. */
@@ -1061,7 +1063,27 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
-  it("puts a file into the document it was dropped on after another tab comes to the front", async () => {
+  /** Show the first tab again, as a click on it does. */
+  async function showFirstTab(store: Store, host: EditorHost): Promise<void> {
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+  }
+
+  /** Open a second document in its own tab, which comes to the front. */
+  async function openSecondTab(store: Store, host: EditorHost): Promise<void> {
+    store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
+    await host.reloadActiveDoc();
+  }
+
+  /** Whether a promise has settled, after pending callbacks ran. */
+  async function settled(promise: Promise<unknown>): Promise<boolean> {
+    let done = false;
+    void promise.then(() => (done = true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return done;
+  }
+
+  it("puts a file dropped on a document now behind another tab where it was dropped once that document is shown", async () => {
     const root = document.createElement("div");
     const store = makeStore();
     const host = new EditorHost(root, store);
@@ -1069,13 +1091,107 @@ describe("EditorHost file drops", () => {
     const first = root.querySelector<HTMLElement>(".editor-pane-wysiwyg")!;
     const line = first.appendChild(document.createElement("p"));
     const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
-    store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
-    await host.reloadActiveDoc();
+    await openSecondTab(store, host);
 
-    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    expect(fakeEditors.insertedInto).toBeNull();
+    await showFirstTab(store, host);
 
+    expect(await inserted).toBe(true);
     expect(fakeEditors.insertedInto).toBe(first);
     expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    await host.dispose();
+  });
+
+  it("keeps a background document's newer edit when a file dropped on its stale Markdown pane is read", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("div"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 20, target: line })!;
+    // While the file is read, the document view edits the same document,
+    // which leaves the hidden Markdown pane behind, and another tab opens.
+    await host.setLayout("document");
+    fakeEditors.wysiwygChange!("typed in the document");
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    expect(store.get().tabs[0]!.doc.markdown).toBe("typed in the document");
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    // At the caret of the document view, the pane being edited.
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg:not([hidden])"));
+    expect(fakeEditors.insertedAt).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a background document's stale document pane into the pane shown later", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    // The Markdown view edits the document, which leaves the hidden document
+    // pane behind, and another tab opens.
+    await host.setLayout("markdown");
+    fakeEditors.rawChange!("typed in Markdown");
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    // The stale pane's report would be dropped, and the file lost with it.
+    expect(fakeEditors.insertedInto).toBeNull();
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    // At the caret of the Markdown view, the pane being edited.
+    expect(fakeEditors.insertedInto).toBeNull();
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a document whose editor was dropped from memory at its caret once it is shown", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    store.set({ settings: { ...DEFAULT_SETTINGS, maxRetainedTabEditors: 1 } });
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg:not([hidden])"));
+    expect(fakeEditors.insertedAt).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts nothing anywhere when the document a file waits for is closed", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const drop = host.aimDrop()!;
+    await openSecondTab(store, host);
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+
+    store.closeTab("tab-1");
+    await host.discardTab("tab-1");
+
+    expect(await inserted).toBe(false);
+    expect(fakeEditors.insertedInto).toBeNull();
     await host.dispose();
   });
 
@@ -1105,6 +1221,7 @@ describe("EditorHost file drops", () => {
     const drop = host.aimDrop()!;
     store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
     await host.reloadActiveDoc();
+    store.closeTab("tab-1");
     await host.discardTab("tab-1");
 
     expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(false);

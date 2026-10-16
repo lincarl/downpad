@@ -521,8 +521,9 @@ export class AppRuntime {
    * Explorer drag-drop (spec §5.4): a markdown file opens (honoring the unsaved
    * guard); image files embed where they were dropped on the document, or at
    * the cursor; other files are copied into the attachments folder and linked
-   * the same way. The files go into the document they were dropped on, even if
-   * another tab is in front by the time a file is read.
+   * the same way. The files go into the document they were dropped on. If
+   * another tab is in front by the time a file is read, the file waits until
+   * that document is shown again.
    */
   private async handleDrop(paths: string[], point: DropPoint): Promise<void> {
     // A dropped markdown file opens in its own tab (§5.19).
@@ -609,13 +610,13 @@ export class AppRuntime {
     await this.insertDropped(drop, mdLink(name, rel), path);
   }
 
-  /** Insert a dropped file's Markdown into the document it was dropped on. If
-   *  that document is closed, or behind another tab without its editor, it
-   *  gets nothing and no other document gets it instead. A copy in the
-   *  attachments folder stays there. */
+  /** Insert a dropped file's Markdown into the document it was dropped on,
+   *  once that document is in front. If the document is closed first, it gets
+   *  nothing and no other document gets it instead. A copy in the attachments
+   *  folder stays there. */
   private async insertDropped(drop: FileDrop, markdown: string, path: string): Promise<void> {
     if (!(await this.editorHost.insertDropped(drop, markdown))) {
-      console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on is closed or not loaded`);
+      console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on was closed`);
     }
   }
 
