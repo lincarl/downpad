@@ -159,3 +159,63 @@ describe("a relocated image", () => {
     expect(native.openDialog).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a missing image", () => {
+  /** Open `markdown` with no image found, and fail the block's first load. */
+  async function openMissing(markdown: string): Promise<HTMLElement> {
+    native.convertFileSrc.mockResolvedValue(null);
+    const root = await open(markdown);
+    // jsdom loads no images, so tell the view the empty source failed.
+    root.querySelector(".milkdown-image-block img")!.dispatchEvent(new Event("error"));
+    return root;
+  }
+
+  it("shows the path its Markdown has now", { timeout: 60_000 }, async () => {
+    const root = await openMissing("![Missing](gone.png)\n");
+    const block = root.querySelector<HTMLElement>(".milkdown-image-block")!;
+    expect(block.dataset.mdPath).toBe("gone.png");
+
+    // The Markdown pane changes the path to another one md-easy cannot load.
+    editor!.setMarkdown("![Missing](lost.png)\n");
+
+    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/lost.png"));
+    expect(block.classList).toContain("md-image-missing");
+    expect(block.dataset.mdPath).toBe("lost.png");
+  });
+
+  it("shows the input for a path once its path is cleared", { timeout: 60_000 }, async () => {
+    const root = await openMissing("![Missing](gone.png)\n");
+
+    editor!.setMarkdown("![Missing]()\n");
+
+    const block = root.querySelector(".milkdown-image-block")!;
+    expect(block.classList).not.toContain("md-image-missing");
+    await vi.waitFor(() => expect(block.querySelector("img")).toBeNull());
+  });
+
+  it("can be located after Crepe draws its image anew", { timeout: 60_000 }, async () => {
+    const root = await openMissing("![Missing](gone.png)\n");
+    const block = root.querySelector(".milkdown-image-block")!;
+    // A path typed again after the old one was cleared gets a new <img>.
+    const old = block.querySelector("img");
+    editor!.setMarkdown("![Missing]()\n");
+    editor!.setMarkdown("![Missing](lost.png)\n");
+    const image = await vi.waitFor(() => {
+      const shown = block.querySelector("img");
+      expect(shown).not.toBe(old);
+      expect(shown?.getAttribute("src")).toBe("data:,");
+      return shown!;
+    });
+    image.dispatchEvent(new Event("error"));
+    expect(block.classList).toContain("md-image-missing");
+
+    native.convertFileSrc.mockResolvedValue("md-easy-file://pic");
+    native.openDialog.mockResolvedValue("/docs/pic.png");
+    block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    expect(editor!.getMarkdown()).toBe("![Missing](/docs/pic.png)\n");
+    image.dispatchEvent(new Event("load"));
+    expect(block.classList).not.toContain("md-image-missing");
+  });
+});

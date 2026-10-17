@@ -11,13 +11,16 @@
 //      shows its URL from its first render.
 //   2. onImageLoadError — when an image fails to load, mark its block as a
 //      missing-image placeholder (broken icon + path) and make it click-to-
-//      relocate via a file dialog (updates the node's src). The placeholder
-//      goes once an image loads in the block.
+//      relocate via a file dialog (updates the node's src). missingImages keeps
+//      the placeholder in step with the document: it shows the node's current
+//      path, and goes once an image loads in the block or its path is cleared.
 //   3. Node helpers (isImageNode / imageAttrs / setImageAttrs / lookups) reused
 //      by the image context menu (imageContextMenu.ts).
 
 import { convertFileSrc } from "../../ipc/bridge";
 import { openDialog } from "../../ipc/dialogs";
+import { $prose } from "@milkdown/kit/utils";
+import { Plugin } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
@@ -109,7 +112,7 @@ async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => vo
 }
 
 /** Show an image block that failed to load as the missing-image placeholder,
- *  which a click relocates. The placeholder goes once an image loads there. */
+ *  which a click relocates. missingImages removes the placeholder again. */
 function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => void): void {
   const img = event.target as HTMLElement | null;
   if (!img) return;
@@ -121,17 +124,57 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
   host.dataset.mdPath = src;
   if (!host.dataset.mdRelocateBound) {
     host.dataset.mdRelocateBound = "1";
+    // Crepe draws a new <img> after the path is cleared, so find the node from
+    // the element that stays.
     host.addEventListener("click", (e) => {
       if (!host.classList.contains("md-image-missing")) return;
       e.preventDefault();
       e.stopPropagation();
-      void relocate(viewRef, img, forget);
-    });
-    img.addEventListener("load", () => {
-      host.classList.remove("md-image-missing");
-      delete host.dataset.mdPath;
+      void relocate(viewRef, host, forget);
     });
   }
+}
+
+/** Show a missing image as an image again. */
+function unmarkMissing(host: HTMLElement): void {
+  host.classList.remove("md-image-missing");
+  delete host.dataset.mdPath;
+}
+
+/** Keeps the images shown as missing in step with the document. An image that
+ *  loads shows again, also in an <img> Crepe draws anew. After each change to
+ *  the document a missing image shows its node's current path, since another
+ *  path md-easy cannot load keeps the same empty URL and gives no new error.
+ *  One whose path was cleared shows Crepe's input for a path instead. Load
+ *  events do not bubble, so the plugin catches them on their way down to the
+ *  image. */
+export function missingImages() {
+  return $prose(
+    () =>
+      new Plugin({
+        view: (editorView) => {
+          const onLoad = (event: Event): void => {
+            if (!(event.target instanceof HTMLImageElement)) return;
+            const host = event.target.closest<HTMLElement>(".md-image-missing");
+            if (host) unmarkMissing(host);
+          };
+          editorView.dom.addEventListener("load", onLoad, true);
+          return {
+            update: (view, prevState) => {
+              if (view.state.doc === prevState.doc) return;
+              for (const host of view.dom.querySelectorAll<HTMLElement>(".md-image-missing")) {
+                const found = imageNodeAtDom(view, host);
+                if (!found) continue;
+                const { src } = imageAttrs(found.node);
+                if (src) host.dataset.mdPath = src;
+                else unmarkMissing(host);
+              }
+            },
+            destroy: () => editorView.dom.removeEventListener("load", onLoad, true),
+          };
+        },
+      }),
+  );
 }
 
 /** The src shown for a local image md-easy cannot load. It fails at once without a

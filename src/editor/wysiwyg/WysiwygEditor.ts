@@ -32,7 +32,7 @@ import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
-import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
+import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
@@ -232,6 +232,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(linkViewPlugin(context));
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
+    // Keep missing images in step with their paths and images (§5.5).
+    this.crepe.editor.use(missingImages());
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
