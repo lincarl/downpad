@@ -119,7 +119,6 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
   const src = info ? imageAttrs(info.node).src : (img.getAttribute?.("src") ?? "");
   host.classList.add("md-image-missing");
   host.dataset.mdPath = src;
-  host.title = `Missing image: ${src} — click to relocate`;
   if (!host.dataset.mdRelocateBound) {
     host.dataset.mdRelocateBound = "1";
     host.addEventListener("click", (e) => {
@@ -131,7 +130,6 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
     img.addEventListener("load", () => {
       host.classList.remove("md-image-missing");
       delete host.dataset.mdPath;
-      host.removeAttribute("title");
     });
   }
 }
