@@ -1306,11 +1306,12 @@ body {
 }
 
 /* ── Print workspace + printed sheets (spec §5.21) ───────────────────────
-   md-easy lays its own pages out: `printRender.ts` builds one fixed-size
-   `.print-page` per sheet — margins, running header/footer and any scaling
-   baked in — and `paginate.ts` only ever breaks between blocks. The very same
-   elements are shown scaled down in the print workspace preview and sent to the
-   printer, so the preview cannot drift from the output.
+   md-easy lays its own pages out. `printRender.ts` builds one fixed-size
+   `.print-page` per sheet, with margins, running header/footer and any scaling
+   baked in, and `paginate.ts` breaks pages between blocks, or between the lines
+   or blocks inside a block taller than a page. The very same elements are shown
+   scaled down in the print workspace preview and sent to the printer, so the
+   preview cannot drift from the output.
 
    `.print-offscreen` hosts the transient WYSIWYG editor used when printing from
    a view that isn't showing the formatted document; `.print-measure` is where a
@@ -1392,9 +1393,10 @@ body {
   box-sizing: border-box;
 }
 
-/* Nothing may spill past the page edge. Images are additionally capped to the
-   content box so a tall image can never push a page over. These print-only
-   selectors cannot overlap the editor-only image, diagram, and table rules. */
+/* Nothing may spill past the page edge. The max-height on images has no effect
+   inside blocks of automatic height, so paginate.ts shrinks an image taller than
+   a page to fit it (scaleToFit). These print-only selectors cannot overlap the
+   editor-only image, diagram, and table rules. */
 /* stylelint-disable no-descending-specificity -- Independent print and editor component trees. */
 .print-doc img,
 .print-doc svg,
