@@ -790,7 +790,10 @@ function afterComposition(view: EditorView): void {
  *  waited. Undoing a paste or Tab that decided a mark makes it wait again, as
  *  it did before, a pasted, moved or mirrored mark that redo puts back stays
  *  text, and undoing a formula or strikethrough that Save or leaving the
- *  editor made after a pause keeps the text. A `$` or `~` in a code block or
+ *  editor made after a pause keeps the text. When Save, a click or leaving the
+ *  editor decides a mark that undo made wait again, the decision is an undo
+ *  step of its own and empties the redo history, because the history cannot
+ *  add it to the step undo took back. A `$` or `~` in a code block or
  *  inline code, or one that ends up there, is code text. Crepe's and
  *  Milkdown's typing shortcuts decided at once, and Milkdown's could strike
  *  from a different `~` than GFM. */
