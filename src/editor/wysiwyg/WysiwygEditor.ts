@@ -14,6 +14,7 @@
 
 import { Crepe } from "@milkdown/crepe";
 import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { $prose, insert } from "@milkdown/kit/utils";
 import { Slice } from "@milkdown/kit/prose/model";
@@ -212,6 +213,17 @@ export class WysiwygEditor {
     // md-easy's text escaping.
     this.crepe.editor.config((ctx) => {
       ctx.update(remarkStringifyOptionsCtx, (prev) => stringifyOptions(prev, style));
+    });
+    // Crepe's block handle shows for the block under the pointer in the middle of
+    // the page. An inline image there, such as a missing image's chip, counted
+    // as that block, and the handle covered the words before it. Look past
+    // inline nodes to the block their text would give. Over text, the lookup
+    // goes on from a line that starts a list item to the item, so do that too.
+    this.crepe.editor.config((ctx) => {
+      ctx.update(blockConfig.key, ({ filterNodes }) => ({
+        filterNodes: (pos, node) =>
+          !node?.isInline && !(node?.isTextblock && pos.depth > 0 && pos.index() === 0) && filterNodes(pos, node),
+      }));
     });
     // Tell screen readers whether each task is done.
     this.crepe.editor.config(labelTaskBoxes);

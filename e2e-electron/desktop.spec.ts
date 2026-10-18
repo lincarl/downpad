@@ -278,6 +278,60 @@ test("End with the caret before a missing image chip that starts a line keeps th
   expect(after).toContain("Z");
 });
 
+test("the block handle of a line with a wide missing image chip stays beside the line", async () => {
+  const file = path.join(directory, "chip-handle.md");
+  const chipImage = "![Q3](charts/quarterly/q3-sales-by-region.png)";
+  const markdown = `Sales are in the ${chipImage} chart and they look good.\n\n- [ ] Sales are in the ${chipImage} chart now.\n- [ ] Plain task.\n`;
+  await writeFile(file, markdown);
+  await launch(file);
+  const line = page.locator(".milkdown .ProseMirror > p").first();
+  const chip = line.locator(".md-image-missing");
+  await expect(chip).toBeVisible();
+  // Crepe looks for the block under the pointer in the middle of the page,
+  // which the chips cross.
+  const middle = await page.locator(".milkdown .ProseMirror").evaluate((editor) => {
+    const { left, width } = editor.getBoundingClientRect();
+    return left + width / 2;
+  });
+  for (const crossing of [chip, page.locator(".milkdown .ProseMirror li .md-image-missing")]) {
+    const box = (await crossing.boundingBox())!;
+    expect(box.x).toBeLessThan(middle);
+    expect(box.x + box.width).toBeGreaterThan(middle);
+  }
+  const handle = page.locator(".milkdown-block-handle");
+  /** Rest the pointer on `block`'s first line, wait for the handle to show
+   *  beside that block, and return the handle's left edge. */
+  const handleLeft = async (block: Locator): Promise<number> => {
+    const box = (await block.boundingBox())!;
+    await page.mouse.move(box.x + 10, box.y + 12);
+    let left = Number.NaN;
+    await expect.poll(async () => {
+      const handleBox = await handle.boundingBox();
+      if (!handleBox) return false;
+      left = handleBox.x;
+      const middleY = handleBox.y + handleBox.height / 2;
+      return middleY > box.y && middleY < box.y + box.height && handleBox.x + handleBox.width <= box.x;
+    }).toBe(true);
+    return left;
+  };
+  await handleLeft(line);
+  // The handle of a task with a chip is where it is for a task without one, not
+  // over its checkbox.
+  const tasks = page.locator(".milkdown .ProseMirror li");
+  const plain = await handleLeft(tasks.nth(1));
+  expect(await handleLeft(tasks.nth(0))).toBe(plain);
+  await handleLeft(line);
+  const chipBox = (await chip.boundingBox())!;
+  // A click on the word before the chip puts the caret in it.
+  await page.mouse.click(chipBox.x - 12, chipBox.y + chipBox.height / 2);
+  await page.keyboard.type("X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page).toHaveTitle("chip-handle.md — md-easy");
+  const saved = await readFile(file, "utf8");
+  expect(saved.replace("X", "")).toBe(markdown);
+  expect(saved.indexOf("X")).toBeLessThan(saved.indexOf("![Q3]"));
+});
+
 test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");
