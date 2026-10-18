@@ -134,9 +134,21 @@ describe("App shell", () => {
     act(() => store.set({ banner: null }));
     expect(notice()).toContain("can't show deep.md");
 
-    // A long error keeps the notice short.
-    act(() => store.setDocumentViewFailure("tab-1", { message: `${"x".repeat(300)}\nat parse`, dismissed: false }));
-    expect(notice()).toBe(`md-easy can't show deep.md in the Document view (${"x".repeat(119)}…), so it is open in the Markdown view.`);
+    // A long error and a long file name are cut, the notice is clamped to two
+    // lines, and its tooltip has the uncut text.
+    const name = `${"n".repeat(60)}-v2.md`;
+    act(() => {
+      store.patchDoc({ filePath: `/notes/${name}` });
+      store.setDocumentViewFailure("tab-1", { message: `${"x".repeat(300)}\nat parse`, dismissed: false });
+    });
+    expect(notice()).toBe(
+      `md-easy can't show ${"n".repeat(20)}…${"n".repeat(13)}-v2.md in the Document view (${"x".repeat(59)}…), so it is open in the Markdown view.`,
+    );
+    const message = screen.getByRole("alert").querySelector(".banner-message")!;
+    expect(message.classList.contains("line-clamp-2")).toBe(true);
+    expect(message.getAttribute("title")).toBe(
+      `md-easy can't show ${name} in the Document view (${"x".repeat(300)}), so it is open in the Markdown view.`,
+    );
 
     // Other tabs show the window's layout and no notice.
     act(() => store.activateTab(other));

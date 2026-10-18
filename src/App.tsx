@@ -58,6 +58,7 @@ import { byteLength, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
 import { showContextMenu } from "@/shell/contextMenu";
 import { EditorIsland } from "@/editor/EditorIsland";
+import { middleTruncate } from "@/editor/wysiwyg/linkView";
 import type { EditorHost } from "@/editor/EditorHost";
 
 export interface AppProps {
@@ -825,8 +826,9 @@ function Banner() {
     state.view === "recent" ? undefined : state.tabs.find((tab) => tab.id === state.activeTabId)?.documentViewFailure,
   );
   const filePath = useAppState((state) => state.doc.filePath);
-  const banner = appBanner ?? (failure && !failure.dismissed ? documentViewNotice(filePath, failure.message) : null);
-  const shown = appBanner ? "banner" : banner ? "notice" : null;
+  const notice = !appBanner && failure && !failure.dismissed ? documentViewNotice(filePath, failure.message) : null;
+  const banner = appBanner ?? notice;
+  const shown = appBanner ? "banner" : notice ? "notice" : null;
   // Answering or dismissing the bar removes the focused button; focus then goes
   // back to where it was when the bar appeared instead of the page body. The
   // failure notice that shows again after the app's banner counts as a new bar.
@@ -845,7 +847,15 @@ function Banner() {
       aria-atomic="true"
     >
       {error && <TriangleAlert aria-hidden="true" className="shrink-0 text-ink-danger" {...SMALL_ICON} />}
-      <AlertDescription className="banner-message flex-1 text-[12px] leading-4 text-inherit">
+      <AlertDescription
+        className={cn(
+          "banner-message flex-1 text-[12px] leading-4 text-inherit",
+          // Two lines at most in a narrow window, breaking an over-long token
+          // such as a file URL. The tooltip has the uncut text.
+          notice && "line-clamp-2 [overflow-wrap:anywhere]",
+        )}
+        title={notice?.fullMessage}
+      >
         {banner.message}
       </AlertDescription>
       <div className="flex shrink-0 items-center gap-1.5">
@@ -877,14 +887,20 @@ function Banner() {
   );
 }
 
-/** The notice for a tab shown in Markdown because its Document view failed. */
-function documentViewNotice(filePath: string | null, error: string): BannerState {
-  // The error's first line, cut short so the notice stays one or two lines.
+/** The notice for a tab shown in Markdown because its Document view failed,
+ *  with its uncut text for the tooltip. */
+function documentViewNotice(filePath: string | null, error: string): BannerState & { fullMessage: string } {
+  const text = (name: string, detail: string): string =>
+    `md-easy can't show ${name} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Markdown view.`;
+  // The error's first line and the file name, cut short so the notice stays
+  // two lines in a window about 800 px wide or wider.
+  const name = fileLabel(filePath);
   const line = error.split("\n", 1)[0].trim();
-  const detail = line.length > 120 ? `${line.slice(0, 119).trimEnd()}…` : line;
+  const detail = line.length > 60 ? `${line.slice(0, 59).trimEnd()}…` : line;
   return {
     kind: "error",
-    message: `md-easy can't show ${fileLabel(filePath)} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Markdown view.`,
+    message: text(middleTruncate(name, 40), detail),
+    fullMessage: text(name, line),
     actions: [{ id: RETRY_DOCUMENT_VIEW, label: "Try again" }],
   };
 }
