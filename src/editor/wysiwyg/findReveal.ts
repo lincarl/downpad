@@ -125,7 +125,9 @@ export function revealMatch(view: EditorView, range: MatchRange): void {
   awaitingEditor.delete(view);
   beforeScroll.get(view)?.();
   if (revealCodeBlockMatch(view, range)) return;
-  revealSpan(view.dom, spanBetween(view.coordsAtPos(range.from, 1), view.coordsAtPos(range.to, -1)));
+  const start = view.coordsAtPos(range.from, 1);
+  const end = view.coordsAtPos(range.to, -1);
+  revealSpan(view.dom, spanBetween(start, end, () => textBox(view.domAtPos(range.from), view.domAtPos(range.to))));
 }
 
 /** A box in viewport pixels, such as a match's. */
@@ -136,14 +138,32 @@ export interface Span {
   bottom: number;
 }
 
-/** The box from caret `start` to caret `end`, which may be on another line. */
-function spanBetween(start: Span, end: Span): Span {
-  return {
+/**
+ * The box of a match from caret `start` to caret `end`. A match that wraps
+ * onto later lines runs from `start` to the end of its first line and from the
+ * start of its last line to `end`, so the carets understate how wide it is.
+ * Its width then comes from `text`, the box of its rendered text.
+ */
+function spanBetween(start: Span, end: Span, text: () => DOMRect): Span {
+  const span = {
     left: Math.min(start.left, end.left),
     right: Math.max(start.right, end.right),
     top: start.top,
     bottom: end.bottom,
   };
+  // The end caret is on a later line when its middle is below the start caret.
+  if ((end.top + end.bottom) / 2 <= start.bottom) return span;
+  const box = text();
+  return { ...span, left: Math.min(span.left, box.left), right: Math.max(span.right, box.right) };
+}
+
+/** The box of the rendered text between two DOM positions, such as the
+ *  editors' `domAtPos` give. */
+function textBox(from: { node: Node; offset: number }, to: { node: Node; offset: number }): DOMRect {
+  const range = document.createRange();
+  range.setStart(from.node, from.offset);
+  range.setEnd(to.node, to.offset);
+  return range.getBoundingClientRect();
 }
 
 /** The box of the text from `from` to `to` in a CodeMirror editor, or null
@@ -151,7 +171,7 @@ function spanBetween(start: Span, end: Span): Span {
 export function codeMirrorSpan(cm: CodeMirror, from: number, to: number): Span | null {
   const start = cm.coordsAtPos(from, 1);
   const end = cm.coordsAtPos(to, -1);
-  return start && end ? spanBetween(start, end) : null;
+  return start && end ? spanBetween(start, end, () => textBox(cm.domAtPos(from), cm.domAtPos(to))) : null;
 }
 
 /** How far above the find card the room below a page's last line lets that line rise. */
