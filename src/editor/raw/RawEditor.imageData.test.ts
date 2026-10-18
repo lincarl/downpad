@@ -96,4 +96,35 @@ describe("a file dropped on base64 image data in the Markdown view", () => {
   it("goes in after an image with a title", () => {
     expect(dropInData(titled, (start) => start)).toBe(`First line.\n\n${titled}${LINK}! After.\n`);
   });
+
+  it("goes in after the link around an image", () => {
+    const linked = `[${png}](https://example.com)`;
+    expect(dropInData(linked, (start) => start)).toBe(`First line.\n\n${linked}${LINK}! After.\n`);
+  });
+
+  const uri = `data:image/png;base64,${pngData}`;
+  const html = `<img src="${uri}" alt="pic">`;
+  // Here the data has no end inside its line that a file could follow, so the
+  // files go in as paragraphs of their own after the block holding the data,
+  // which stays in one piece.
+  it.each([
+    ["a reference definition", `[logo]: ${uri}`, "[other]: other.png\n"],
+    ["an HTML image in a line of text", `${html} (figure 1)`, "\nLast line.\n"],
+    ["code", `Use \`url(${uri})\` here.`, "\nLast line.\n"],
+    ["an HTML block", `<p align="center">\n${html}\n</p>`, "\nLast line.\n"],
+    ["a table", `| a | b |\n| - | - |\n| ${html} | x |\n| c | d |`, "\nLast line.\n"],
+    ["a list", `- ${html}\n- next`, "\nLast line.\n"],
+    ["a code block", `\`\`\`css\n.a { background: url(${uri}); }\n\`\`\``, "After code.\n"],
+  ])("goes in after the block that holds it, not into the data, in %s", (_where, block, rest) => {
+    const text = `First line.\n\n${block}\n${rest}`;
+    const opened = open(text);
+    const { view } = opened as unknown as { view: EditorView };
+    vi.spyOn(view, "posAtCoords").mockReturnValue(text.indexOf(pngData) + pngData.length);
+    const target = opened.dropTargetAt(10, 10);
+    opened.insertText(LINK, target);
+    opened.insertText("!");
+    opened.insertText("[b.csv](attachments/b.csv)", target, false);
+
+    expect(opened.getText()).toBe(`First line.\n\n${block}\n\n${LINK}!\n\n[b.csv](attachments/b.csv)\n\n${rest.replace(/^\n/, "")}`);
+  });
 });

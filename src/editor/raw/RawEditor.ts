@@ -13,7 +13,7 @@ import {
   search,
   setSearchQuery,
 } from "@codemirror/search";
-import { base64Collapse, inBase64Payload, pastBase64Payload } from "./base64Collapse";
+import { base64Collapse, dropOutsidePayload, inBase64Payload } from "./base64Collapse";
 import { differingRuns } from "../differingRuns";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
@@ -175,13 +175,13 @@ export class RawEditor {
   }
 
   /** Aim a file drop at the text position nearest a viewport point (§5.4),
-   *  but never inside an image's base64 data (`pastBase64Payload`). Returns
+   *  but never inside an image's base64 data (`dropOutsidePayload`). Returns
    *  the target for `insertText`, which the pane keeps in step with edits
    *  until `releaseDropTarget`, or null without an editor. */
   dropTargetAt(x: number, y: number): DropTarget | null {
     if (!this.view) return null;
-    const { doc } = this.view.state;
-    const target: DropTarget = { pos: pastBase64Payload(doc, this.view.posAtCoords({ x, y }, false)) };
+    const { pos, newBlock } = dropOutsidePayload(this.view.state, this.view.posAtCoords({ x, y }, false));
+    const target: DropTarget = newBlock ? { pos, newBlock } : { pos };
     this.dropTargets.add(target);
     return target;
   }
@@ -194,16 +194,31 @@ export class RawEditor {
   /** Insert text for a dropped file (§5.4) at the target of a drop on this
    *  pane, after any file of the same drop, or else at the caret. At the caret
    *  it goes in after any selection, such as the find card's current match,
-   *  and never replaces it. The caret moves after the text, unless
-   *  `moveCaret` is off, for a user who has moved on since the drop. Then the
-   *  selection stays where it was, before text inserted at its end. */
+   *  and never replaces it. A target that asks for a new block gets the text
+   *  as a paragraph of its own at the end of its line. The caret moves after
+   *  the text, unless `moveCaret` is off, for a user who has moved on since
+   *  the drop. Then the selection stays where it was, before text inserted at
+   *  its end. */
   insertText(text: string, target: DropTarget | null = null, moveCaret = true): void {
     if (!this.view || !text) return;
-    const at = target && this.dropTargets.has(target) ? target.pos : this.view.state.selection.main.to;
+    const aimed = target && this.dropTargets.has(target) ? target : null;
+    const at = aimed ? aimed.pos : this.view.state.selection.main.to;
+    let before = "";
+    let after = "";
+    if (aimed?.newBlock) {
+      const { doc } = this.view.state;
+      const line = doc.lineAt(at);
+      before = "\n\n";
+      // A blank line after it too, unless one follows already.
+      if (line.number < doc.lines && doc.line(line.number + 1).text.trim()) after = "\n";
+    }
+    const end = at + before.length + text.length;
     this.view.dispatch({
-      changes: { from: at, insert: text },
-      ...(moveCaret ? { selection: { anchor: at + text.length } } : {}),
+      changes: { from: at, insert: before + text + after },
+      ...(moveCaret ? { selection: { anchor: end } } : {}),
     });
+    // The next file of the drop goes in after this one, in a block of its own.
+    if (aimed?.newBlock) aimed.pos = end;
   }
 
   /** Make the change that puts a file dropped on the split's document pane

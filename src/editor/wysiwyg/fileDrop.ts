@@ -19,6 +19,10 @@ export interface DropTarget {
   /** Set once a file of the drop went in as a list item of its own, so the
    *  files after it go in as list items too. */
   listItems?: boolean;
+  /** Set for a drop on a Markdown pane whose files go in as paragraphs of
+   *  their own at `pos`, the end of a line, as for one on base64 data that is
+   *  not a Markdown image's URL. */
+  newBlock?: boolean;
 }
 
 /**

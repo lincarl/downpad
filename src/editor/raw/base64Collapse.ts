@@ -8,11 +8,12 @@
 // collapsed or not (`inBase64Payload`). The data is not text anyone searches
 // for, and Replace all would corrupt the image. That includes a data: URI
 // written as text, such as in a code sample, which the document view still
-// searches. A file dropped on the payload goes in after the image instead
-// (`pastBase64Payload`).
+// searches. A file dropped on the payload goes in after the image or the
+// block that holds the data instead (`dropOutsidePayload`).
 
+import { ensureSyntaxTree } from "@codemirror/language";
 import { ViewPlugin, Decoration, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
-import { StateEffect, RangeSetBuilder, type Extension, type Text } from "@codemirror/state";
+import { StateEffect, RangeSetBuilder, type EditorState, type Extension, type Text } from "@codemirror/state";
 import { formatSize } from "../../document/docSize";
 
 // data: URI with a base64 payload, in the plain form the view collapses.
@@ -46,19 +47,37 @@ export function inBase64Payload(doc: Text, from: number, to: number): boolean {
   return payloadRanges(doc).some(([start, end]) => from < end && to > start);
 }
 
+/** How long a drop on image data may wait for the Markdown view to finish
+ *  reading the text's structure. */
+const PARSE_BUDGET_MS = 200;
+
 /**
- * A position moved out of the base64 payload of a data URI it is in or at
- * either edge of, to after the image's closing `)`, or to the end of the
- * payload if no `)` follows on its line. A file dropped on a collapsed
- * image's chip would otherwise go into the data, since the chip covers the
- * payload and a drop on it finds one of its edges.
+ * Where a file dropped at `pos` goes in, moved out of the base64 payload of a
+ * data URI that `pos` is in or at either edge of. A file dropped on a
+ * collapsed image's chip would otherwise go into the data, since the chip
+ * covers the payload and a drop on it finds one of its edges. When the data
+ * is the URL of a Markdown image or link, `![](data:…)`, the file goes in
+ * after it, after the outermost one for an image inside a link. Elsewhere,
+ * such as in a reference definition, HTML or code, the data has no end the
+ * file could follow inside its line, so the file goes in as a paragraph of
+ * its own (`newBlock`) after the top-level block that holds the data, which
+ * keeps a table, a list or an HTML block in one piece. Without the text's
+ * structure in time, that is after the line.
  */
-export function pastBase64Payload(doc: Text, pos: number): number {
+export function dropOutsidePayload(state: EditorState, pos: number): { pos: number; newBlock: boolean } {
+  const { doc } = state;
   const payload = payloadRanges(doc).find(([start, end]) => pos >= start && pos <= end);
-  if (!payload) return pos;
-  const line = doc.lineAt(payload[1]);
-  const close = line.text.indexOf(")", payload[1] - line.from);
-  return close < 0 ? payload[1] : line.from + close + 1;
+  if (!payload) return { pos, newBlock: false };
+  const [start, end] = payload;
+  // `resolve` stays in the Markdown tree, out of the HTML parsed inside it.
+  let node = ensureSyntaxTree(state, doc.length, PARSE_BUDGET_MS)?.resolve(start, 1) ?? null;
+  let link: typeof node = null;
+  while (node?.parent?.parent) {
+    if (node.name === "Image" || node.name === "Link") link = node;
+    node = node.parent;
+  }
+  if (link) return { pos: link.to, newBlock: false };
+  return { pos: doc.lineAt(node?.parent ? node.to : end).to, newBlock: true };
 }
 
 class CollapsedWidget extends WidgetType {
