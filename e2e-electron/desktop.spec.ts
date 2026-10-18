@@ -1072,6 +1072,35 @@ test("typing in the split's document pane right after the Markdown pane keeps bo
   await expect(markdownLine).toHaveText("First line. Markdown. Document.");
 });
 
+test("typing in the split's Markdown pane while a reload from disk builds keeps the file's new text", async () => {
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const { file, documentLine, markdownLine } = await openSplit("reload-while-typing.md", "Old text.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("Old text.");
+  // Hold back the answer about the image, so the document pane built for the
+  // reload waits a second for it. The Markdown pane from before the reload
+  // stays on screen meanwhile.
+  await app!.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", () => new Promise(() => {}));
+  });
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  // The old document pane goes once the reload has replaced the tab's text.
+  await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" Typed during the reload.");
+  // The new document pane is still building, so the typing went to the old text.
+  expect(await page.locator(".editor-pane-wysiwyg:not([hidden])").count()).toBe(0);
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page).toHaveTitle("reload-while-typing.md — md-easy");
+  // The panes built for the reload take typing.
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("New text from disk. Typed after.");
+});
+
 /** Drop files from the desktop onto the middle of an element, through
  *  Chromium's drag emulation, so the app gets their real paths. */
 async function dropFiles(target: Locator, files: string[]): Promise<void> {
