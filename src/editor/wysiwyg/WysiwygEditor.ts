@@ -67,8 +67,7 @@ import {
   dropPosition,
   insertAtSelection,
   insertBlocksAt,
-  mapAcrossChange,
-  replaceKeepingSelection,
+  mirrorMarkdown,
   sourceEditBetween,
   type DropTarget,
   type SourceEdit,
@@ -494,14 +493,16 @@ export class WysiwygEditor {
   }
 
   /**
-   * Replace the whole document to mirror an edit made in the other split pane
-   * (§6.1). The frontmatter block is re-split (and its table re-rendered, added,
-   * or removed as the source gains/loses a `---` block) and Crepe's body is
-   * replaced. Both changes are one transaction, so an undo here takes back the
-   * block and the body together. The caret and selection keep their place
-   * outside the change (`replaceKeepingSelection`), since the user can be
-   * typing here while a file dropped on the Markdown pane goes in there. The
-   * table keeps its cells unless one still shows text the block no longer has.
+   * Mirror an edit made in the other split pane into the document (§6.1). The
+   * frontmatter block is re-split (and its table re-rendered, added, or
+   * removed as the source gains/loses a `---` block) and the blocks of Crepe's
+   * body that differ are replaced (`mirrorMarkdown`). Both changes are one
+   * transaction, so an undo here takes back the block and the body together.
+   * Positions outside the changed blocks keep their place, such as the caret
+   * and the targets of drops, through the sync and its undo and redo. The user
+   * can be typing here while a file dropped on the Markdown pane goes in
+   * there. The table keeps its cells unless one still shows text the block no
+   * longer has.
    *
    * The replacement is reported like an edit after a ~200ms pause
    * (`scheduleChange`). That report carries `markdown` itself, because every
@@ -534,18 +535,19 @@ export class WysiwygEditor {
     else this.replaceBody(split.body);
   }
 
-  /** Replace Crepe's body and remember its source (see `setMarkdown`). */
+  /** Replace the blocks of Crepe's body that differ from `body` and remember
+   *  its source (see `setMarkdown`). */
   private replaceBody(body: string): void {
     if (!this.crepe) return;
-    const before = this.withView((view) => view.state.doc, null);
-    const targets = [...this.dropTargets].map((target) => ({ target, pos: target.pos }));
     try {
       // The frontmatter block and the blank lines after it, which setMarkdown
       // has just stored, and the new body's baseline go in the same
-      // transaction.
+      // transaction. A file dropped on this pane while the other one was
+      // edited still goes in where it was dropped, since the drop targets map
+      // through it.
       const slot: BaselineSlot = { baseline: null };
       this.crepe.editor.action(
-        replaceKeepingSelection(body, (state, tr) =>
+        mirrorMarkdown(body, (state, tr) =>
           setBaseline(state, setFrontmatter(state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator }), slot),
         ),
       );
@@ -554,10 +556,6 @@ export class WysiwygEditor {
     } catch {
       // Editor torn down mid-sync; ignore.
     }
-    // A file dropped on this pane while the other one was edited still goes
-    // in where it was dropped.
-    const after = this.withView((view) => view.state.doc, null);
-    if (before && after) for (const { target, pos } of targets) target.pos = mapAcrossChange(before, after, pos);
   }
 
   /** Bring the frontmatter table into line with the current `frontmatterBlock`

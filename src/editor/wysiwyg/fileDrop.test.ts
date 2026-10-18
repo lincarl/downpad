@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import type { Node } from "@milkdown/kit/prose/model";
+import { undo } from "@milkdown/kit/prose/history";
 import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -280,6 +281,39 @@ describe("drops whose files are still being read", () => {
     opened.insertMarkdown(LINK_A, target);
 
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\nThird line. Typed.\n`);
+  });
+
+  const LINES = "First line.\n\nSecond line.\n\nThird line.\n\nFourth line.\n";
+
+  /** Aim a drop at the edge between "Second line." and "Third line.". */
+  function aimBetweenSecondAndThird(opened: WysiwygEditor) {
+    place(opened, block("paragraph", "Second line."), 140, 170);
+    place(opened, block("paragraph", "Third line."), 180, 210);
+    return opened.dropTargetAt(300, 168)!;
+  }
+
+  it("keeps a drop's place when the split mirrors a Markdown edit made in two places", async () => {
+    const opened = await open(LINES);
+    const target = aimBetweenSecondAndThird(opened);
+
+    opened.setMarkdown(LINES.replace("First line.", "First line. Typed.").replace("Fourth line.", "Fourth line. Typed."));
+    opened.insertMarkdown(LINK_A, target);
+
+    expect(opened.getMarkdown()).toBe(
+      `First line. Typed.\n\nSecond line.\n\n${LINK_A}\n\nThird line.\n\nFourth line. Typed.\n`,
+    );
+  });
+
+  it("keeps a drop's place when a mirrored Markdown edit is undone in the document", async () => {
+    const opened = await open(LINES);
+    opened.setMarkdown(LINES.replace("First line.", "First line. Typed"));
+    const target = aimBetweenSecondAndThird(opened);
+
+    const view = viewOf(opened);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    opened.insertMarkdown(LINK_A, target);
+
+    expect(opened.getMarkdown()).toBe(LINES.replace("Third line.", `${LINK_A}\n\nThird line.`));
   });
 });
 

@@ -9,8 +9,9 @@ import type { Ctx } from "@milkdown/kit/ctx";
 import { GapCursor } from "@milkdown/kit/prose/gapcursor";
 import { Slice, type Fragment, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Selection, TextSelection, type EditorState, type Transaction, Plugin, PluginKey } from "@milkdown/kit/prose/state";
-import { dropPoint } from "@milkdown/kit/prose/transform";
+import { Transform, dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
+import { differingRuns } from "../differingRuns";
 
 /** Where the files of a drop on the document go in. The editor that made it
  *  keeps the position in step with later edits. */
@@ -428,52 +429,96 @@ function writtenForms(serialize: (doc: Node) => string, docType: Node["type"], b
   return forms;
 }
 
+/** Whether two blocks hold the same content. Heading ids are left out, since
+ *  Milkdown gives them to headings only after a parse. */
+function sameBlock(a: Node, b: Node): boolean {
+  if (a.eq(b)) return true;
+  if (a.isText || a.childCount !== b.childCount) return false;
+  const attrs = a.type.name === "heading" ? { ...b.attrs, id: a.attrs.id } : b.attrs;
+  if (!a.hasMarkup(b.type, attrs, b.marks)) return false;
+  for (let index = 0; index < a.childCount; index += 1) {
+    if (!sameBlock(a.child(index), b.child(index))) return false;
+  }
+  return true;
+}
+
+/** Where each top-level block of a document starts, and its end last. */
+function blockStarts(doc: Node): number[] {
+  const starts = [0];
+  doc.forEach((node) => starts.push(starts[starts.length - 1] + node.nodeSize));
+  return starts;
+}
+
 /**
- * Map a position from `before` to `after`, two versions of a document that
- * differ in one run of content, as a split mirror sync leaves them when it
- * replaces the whole document. A position before the run stays, one after it
- * moves with the content after it, and one inside it goes to the end of the
- * new run. Mapping through the replacement itself would move every position to
- * the end of the document.
+ * The part of the top-level blocks of `doc` from `from` to `to` that differs
+ * from `changed`, the blocks that replace them, as positions in `doc` and
+ * offsets into `changed`. Undefined when nothing differs. Null when replacing
+ * only that part would not give exactly `changed`, as ProseMirror can add a
+ * node, such as a table cell, to fit a cut through a table. Then the whole
+ * blocks must be replaced.
  */
-export function mapAcrossChange(before: Node, after: Node, pos: number): number {
-  const start = before.content.findDiffStart(after.content);
-  if (start == null || pos <= start) return pos;
-  const end = before.content.findDiffEnd(after.content);
-  if (!end) return pos;
-  let { a, b } = end;
-  // Repeated content can put the ends of the run before its start.
+function changedPart(
+  doc: Node,
+  from: number,
+  to: number,
+  changed: Fragment,
+): { from: number; to: number; start: number; end: number } | null | undefined {
+  const old = doc.content.cut(from, to);
+  const start = old.findDiffStart(changed);
+  const diffEnd = old.findDiffEnd(changed);
+  if (start == null || !diffEnd) return undefined;
+  let { a, b } = diffEnd;
+  // Repeated content can put the ends of the change before its start.
   const overlap = start - Math.min(a, b);
   if (overlap > 0) {
     a += overlap;
     b += overlap;
   }
-  return pos >= a ? pos - a + b : b;
+  const part = { from: from + start, to: from + a, start, end: b };
+  const blocks = doc.type.create(null, changed);
+  const probe = new Transform(doc).replace(part.from, part.to, blocks.slice(start, b));
+  const placed = probe.doc.content.size === doc.content.size - old.size + changed.size && probe.doc.content.cut(from, from + changed.size).eq(changed);
+  return placed ? part : null;
 }
 
 /**
- * Milkdown action that replaces the document with Markdown's, as Milkdown's
- * `replaceAll` does for a split mirror sync, but keeps the caret and the
- * selection where they were (`mapAcrossChange`). The user can be typing in
- * this pane while a file dropped on the Markdown pane goes in there. `extend`
- * can add steps to the same transaction, such as the frontmatter's.
+ * Milkdown action that mirrors Markdown into the document for a split mirror
+ * sync. Unlike Milkdown's `replaceAll`, it replaces only the top-level blocks
+ * that differ, each run of them on its own (`differingRuns`), and within a run
+ * only the part that changed. Positions outside the changes keep their place
+ * through the sync and through its undo and redo, and so do the caret, the
+ * selection and the targets of drops. The user can be typing in this pane
+ * while a file dropped on the Markdown pane goes in there. `extend` can add
+ * steps to the same transaction, such as the frontmatter's.
  */
-export function replaceKeepingSelection(
+export function mirrorMarkdown(
   markdown: string,
   extend: (state: EditorState, tr: Transaction) => Transaction = (_state, tr) => tr,
 ) {
   return (ctx: Ctx): void => {
     const view = ctx.get(editorViewCtx);
-    const doc = ctx.get(parserCtx)(markdown);
-    if (!doc) return;
+    const parse = ctx.get(parserCtx);
+    const next = parse(markdown);
+    if (!next) return;
     const { state } = view;
-    const tr = state.tr.replace(0, state.doc.content.size, new Slice(doc.content, 0, 0));
-    const { anchor, head } = state.selection;
-    const $head = tr.doc.resolve(mapAcrossChange(state.doc, tr.doc, head));
-    const selection =
-      state.selection instanceof TextSelection
-        ? TextSelection.between(tr.doc.resolve(mapAcrossChange(state.doc, tr.doc, anchor)), $head)
-        : Selection.near($head);
-    view.dispatch(extend(state, tr.setSelection(selection)));
+    const { doc } = state;
+    const runs = differingRuns(doc.childCount, next.childCount, (a, b) => sameBlock(doc.child(a), next.child(b)), 50_000);
+    const starts = blockStarts(doc);
+    const nextStarts = blockStarts(next);
+    const tr = state.tr;
+    // From the last run back, so each run's positions still hold.
+    for (const run of runs.reverse()) {
+      const from = starts[run.fromA];
+      const to = starts[run.toA];
+      const nextFrom = nextStarts[run.fromB];
+      const changed = next.content.cut(nextFrom, nextStarts[run.toB]);
+      const narrowed = changedPart(doc, from, to, changed);
+      if (narrowed === undefined) continue;
+      if (narrowed) tr.replace(narrowed.from, narrowed.to, next.slice(nextFrom + narrowed.start, nextFrom + narrowed.end));
+      else tr.replaceWith(from, to, changed);
+    }
+    if (tr.docChanged) keepSelection(tr, state.selection);
+    const done = extend(state, tr);
+    if (done.steps.length) view.dispatch(done);
   };
 }
