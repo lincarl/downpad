@@ -1,16 +1,18 @@
 // Block-level pagination for the custom print path (spec §5.21).
 //
 // The document is laid out once, at the exact content width of a page, and its
-// top-level blocks are then packed into page-sized groups. Breaks only ever fall
-// *between* blocks, so a printed page never cuts a line of text in half the way
-// a naive fixed-height clip would — this is what makes the output read like a
-// document rather than a screenshot of a scrolling page.
+// top-level blocks are then packed into page-sized groups. Breaks fall between
+// blocks, or between the lines of a block taller than a page, so a printed page
+// never cuts a line of text in half the way a naive fixed-height clip would. This
+// is what makes the output read like a document rather than a screenshot of a
+// scrolling page.
 //
 // Blocks that are themselves taller than a page (a long table, a long list, a
 // long code block, a paragraph or heading, a quote, a Markdown source line that
 // wraps past a page) are split one level down first, so the packer always has
 // pieces it can place. Text splits between the lines it wraps onto, never inside
-// a line, and a quote between the blocks it holds, each split the same way.
+// a line, and a quote or a list item between the blocks it holds, each split the
+// same way.
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -359,21 +361,90 @@ function holdsBlocks(el: HTMLElement): boolean {
  * children found nothing and left a long list to be clipped at the page edge.
  * Crepe draws its own bullets and numbers into those wrappers, so the numbering
  * travels with the items; `start` still carries it for plain HTML lists.
+ *
+ * An item taller than a page is split between its own blocks first
+ * (splitListItem), and its pieces are packed like items.
  */
 function splitList(list: HTMLElement, maxHeightPx: number): HTMLElement[] {
-  const items = Array.from(list.children).filter(
-    (c) => c.tagName === "LI" || c.querySelector("li") !== null,
-  );
+  for (const item of listItems(list)) {
+    if (item.offsetHeight <= maxHeightPx) continue;
+    const pieces = splitListItem(item, maxHeightPx);
+    if (pieces.length) item.replaceWith(...pieces);
+  }
+  const items = listItems(list);
   if (items.length < 2) return [];
   const groups = packByHeight(items, maxHeightPx);
   if (groups.length < 2) return [];
-  let index = Number((list as HTMLOListElement).start) || 1;
+  // An item's number, which the piece of it that continues on a later page keeps.
+  const numbers = new Map<Element, number>();
+  let number = (Number((list as HTMLOListElement).start) || 1) - 1;
+  for (const item of items) {
+    if (!continued.has(item)) number++;
+    numbers.set(item, number);
+  }
   return groups.map((group) => {
     const piece = list.cloneNode(false) as HTMLElement;
-    if (list.tagName === "OL") (piece as HTMLOListElement).start = index;
-    index += group.length;
+    if (list.tagName === "OL") (piece as HTMLOListElement).start = numbers.get(group[0]) ?? 1;
     for (const item of group) piece.appendChild(item);
     return piece;
+  });
+}
+
+/** A list's items, in Crepe's item wrappers or plain `<li>`s. */
+function listItems(list: HTMLElement): HTMLElement[] {
+  return (Array.from(list.children) as HTMLElement[]).filter(
+    (c) => c.tagName === "LI" || c.querySelector("li") !== null,
+  );
+}
+
+/** The pieces of split list items after the first: the rest of an item, not a new one. */
+const continued = new WeakSet<Element>();
+
+/**
+ * Split a list item taller than a page between the blocks it holds.
+ *
+ * An item printed as one block, so the page body clipped an item taller than a
+ * page, such as a long paragraph under a bullet, and everything after its first
+ * page was lost. Crepe renders an item as `div.milkdown-list-item-block > li >
+ * (div.label-wrapper, div.children > div.content-dom)`, the bullet or number
+ * beside the content. The content splits like a quote (splitContainer), and
+ * each piece is rebuilt in copies of the item's wrappers. The label goes beside
+ * every piece so the text keeps its indent, but only the first piece shows it:
+ * the rest continue the item rather than start new ones. A plain `<li>` that
+ * holds blocks splits the same way and hides its marker on later pieces.
+ */
+function splitListItem(item: HTMLElement, maxHeightPx: number): HTMLElement[] {
+  const content =
+    item.querySelector<HTMLElement>(":scope > li > .children > .content-dom") ??
+    (item.tagName === "LI" ? item : null);
+  if (!content) return [];
+  const overhead = Math.max(0, item.offsetHeight - content.offsetHeight);
+  const pieces = splitContainer(content, Math.max(1, maxHeightPx - overhead));
+  return pieces.map((piece, index) => {
+    const later = index > 0;
+    let wrapped = piece;
+    for (
+      let level = content.parentElement;
+      content !== item && level && level !== item.parentElement;
+      level = level.parentElement
+    ) {
+      const copy = level.cloneNode(false) as HTMLElement;
+      for (const child of Array.from(level.children) as HTMLElement[]) {
+        if (child.contains(content)) {
+          copy.appendChild(wrapped);
+          continue;
+        }
+        const beside = child.cloneNode(true) as HTMLElement;
+        if (later) beside.style.visibility = "hidden";
+        copy.appendChild(beside);
+      }
+      wrapped = copy;
+    }
+    if (later) {
+      if (wrapped.tagName === "LI") wrapped.style.listStyleType = "none";
+      continued.add(wrapped);
+    }
+    return wrapped;
   });
 }
 

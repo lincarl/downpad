@@ -913,3 +913,75 @@ describe("splitIntoPages, splitting a quote", () => {
     expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
   });
 });
+
+/**
+ * A list item as Crepe renders it, in the fake layout: the label beside the
+ * content, `div.milkdown-list-item-block > li > (div.label-wrapper,
+ * div.children > div.content-dom > blocks)`.
+ */
+function crepeItem(label: string, ...blocks: HTMLElement[]): HTMLElement {
+  const content = stack("div", ...blocks);
+  content.className = "content-dom";
+  const children = stack("div", content);
+  children.className = "children";
+  const mark = sized("div", 32, label);
+  mark.className = "label-wrapper";
+  const li = document.createElement("li");
+  li.className = "list-item";
+  li.dataset.row = "";
+  li.append(mark, children);
+  const wrapper = stack("div", li);
+  wrapper.className = "milkdown-list-item-block";
+  return wrapper;
+}
+
+describe("splitIntoPages, splitting a list item", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  it("continues an item taller than a page on the next pages, showing its number once", () => {
+    // An item printed as one block, so the page body clipped a long paragraph
+    // under a number after its first page.
+    const list = stack(
+      "ol",
+      crepeItem("1.", sized("p", 30, "First.")),
+      crepeItem("2.", longParagraph(400, "w")),
+      crepeItem("3.", sized("p", 30, "Third.")),
+    );
+    const visible = (el: Element): string => {
+      const copy = el.cloneNode(true) as Element;
+      copy.querySelectorAll('[style*="visibility: hidden"]').forEach((hidden) => hidden.remove());
+      return copy.textContent ?? "";
+    };
+    const text = list.textContent;
+    const flow = flowWith(list);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLOListElement[];
+    expect(pieces.length).toBeGreaterThan(2);
+    for (const piece of pieces) {
+      expect(piece.tagName).toBe("OL");
+      expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+    }
+    // Every character prints once, in order, and each number shows once.
+    expect(pieces.map(visible).join("")).toBe(text);
+    const labels = pieces.flatMap((piece) => Array.from(piece.querySelectorAll<HTMLElement>(".label-wrapper")));
+    expect(labels.filter((label) => !label.style.visibility).map((label) => label.textContent)).toEqual(["1.", "2.", "3."]);
+    // The rest of item 2 keeps the item's shape, with its number hidden beside it
+    // so the text keeps its indent.
+    const rest = labels.filter((label) => label.style.visibility === "hidden");
+    expect(rest.length).toBeGreaterThan(0);
+    for (const label of rest) {
+      expect(label.textContent).toBe("2.");
+      expect(label.closest(".milkdown-list-item-block > li.list-item")).not.toBeNull();
+      expect(label.nextElementSibling!.matches(".children")).toBe(true);
+      expect(label.nextElementSibling!.querySelector(":scope > .content-dom > p")).not.toBeNull();
+    }
+    // Each piece starts counting at the item it begins with, so a continued item
+    // keeps its number.
+    for (const piece of pieces) {
+      expect(piece.start).toBe(Number.parseInt(piece.querySelector(".label-wrapper")!.textContent!));
+    }
+  });
+});
