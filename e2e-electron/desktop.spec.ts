@@ -1072,6 +1072,14 @@ test("typing in the split's document pane right after the Markdown pane keeps bo
   await expect(markdownLine).toHaveText("First line. Markdown. Document.");
 });
 
+/** Make the main process never answer about an image, so a document view
+ *  waits its full second for each image before it shows. */
+async function holdImageAnswers(): Promise<void> {
+  await app!.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", () => new Promise(() => {}));
+  });
+}
+
 test("typing in the split's Markdown pane while a reload from disk builds keeps the file's new text", async () => {
   await writeFile(path.join(directory, "pixel.png"), onePixelPng);
   const { file, documentLine, markdownLine } = await openSplit("reload-while-typing.md", "Old text.\n\n![pixel](pixel.png)\n");
@@ -1079,9 +1087,7 @@ test("typing in the split's Markdown pane while a reload from disk builds keeps 
   // Hold back the answer about the image, so the document pane built for the
   // reload waits a second for it. The Markdown pane from before the reload
   // stays on screen meanwhile.
-  await app!.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", () => new Promise(() => {}));
-  });
+  await holdImageAnswers();
   await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
   await page.getByRole("button", { name: "Reload", exact: true }).click();
   // The old document pane goes once the reload has replaced the tab's text.
@@ -1095,6 +1101,68 @@ test("typing in the split's Markdown pane while a reload from disk builds keeps 
   await expect(markdownLine).toHaveText("New text from disk.");
   await expect(page).toHaveTitle("reload-while-typing.md — md-easy");
   // The panes built for the reload take typing.
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("New text from disk. Typed after.");
+});
+
+test("switching tabs while a reload from disk builds shows the other tab, then the reloaded text", async () => {
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const file = path.join(directory, "reloaded.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(file, "Old text.\n\n![pixel](pixel.png)\n");
+  await writeFile(other, "Other file.\n");
+  await launch(file);
+  await chooseOpen(other);
+  await expect(page).toHaveTitle("other.md — md-easy");
+  await page.getByRole("tab", { name: "reloaded.md", exact: true }).click();
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  await expect(documentLine).toHaveText("Old text.");
+  await expect(markdownLine).toHaveText("Old text.");
+  await holdImageAnswers();
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  // Switch tabs while the document pane for the reload waits for its image.
+  await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
+  await page.getByRole("tab", { name: "other.md", exact: true }).click();
+  // The other tab's panes replace the Markdown pane from before the reload.
+  await expect(documentLine).toHaveText("Other file.");
+  await expect(markdownLine).toHaveText("Other file.");
+  await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(2);
+  await expect(page).toHaveTitle("other.md — md-easy");
+  await page.getByRole("tab", { name: "reloaded.md", exact: true }).click();
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(readFile(other, "utf8")).resolves.toBe("Other file.\n");
+});
+
+test("a Reload clicked while a layout switch builds the document view shows the file's new text", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), 'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ndefaultView = "markdown"\n');
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const file = path.join(directory, "reload-during-switch.md");
+  await writeFile(file, "Old text on disk.\n\n![pixel](pixel.png)\n");
+  await launch(file);
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  await expect(markdownLine).toHaveText("Old text on disk.");
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  const reload = page.getByRole("button", { name: "Reload", exact: true });
+  await expect(reload).toBeVisible();
+  await holdImageAnswers();
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  // Reload while the document pane for the split waits for its image.
+  await page.waitForFunction(() => document.querySelector(".editor-pane-wysiwyg") !== null, undefined, { polling: "raf" });
+  await reload.click();
+  // The build from the old text is done again from the new.
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page).toHaveTitle("reload-during-switch.md — md-easy");
   await typeAtEnd(markdownLine, " Typed after.");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
