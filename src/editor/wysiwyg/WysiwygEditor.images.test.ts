@@ -6,6 +6,9 @@
 // shows the file it is pointed at.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Crepe } from "@milkdown/crepe";
+import { editorViewCtx } from "@milkdown/kit/core";
+import { undoDepth } from "@milkdown/kit/prose/history";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 
@@ -59,11 +62,11 @@ afterEach(async () => {
 });
 
 /** Start mounting the document editor on `markdown`, saved at /docs/a.md. */
-function start(markdown: string): { root: HTMLElement; mounting: Promise<void> } {
+function start(markdown: string, onChange: (markdown: string) => void = () => {}): { root: HTMLElement; mounting: Promise<void> } {
   const root = document.createElement("div");
   document.body.append(root);
   editor = new WysiwygEditor();
-  const mounting = editor.mount(root, markdown, { onChange: () => {} }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  const mounting = editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => "/docs/a.md",
     requestSave: async () => false,
@@ -72,11 +75,15 @@ function start(markdown: string): { root: HTMLElement; mounting: Promise<void> }
 }
 
 /** Mount the document editor on `markdown`, saved at /docs/a.md. */
-async function open(markdown: string): Promise<HTMLElement> {
-  const { root, mounting } = start(markdown);
+async function open(markdown: string, onChange?: (markdown: string) => void): Promise<HTMLElement> {
+  const { root, mounting } = start(markdown, onChange);
   await mounting;
   return root;
 }
+
+/** The editor's ProseMirror view, for undo checks the public API cannot make. */
+const viewOf = (opened: WysiwygEditor) =>
+  (opened as unknown as { crepe: Crepe }).crepe.editor.ctx.get(editorViewCtx);
 
 /** The src each image in the editor has now. */
 const sources = (root: HTMLElement) => [...root.querySelectorAll("img")].map((image) => image.getAttribute("src"));
@@ -157,6 +164,39 @@ describe("a relocated image", () => {
     // A click on the found image leaves it alone.
     block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(native.openDialog).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a missing image located at the path it has", () => {
+  it.each([
+    ["on its own line", ".milkdown-image-block"],
+    ["in a line of text", ".milkdown-image-inline"],
+  ])("shows the file put back there %s, and leaves the document as it was", { timeout: 60_000 }, async (_where, selector) => {
+    const markdown = "![Block](/docs/block.png)\n\nInline ![Inline](/docs/inline.png) here.\n";
+    native.convertFileSrc.mockResolvedValue(null);
+    const onChange = vi.fn();
+    const root = await open(markdown, onChange);
+    // jsdom loads no images, so tell each view its empty source failed.
+    for (const image of root.querySelectorAll("img")) image.dispatchEvent(new Event("error"));
+    const host = root.querySelector<HTMLElement>(selector)!;
+    const image = host.querySelector("img")!;
+    expect(host.classList).toContain("md-image-missing");
+    const view = viewOf(editor!);
+    const depth = undoDepth(view.state);
+
+    // The file is put back, and the user picks it at the path the Markdown has.
+    native.convertFileSrc.mockResolvedValue("md-easy-file://found");
+    native.openDialog.mockResolvedValue(host.dataset.mdPath!);
+    host.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://found"));
+    image.dispatchEvent(new Event("load"));
+    expect(host.classList).not.toContain("md-image-missing");
+    // Past the 200 ms change report.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(editor!.getMarkdown()).toBe(markdown);
+    expect(undoDepth(view.state)).toBe(depth);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 

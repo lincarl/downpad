@@ -11,7 +11,8 @@
 //   2. onImageLoadError — when an image fails to load, show it as missing: an
 //      image block as a placeholder with the broken icon and its path, an inline
 //      image as a chip in its line with the icon and its path. A click on either
-//      relocates it via a file dialog (updates the node's src). missingImages
+//      relocates it via a file dialog (updates the node's src, or looks the
+//      file up again when the picked file is at the path it has). missingImages
 //      reports the errors of inline images, which Crepe does not, and keeps both
 //      in step with the document. They show the node's current path, and go
 //      once an image loads there or the path is cleared. A chip inside a text
@@ -22,7 +23,7 @@
 import { convertFileSrc } from "../../ipc/bridge";
 import { openDialog } from "../../ipc/dialogs";
 import { $prose } from "@milkdown/kit/utils";
-import { NodeSelection, Plugin, TextSelection } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
@@ -100,8 +101,25 @@ export async function pickImageFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+/** missingImages' state: the position of an image whose view looks its file up
+ *  again in this transaction (see showAgain), or null. */
+const showAgainKey = new PluginKey<number | null>("md-easy-show-image-again");
+
+/** Look the file of the image at `pos` up again and show it, without a change
+ *  to the document, its undo history or its unsaved mark. An image's view looks
+ *  its file up when ProseMirror passes it the node again, which ProseMirror does
+ *  only when the node or its decorations change. missingImages gives the image
+ *  a node decoration for one transaction, and the next takes it off again, so
+ *  the image can be shown again the same way later. */
+function showAgain(view: EditorView, pos: number): void {
+  view.dispatch(view.state.tr.setMeta(showAgainKey, pos));
+  view.dispatch(view.state.tr.setMeta(showAgainKey, null));
+}
+
 /** Point a missing image at a file the user picks. The main process is asked
- *  about that file again, since it may be the one it could not find before. */
+ *  about that file again, since it may be the one it could not find before.
+ *  The path the image already has, of a file that is back, leaves the node as
+ *  it is, so the image is shown again instead. */
 async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => void): Promise<void> {
   const view = viewRef.current;
   if (!view) return;
@@ -110,7 +128,8 @@ async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => vo
   const path = await pickImageFile();
   if (!path) return;
   forget(path);
-  setImageAttrs(view, found.pos, found.node, { src: path });
+  if (imageAttrs(found.node).src === path) showAgain(view, found.pos);
+  else setImageAttrs(view, found.pos, found.node, { src: path });
 }
 
 /** The hover text of a missing inline image, whose chip shows only its path.
@@ -168,7 +187,7 @@ const IN_SELECTION = "md-in-selection";
  *  input for a path instead. Load and error events do not bubble, so the plugin
  *  catches them on their way down to the image. Inline images inside a text
  *  selection get the IN_SELECTION class, and Shift+click on a chip extends the
- *  selection to it. */
+ *  selection to it. The plugin also draws the decoration of showAgain. */
 export function missingImages(onError: (event: Event) => void) {
   return $prose(
     () =>
@@ -202,21 +221,31 @@ export function missingImages(onError: (event: Event) => void) {
             },
           };
         },
+        key: showAgainKey,
+        state: {
+          init: () => null,
+          apply: (tr) => (tr.getMeta(showAgainKey) as number | null | undefined) ?? null,
+        },
         props: {
-          // Chromium paints no selection over a chip, whose icon and path CSS
-          // draws, so mark the inline images a text selection covers.
           decorations: (state) => {
+            const marks: Decoration[] = [];
+            // The image showAgain shows again gets a decoration without attributes.
+            const again = showAgainKey.getState(state);
+            const image = again == null ? null : state.doc.nodeAt(again);
+            if (again != null && image) marks.push(Decoration.node(again, again + image.nodeSize, {}));
+            // Chromium paints no selection over a chip, whose icon and path CSS
+            // draws, so mark the inline images a text selection covers.
             const { selection } = state;
-            if (selection.empty || selection instanceof NodeSelection) return null;
-            const covered: Decoration[] = [];
-            for (const { $from, $to } of selection.ranges) {
-              state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
-                if (node.isInline && isImageNode(node)) {
-                  covered.push(Decoration.node(pos, pos + node.nodeSize, { class: IN_SELECTION }));
-                }
-              });
+            if (!selection.empty && !(selection instanceof NodeSelection)) {
+              for (const { $from, $to } of selection.ranges) {
+                state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+                  if (node.isInline && isImageNode(node)) {
+                    marks.push(Decoration.node(pos, pos + node.nodeSize, { class: IN_SELECTION }));
+                  }
+                });
+              }
             }
-            return DecorationSet.create(state.doc, covered);
+            return marks.length ? DecorationSet.create(state.doc, marks) : null;
           },
           handleDOMEvents: {
             // Chromium finds no place in a chip to extend the selection to, so
