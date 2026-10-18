@@ -260,6 +260,24 @@ test("a missing inline image shows its path in a chip, which a click locates", a
   expect(await readFile(file, "utf8")).toBe(markdown);
 });
 
+test("End with the caret before a missing image chip that starts a line keeps the caret in that line", async () => {
+  const file = path.join(directory, "chip-end.md");
+  await writeFile(file, "Ends with ![End](end/missing.png)\n\n![Start](start/missing.png) starts here.\n");
+  await launch(file);
+  const line = page.locator(".milkdown .ProseMirror > p").nth(1);
+  await expect(line.locator(".md-image-missing")).toHaveAttribute("data-md-path", "start/missing.png");
+  const box = (await line.boundingBox())!;
+  await page.mouse.click(box.x + box.width - 2, box.y + box.height / 2);
+  await page.keyboard.press("Home");
+  await page.keyboard.press("End");
+  await page.keyboard.type("Z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page).toHaveTitle("chip-end.md — md-easy");
+  const [before, after] = (await readFile(file, "utf8")).split("\n\n");
+  expect(before).toBe("Ends with ![End](end/missing.png)");
+  expect(after).toContain("Z");
+});
+
 test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");

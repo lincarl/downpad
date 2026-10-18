@@ -1192,8 +1192,15 @@ body {
   vertical-align: middle;
 }
 
+/* CSS draws the chip's icon and path, so its broken <img> is hidden at no
+   size, out of the chip's row. It stays rendered because without it Chromium
+   finds no place for the caret in a line that starts with the chip, and End
+   there moves the caret to the line above. */
 .editor-host .milkdown-image-inline.md-image-missing > img {
-  display: none;
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 .editor-host .milkdown-image-inline.md-image-missing::before {
