@@ -1223,8 +1223,10 @@ body {
 }
 
 /* Chromium paints no selection over the chip's icon and path, so a chip inside
-   a text selection takes the selection colour from missingImages' class. */
-.editor-host .milkdown-image-inline.md-image-missing.md-in-selection {
+   a text selection takes the selection colour from missingImages' class. Only
+   while the editor has focus: once focus leaves, the text no longer shows the
+   selection either. */
+.editor-host .ProseMirror:focus .milkdown-image-inline.md-image-missing.md-in-selection {
   background: var(--crepe-color-selected);
 }
 
