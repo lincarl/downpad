@@ -168,11 +168,14 @@ describe("a relocated image", () => {
 });
 
 describe("a missing image located at the path it has", () => {
+  // The document is /docs/a.md, and the dialog returns absolute paths.
   it.each([
-    ["on its own line", ".milkdown-image-block"],
-    ["in a line of text", ".milkdown-image-inline"],
-  ])("shows the file put back there %s, and leaves the document as it was", { timeout: 60_000 }, async (_where, selector) => {
-    const markdown = "![Block](/docs/block.png)\n\nInline ![Inline](/docs/inline.png) here.\n";
+    ["on its own line", ".milkdown-image-block", "/docs/block.png", "/docs/block.png"],
+    ["in a line of text", ".milkdown-image-inline", "/docs/inline.png", "/docs/inline.png"],
+    ["on its own line, by a relative path", ".milkdown-image-block", "img/block.png", "/docs/img/block.png"],
+    ["in a line of text, by a relative path", ".milkdown-image-inline", "./img/inline.png", "/docs/img/inline.png"],
+  ])("shows the file put back there %s, and leaves the document as it was", { timeout: 60_000 }, async (_where, selector, src, picked) => {
+    const markdown = selector === ".milkdown-image-block" ? `![Block](${src})\n\nText.\n` : `Inline ![Inline](${src}) here.\n`;
     native.convertFileSrc.mockResolvedValue(null);
     const onChange = vi.fn();
     const root = await open(markdown, onChange);
@@ -186,7 +189,7 @@ describe("a missing image located at the path it has", () => {
 
     // The file is put back, and the user picks it at the path the Markdown has.
     native.convertFileSrc.mockResolvedValue("md-easy-file://found");
-    native.openDialog.mockResolvedValue(host.dataset.mdPath!);
+    native.openDialog.mockResolvedValue(picked);
     host.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 
     await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://found"));

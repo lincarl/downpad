@@ -27,7 +27,7 @@ import { NodeSelection, Plugin, PluginKey, TextSelection } from "@milkdown/kit/p
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
-import { isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
+import { collapseDotSegments, isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
 import { resolveImageSrc } from "../../images/imageStore";
 import type { WysiwygContext } from "./context";
 
@@ -116,20 +116,32 @@ function showAgain(view: EditorView, pos: number): void {
   view.dispatch(view.state.tr.setMeta(showAgainKey, null));
 }
 
+/** How missing images look their files up: `forget` drops the answer about a
+ *  src, and `names` tells whether a picked path is the file a src names. */
+interface FileLookup {
+  forget: (src: string) => void;
+  names: (src: string, path: string) => boolean;
+}
+
 /** Point a missing image at a file the user picks. The main process is asked
  *  about that file again, since it may be the one it could not find before.
- *  The path the image already has, of a file that is back, leaves the node as
+ *  The file the image already names, such as one put back, leaves the node as
  *  it is, so the image is shown again instead. */
-async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => void): Promise<void> {
+async function relocate(viewRef: ViewRef, dom: Node, files: FileLookup): Promise<void> {
   const view = viewRef.current;
   if (!view) return;
   const found = imageNodeAtDom(view, dom);
   if (!found) return;
   const path = await pickImageFile();
   if (!path) return;
-  forget(path);
-  if (imageAttrs(found.node).src === path) showAgain(view, found.pos);
-  else setImageAttrs(view, found.pos, found.node, { src: path });
+  files.forget(path);
+  const { src } = imageAttrs(found.node);
+  if (files.names(src, path)) {
+    files.forget(src);
+    showAgain(view, found.pos);
+  } else {
+    setImageAttrs(view, found.pos, found.node, { src: path });
+  }
 }
 
 /** The hover text of a missing inline image, whose chip shows only its path.
@@ -139,7 +151,7 @@ const LOCATE_HINT = "Missing image. Click to locate it.";
 /** Show an image that failed to load as missing, which a click relocates: an
  *  image block as the missing-image placeholder, an inline image as a chip with
  *  its path. missingImages shows it as an image again. */
-function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => void): void {
+function markMissing(event: Event, viewRef: ViewRef, files: FileLookup): void {
   const img = event.target as HTMLElement | null;
   if (!img) return;
   const host = (img.closest?.(".milkdown-image-block, .milkdown-image-inline") as HTMLElement | null) ?? img;
@@ -161,7 +173,7 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.detail > 1) return;
       e.preventDefault();
       e.stopPropagation();
-      void relocate(viewRef, host, forget);
+      void relocate(viewRef, host, files);
     });
   }
 }
@@ -331,6 +343,12 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
     const path = localPath(src);
     if (path) answers.delete(path);
   };
+  /** Whether a picked path is the file an image src names, as a relative src
+   *  such as `charts/q3.png` names a file beside the document. */
+  const names = (src: string, path: string): boolean => {
+    const named = localPath(src);
+    return src === path || (named !== null && collapseDotSegments(named) === collapseDotSegments(path));
+  };
   /** The local paths the open document shows, kept per document and file path. */
   let shown: { doc: ProseNode; filePath: string | null; paths: Set<string> } | null = null;
   /** Whether an image in the open document still shows `path`. True before the
@@ -411,6 +429,6 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
         timers.forEach(clearTimeout);
       }
     },
-    onImageLoadError: (event: Event): void => markMissing(event, viewRef, forget),
+    onImageLoadError: (event: Event): void => markMissing(event, viewRef, { forget, names }),
   };
 }
