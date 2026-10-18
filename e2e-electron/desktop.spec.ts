@@ -1226,6 +1226,64 @@ test("find in the Markdown view lifts a match on the last line clear of the card
   expect(await roomBelow()).toBe(roomBefore);
 });
 
+/** The text of `line`, a paragraph or a source line that wraps, from its
+ *  start through the first word on its second line. */
+function throughSecondLine(line: Locator): Promise<string> {
+  return line.evaluate((element) => {
+    const text = element.firstChild;
+    if (!(text instanceof Text)) throw new Error("The line does not start with its text.");
+    const word = document.createRange();
+    let firstTop: number | undefined;
+    for (const { 0: found, index } of text.data.matchAll(/\S+/g)) {
+      word.setStart(text, index);
+      word.setEnd(text, index + found.length);
+      const top = word.getBoundingClientRect().top;
+      firstTop ??= top;
+      if (top > firstTop + 1) return text.data.slice(0, index + found.length);
+    }
+    throw new Error("The line does not wrap.");
+  });
+}
+
+test("find lifts a match that wraps onto another line clear of the card", async () => {
+  // The match runs from the start of the last paragraph to the first word on
+  // its second line. Both of its ends lie left of the card, while its first
+  // line runs on under the card.
+  const terms = Array.from({ length: 60 }, (_, index) => `term${index + 1}`).join(" ");
+  const file = path.join(directory, "find-wrapped.md");
+  await writeFile(file, [...Array.from({ length: 80 }, (_, index) => `Paragraph ${index + 1} of the notes.`), terms].join("\n\n"));
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror p").first()).toHaveText("Paragraph 1 of the notes.");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  for (const [layout, scroller, line] of [
+    ["Markdown", ".editor-pane-raw:not([hidden])", ".cm-line"],
+    ["Document", ".editor-area", ".milkdown .ProseMirror p"],
+  ] as const) {
+    await page.getByRole("radio", { name: layout, exact: true }).click();
+    const pane = page.locator(scroller);
+    // CodeMirror draws the last line once the page scrolls to it.
+    await pane.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    const query = await throughSecondLine(pane.locator(line).filter({ hasText: "term1 " }));
+    await pane.evaluate((element) => { element.scrollTop = 0; });
+    // The replace row makes the card reach higher.
+    await page.keyboard.press("Control+h");
+    await find.fill(query);
+    await expect(page.locator(".find-count")).toHaveText("1 of 1");
+    await expect.poll(currentMatchProblem).toBe("");
+    // The user scrolls up until the match's first line is under the card. The
+    // next find step lifts it clear.
+    await pane.evaluate((element) => {
+      const match = [...document.querySelectorAll(".md-find-current")].find((part) => part.getClientRects().length)!;
+      element.scrollTop -= document.querySelector(".find-bar")!.getBoundingClientRect().top + 8 - match.getClientRects()[0]!.top;
+    });
+    expect(await currentMatchProblem()).toContain("under the card");
+    await find.press("Enter");
+    await expect.poll(currentMatchProblem).toBe("");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".find-bar")).toBeHidden();
+  }
+});
+
 test("Tab in the split moves from the document pane to the Markdown pane, then to the divider", async () => {
   const { documentLine, markdownLine } = await openSplit("tab-split.md");
   await documentLine.click();
