@@ -51,6 +51,10 @@ async function open(markdown: string, onChange = vi.fn()): Promise<{ editor: Wys
 const formulas = (root: HTMLElement) =>
   [...root.querySelectorAll<HTMLElement>('[data-type="math_inline"]')].map((math) => math.dataset.value);
 
+/** What KaTeX shows for each inline formula on screen. */
+const shown = (root: HTMLElement) =>
+  [...root.querySelectorAll('[data-type="math_inline"]')].map((math) => math.querySelector(".katex-html")?.textContent);
+
 /** A Crepe editor on `markdown` with these plugins, the way WysiwygEditor adds them. */
 async function openCrepe(markdown = ""): Promise<{ crepe: Crepe; root: HTMLElement; view: EditorView }> {
   const root = document.createElement("div");
@@ -253,14 +257,21 @@ describe("math and strikethrough delimiters", () => {
     // no other `$` opens a math block, so its line endings are saved as spaces.
     ["$a +\nb$ items.", "$$a + b$$2 items.", "a + b"],
     ["The value\n$a +\nb$ items.", "The value\n$$a + b$$2 items.", "a + b"],
+    // A line ending ends a `%` comment, so the comment is left out, with a
+    // space after a command's name. A `%` in `\verb` starts no comment.
+    ["$a % comment\n+b$ items.", "$$a +b$$2 items.", "a +b"],
+    ["$\\alpha%\nb$ items.", "$$\\alpha b$$2 items.", "\\alpha b"],
+    ["$\\verb!%! x\n+y$ items.", "$$\\verb!%! x +y$$2 items.", "\\verb!%! x +y"],
   ])("saves %j with a digit typed after the formula so it opens the same way", { timeout: 60_000 }, async (paragraph, saved, math) => {
     const rest = "\n\n## Later heading\n\nAfter.\n";
-    const { crepe, view } = await openCrepe(paragraph + rest);
+    const { crepe, root, view } = await openCrepe(paragraph + rest);
+    const before = shown(root);
     moveTo(view, formulaAt(view) + 1);
     type(view, "2");
     expect(crepe.getMarkdown()).toBe(saved + rest);
     const reopened = await openCrepe(saved + rest);
     expect(formulas(reopened.root)).toEqual([math]);
+    expect(shown(reopened.root)).toEqual(before);
     expect(blocks(reopened.root)).toEqual(["P", "H2", "P"]);
     expect(reopened.root.querySelector(".ProseMirror > p:last-child")?.textContent).toBe("After.");
   });
@@ -294,16 +305,19 @@ describe("math and strikethrough delimiters", () => {
     ["\\|@x", "$\\Vert @x$", "\\Vert @x"],
     // An escaped backslash escapes nothing.
     ["a \\\\| b", "$a \\\\\\| b$", "a \\\\| b"],
-    // A cell is one line.
+    // A cell is one line, and a line ending ends a `%` comment.
     ["a\n|b|", "$a \\|b\\|$", "a |b|"],
+    ["a % c\n+b", "$a +b$", "a +b"],
   ])("saves the formula %j in a table cell so the table opens with the same cells", { timeout: 60_000 }, async (value, written, math) => {
-    const { crepe, view } = await openCrepe("| a | b |\n| --- | --- |\n| c $q$ ok | d |\n");
+    const { crepe, root, view } = await openCrepe("| a | b |\n| --- | --- |\n| c $q$ ok | d |\n");
     view.dispatch(view.state.tr.setNodeMarkup(formulaAt(view), undefined, { value }));
+    const before = shown(root);
     const saved = crepe.getMarkdown();
     expect(saved).toContain(`| c ${written} ok |`);
-    const { root } = await openCrepe(saved);
-    expect(root.querySelectorAll("th, td")).toHaveLength(4);
-    expect(formulas(root)).toEqual([math]);
+    const reopened = await openCrepe(saved);
+    expect(reopened.root.querySelectorAll("th, td")).toHaveLength(4);
+    expect(formulas(reopened.root)).toEqual([math]);
+    expect(shown(reopened.root)).toEqual(before);
   });
 
   it("reads `\\|` in a formula in a table cell as `|`, as GitHub does", { timeout: 60_000 }, async () => {
@@ -337,6 +351,15 @@ describe("math and strikethrough delimiters", () => {
     // Right after a formula, a run of dollars reads as text.
     expect(editor.getMarkdown()).toBe(`Edited.\n\n${paragraph}\n`);
     expect(formulas((await open(editor.getMarkdown())).root)).toEqual(math);
+  });
+
+  it("leaves out a comment that a line ending ends when it saves a formula next to another on one line", { timeout: 60_000 }, async () => {
+    const { editor, root } = await open("Edit.\n\n$\\$ % c\n+5$$y$ q\n");
+    const before = shown(root);
+    expect(before).toEqual(["$+5", "y"]);
+    edit(editor);
+    expect(editor.getMarkdown()).toBe("Edited.\n\n$\\$ +5$$y$ q\n");
+    expect(shown((await open(editor.getMarkdown())).root)).toEqual(before);
   });
 
   it("keeps a whole Windows line ending after a backslash at the end of a formula", { timeout: 60_000 }, async () => {

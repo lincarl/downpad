@@ -254,15 +254,35 @@ function besideFormula(node: unknown, parent: { children?: readonly { type: stri
   return index >= 0 && (siblings[index - 1]?.type === "inlineMath" || siblings[index + 1]?.type === "inlineMath");
 }
 
+/** One part of a formula as KaTeX reads it: `\verb` and its text, a command,
+ *  a comment that a line ending ends, with that line ending, or another
+ *  character. A `%` starts a comment, unless it is part of `\%` or `\verb`. */
+const TEX_TOKEN = /\\verb\*([^]).*?\1|\\verb([^*a-zA-Z]).*?\2|\\[a-zA-Z@]+|\\[^]|%[^\n]*\n|[^]/g;
+
+/** `value` on one line, which TeX reads the same. A line ending is read as a
+ *  space, but it also ends a `%` comment, so such a comment is left out, with a
+ *  space in its place after a command's name, which would otherwise run into
+ *  the letter after it. */
+function oneLine(value: string): string {
+  let previous = "";
+  return value
+    .replace(TEX_TOKEN, (token) => {
+      const comment = token.startsWith("%") && token.endsWith("\n");
+      const part = !comment ? token : /^\\[a-zA-Z@]+$/.test(previous) ? " " : "";
+      previous = token;
+      return part;
+    })
+    .replace(/\r\n?|\n/g, " ");
+}
+
 /** `value` written so that a table cell holds it. GFM ends a cell at a `|`
  *  that no backslash escapes, so a `|` is written `\|`, as remark-gfm writes
  *  one in inline code, and GitHub, VS Code and md-easy read it back as `|`. No
  *  backslash may come before such a `|`, so TeX's `\|` is written `\Vert`,
  *  which TeX reads the same, with a space before a letter or `@`, which KaTeX
- *  reads as part of a command's name. A cell is one line, so line endings
- *  are written as spaces. */
+ *  reads as part of a command's name. A cell is one line (`oneLine`). */
 function inTableCell(value: string): string {
-  return value.replace(/\r\n?|\n/g, " ").replace(/(\\*)\|([a-zA-Z@]?)/g, (_match, backslashes: string, letter: string) =>
+  return oneLine(value).replace(/(\\*)\|([a-zA-Z@]?)/g, (_match, backslashes: string, letter: string) =>
     backslashes.length % 2 ? `${backslashes.slice(1)}\\Vert${letter && " "}${letter}` : `${backslashes}\\|${letter}`,
   );
 }
@@ -273,34 +293,36 @@ function inTableCell(value: string): string {
  *  dollars would not read back, such as right before a digit, it is fenced with
  *  the shortest run of two or more dollars that the formula does not hold on
  *  its own, and of three or more when it fills a line, because a paragraph that
- *  is only `$$...$$` reads as a math block. Line endings in such a formula are
- *  written as spaces, because a line that starts with `$$` and holds no other
- *  `$` opens a math block. TeX reads a line ending as a space, except at the end
- *  of a `%` comment. Right next to another formula a run of dollars reads as
- *  text, so a formula whose every `$` is escaped is fenced with single dollars
- *  there, with its line endings written as spaces too. An empty formula shows
- *  nothing and is left out, because `$$` reads as text or as the start of a
- *  math block. A formula in a table cell keeps its `|` from ending the cell
- *  (`inTableCell`). */
+ *  is only `$$...$$` reads as a math block. Such a formula is written on one
+ *  line (`oneLine`), because a line that starts with `$$` and holds no other
+ *  `$` opens a math block. Right next to another formula a run of dollars reads
+ *  as text, so a formula whose every `$` is escaped is fenced with single
+ *  dollars there, on one line too. An empty formula shows nothing and is left
+ *  out, because `$$` reads as text or as the start of a math block. A formula
+ *  in a table cell keeps its `|` from ending the cell (`inTableCell`). */
 function pandocMathWriter(write: Handle): Handle {
   return (node: { value?: string }, parent, state, info) => {
     const trimmed = trimMath(node.value ?? "");
     if (!trimmed) return "";
+    /** remark-math's fence for `value`, and the formula as it writes it
+     *  between the fences. */
+    const fenced = (value: string): [string, string] => {
+      const written: string = write({ ...node, value }, parent, state, info);
+      const size = written.search(/[^$]/);
+      return [written.slice(0, size), written.slice(size, -size)];
+    };
     const value = state.stack.includes("tableCell") ? inTableCell(trimmed) : trimmed;
-    const written: string = write({ ...node, value }, parent, state, info);
-    // remark-math's fence, and the formula as it writes it between the fences.
-    const size = written.search(/[^$]/);
-    const inner = written.slice(size, -size);
-    if (size === 1 && readsAsMath(inner, info.after)) return written;
+    const [sequence, inner] = fenced(value);
+    if (sequence === "$" && readsAsMath(inner, info.after)) return `$${inner}$`;
+    const line = oneLine(value);
     // Single dollars hold a `$` that a backslash escapes.
-    const oneLine = value.replace(/\r\n?|\n/g, " ");
-    if (besideFormula(node, parent) && escapesEveryDollar(value) && readsAsMath(oneLine.replace(/\$/g, "x"), info.after)) {
-      return "$" + oneLine + "$";
+    if (besideFormula(node, parent) && escapesEveryDollar(line) && readsAsMath(line.replace(/\$/g, "x"), info.after)) {
+      return "$" + line + "$";
     }
     const fillsLine = /^$|[\r\n]$/.test(info.before) && /^$|^[\r\n]/.test(info.after);
     let fence = fillsLine ? 3 : 2;
-    while (new RegExp(`(^|[^$])${"\\$".repeat(fence)}([^$]|$)`).test(value)) fence++;
-    return "$".repeat(fence) + inner.replace(/\r\n?|\n/g, " ") + "$".repeat(fence);
+    while (new RegExp(`(^|[^$])${"\\$".repeat(fence)}([^$]|$)`).test(line)) fence++;
+    return "$".repeat(fence) + fenced(line)[1] + "$".repeat(fence);
   };
 }
 
