@@ -764,6 +764,14 @@ describe("a definition the file keeps", () => {
     typeAfter(view, "See", " now");
     expect(editor.getMarkdown()).toBe(markdown.replace("See [ref]", "See now [ref]"));
   });
+
+  it("keeps the file's text when the label is typed in a code block", { timeout: 60_000 }, async () => {
+    const markdown = "Intro.\n\n```\nlet a = b\n```\n\nUses [ref].\n\n[ref]: https://r.example\n";
+    const { editor, view } = await open(markdown);
+    // Text in a code block is never a reference.
+    typeAfter(view, "let a = b", "[ref]");
+    expect(editor.getMarkdown()).toBe(markdown.replace("let a = b", "let a = b[ref]"));
+  });
 });
 
 describe("a new footnote", () => {
