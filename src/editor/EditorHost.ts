@@ -327,11 +327,18 @@ export class EditorHost implements FindController {
    * be before it can be saved for a file read for it, such as an image that
    * needs an attachments folder beside an untitled document (§5.5). While it
    * is behind another tab, the file waits, and the document counts as unsaved
-   * meanwhile. Resolves false once the document is closed.
+   * meanwhile. In front again, it gets back the unsaved mark it had, unless
+   * its text or saved text changed, so a save the user then cancels leaves an
+   * untouched document clean. Resolves false once the document is closed.
    */
   async untilInFront(drop: FileDrop): Promise<boolean> {
+    const before = this.store.get().tabs.find((t) => t.id === drop.tabId)?.doc;
     while (this.store.get().activeTabId !== drop.tabId) {
       if (!(await this.waitWhileBehind(drop))) return false;
+    }
+    const now = this.store.get().tabs.find((t) => t.id === drop.tabId)?.doc;
+    if (before && now && now.markdown === before.markdown && now.savedMarkdown === before.savedMarkdown) {
+      this.store.patchDocById(drop.tabId, { isDirty: before.isDirty });
     }
     return this.dropOpen(drop);
   }

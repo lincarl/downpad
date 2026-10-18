@@ -1329,6 +1329,9 @@ describe("EditorHost file drops", () => {
     expect(store.get().tabs[0]!.doc.isDirty).toBe(true);
     await showFirstTab(store, host);
     expect(await inFront).toBe(true);
+    // In front, the untouched document is clean again, so a cancelled save
+    // leaves nothing unsaved.
+    expect(store.get().doc.isDirty).toBe(false);
 
     // Once the document is closed, it is never in front.
     await openSecondTab(store, host);
