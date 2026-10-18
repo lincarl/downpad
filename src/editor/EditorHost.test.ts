@@ -1316,6 +1316,29 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
+  it("holds a file that its untitled document must be saved for until that document is in front, as unsaved", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const drop = host.aimDrop()!;
+    await openSecondTab(store, host);
+
+    const inFront = host.untilInFront(drop);
+    expect(await settled(inFront)).toBe(false);
+    expect(store.get().tabs[0]!.doc.isDirty).toBe(true);
+    await showFirstTab(store, host);
+    expect(await inFront).toBe(true);
+
+    // Once the document is closed, it is never in front.
+    await openSecondTab(store, host);
+    const closed = host.untilInFront(drop);
+    store.closeTab("tab-1");
+    await host.discardTab("tab-1");
+    expect(await closed).toBe(false);
+    await host.dispose();
+  });
+
   it("puts nothing anywhere when the document a file waits for is closed", async () => {
     const root = document.createElement("div");
     const store = makeStore();

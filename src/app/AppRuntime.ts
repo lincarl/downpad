@@ -558,12 +558,25 @@ export class AppRuntime {
     return this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
   }
 
-  /** Save the document a drop went to, if it is untitled. Only the document in
-   *  front can be saved, so a drop on a document now behind another tab stops
-   *  here. Resolves true once the document has a path. */
+  /** Save the document a drop went to, if it is untitled, which asks where.
+   *  Only the document in front can be saved, so for a drop on a document
+   *  that is behind another tab by now, this waits until that document is
+   *  shown again. Resolves true once the document has a path, or false if the
+   *  user cancels or the document is closed first. */
   private async saveDropDocument(drop: FileDrop): Promise<boolean> {
     if (this.tabFilePath(drop.tabId)) return true;
-    return this.store.get().activeTabId === drop.tabId && (await this.files.save());
+    if (!(await this.editorHost.untilInFront(drop))) return false;
+    return this.tabFilePath(drop.tabId) !== null || (await this.files.save());
+  }
+
+  /** Log that a dropped file went nowhere because its document was closed. */
+  private warnNotInserted(path: string): void {
+    console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on was closed`);
+  }
+
+  /** Whether a tab is still open. */
+  private hasTab(tabId: string): boolean {
+    return this.store.get().tabs.some((tab) => tab.id === tabId);
   }
 
   /** Context for image storage: settings, current path, and prompt-to-save. */
@@ -590,13 +603,17 @@ export class AppRuntime {
     const { bytes, mime } = await readImageBytes(path);
     const src = await resolveImageSrc(bytes, mime, this.dropImageContext(drop));
     if (src) await this.insertDropped(drop, mdImage("", src), path);
+    else if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
   }
 
   /** Copy a dropped file into the attachments folder beside the document it
    *  was dropped on, and link it where its drop goes in. */
   private async attachDroppedFile(path: string, drop: FileDrop): Promise<void> {
     // Non-image files always go to attachments (§5.7), which needs a saved doc.
-    if (!(await this.saveDropDocument(drop))) return;
+    if (!(await this.saveDropDocument(drop))) {
+      if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
+      return;
+    }
     const filePath = this.tabFilePath(drop.tabId);
     if (!filePath) return;
     const { bytes } = await readImageBytes(path);
@@ -615,9 +632,7 @@ export class AppRuntime {
    *  nothing and no other document gets it instead. A copy in the attachments
    *  folder stays there. */
   private async insertDropped(drop: FileDrop, markdown: string, path: string): Promise<void> {
-    if (!(await this.editorHost.insertDropped(drop, markdown))) {
-      console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on was closed`);
-    }
+    if (!(await this.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(path);
   }
 
   /** Run a file action, surfacing failures without crashing the shell. */

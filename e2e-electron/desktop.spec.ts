@@ -1907,6 +1907,48 @@ test("a file dropped on a document goes into it once it is in front again after 
   expect(await readFile(other, "utf8")).toBe("Other line.\n");
 });
 
+test("an image dropped on an untitled document asks where to save it once that document is in front again", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const other = path.join(directory, "other.md");
+  await writeFile(other, "Other line.\n");
+  await launch(other);
+  await page.getByRole("button", { name: "Open options" }).click();
+  await page.getByRole("menuitem", { name: "New document" }).click();
+  const line = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await line.click();
+  await page.keyboard.type("Alpha line.");
+  // Each image goes beside the document, which asks where to save it first.
+  // Hold the answers back.
+  await app!.evaluate(({ dialog }) => {
+    const answers: Array<(path: string | null) => void> = [];
+    Reflect.set(globalThis, "saveAnswers", answers);
+    dialog.showSaveDialog = () => new Promise((resolve) => {
+      answers.push((filePath) => resolve(filePath ? { canceled: false, filePath } : { canceled: true, filePath: "" }));
+    });
+  });
+  const asked = () => app!.evaluate(() => (Reflect.get(globalThis, "saveAnswers") as unknown[]).length);
+  const answer = (index: number, filePath: string | null) =>
+    app!.evaluate((_electron, [at, chosen]) => (Reflect.get(globalThis, "saveAnswers") as Array<(path: string | null) => void>)[at]!(chosen), [index, filePath] as const);
+  await dropBelow(line, [await pngFile("first.png"), await pngFile("second.png")]);
+  await expect.poll(asked).toBe(1);
+  // The other tab comes to the front before the first prompt is answered, so
+  // the second image is read while its document is behind.
+  await page.getByRole("tab", { name: /other\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toHaveText("Other line.");
+  await answer(0, null);
+  // No prompt over the other document.
+  await page.waitForTimeout(1000);
+  expect(await asked()).toBe(1);
+  await page.getByRole("tab", { name: /Untitled/ }).click();
+  await expect.poll(asked).toBe(2);
+  const saved = path.join(directory, "saved.md");
+  await answer(1, saved);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror img")).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^Alpha line\.\n\n!\[\]\(attachments\/[^)]+\.png\)\n$/);
+  expect(await readFile(other, "utf8")).toBe("Other line.\n");
+});
+
 test("Print keeps a saved Markdown edit as typed", async () => {
   const { file, markdownLine } = await openSplit("bullets.md");
   await markdownLine.click();

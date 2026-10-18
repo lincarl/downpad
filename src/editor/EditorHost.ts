@@ -295,11 +295,7 @@ export class EditorHost implements FindController {
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
     let place = this.dropPlace(drop);
     while (!place) {
-      if (this.disposed || !this.drops.has(drop) || !this.hasTab(drop.tabId)) return false;
-      // The waiting file is an unsaved change, so closing the document or the
-      // window asks first.
-      this.store.patchDocById(drop.tabId, { isDirty: true });
-      await this.nextPresent();
+      if (!(await this.waitWhileBehind(drop))) return false;
       place = this.dropPlace(drop);
     }
     const aimed = this.drops.get(drop)!;
@@ -323,6 +319,36 @@ export class EditorHost implements FindController {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
       else pane.raw?.focus();
     }
+    return true;
+  }
+
+  /**
+   * Resolve true once the document a drop belongs to is in front, as it must
+   * be before it can be saved for a file read for it, such as an image that
+   * needs an attachments folder beside an untitled document (§5.5). While it
+   * is behind another tab, the file waits, and the document counts as unsaved
+   * meanwhile. Resolves false once the document is closed.
+   */
+  async untilInFront(drop: FileDrop): Promise<boolean> {
+    while (this.store.get().activeTabId !== drop.tabId) {
+      if (!(await this.waitWhileBehind(drop))) return false;
+    }
+    return this.dropOpen(drop);
+  }
+
+  /** Whether a drop's document is still open and the drop has not ended. */
+  private dropOpen(drop: FileDrop): boolean {
+    return !this.disposed && this.drops.has(drop) && this.hasTab(drop.tabId);
+  }
+
+  /** Wait until the next document is shown, for a file of a drop whose
+   *  document is behind another tab. The waiting file is an unsaved change,
+   *  so closing that document or the window asks first. Resolves false at
+   *  once if the document is closed. */
+  private async waitWhileBehind(drop: FileDrop): Promise<boolean> {
+    if (!this.dropOpen(drop)) return false;
+    this.store.patchDocById(drop.tabId, { isDirty: true });
+    await this.nextPresent();
     return true;
   }
 
