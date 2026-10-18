@@ -250,4 +250,23 @@ describe("a missing inline image", () => {
     expect(chip.hasAttribute("title")).toBe(false);
     expect(native.openDialog).toHaveBeenCalledTimes(1);
   });
+
+  it("is located by a plain click only", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockResolvedValue(null);
+    const root = await open("See [the ![gone](gone.png) chart](https://example.com).\n");
+    root.querySelector("img")!.dispatchEvent(new Event("error"));
+    const chip = root.querySelector(".milkdown-image-inline")!;
+    expect(chip.classList).toContain("md-image-missing");
+
+    // Ctrl or Cmd+click follows the link and Shift+click extends the selection,
+    // as on an image. The second click of a double-click opens no second dialog.
+    for (const modifier of ["ctrlKey", "metaKey", "shiftKey", "altKey"]) {
+      chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1, [modifier]: true }));
+    }
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    expect(native.openDialog).not.toHaveBeenCalled();
+
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    expect(native.openDialog).toHaveBeenCalledTimes(1);
+  });
 });

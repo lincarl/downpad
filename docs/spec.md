@@ -31,7 +31,7 @@ Images can be pasted or dropped into a document. They may be embedded as base64 
 
 An image keeps its alt text and title when the document is saved. An image on its own line can be resized in the document view, but plain Markdown has no place for the size, so the size is not saved.
 
-When the document view cannot load an image, such as a local file that was moved or deleted, it shows the image's path in its place. An image on its own line becomes a placeholder that reads "Missing image. Click to locate it." above the path. An image inside a line of text becomes a small chip with the path, and its hover text reads the same words. A click on either opens a file dialog, and the image's path in the Markdown becomes the chosen file's path. The placeholder and the chip never change the Markdown or the saved file. Print shows a missing image's alt text.
+When the document view cannot load an image, such as a local file that was moved or deleted, it shows the image's path in its place. An image on its own line becomes a placeholder that reads "Missing image. Click to locate it." above the path. An image inside a line of text becomes a small chip with the path, and its hover text reads the same words. A click on either opens a file dialog, and the image's path in the Markdown becomes the chosen file's path. A click with Ctrl, Cmd or Shift does what it does on a working image, so Ctrl or Cmd+click on a chip inside a link opens the link. The placeholder and the chip never change the Markdown or the saved file. Print shows a missing image's alt text.
 
 Local Markdown links can open their targets in another tab. External links open in the default browser.
 

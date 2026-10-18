@@ -132,9 +132,13 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
   if (!host.dataset.mdRelocateBound) {
     host.dataset.mdRelocateBound = "1";
     // Crepe draws a new <img> after the path is cleared, so find the node from
-    // the element that stays.
+    // the element that stays. Only a plain click locates the file. A click with
+    // Ctrl or Cmd follows a link around the image and one with Shift extends the
+    // selection, as they do on an image. The second click of a double-click
+    // opens no second dialog.
     host.addEventListener("click", (e) => {
       if (!host.classList.contains("md-image-missing")) return;
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.detail > 1) return;
       e.preventDefault();
       e.stopPropagation();
       void relocate(viewRef, host, forget);
