@@ -391,6 +391,8 @@ describe("math and strikethrough delimiters", () => {
     ["Expect ~5-~~ min.", "Expect \\~5-\\~\\~ min.\n"],
     // A backslash before a mark makes it text in a file.
     ["Pay \\$x$ or \\~y~ now.", "Pay \\\\\\$x\\$ or \\\\\\~y\\~ now.\n"],
+    // An escaped backslash escapes no space after it.
+    ["Use $a\\\\ $ now.", "Use \\$a\\\\\\ \\$ now.\n"],
   ])("types %j as text", { timeout: 60_000 }, async (typed, markdown) => {
     const { crepe, root, view } = await openCrepe();
     type(view, typed);
@@ -409,6 +411,8 @@ describe("math and strikethrough delimiters", () => {
     ["Try $a$$b$ now.", ["a", "b"], "Try $a$$b$ now.\n"],
     // An escaped `$` is no part of a run of dollars.
     ["Pay \\$$x$ now.", ["x"], "Pay \\\\\\$$x$ now.\n"],
+    // `\ ` is a space in TeX, which may come before the closing `$`.
+    ["Use $a\\ $ now.", ["a\\ "], "Use $a\\ $ now.\n"],
   ])("saves typed %j so it opens with the same formulas", { timeout: 60_000 }, async (typed, math, markdown) => {
     const { crepe, root, view } = await openCrepe();
     type(view, typed);

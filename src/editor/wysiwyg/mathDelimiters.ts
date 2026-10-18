@@ -429,8 +429,10 @@ function staysText(before: string, mark: "$" | "~"): boolean {
   // Leave out a run of the same mark before the cursor, so the second `~` of
   // `~~` or `$` of `$$` counts as closing too.
   const rest = before.replace(mark === "$" ? /\$+$/ : /~+$/, "");
-  // A closing mark never follows a space, starts a paragraph or is escaped.
-  if (rest === "" || /\s$/.test(rest) || escapes(rest)) return true;
+  // A closing mark never starts a paragraph or is escaped, nor follows a
+  // space, unless a backslash escapes the space before a `$`, as in `$a\ $`.
+  const space = /\s$/.test(rest) && !(mark === "$" && escapes(rest.slice(0, -1)));
+  if (rest === "" || space || escapes(rest)) return true;
   // Which `~` the run closes is decided once the next character is known.
   if (mark === "~") return false;
   // Crepe's math shortcut, which `formula` follows, opens at the nearest `$`.
