@@ -580,6 +580,13 @@ test("a file the document view cannot show opens in the Markdown view with a not
 
   await page.getByRole("tab", { name: "deep.md", exact: true }).click();
   await expect(notice).toBeVisible();
+  // Dismissing the notice puts focus in the Markdown view, not on the clicked
+  // tab. Choosing Document tries again, and the failure brings the notice back.
+  await notice.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(markdown).toBeFocused();
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(notice).toBeVisible();
   await markdown.click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.insertText("# Fixed\n\nNo longer deep.\n");

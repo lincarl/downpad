@@ -233,7 +233,12 @@ export class AppRuntime {
       return;
     }
     const failure = tabs.find((tab) => tab.id === activeTabId)?.documentViewFailure;
-    if (activeTabId && failure) this.store.setDocumentViewFailure(activeTabId, { ...failure, dismissed: true });
+    if (!activeTabId || !failure) return;
+    this.store.setDocumentViewFailure(activeTabId, { ...failure, dismissed: true });
+    // The bar remembers where focus was when it appeared, which for this notice
+    // can be the clicked tab, the page body or another tab's editor. The user
+    // was working in this tab's Markdown view, so continue there.
+    this.editorHost.focusEditor();
   }
 
   revealPath(path: string): void {
