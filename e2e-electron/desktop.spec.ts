@@ -286,6 +286,62 @@ test("Shift+click on a missing image chip extends the selection to it", async ()
   expect(await app!.evaluate(() => Reflect.get(globalThis, "dialogs"))).toBe(0);
 });
 
+test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
+  const file = path.join(directory, "image-links.md");
+  // An image wide enough to click either half of.
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(path.join(directory, "one.md"), "# One\n");
+  await writeFile(path.join(directory, "two.md"), "# Two\n");
+  await writeFile(file, [
+    "A chip [![Logo](logo.png)](https://example.com/chip)[after](https://example.com/after).",
+    "An image [![Bar](bar.svg)](https://example.com/bar)[next](https://example.com/next).",
+    "No link ![Gone](gone.png)[later](https://example.com/later).",
+    "A file [![Bar](bar.svg)](one.md)[two](two.md).",
+    "Plain line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline");
+  await expect(images.nth(0)).toHaveClass(/md-image-missing/);
+  await expect(images.nth(2)).toHaveClass(/md-image-missing/);
+  await expect.poll(() => images.nth(1).locator("img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
+  const plain = page.locator(".milkdown .ProseMirror > p").filter({ hasText: "Plain line." });
+  /** Ctrl or Cmd+click `fraction` of the way across `target`, then click plain
+   *  text, so no link's preview covers the next target. */
+  const ctrlClick = async (target: Locator, fraction: number) => {
+    const box = (await target.boundingBox())!;
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.keyboard.up("ControlOrMeta");
+    await plain.click({ position: { x: 2, y: 8 } });
+  };
+  // ProseMirror puts a click on an image's right half after the image, where
+  // the next link starts.
+  for (const index of [0, 1, 2]) {
+    await ctrlClick(images.nth(index), 0.25);
+    await ctrlClick(images.nth(index), 0.9);
+  }
+  // The text link opens last, so every link the image clicks opened is in by then.
+  await ctrlClick(page.getByText("after", { exact: true }), 0.5);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([
+    "https://example.com/chip",
+    "https://example.com/chip",
+    "https://example.com/bar",
+    "https://example.com/bar",
+    "https://example.com/after",
+  ]);
+  // A double-click on an image inside a link to a Markdown file opens that file.
+  const box = (await images.nth(3).boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width * 0.9, box.y + box.height / 2);
+  await expect(page).toHaveTitle("one.md — md-easy");
+});
+
 test("End with the caret before a missing image chip that starts a line keeps the caret in that line", async () => {
   const file = path.join(directory, "chip-end.md");
   await writeFile(file, "Ends with ![End](end/missing.png)\n\n![Start](start/missing.png) starts here.\n");
