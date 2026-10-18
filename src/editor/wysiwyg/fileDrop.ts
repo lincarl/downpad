@@ -318,19 +318,42 @@ export interface SourceEdit {
   assoc: -1 | 1;
 }
 
+/** A part of a Markdown body, as offsets into it. */
+interface Span {
+  start: number;
+  end: number;
+}
+
 /** Where each top-level block of a Markdown body is in its text, as remark
- *  parses it. Link reference definitions are left out, since the document
- *  has no block for them. Null if remark gives a block no position. */
-function sourceBlocks(ctx: Ctx, body: string): Array<{ start: number; end: number }> | null {
-  const blocks: Array<{ start: number; end: number }> = [];
+ *  parses it, and where each link reference definition is, which the
+ *  document has no block for. Null if remark gives a node no position. */
+function sourceBlocks(ctx: Ctx, body: string): { blocks: Span[]; definitions: Span[] } | null {
+  const blocks: Span[] = [];
+  const definitions: Span[] = [];
   for (const node of ctx.get(remarkCtx).parse(body).children) {
-    if (node.type === "definition") continue;
     const start = node.position?.start.offset;
     const end = node.position?.end.offset;
     if (start === undefined || end === undefined) return null;
-    blocks.push({ start, end });
+    (node.type === "definition" ? definitions : blocks).push({ start, end });
   }
-  return blocks;
+  return { blocks, definitions };
+}
+
+/** How many line breaks `text` ends with, or begins with for `atStart`,
+ *  with nothing but spaces and tabs between them. */
+function lineBreaks(text: string, atStart: boolean): number {
+  const [run] = (atStart ? /^(?:[ \t]*\n)*/ : /(?:\n[ \t]*)*$/).exec(text) ?? [""];
+  return run.split("\n").length - 1;
+}
+
+/** The line breaks that give text put in between `before` and `after` a
+ *  blank line on each side, apart from the start and the end of the body.
+ *  Without one, the text could run on from the block before, as after a
+ *  heading or a closing code fence, or the next block could run on from it. */
+function blankLinesAround(before: string, after: string): [string, string] {
+  const needed = (text: string, atStart: boolean): string =>
+    /\S/.test(text) ? "\n".repeat(Math.max(0, 2 - lineBreaks(text, atStart))) : "";
+  return [needed(before, false), needed(after, true)];
 }
 
 /**
@@ -338,13 +361,16 @@ function sourceBlocks(ctx: Ctx, body: string): Array<{ start: number; end: numbe
  * document, which turned `before`, parsed from `body`, into `after`. The
  * split's Markdown pane makes it while the user types there, so the rest of
  * the source stays as written instead of in Milkdown's form. The top-level
- * blocks the insert changed are written in Milkdown's form. Null when the
- * source's top-level blocks do not line up with the document's, as for an
- * empty body.
+ * blocks the insert changed are written in Milkdown's form, with a blank line
+ * on each side. The changed source must read back as `after`. Null when it
+ * would not, as for text after a code fence that is not closed yet, when it
+ * would take out a link reference definition, or when the source's top-level
+ * blocks do not line up with the document's, as for an empty body.
  */
 export function sourceEditBetween(ctx: Ctx, before: Node, after: Node, body: string): SourceEdit | null {
-  const blocks = sourceBlocks(ctx, body);
-  if (!blocks?.length) return null;
+  const source = sourceBlocks(ctx, body);
+  if (!source?.blocks.length) return null;
+  const { blocks, definitions } = source;
   // Crepe's empty last line has no source.
   const lastLine = blocks.length === before.childCount - 1 && isEmptyParagraph(before.lastChild);
   if (blocks.length !== before.childCount - (lastLine ? 1 : 0)) return null;
@@ -359,18 +385,25 @@ export function sourceEditBetween(ctx: Ctx, before: Node, after: Node, body: str
   }
   const written: Node[] = [];
   for (let index = start; index < afterEnd; index += 1) written.push(after.child(index));
-  const text = ctx.get(serializerCtx)(after.type.create(null, written)).replace(/\n+$/, "");
-  if (!text) return null;
   const replaced = Math.min(end, blocks.length);
-  if (start < replaced) {
-    return { from: blocks[start].start, to: blocks[replaced - 1].end, insert: text, assoc: -1 };
-  }
-  // New blocks go in after the block before them, or before the first block.
-  // A caret at the end of the block before stays there, and one at the start
-  // of the first block stays with it.
-  if (start === 0) return { from: blocks[0].start, to: blocks[0].start, insert: `${text}\n\n`, assoc: 1 };
-  const previousEnd = blocks[start - 1].end;
-  return { from: previousEnd, to: previousEnd, insert: `\n\n${text}`, assoc: -1 };
+  // The changed blocks replace their source. New blocks go in after the block
+  // before them, or before the first block. A caret at the end of the block
+  // before stays there, and one at the start of the first block stays with it.
+  const [from, to, assoc]: [number, number, -1 | 1] =
+    start < replaced
+      ? [blocks[start].start, blocks[replaced - 1].end, -1]
+      : start === 0
+        ? [blocks[0].start, blocks[0].start, 1]
+        : [blocks[start - 1].end, blocks[start - 1].end, -1];
+  if (definitions.some((definition) => definition.start < to && definition.end > from)) return null;
+  const [open, close] = blankLinesAround(body.slice(0, from), body.slice(to));
+  const serialize = ctx.get(serializerCtx);
+  const parse = ctx.get(parserCtx);
+  const text = serialize(after.type.create(null, written)).replace(/\n+$/, "");
+  if (!text) return null;
+  const insert = open + text + close;
+  const changed = body.slice(0, from) + insert + body.slice(to);
+  return serialize(parse(changed)).trimEnd() === serialize(after).trimEnd() ? { from, to, insert, assoc } : null;
 }
 
 /**

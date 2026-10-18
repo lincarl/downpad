@@ -329,6 +329,28 @@ describe("the source change for a file dropped on the split's document pane", ()
     expect(dropInSource(opened, source, 300, 169)).toBe(`Intro.\n\n- Item 1\n- ${LINK_A}\n- Item 2\n\nOutro.\n`);
   });
 
+  // The source starts the next block on the line after the drop's block.
+  it.each([
+    ["a heading", "# Title\nSome text here.\n\nMore.\n", "heading", "# Title\n\nLINK\n\nSome text here.\n\nMore.\n"],
+    ["a setext heading", "Title\n=====\nText under.\n", "heading", "Title\n=====\n\nLINK\n\nText under.\n"],
+    ["a code block", "```\ncode line\n```\nAfter code.\n", "code_block", "```\ncode line\n```\n\nLINK\n\nAfter code.\n"],
+    ["a heading before a rule", "# Title\n---\n\nMore.\n", "heading", "# Title\n\nLINK\n\n---\n\nMore.\n"],
+  ])("puts a blank line between the file and the next block after %s", async (_where, source, type, changed) => {
+    const opened = await open(source);
+    place(opened, block(type), 100, 130);
+
+    expect(dropInSource(opened, source, 300, 128)).toBe(changed.replace("LINK", LINK_A));
+  });
+
+  it("finds no source change where the file would go into a code block that is not closed yet", async () => {
+    const source = "Intro.\n\nMiddle.\n\n```js\nlet a = 1;";
+    const opened = await open(source);
+
+    expect(opened.insertMarkdownWithSource(LINK_A, opened.dropTargetAt(300, 400)!, source)).toBeNull();
+    // The file still goes into the document.
+    expect(opened.getMarkdown()).toBe(`Intro.\n\nMiddle.\n\n\`\`\`js\nlet a = 1;\n\`\`\`\n\n${LINK_A}\n`);
+  });
+
   it("finds no source change for a document with no text", async () => {
     const opened = await open("");
 
