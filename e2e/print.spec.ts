@@ -259,3 +259,89 @@ test("an over-tall code block and list split too, keeping line numbers and item 
   // Every list item printed exactly once, in order.
   expect(result.listItems).toEqual(Array.from({ length: 40 }, (_, i) => `item ${i + 1}`));
 });
+
+test("a paragraph, quote and list item taller than a page continue on the next sheets", async ({
+  page,
+}) => {
+  // The Document version broke pages only between blocks, so a paragraph, a
+  // quote or a list item taller than a page got a sheet to itself and the page
+  // body cut it off. Real layout decides where lines wrap, so only a browser can
+  // show that every break falls between lines and every sheet fits.
+  const words = (label: string, count: number): string =>
+    Array.from({ length: count }, (_, i) => `${label}${i + 1}`).join(" ");
+  const paragraph =
+    `${words("w", 300)} **${words("bold", 600)}** *${words("em", 50)}* ` +
+    `[${words("link", 30)}](https://example.com/long) \`code\` $x^2$ ${words("v", 800)} END_PARA`;
+  const markdown = [
+    "# Long blocks",
+    "",
+    "Intro.",
+    "",
+    paragraph,
+    "",
+    "> Quote start.",
+    ">",
+    ...Array.from({ length: 60 }, (_, i) => `> > nested ${i + 1}\n> >`),
+    "> " + words("q", 900) + " END_QUOTE",
+    "",
+    "- Short item",
+    "- " + words("item", 1200) + " END_ITEM",
+    "- Last item",
+    "",
+    "The end.",
+  ].join("\n");
+
+  await page.goto("/");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await page.click(".toolbar-view button:has-text('Split')");
+  await page.locator(".editor-pane-raw .cm-content").click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(markdown);
+  await expect(page.locator(`${wysiwyg} blockquote blockquote p`)).toHaveCount(60);
+  await expect(page.locator(`${wysiwyg} li`).last()).toContainText("Last item");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  const boldText = await page.locator(`${wysiwyg} strong`).textContent();
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  const result = await page.evaluate(() => {
+    let overflow = 0;
+    const texts: string[] = [];
+    const bold: string[] = [];
+    let boldSheets = 0;
+    let shownLabels = 0;
+    let hiddenLabels = 0;
+    for (const sheet of Array.from(document.querySelectorAll<HTMLElement>(".print-page"))) {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      const box = body.getBoundingClientRect();
+      const scale = box.height / body.offsetHeight;
+      const flow = sheet.querySelector<HTMLElement>(".print-flow")!;
+      for (const block of Array.from(flow.children)) {
+        overflow = Math.max(overflow, (block.getBoundingClientRect().bottom - box.top) / scale - body.clientHeight);
+      }
+      const visible = flow.cloneNode(true) as HTMLElement;
+      visible.querySelectorAll('[style*="visibility: hidden"]').forEach((hidden) => hidden.remove());
+      texts.push(visible.textContent!.replace(/\s+/g, ""));
+      const strong = Array.from(flow.querySelectorAll("strong"), (part) => part.textContent!);
+      bold.push(...strong);
+      if (strong.length) boldSheets++;
+      for (const label of Array.from(flow.querySelectorAll<HTMLElement>(".label-wrapper"))) {
+        if (label.style.visibility === "hidden") hiddenLabels++;
+        else shownLabels++;
+      }
+    }
+    return { overflow, text: texts.join(""), bold: bold.join(""), boldSheets, shownLabels, hiddenLabels };
+  });
+
+  // No block reaches past its page body, so the page clips nothing.
+  expect(result.overflow).toBeLessThanOrEqual(0.5);
+  // Every character prints once, in order.
+  expect(result.text).toBe(documentText);
+  // The bold text continues as bold on the next sheet.
+  expect(result.boldSheets).toBeGreaterThan(1);
+  expect(result.bold).toBe(boldText);
+  // The long item continues beside its bullet's place, showing the bullet once.
+  expect(result.shownLabels).toBe(3);
+  expect(result.hiddenLabels).toBeGreaterThan(0);
+});
