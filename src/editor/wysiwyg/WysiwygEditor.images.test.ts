@@ -259,7 +259,8 @@ describe("a missing inline image", () => {
     expect(chip.classList).toContain("md-image-missing");
 
     // Ctrl or Cmd+click follows the link and Shift+click extends the selection,
-    // as on an image. The second click of a double-click opens no second dialog.
+    // so neither locates the file. The second click of a double-click opens no
+    // second dialog.
     for (const modifier of ["ctrlKey", "metaKey", "shiftKey", "altKey"]) {
       chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1, [modifier]: true }));
     }
