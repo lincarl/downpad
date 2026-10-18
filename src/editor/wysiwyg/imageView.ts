@@ -14,15 +14,16 @@
 //      relocates it via a file dialog (updates the node's src). missingImages
 //      reports the errors of inline images, which Crepe does not, and keeps both
 //      in step with the document. They show the node's current path, and go
-//      once an image loads there or the path is cleared.
+//      once an image loads there or the path is cleared. A chip inside a text
+//      selection is tinted as selected.
 //   3. Node helpers (isImageNode / imageAttrs / setImageAttrs / lookups) reused
 //      by the image context menu (imageContextMenu.ts).
 
 import { convertFileSrc } from "../../ipc/bridge";
 import { openDialog } from "../../ipc/dialogs";
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin } from "@milkdown/kit/prose/state";
-import type { EditorView } from "@milkdown/kit/prose/view";
+import { NodeSelection, Plugin } from "@milkdown/kit/prose/state";
+import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
 import { isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
@@ -153,6 +154,10 @@ function unmarkMissing(host: HTMLElement): void {
   host.removeAttribute("title");
 }
 
+/** The class of an inline image inside a text selection, which tints a
+ *  missing image's chip as selected. */
+const IN_SELECTION = "md-in-selection";
+
 /** Shows missing inline images as missing too, and keeps the images shown as
  *  missing in step with the document. `onError` is the onImageLoadError Crepe
  *  calls for image blocks. Crepe reports no load errors of inline images, so the
@@ -161,7 +166,8 @@ function unmarkMissing(host: HTMLElement): void {
  *  node's current path, since another path md-easy cannot load keeps the same
  *  empty URL and gives no new error. One whose path was cleared shows Crepe's
  *  input for a path instead. Load and error events do not bubble, so the plugin
- *  catches them on their way down to the image. */
+ *  catches them on their way down to the image. Inline images inside a text
+ *  selection get the IN_SELECTION class. */
 export function missingImages(onError: (event: Event) => void) {
   return $prose(
     () =>
@@ -194,6 +200,23 @@ export function missingImages(onError: (event: Event) => void) {
               editorView.dom.removeEventListener("error", onInlineError, true);
             },
           };
+        },
+        props: {
+          // Chromium paints no selection over a chip, whose icon and path CSS
+          // draws, so mark the inline images a text selection covers.
+          decorations: (state) => {
+            const { selection } = state;
+            if (selection.empty || selection instanceof NodeSelection) return null;
+            const covered: Decoration[] = [];
+            for (const { $from, $to } of selection.ranges) {
+              state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+                if (node.isInline && isImageNode(node)) {
+                  covered.push(Decoration.node(pos, pos + node.nodeSize, { class: IN_SELECTION }));
+                }
+              });
+            }
+            return DecorationSet.create(state.doc, covered);
+          },
         },
       }),
   );

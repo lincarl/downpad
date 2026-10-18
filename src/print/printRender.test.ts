@@ -42,4 +42,10 @@ describe("the printed document", () => {
 
     expect(printedBlocks(missing)).toEqual([missing.replace(' title="Missing image. Click to locate it."', "")]);
   });
+
+  it("prints an image inside the text selection without the selection's mark", () => {
+    const image = '<p>A <span class="milkdown-image-inline md-image-missing md-in-selection"><img src="data:," alt="Gone"></span></p>';
+
+    expect(printedBlocks(image)).toEqual([image.replace(" md-in-selection", "")]);
+  });
 });

@@ -332,6 +332,23 @@ test("the block handle of a line with a wide missing image chip stays beside the
   expect(saved.indexOf("X")).toBeLessThan(saved.indexOf("![Q3]"));
 });
 
+test("a missing image chip inside a text selection shows as selected", async () => {
+  const file = path.join(directory, "chip-selection.md");
+  await writeFile(file, "The chart ![Chart](charts/missing.png) shows the trend.\n");
+  await launch(file);
+  const line = page.locator(".milkdown .ProseMirror > p").first();
+  const chip = line.locator(".md-image-missing");
+  await expect(chip).toBeVisible();
+  const fill = await chip.evaluate((element) => getComputedStyle(element).backgroundColor);
+  const selected = await line.evaluate((element) => getComputedStyle(element, "::selection").backgroundColor);
+  expect(selected).not.toBe(fill);
+  await line.click({ position: { x: 1, y: 8 } });
+  await page.keyboard.press("Shift+End");
+  await expect(chip).toHaveCSS("background-color", selected);
+  await page.keyboard.press("ArrowRight");
+  await expect(chip).toHaveCSS("background-color", fill);
+});
+
 test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");

@@ -1222,6 +1222,12 @@ body {
   -webkit-line-clamp: 1;
 }
 
+/* Chromium paints no selection over the chip's icon and path, so a chip inside
+   a text selection takes the selection colour from missingImages' class. */
+.editor-host .milkdown-image-inline.md-image-missing.md-in-selection {
+  background: var(--crepe-color-selected);
+}
+
 /* The placeholder and the chip darken under the pointer. This rule follows the
    chip's colour so it wins over it. */
 .editor-host .md-image-missing:hover {

@@ -64,6 +64,8 @@ const EDITOR_CHROME = [
 const FOCUS_CLASSES = [
   "ProseMirror-focused",
   "ProseMirror-selectednode",
+  // An inline image inside the text selection (imageView.ts).
+  "md-in-selection",
   "cm-activeLine",
   "cm-activeLineGutter",
 ];
