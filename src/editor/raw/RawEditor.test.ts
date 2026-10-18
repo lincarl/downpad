@@ -74,6 +74,15 @@ describe("RawEditor.applyDropEdit", () => {
 
     expect(editor.getText()).toBe(`- ax\n- ${LINK}\n- b\n`);
   });
+
+  it("keeps a caret in a list item that the file only renumbers", () => {
+    const editor = mountWithCaret("1. One\n2. Two\n3. Th", "ree\n4. Four\n");
+
+    editor.applyDropEdit({ from: 0, to: 30, insert: `1. One\n2. ${LINK}\n3. Two\n4. Three\n5. Four`, assoc: -1 });
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe(`1. One\n2. ${LINK}\n3. Two\n4. ThXree\n5. Four\n`);
+  });
 });
 
 describe("RawEditor.setText", () => {

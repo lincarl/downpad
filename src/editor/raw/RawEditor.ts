@@ -99,6 +99,18 @@ function changedLines(before: string, after: string): Array<{ from: number; to: 
   });
 }
 
+/** The changes that turn `before` into `after`, one for each run of
+ *  characters that differ, as Myers' diff finds them, so text that stays
+ *  keeps its offsets. A diff too long to find gives one change from the
+ *  first difference to the last (`differingRuns`). */
+function changedChars(before: string, after: string): Array<{ from: number; to: number; insert: string }> {
+  return differingRuns(before.length, after.length, (i, j) => before.charCodeAt(i) === after.charCodeAt(j)).map((run) => ({
+    from: run.fromA,
+    to: run.toA,
+    insert: after.slice(run.fromB, run.toB),
+  }));
+}
+
 export class RawEditor {
   private view: EditorView | null = null;
   /** Set while `setText` replaces the doc programmatically (split-view mirror
@@ -223,14 +235,16 @@ export class RawEditor {
 
   /** Make the change that puts a file dropped on the split's document pane
    *  into this pane's text while the user types here (§5.4). It is reported,
-   *  mirrored and undone like typing. Only the part that differs from the
-   *  text is replaced, so a caret outside it keeps its place, and a caret
-   *  right where text goes in stays on the side the change gives. */
+   *  mirrored and undone like typing. Only the characters that differ from
+   *  the text are replaced, each run of them on its own, so a caret in text
+   *  that stays keeps its place, such as in a list item after the file that
+   *  only gets a new number. A caret right where text goes in stays on the
+   *  side the change gives. */
   applyDropEdit({ from, to, insert, assoc }: SourceEdit): void {
     if (!this.view) return;
     const { state } = this.view;
-    const part = changedRange(state.sliceDoc(from, to), insert);
-    const changes = state.changes({ from: from + part.from, to: from + part.to, insert: part.insert });
+    const parts = changedChars(state.sliceDoc(from, to), insert);
+    const changes = state.changes(parts.map((part) => ({ from: from + part.from, to: from + part.to, insert: part.insert })));
     this.view.dispatch({ changes, selection: state.selection.map(changes, assoc) });
   }
 
