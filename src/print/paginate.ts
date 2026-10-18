@@ -7,11 +7,14 @@
 // document rather than a screenshot of a scrolling page.
 //
 // Blocks that are themselves taller than a page (a long table, a long list, a
-// long code block) are split one level down first, so the packer always has
-// pieces it can place.
+// long code block, a Markdown source line that wraps past a page) are split one
+// level down first, so the packer always has pieces it can place.
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
+
+/** One line of Markdown source in the Markdown version (printRender.ts). */
+export const SOURCE_LINE_CLASS = "print-src-line";
 
 /**
  * Group `flow`'s children into pages of at most `contentHeightPx`.
@@ -118,6 +121,7 @@ function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
 /** Dispatch to the splitter for one element's own kind. */
 function splitElement(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (el.classList.contains("cm-scroller")) return splitCodeMirror(el, maxHeightPx);
+  if (el.classList.contains(SOURCE_LINE_CLASS)) return splitSourceLine(el, maxHeightPx);
   switch (el.tagName) {
     case "TABLE":
       return splitTable(el as HTMLTableElement, maxHeightPx);
@@ -137,7 +141,9 @@ function splitElement(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
  * one, and only the one that makes it over-tall is worth splitting.
  */
 function splittableIn(block: HTMLElement): HTMLElement | null {
-  if (SPLITTABLE_TAGS.has(block.tagName)) return block;
+  if (SPLITTABLE_TAGS.has(block.tagName) || block.classList.contains(SOURCE_LINE_CLASS)) {
+    return block;
+  }
   let tallest: HTMLElement | null = null;
   for (const el of block.querySelectorAll<HTMLElement>(SPLITTABLE_SELECTOR)) {
     if (!tallest || el.offsetHeight > tallest.offsetHeight) tallest = el;
@@ -441,6 +447,60 @@ function splitPre(pre: HTMLElement, maxHeightPx: number): HTMLElement[] {
     const codePiece = code.cloneNode(false) as HTMLElement;
     for (const line of group) codePiece.appendChild(line);
     piece.appendChild(codePiece);
+    return piece;
+  });
+}
+
+/**
+ * Split a Markdown source line that wraps onto more lines than a page holds,
+ * between its wrapped lines.
+ *
+ * The Markdown version prints each source line as one block, and a block taller
+ * than a page was clipped at the page edge, so a long paragraph, a data URI or a
+ * file of thousands of nested quotes lost everything below its first page. Each
+ * piece holds whole wrapped lines of the text, so it wraps as the line did and
+ * every character prints once.
+ *
+ * The wrapped lines are found from where the browser placed each character. A
+ * character's box is its line's text box, which sits inside the line box with the
+ * half-leading above and below it, so the gap above the first character measures
+ * that half-leading for every line.
+ */
+function splitSourceLine(line: HTMLElement, maxHeightPx: number): HTMLElement[] {
+  const text = line.firstChild;
+  if (!(text instanceof Text) || line.childNodes.length !== 1) return [];
+  const box = line.getBoundingClientRect();
+  const range = document.createRange();
+  /** The text box of the character at `offset`, measured from the line's top. */
+  const charBox = (offset: number): { top: number; bottom: number } => {
+    range.setStart(text, offset);
+    range.setEnd(text, offset + 1);
+    const rect = range.getBoundingClientRect();
+    return { top: rect.top - box.top, bottom: rect.bottom - box.top };
+  };
+  const leading = charBox(0).top;
+
+  const starts = [0];
+  let pageTop = 0;
+  while (box.height - pageTop > maxHeightPx) {
+    // The first character whose line box ends below this page starts the next
+    // piece. Characters only move down as the offset grows, so search for it.
+    const limit = pageTop + maxHeightPx;
+    let low = starts[starts.length - 1] + 1;
+    let high = text.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (charBox(middle).bottom + leading > limit) high = middle;
+      else low = middle + 1;
+    }
+    if (low >= text.length) break;
+    starts.push(low);
+    pageTop = charBox(low).top - leading;
+  }
+  if (starts.length < 2) return [];
+  return starts.map((start, index) => {
+    const piece = line.cloneNode(false) as HTMLElement;
+    piece.textContent = text.data.slice(start, starts[index + 1]);
     return piece;
   });
 }

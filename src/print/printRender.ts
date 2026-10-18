@@ -6,7 +6,7 @@
 // Each sheet is a fixed-size `.print-page` carrying its own running header and
 // footer, with the document flow packed into the content box by paginate.ts.
 
-import { splitIntoPages } from "./paginate";
+import { SOURCE_LINE_CLASS, splitIntoPages } from "./paginate";
 import type { PageGeometry, PrintVersion } from "./paper";
 
 export interface RunningHead {
@@ -161,13 +161,14 @@ function flowElement(req: RenderRequest): HTMLElement {
   return flow;
 }
 
-/** Markdown source as one block per line, so page breaks land between lines. */
+/** Markdown source as one block per line, so page breaks land between lines. A
+ *  line that wraps past a page is split between its wrapped lines (paginate.ts). */
 function markdownFlow(markdown: string): HTMLElement {
   const flow = document.createElement("div");
   flow.className = "print-flow";
   for (const line of markdown.replace(/\n$/, "").split("\n")) {
     const el = document.createElement("div");
-    el.className = "print-src-line";
+    el.className = SOURCE_LINE_CLASS;
     // A blank line still has to occupy a line box on the page.
     el.textContent = line === "" ? "​" : line;
     flow.appendChild(el);
