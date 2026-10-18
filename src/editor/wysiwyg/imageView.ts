@@ -22,7 +22,7 @@
 import { convertFileSrc } from "../../ipc/bridge";
 import { openDialog } from "../../ipc/dialogs";
 import { $prose } from "@milkdown/kit/utils";
-import { NodeSelection, Plugin } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, TextSelection } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
@@ -134,9 +134,9 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
     host.dataset.mdRelocateBound = "1";
     // Crepe draws a new <img> after the path is cleared, so find the node from
     // the element that stays. Only a plain click locates the file. A click with
-    // Ctrl or Cmd follows a link around the image and one with Shift extends the
-    // selection, as they do on an image. The second click of a double-click
-    // opens no second dialog.
+    // Ctrl or Cmd follows a link around the image, as it does on an image, and
+    // one with Shift extends the selection (see missingImages). The second
+    // click of a double-click opens no second dialog.
     host.addEventListener("click", (e) => {
       if (!host.classList.contains("md-image-missing")) return;
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.detail > 1) return;
@@ -167,7 +167,8 @@ const IN_SELECTION = "md-in-selection";
  *  empty URL and gives no new error. One whose path was cleared shows Crepe's
  *  input for a path instead. Load and error events do not bubble, so the plugin
  *  catches them on their way down to the image. Inline images inside a text
- *  selection get the IN_SELECTION class. */
+ *  selection get the IN_SELECTION class, and Shift+click on a chip extends the
+ *  selection to it. */
 export function missingImages(onError: (event: Event) => void) {
   return $prose(
     () =>
@@ -216,6 +217,24 @@ export function missingImages(onError: (event: Event) => void) {
               });
             }
             return DecorationSet.create(state.doc, covered);
+          },
+          handleDOMEvents: {
+            // Chromium finds no place in a chip to extend the selection to, so
+            // Shift+click there moved the caret instead. Extend it to the side
+            // of the chip clicked, as on text.
+            mousedown: (view, event) => {
+              if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element)) return false;
+              const host = event.target.closest<HTMLElement>(".milkdown-image-inline.md-image-missing");
+              const found = host ? imageNodeAtDom(view, host) : null;
+              if (!host || !found) return false;
+              const { left, width } = host.getBoundingClientRect();
+              const head = event.clientX < left + width / 2 ? found.pos : found.pos + found.node.nodeSize;
+              event.preventDefault();
+              view.focus();
+              const { doc, selection } = view.state;
+              view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, selection.anchor, head)));
+              return true;
+            },
           },
         },
       }),

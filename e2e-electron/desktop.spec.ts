@@ -260,6 +260,32 @@ test("a missing inline image shows its path in a chip, which a click locates", a
   expect(await readFile(file, "utf8")).toBe(markdown);
 });
 
+test("Shift+click on a missing image chip extends the selection to it", async () => {
+  const file = path.join(directory, "chip-shift.md");
+  await writeFile(file, "Short line ![Logo](logo.png) here.\n");
+  await launch(file);
+  await app!.evaluate(({ dialog }) => {
+    Object.assign(globalThis, { dialogs: 0 });
+    dialog.showOpenDialog = async () => {
+      Object.assign(globalThis, { dialogs: Reflect.get(globalThis, "dialogs") + 1 });
+      return { canceled: true, filePaths: [] };
+    };
+  });
+  const line = page.locator(".milkdown .ProseMirror > p").first();
+  const chip = line.locator(".md-image-missing");
+  await expect(chip).toBeVisible();
+  await line.click({ position: { x: 1, y: 8 } });
+  // The right half of the chip takes the selection past it.
+  const box = (await chip.boundingBox())!;
+  await page.keyboard.down("Shift");
+  await page.mouse.click(box.x + box.width * 0.75, box.y + box.height / 2);
+  await page.keyboard.up("Shift");
+  await page.keyboard.type("X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("X here.\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "dialogs"))).toBe(0);
+});
+
 test("End with the caret before a missing image chip that starts a line keeps the caret in that line", async () => {
   const file = path.join(directory, "chip-end.md");
   await writeFile(file, "Ends with ![End](end/missing.png)\n\n![Start](start/missing.png) starts here.\n");
