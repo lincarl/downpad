@@ -616,14 +616,18 @@ describe("splitIntoPages, splitting a Markdown source line", () => {
 });
 
 /**
- * A fake layout for text blocks, since jsdom lays nothing out. A block marked
- * `data-text-layout` wraps its text word by word at COLUMNS monospace columns,
- * in lines of LINE px with the glyphs TEXT px tall in the middle, inside PAD px
- * of padding. Copies of the block (the splitter's trial pieces and the pieces
- * themselves) keep the mark, so they measure by the same rules. An element laid
- * out as an inline block is one box over the columns its text takes.
+ * A fake layout, since jsdom lays nothing out. Elements say how they measure:
+ * - `data-text-layout` wraps its text word by word at COLUMNS monospace columns,
+ *   in lines of LINE px with the glyphs TEXT px tall in the middle, inside PAD px
+ *   of padding. An element laid out as an inline block inside it is one box over
+ *   the columns its text takes.
+ * - `data-stack` stacks its children, each starting where the one before ends.
+ * - `data-row` sets its children side by side and is as tall as the tallest.
+ * - `data-height` is that many px tall.
+ * Copies of an element (the splitter's trial pieces and the pieces themselves)
+ * keep the mark, so they measure by the same rules.
  */
-const textLayout = (() => {
+const fakeLayout = (() => {
   const LINE = 18;
   const TEXT = 14;
   const PAD = 4;
@@ -660,10 +664,20 @@ const textLayout = (() => {
     return offset;
   }
 
-  const heightOf = (block: HTMLElement): number => {
+  const textHeight = (block: HTMLElement): number => {
     const places = wrap(block.textContent ?? "");
     return PAD * 2 + LINE * (places.length ? places[places.length - 1].line + 1 : 1);
   };
+
+  /** The fake height of `el`, or null when it carries no mark. */
+  function heightOf(el: HTMLElement): number | null {
+    if (el.dataset.height) return Number(el.dataset.height);
+    if (el.matches("[data-text-layout]")) return textHeight(el);
+    const children = Array.from(el.children) as HTMLElement[];
+    if (el.matches("[data-stack]")) return children.reduce((sum, child) => sum + child.offsetHeight, 0);
+    if (el.matches("[data-row]")) return Math.max(0, ...children.map((child) => child.offsetHeight));
+    return null;
+  }
 
   /** The box of `length` characters from `offset` in `block`. */
   function charBox(block: HTMLElement, offset: number, length: number): DOMRect {
@@ -685,7 +699,19 @@ const textLayout = (() => {
       const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
       override(HTMLElement.prototype, "offsetHeight", {
         get(this: HTMLElement) {
-          return this.matches("[data-text-layout]") ? heightOf(this) : height.get!.call(this);
+          return heightOf(this) ?? height.get!.call(this);
+        },
+      });
+      const top = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop")!;
+      override(HTMLElement.prototype, "offsetTop", {
+        get(this: HTMLElement) {
+          const parent = this.parentElement;
+          if (!parent?.matches("[data-stack]")) return top.get!.call(this);
+          let offset = parent.offsetTop;
+          for (let sibling = this.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+            offset += (sibling as HTMLElement).offsetHeight;
+          }
+          return offset;
         },
       });
       const elementBox = Element.prototype.getBoundingClientRect;
@@ -693,7 +719,7 @@ const textLayout = (() => {
         value(this: Element) {
           const block = blockOf(this);
           if (!block) return elementBox.call(this);
-          if (block === this) return DOMRect.fromRect({ width: COLUMNS * CHAR, height: heightOf(block) });
+          if (block === this) return DOMRect.fromRect({ width: COLUMNS * CHAR, height: textHeight(block) });
           return charBox(block, offsetIn(block, this), (this.textContent ?? "").length);
         },
       });
@@ -715,8 +741,8 @@ const textLayout = (() => {
 })();
 
 describe("splitIntoPages, splitting a paragraph or heading", () => {
-  beforeEach(() => textLayout.install());
-  afterEach(() => textLayout.uninstall());
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
 
   const words = (from: number, to: number): string =>
     Array.from({ length: to - from }, (_, i) => `word${from + i}`).join(" ");
@@ -757,7 +783,7 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
       expect(pieces.length).toBeGreaterThan(2);
       // Every character prints once, in order.
       expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
-      const places = textLayout.wrap(text);
+      const places = fakeLayout.wrap(text);
       let start = 0;
       pieces.forEach((piece, index) => {
         expect(piece.tagName).toBe(tag);
@@ -787,4 +813,103 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
       expect(code.map((box) => box.textContent)).toEqual(["x=1", "y=2"]);
     },
   );
+});
+
+/** An element of a fake-layout tree: `data-height` px tall, holding `text`. */
+function sized(tag: string, height: number, text: string): HTMLElement {
+  const el = document.createElement(tag);
+  el.dataset.height = String(height);
+  el.textContent = text;
+  return el;
+}
+
+/** An element that stacks `children` in the fake layout. */
+function stack(tag: string, ...children: HTMLElement[]): HTMLElement {
+  const el = document.createElement(tag);
+  el.dataset.stack = "";
+  el.append(...children);
+  return el;
+}
+
+const paragraphs = (count: number, label: string): HTMLElement[] =>
+  Array.from({ length: count }, (_, i) => sized("p", 30, `${label}${i + 1}.`));
+
+/** A text block of `count` words in the fake text layout: 5 words to a line. */
+function longParagraph(count: number, label: string): HTMLElement {
+  const p = document.createElement("p");
+  p.dataset.textLayout = "";
+  p.textContent = Array.from({ length: count }, (_, i) => `${label}${i + 1}`).join(" ");
+  return p;
+}
+
+describe("splitIntoPages, splitting a quote", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  it("splits a quote taller than a page between its paragraphs", () => {
+    // A quote printed as one block, so the page body clipped every paragraph
+    // after its first page.
+    const quote = stack("blockquote", ...paragraphs(40, "q"));
+    quote.className = "note";
+    const flow = flowWith(quote);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.length).toBe(3);
+    for (const piece of pieces) {
+      expect(piece.tagName).toBe("BLOCKQUOTE");
+      expect(piece.className).toBe("note");
+      expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+    }
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(
+      Array.from({ length: 40 }, (_, i) => `q${i + 1}.`).join(""),
+    );
+  });
+
+  it("splits a nested quote and a long paragraph inside a quote by the same rules", () => {
+    const inner = stack("blockquote", ...paragraphs(40, "n"));
+    const long = longParagraph(400, "w");
+    const outer = stack("blockquote", sized("p", 30, "first."), inner, long, sized("p", 30, "last."));
+    const text = outer.textContent;
+    const flow = flowWith(outer);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.length).toBeGreaterThan(4);
+    for (const piece of pieces) {
+      expect(piece.tagName).toBe("BLOCKQUOTE");
+      expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+    }
+    // Every character prints once, in order.
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+    // The nested quote and the long paragraph each continue over several pieces,
+    // still a quote inside the quote and a paragraph.
+    const nested = pieces.filter((piece) => piece.querySelector(":scope > blockquote"));
+    expect(nested.length).toBeGreaterThan(1);
+    const words = pieces.filter((piece) => piece.querySelector(":scope > p[data-text-layout]"));
+    expect(words.length).toBeGreaterThan(1);
+  });
+
+  it("keeps the rest of a quote that holds a list taller than a page", () => {
+    // The paginator used to split only the list inside the quote and rebuild the
+    // quote around each piece of it, which left out the quote's other blocks.
+    const items = Array.from({ length: 40 }, (_, i) => {
+      const wrapper = sized("div", 30, "");
+      wrapper.className = "milkdown-list-item-block";
+      wrapper.append(sized("li", 30, `item ${i + 1}`));
+      return wrapper;
+    });
+    const quote = stack("blockquote", sized("p", 30, "Before the list."), stack("ul", ...items), sized("p", 30, "After the list."));
+    const text = quote.textContent;
+    const flow = flowWith(quote);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const piece of pieces) expect(piece.tagName).toBe("BLOCKQUOTE");
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+  });
 });

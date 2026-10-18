@@ -7,9 +7,10 @@
 // document rather than a screenshot of a scrolling page.
 //
 // Blocks that are themselves taller than a page (a long table, a long list, a
-// long code block, a paragraph or heading, a Markdown source line that wraps past
-// a page) are split one level down first, so the packer always has pieces it can
-// place. Text splits between the lines it wraps onto, never inside a line.
+// long code block, a paragraph or heading, a quote, a Markdown source line that
+// wraps past a page) are split one level down first, so the packer always has
+// pieces it can place. Text splits between the lines it wraps onto, never inside
+// a line, and a quote between the blocks it holds, each split the same way.
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -123,6 +124,7 @@ function splitElement(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (el.classList.contains("cm-scroller")) return splitCodeMirror(el, maxHeightPx);
   if (el.classList.contains(SOURCE_LINE_CLASS)) return splitSourceLine(el, maxHeightPx);
   if (TEXT_TAGS.has(el.tagName)) return splitText(el, maxHeightPx);
+  if (CONTAINER_TAGS.has(el.tagName)) return splitContainer(el, maxHeightPx);
   switch (el.tagName) {
     case "TABLE":
       return splitTable(el as HTMLTableElement, maxHeightPx);
@@ -145,6 +147,7 @@ function splittableIn(block: HTMLElement): HTMLElement | null {
   if (
     SPLITTABLE_TAGS.has(block.tagName) ||
     TEXT_TAGS.has(block.tagName) ||
+    CONTAINER_TAGS.has(block.tagName) ||
     block.classList.contains(SOURCE_LINE_CLASS)
   ) {
     return block;
@@ -160,6 +163,14 @@ const SPLITTABLE_TAGS = new Set(["TABLE", "UL", "OL", "PRE"]);
 
 /** Blocks of inline content, split between the lines they wrap onto (splitText). */
 const TEXT_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
+
+/**
+ * Blocks that hold other blocks, split between them (splitContainer). Checked
+ * before looking inside a block, so a quote around a long list or table keeps
+ * the rest of its content: splitting only the list inside dropped the quote's
+ * other blocks from every piece.
+ */
+const CONTAINER_TAGS = new Set(["BLOCKQUOTE"]);
 
 /** `.cm-scroller` is Crepe's code block: CodeMirror, not a `<pre>` (splitCodeMirror). */
 const SPLITTABLE_SELECTOR = "table, ul, ol, pre, .cm-scroller";
@@ -292,6 +303,52 @@ function applyFrozenColumns(table: HTMLTableElement, frozen: FrozenColumns | nul
     group.appendChild(col);
   }
   table.insertBefore(group, table.firstChild);
+}
+
+/**
+ * Split a block that holds other blocks, such as a quote, between its children.
+ *
+ * A quote printed as one block, and the page body clipped one taller than a
+ * page: a quote of 120 paragraphs stopped at paragraph 29. Each piece is a copy
+ * of the container holding a run of its children. A child that does not fit a
+ * page by itself is split first by the same rules, so a long paragraph or a
+ * nested quote inside the quote continues on the next page too.
+ */
+function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElement[] {
+  if (!holdsBlocks(container)) return [];
+  const style = getComputedStyle(container);
+  // Every piece repeats the container's top margin, padding and borders.
+  const chrome =
+    marginTopOf(container) +
+    (Number.parseFloat(style.paddingTop) || 0) +
+    (Number.parseFloat(style.paddingBottom) || 0) +
+    (Number.parseFloat(style.borderTopWidth) || 0) +
+    (Number.parseFloat(style.borderBottomWidth) || 0);
+  const room = Math.max(1, maxHeightPx - chrome);
+  for (const child of Array.from(container.children) as HTMLElement[]) {
+    if (child.offsetHeight + marginTopOf(child) <= room) continue;
+    const pieces = splitBlock(child, room);
+    if (pieces.length) child.replaceWith(...pieces);
+  }
+  const children = Array.from(container.children);
+  if (children.length < 2) return [];
+  const groups = packByHeight(children, room);
+  if (groups.length < 2) return [];
+  return groups.map((group) => {
+    const piece = container.cloneNode(false) as HTMLElement;
+    piece.append(...group);
+    return piece;
+  });
+}
+
+/**
+ * Whether `el` holds only elements, so splitting between them moves all of its
+ * content. Text directly inside it would be left behind.
+ */
+function holdsBlocks(el: HTMLElement): boolean {
+  return Array.from(el.childNodes).every(
+    (node) => node instanceof Element || node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim(),
+  );
 }
 
 /**
