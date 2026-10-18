@@ -23,6 +23,10 @@ const fakeEditors = vi.hoisted(() => ({
   destroyPromise: Promise.resolve() as Promise<void>,
   mountCalls: 0,
   destroyCalls: 0,
+  /** The text and serializer bullet each document pane was built with, in order. */
+  mounted: [] as Array<{ markdown: string; bullet: string }>,
+  /** Runs as each document pane starts to build, to simulate an edit then. */
+  duringMount: null as (() => void) | null,
   /** What the document pane writes, its own form of the tab's text or typing. */
   markdown: "document pane's form",
   /** Whether the document pane holds typing it has not reported yet. */
@@ -53,10 +57,13 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
     async mount(
       _root: HTMLElement,
-      _markdown: string,
+      markdown: string,
       cb: { onChange(markdown: string): void; onFindChange?(): void },
+      style: { bullet: string },
     ): Promise<void> {
       fakeEditors.mountCalls += 1;
+      fakeEditors.mounted.push({ markdown, bullet: style.bullet });
+      fakeEditors.duringMount?.();
       this.onChange = cb.onChange;
       fakeEditors.wysiwygChange = cb.onChange;
       fakeEditors.wysiwygFindChange = cb.onFindChange ?? null;
@@ -138,6 +145,12 @@ vi.mock("./wysiwyg/spellcheck", () => ({ applySpellcheck: vi.fn() }));
 
 import { EditorHost } from "./EditorHost";
 
+/** The classes of the visible panes. */
+const shown = (root: HTMLElement): string[] =>
+  [...root.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")].map((pane) => pane.className);
+const failureOf = (store: Store, tabId: string) =>
+  store.get().tabs.find((tab) => tab.id === tabId)?.documentViewFailure;
+
 function makeStore(): Store {
   const doc = {
     markdown: "original markdown",
@@ -178,6 +191,8 @@ beforeEach(() => {
   fakeEditors.destroyPromise = Promise.resolve();
   fakeEditors.mountCalls = 0;
   fakeEditors.destroyCalls = 0;
+  fakeEditors.mounted = [];
+  fakeEditors.duringMount = null;
   fakeEditors.markdown = "document pane's form";
   fakeEditors.pending = false;
   fakeEditors.reportCalls = 0;
@@ -307,12 +322,6 @@ describe("EditorHost document view failure", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
-
-  /** The classes of the visible panes. */
-  const shown = (root: HTMLElement): string[] =>
-    [...root.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")].map((pane) => pane.className);
-  const failureOf = (store: Store, tabId: string) =>
-    store.get().tabs.find((tab) => tab.id === tabId)?.documentViewFailure;
 
   it("shows the tab's Markdown alone and records why, then Try again builds the document pane", async () => {
     const root = document.createElement("div");
@@ -492,6 +501,142 @@ describe("EditorHost build", () => {
     // The document pane writes the text its own way, but nothing was edited.
     expect(store.get().doc).toMatchObject({ markdown: "original markdown", isDirty: false });
     expect(fakeEditors.rawText).toBe("original markdown");
+    await host.dispose();
+  });
+});
+
+describe("EditorHost changes while a document pane builds", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Start `show`, which builds a document pane, make `change` while that build
+   *  waits, then let it finish. Any later build ends as `later` does. */
+  async function changeWhileBuilding(
+    show: () => Promise<void>,
+    change: () => void,
+    later: Promise<void> = Promise.resolve(),
+  ): Promise<void> {
+    const mount = deferred();
+    fakeEditors.mountPromise = mount.promise;
+    const showing = show();
+    expect(fakeEditors.mounted).not.toHaveLength(0);
+    fakeEditors.mountPromise = later;
+    change();
+    mount.resolve();
+    await showing;
+  }
+
+  it("shows Try again's document pane with the Markdown typed while it builds, and keeps its edits", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    fakeEditors.rawChange!("fixed text");
+
+    await changeWhileBuilding(
+      () => host.retryDocumentView(),
+      () => fakeEditors.rawChange!("fixed text, typed while it opens"),
+    );
+
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    // An edit in it reaches the tab, and it was built from the latest text.
+    fakeEditors.wysiwygChange!("fixed text, typed while it opens, then the document");
+    expect(store.get().doc.markdown).toBe("fixed text, typed while it opens, then the document");
+    expect(fakeEditors.mounted.at(-1)?.markdown).toBe("fixed text, typed while it opens");
+    await host.dispose();
+  });
+
+  it("keeps the Markdown view and the notice when the text typed while Try again builds cannot be shown", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    fakeEditors.rawChange!("fixed text");
+
+    await changeWhileBuilding(
+      () => host.retryDocumentView(),
+      () => fakeEditors.rawChange!("> deep again"),
+      Promise.reject(new Error("failed again")),
+    );
+
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(root.querySelector(".editor-pane-wysiwyg")).toBeNull();
+    expect(failureOf(store, "tab-1")).toEqual({ message: "failed again", dismissed: false });
+    expect(fakeEditors.mounted.at(-1)?.markdown).toBe("> deep again");
+    await host.dispose();
+  });
+
+  it.each(["document", "split"] as const)(
+    "shows the %s layout's new document pane with the Markdown typed while it builds, and keeps its edits",
+    async (layout) => {
+      const root = document.createElement("div");
+      const store = makeStore();
+      const host = new EditorHost(root, store);
+      host.initLayout("markdown");
+      await host.reloadActiveDoc();
+
+      await changeWhileBuilding(
+        () => host.setLayout(layout),
+        () => fakeEditors.rawChange!("typed while it opens"),
+      );
+
+      expect(root.querySelector(".editor-pane-wysiwyg:not([hidden])")).not.toBeNull();
+      fakeEditors.wysiwygChange!("typed while it opens, then the document");
+      expect(store.get().doc.markdown).toBe("typed while it opens, then the document");
+      expect(fakeEditors.mounted.at(-1)?.markdown).toBe("typed while it opens");
+      await host.dispose();
+    },
+  );
+
+  it("builds the document pane again with settings changed while it builds", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+
+    await changeWhileBuilding(
+      () => host.setLayout("document"),
+      () => {
+        store.set({ settings: { ...store.get().settings, mdBulletChar: "*" } });
+        void host.reload();
+      },
+    );
+
+    expect(fakeEditors.mounted.map((build) => build.bullet)).toEqual(["-", "*"]);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    expect(root.querySelectorAll(".editor-pane-wysiwyg")).toHaveLength(1);
+    await host.dispose();
+  });
+
+  it("stops building and shows the Markdown with the notice while the typing never pauses", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+    let keystrokes = 0;
+    fakeEditors.duringMount = () => fakeEditors.rawChange!(`typed ${++keystrokes}`);
+
+    await host.setLayout("document");
+
+    expect(fakeEditors.mountCalls).toBe(5);
+    // Every pane built is destroyed again.
+    expect(fakeEditors.destroyCalls).toBe(5);
+    expect(root.querySelector(".editor-pane-wysiwyg")).toBeNull();
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(failureOf(store, "tab-1")).toEqual({
+      message: "the text kept changing while the view opened",
+      dismissed: false,
+    });
+    expect(store.get().doc.markdown).toBe("typed 5");
     await host.dispose();
   });
 });

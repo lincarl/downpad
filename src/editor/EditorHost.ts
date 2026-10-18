@@ -18,7 +18,8 @@
 // to a tab's canonical string bumps its rev and stamps the authoring pane as
 // in-sync; every other pane of that tab is now stale. On reveal, a stale pane is
 // rebuilt from the canonical string (its undo resets) — so the views can never
-// diverge, yet an untouched view keeps its undo. At most `maxRetainedTabEditors`
+// diverge, yet an untouched view keeps its undo. A pane that falls behind while
+// it builds is built again before it is shown. At most `maxRetainedTabEditors`
 // tabs keep live panes (LRU); older tabs fall back to rebuild-on-revisit.
 
 import type { Store } from "../state/store";
@@ -55,6 +56,11 @@ const paneKey = (tabId: string, view: View): string => `${tabId} ${view}`;
 /** Debounce for mirroring an edit into the other split pane (§6.1). Coalesces a
  *  burst of keystrokes so the (heavier) WYSIWYG re-parse doesn't run per key. */
 const SYNC_DEBOUNCE_MS = 120;
+/** How many builds of a document pane in a row may each end behind the tab's
+ *  text, because of an edit made while it built, before md-easy gives up
+ *  (`ensurePane`). A rebuild usually finishes before the next keystroke, so
+ *  typing while the view opens seldom needs a third build. */
+const MAX_STALE_BUILDS = 5;
 /** How far the divider can travel: the narrower pane keeps at least this share. */
 const SPLIT_MIN_RATIO = 0.2;
 const SPLIT_MAX_RATIO = 0.8;
@@ -585,17 +591,32 @@ export class EditorHost implements FindController {
     }
   }
 
-  /** Return the live `(tab, view)` pane, rebuilding it when forced or stale. */
+  /** Return the live `(tab, view)` pane, rebuilding it when forced or stale.
+   *
+   *  A document pane takes a while to build, and the Markdown pane on screen
+   *  stays editable meanwhile, so the tab's text can change before the new pane
+   *  is ready. A settings change made then also leaves it stale. Such a pane
+   *  would show older text and drop its own edits (`onChange`), so it is built
+   *  again from the tab's current text. After `MAX_STALE_BUILDS` builds in a row
+   *  that each fell behind, the last is destroyed and this throws, so the tab
+   *  shows its Markdown with the notice like any failed build. */
   private async ensurePane(tabId: string, view: View, rebuild: boolean): Promise<Pane | null> {
     if (this.disposed || !this.hasTab(tabId)) return null;
     let pane = this.panes.get(paneKey(tabId, view));
-    if (pane && (rebuild || this.isStale(pane))) {
-      await this.destroyPane(pane);
-      if (this.disposed || !this.hasTab(tabId)) return null;
-      pane = undefined;
+    if (pane && !rebuild && !this.isStale(pane)) return pane;
+    for (let builds = 1; ; builds += 1) {
+      if (pane) {
+        await this.destroyPane(pane);
+        if (this.disposed || !this.hasTab(tabId)) return null;
+      }
+      const built = await this.buildPane(tabId, view);
+      if (!built || !this.isStale(built)) return built;
+      if (builds === MAX_STALE_BUILDS) {
+        await this.destroyPane(built);
+        throw new Error("the text kept changing while the view opened");
+      }
+      pane = built;
     }
-    if (!pane) return this.buildPane(tabId, view);
-    return pane;
   }
 
   /** A pane is stale when the tab moved on without it, or (WYSIWYG only) the
