@@ -388,7 +388,7 @@ export class SourceBaseline {
     if (addsFootnote(pieces, layout) || addsDefinition(pieces) || linksToKeptDefinition(pieces, layout)) return null;
     const gaps = this.join(pieces, layout);
     if (!gaps) return null;
-    return layout.lead + pieces.map((piece, k) => piece.text + (gaps[k] ?? "")).join("") + layout.tail;
+    return layout.lead + pieces.map((piece, k) => piece.text + (gaps[k] ?? "")).join("") + tailOf(pieces, layout);
   }
 
   /**
@@ -530,7 +530,7 @@ export class SourceBaseline {
     // its line only because the text ends there.
     text +=
       lines +
-      (lines.length < lower.text.length ? "\n" : window.head + 1 < pieces.length ? firstLine(gaps[window.head]) : layout.tail);
+      (lines.length < lower.text.length ? "\n" : window.head + 1 < pieces.length ? firstLine(gaps[window.head]) : tailOf(pieces, layout));
     ids.push(lower.item >= 0 ? String(lower.item) : "w");
     if (notes.size > 0) text += `${text.endsWith("\n") ? "" : "\n"}\n${[...notes].map((label) => `[^${label}]: .`).join("\n\n")}\n`;
 
@@ -896,6 +896,19 @@ function codeMayMove(layout: SourceLayout, k: number, above: Piece | undefined, 
  */
 function readsOnlyAtEnd(layout: SourceLayout, k: number): boolean {
   return k === layout.items.length - 1 && !layout.tail.includes("\n") && !itemFresh(layout, k);
+}
+
+/**
+ * The text after the last of `pieces`, which is the source's blank text after
+ * its last node. In a source that ends with no line break, a source item that
+ * had more text after it keeps the line break that followed it there. A tag
+ * alone on its line at the end of a list, quote or footnote, as in
+ * `- item\n<img src="a.png">`, reads as a block of its own at the very end of
+ * a text, and with a line break after it, as part of the item.
+ */
+function tailOf(pieces: readonly Piece[], layout: SourceLayout): string {
+  const { item } = pieces[pieces.length - 1];
+  return item >= 0 && item < layout.items.length - 1 && !layout.tail.includes("\n") ? firstLine(layout.gaps[item]) : layout.tail;
 }
 
 /** What ends `piece` (see `Ending`), worked out once. */

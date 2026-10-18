@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
-import { editorViewCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
+import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { closeHistory, undo } from "@milkdown/kit/prose/history";
 import { TextSelection } from "@milkdown/kit/prose/state";
@@ -94,6 +94,14 @@ function typeAtStart(view: EditorView, start: string, text: string): void {
     const insert = () => view.state.tr.insertText(char, from, to);
     if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, char, insert))) view.dispatch(insert());
   }
+}
+
+/** The top-level blocks of `doc` without Crepe's empty last line to type on. */
+function written(doc: ProseNode): ProseNode[] {
+  const blocks: ProseNode[] = [];
+  doc.forEach((block) => blocks.push(block));
+  const last = blocks[blocks.length - 1];
+  return last?.type.name === "paragraph" && last.content.size === 0 ? blocks.slice(0, -1) : blocks;
 }
 
 // A file with much that Milkdown writes in its own way, such as a setext
@@ -297,6 +305,59 @@ describe("an edit in the document view", () => {
     expect(editor.getMarkdown()).toBe(
       markdown.replace("Para 3  \nline.\n", "Para 3  \nline.\n\nNew\n").replace("Para 1150  \n", "Para 1150!\\\n"),
     );
+  });
+
+  // In a file with no line break at its end, a list, quote or footnote that
+  // ends in a tag alone on its line reads that line as its own block when it
+  // ends the text. Below it in the file, the line break after it kept the
+  // tag inside. A block that becomes the last one keeps that line break.
+  it.each([
+    [
+      "a list above definitions the edit leaves out",
+      '# Setup\n\nRead the [guide] first.\n\n- Install the tool\n<img src="setup.png" alt="setup">\n\n[guide]: https://example.com/guide',
+      (view: EditorView) => typeAfter(view, "first.", " Then continue."),
+      '# Setup\n\nRead the [guide](https://example.com/guide) first. Then continue.\n\n- Install the tool\n<img src="setup.png" alt="setup">\n',
+    ],
+    [
+      "a list above a deleted last paragraph",
+      '# Setup\n\n- Install the tool\n<img src="setup.png" alt="setup">\n\nLast paragraph.',
+      (view: EditorView) => deleteBlock(view, "Last paragraph."),
+      '# Setup\n\n- Install the tool\n<img src="setup.png" alt="setup">\n',
+    ],
+    [
+      "a quote above a deleted last paragraph",
+      '# Quote\n\n> A quoted line\n<img src="x.png" alt="x">\n\nLast paragraph.',
+      (view: EditorView) => deleteBlock(view, "Last paragraph."),
+      '# Quote\n\n> A quoted line\n<img src="x.png" alt="x">\n',
+    ],
+    [
+      "a footnote above a deleted last paragraph",
+      "# Notes\n\nA claim[^1] here.\n\n[^1]: The note\n<x-y>\n\nLast paragraph.",
+      (view: EditorView) => deleteBlock(view, "Last paragraph."),
+      "# Notes\n\nA claim[^1] here.\n\n[^1]: The note\n<x-y>\n",
+    ],
+    [
+      "a list above a deleted last paragraph, with Windows line endings",
+      '# Setup\r\n\r\n- Install the tool\r\n<img src="setup.png" alt="setup">\r\n\r\nLast paragraph.',
+      (view: EditorView) => deleteBlock(view, "Last paragraph."),
+      '# Setup\r\n\r\n- Install the tool\r\n<img src="setup.png" alt="setup">\r\n',
+    ],
+    // The file's last block stays last, so it keeps the file's end.
+    [
+      "the file's last block",
+      "Intro.\n\n- Install the tool\n<custom-tag>",
+      (view: EditorView) => typeAfter(view, "Intro", " now"),
+      "Intro now.\n\n- Install the tool\n<custom-tag>",
+    ],
+  ])("ends the body as the file read for %s", { timeout: 60_000 }, async (_name, markdown, edit, expected) => {
+    const { editor, crepe, view } = await open(markdown);
+    edit(view);
+    expect(editor.getMarkdown()).toBe(expected);
+    // Opened again, the text has the document's blocks. A heading's id comes
+    // from a plugin the parser does not run.
+    const blocks = (doc: ProseNode): unknown =>
+      JSON.parse(JSON.stringify(written(doc).map((block) => block.toJSON()), (key, value: unknown) => (key === "id" ? undefined : value)));
+    expect(blocks(crepe.editor.action((ctx) => ctx.get(parserCtx)(expected)))).toEqual(blocks(view.state.doc));
   });
 
   it("keeps the other blocks when a block is moved", { timeout: 60_000 }, async () => {
