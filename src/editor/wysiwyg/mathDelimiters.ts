@@ -20,7 +20,6 @@ import { customInputRulesKey } from "@milkdown/kit/prose";
 import { closeHistory, isHistoryTransaction, redoDepth } from "@milkdown/kit/prose/history";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
 import type { Mark, Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
-import { Mapping } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { RemarkParser } from "@milkdown/kit/transformer";
 import { $prose, $remark } from "@milkdown/kit/utils";
@@ -646,9 +645,85 @@ interface Waiting {
   decide: boolean;
 }
 
-/** The waiting mark, or null. A transaction sets it with this key's meta, a
- *  position or null. */
-const waitingKey = new PluginKey<Waiting | null>("mdEasyWaitingMark");
+/** A waiting mark as undo and redo keep it: how far before the cursor it
+ *  sits, which mark it is, and whether it waits to be decided. Undo and redo
+ *  put the cursor back where it was, so the mark is found there again. */
+interface KeptMark {
+  distance: number;
+  mark: string;
+  decide: boolean;
+}
+
+/** The state of `closingDelimiterGuard`. */
+interface Guard {
+  /** The waiting mark, or null. */
+  waiting: Waiting | null;
+  /** One entry for each step that redo can put back, the next one last: the
+   *  mark that waited when undo took the step back, or null. */
+  undone: readonly (KeptMark | null)[];
+}
+
+/** The guard's state. A transaction sets the waiting mark with this key's
+ *  meta, a position or null. */
+const waitingKey = new PluginKey<Guard>("mdEasyWaitingMark");
+
+/** The waiting mark in `state`, or null. */
+const waitingIn = (state: EditorState): Waiting | null => waitingKey.getState(state)?.waiting ?? null;
+
+/** Whether the character at `pos` is code text, in a code block or inline
+ *  code. */
+function inCode(doc: ProseNode, pos: number): boolean {
+  return !!doc.resolve(pos).parent.type.spec.code || isCode(doc.nodeAt(pos)?.marks);
+}
+
+/** `waiting` in `state` as undo and redo keep it, or null. */
+function keep(state: EditorState, waiting: Waiting | null): KeptMark | null {
+  if (!waiting) return null;
+  const { pos, decide } = waiting;
+  return { distance: state.selection.head - pos, mark: state.doc.textBetween(pos, pos + 1), decide };
+}
+
+/** The waiting mark that `kept` describes in `state`, or null when that mark
+ *  is not there or is code text. */
+function restore(state: EditorState, kept: KeptMark | null | undefined): Waiting | null {
+  if (!kept) return null;
+  const pos = state.selection.head - kept.distance;
+  if (pos < 0 || pos >= state.doc.content.size || state.doc.textBetween(pos, pos + 1) !== kept.mark) return null;
+  return inCode(state.doc, pos) ? null : { pos, decide: kept.decide };
+}
+
+/** `entries` cut or filled to `depth`, the number of steps in the history it
+ *  follows. The history drops its oldest steps beyond its depth, so the
+ *  oldest entries go first, and missing ones are null. */
+function align(entries: readonly (KeptMark | null)[], depth: number): readonly (KeptMark | null)[] {
+  if (entries.length > depth) return entries.slice(entries.length - depth);
+  return entries.length < depth ? [...new Array<null>(depth - entries.length).fill(null), ...entries] : entries;
+}
+
+/** Whether `tr` is someone's edit, which decides a waiting mark once the
+ *  selection no longer keeps it waiting. Changes left out of the undo history,
+ *  such as a heading's new id, are not, nor are changes that plugins make in
+ *  reply to them or to an undo or redo. */
+function isEdit(tr: Transaction): boolean {
+  const root: Transaction | undefined = tr.getMeta("appendedTransaction");
+  if (tr.getMeta("addToHistory") === false || root?.getMeta("addToHistory") === false) return false;
+  return !root || !isHistoryTransaction(root);
+}
+
+/** The waiting mark after `tr`, which is no redo. */
+function follow(tr: Transaction, waiting: Waiting | null, before: EditorState, after: EditorState): Waiting | null {
+  const set: number | null | undefined = tr.getMeta(waitingKey);
+  if (set !== undefined) return set === null ? null : { pos: set, decide: false };
+  if (!waiting) return null;
+  if (!tr.docChanged) return after.selection.eq(before.selection) ? waiting : { ...waiting, decide: true };
+  const { pos, deleted } = tr.mapping.mapResult(waiting.pos, 1);
+  const mark = after.doc.textBetween(pos, Math.min(pos + 1, after.doc.content.size));
+  if (deleted || (mark !== "$" && mark !== "~")) return null;
+  // A mark that ends up in code, as when Ctrl+Alt+C makes its paragraph a
+  // code block, is code text.
+  if (inCode(after.doc, pos)) return null;
+  return { pos, decide: waiting.decide || isEdit(tr) };
+}
 
 /** The change that decides the waiting mark at `pos` by the character now
  *  after it, and stops it waiting. */
@@ -660,7 +735,7 @@ function decide(state: EditorState, pos: number): Transaction {
  *  null when none waits or a composition runs, which decides it once it
  *  ends. */
 function decision(view: EditorView): Transaction | null {
-  const waiting = waitingKey.getState(view.state);
+  const waiting = waitingIn(view.state);
   return waiting && !view.composing ? decide(view.state, waiting.pos) : null;
 }
 
@@ -687,7 +762,7 @@ export function decidedDoc(view: EditorView): ProseNode {
  *  cursor wait like a typed one. */
 function afterComposition(view: EditorView): void {
   if (view.isDestroyed) return;
-  const waiting = waitingKey.getState(view.state);
+  const waiting = waitingIn(view.state);
   // A composition that put nothing after the mark, such as a cancelled one,
   // leaves it waiting, and so does one between the marks of its span, unless
   // the editor lost focus, which ended the composition.
@@ -700,26 +775,6 @@ function afterComposition(view: EditorView): void {
   if (empty && closingMark(view.state, from, "") === "wait") view.dispatch(view.state.tr.setMeta(waitingKey, from - 1));
 }
 
-/** After a redo, the change that lets a closing `$` or `~` that the redo put
- *  back right before the cursor wait again, as it did when it was typed, or
- *  null. `transactions` took `before` to `state`. A mark that undo puts back
- *  stays text, so undoing the formula or strikethrough that Save or leaving
- *  the editor made keeps the text. A mark that the redo did not put back,
- *  such as one whose next character the redo deletes again, keeps the
- *  decision made before. Only one mark waits, so one that an earlier redo
- *  let wait stays text. The text typed after it kept it text then, since a
- *  formula or strikethrough it became is put back by a redo of its own
- *  first. */
-function waitAfterRedo(transactions: readonly Transaction[], before: EditorState, state: EditorState): Transaction | null {
-  if (!transactions.some(isHistoryTransaction) || redoDepth(state) >= redoDepth(before)) return null;
-  const { empty, from } = state.selection;
-  if (!empty || closingMark(state, from, "") !== "wait") return null;
-  const mapping = new Mapping();
-  for (const tr of transactions) mapping.appendMapping(tr.mapping);
-  // Mapped back to the document before the redo, the mark was not there.
-  return mapping.invert().mapResult(from - 1, 1).deletedAfter ? state.tr.setMeta(waitingKey, from - 1) : null;
-}
-
 /** Makes a typed `$` or `~` close math or strikethrough only where Markdown
  *  would read the same text that way. One that never could, such as after a
  *  space, stays text. One that could waits for the next character, since a `$`
@@ -728,34 +783,35 @@ function waitAfterRedo(transactions: readonly Transaction[], before: EditorState
  *  leaving it, or another edit such as a paste. A cursor moved between the
  *  marks, as by a click or Left, keeps it waiting until the cursor leaves the
  *  span, so the text there can still be edited. Changes nobody typed, such as
- *  a heading's new id, leave it waiting, and a mark that a redo puts back
- *  waits again. A `$` or `~` in a code block or inline code, or one that
- *  ends up there, is code text. Crepe's and Milkdown's typing shortcuts
- *  decided at once, and Milkdown's could strike from a different `~` than
- *  GFM. */
+ *  a heading's new id, leave it waiting. A mark that waited when undo took a
+ *  step back waits again once redo puts the step back, while a pasted, moved
+ *  or mirrored one that redo puts back stays text. A `$` or `~` in a code
+ *  block or inline code, or one that ends up there, is code text. Crepe's and
+ *  Milkdown's typing shortcuts decided at once, and Milkdown's could strike
+ *  from a different `~` than GFM. */
 export const closingDelimiterGuard = $prose(() => {
   /** The editor's view, to tell whether a composition is running. */
   let editorView: EditorView | undefined;
-  return new Plugin<Waiting | null>({
+  return new Plugin<Guard>({
     key: waitingKey,
     state: {
-      init: () => null,
-      /** Follow the waiting mark through changes, and note when one means
-       *  it must be decided. */
-      apply(tr, waiting, before, after): Waiting | null {
-        const set: number | null | undefined = tr.getMeta(waitingKey);
-        if (set !== undefined) return set === null ? null : { pos: set, decide: false };
-        if (!waiting) return null;
-        if (!tr.docChanged) return after.selection.eq(before.selection) ? waiting : { ...waiting, decide: true };
-        const { pos, deleted } = tr.mapping.mapResult(waiting.pos, 1);
-        const mark = after.doc.textBetween(pos, Math.min(pos + 1, after.doc.content.size));
-        if (deleted || (mark !== "$" && mark !== "~")) return null;
-        // A mark that ends up in code, as when Ctrl+Alt+C makes its paragraph
-        // a code block, is code text.
-        if (after.doc.resolve(pos).parent.type.spec.code || isCode(after.doc.nodeAt(pos)?.marks)) return null;
-        // Changes left out of the undo history, such as a heading's new id,
-        // are nobody's edit.
-        return { pos, decide: waiting.decide || tr.getMeta("addToHistory") !== false };
+      init: () => ({ waiting: null, undone: [] }),
+      /** Follow the waiting mark through changes, note when one means it must
+       *  be decided, and keep the mark that waits when undo takes a step back,
+       *  so that redo makes it wait again. The undo history must come first
+       *  in the editor's plugins, so `after` holds its new depth. */
+      apply(tr, guard, before, after): Guard {
+        let { waiting, undone } = guard;
+        // A redo puts back one step. An undo adds one, or drops the oldest
+        // past the history's depth.
+        if (isHistoryTransaction(tr) && redoDepth(after) === redoDepth(before) - 1) {
+          waiting = restore(after, undone.at(-1));
+          undone = undone.slice(0, -1);
+        } else {
+          if (isHistoryTransaction(tr)) undone = [...undone, keep(before, waiting)];
+          waiting = follow(tr, waiting, before, after);
+        }
+        return { waiting, undone: align(undone, redoDepth(after)) };
       },
     },
     props: {
@@ -767,7 +823,7 @@ export const closingDelimiterGuard = $prose(() => {
         // around it restarts the composition, which typed its first
         // character twice, so marks are decided once it ends.
         if (view.composing) return false;
-        const waiting = waitingKey.getState(view.state);
+        const waiting = waitingIn(view.state);
         if (waiting?.pos === from - 1 && from === to && closeWaiting(view, waiting.pos, text)) {
           typeText(view, text);
           return true;
@@ -786,7 +842,7 @@ export const closingDelimiterGuard = $prose(() => {
       /** Close a waiting mark on Enter, since a line break after the mark ends
        *  its paragraph or line. */
       handleKeyDown(view, event) {
-        const waiting = waitingKey.getState(view.state);
+        const waiting = waitingIn(view.state);
         const { empty, from } = view.state.selection;
         if (event.key === "Enter" && waiting?.pos === from - 1 && empty) closeWaiting(view, waiting.pos, "\n");
         return false;
@@ -814,12 +870,9 @@ export const closingDelimiterGuard = $prose(() => {
     },
     /** Decide a waiting mark once a change says so, in the same update, so
      *  views drawn for that change already see the result. Crepe's list
-     *  items restore the cursor to where it was when they were drawn. A mark
-     *  that a redo put back waits again instead (`waitAfterRedo`). */
-    appendTransaction(transactions, before, state) {
-      const redone = waitAfterRedo(transactions, before, state);
-      if (redone) return redone;
-      const waiting = waitingKey.getState(state);
+     *  items restore the cursor to where it was when they were drawn. */
+    appendTransaction(_transactions, _before, state) {
+      const waiting = waitingIn(state);
       if (!waiting?.decide || editorView?.composing || keepsWaiting(state, waiting.pos)) return null;
       return decide(state, waiting.pos);
     },

@@ -677,7 +677,7 @@ describe("math and strikethrough delimiters", () => {
     }
   });
 
-  it("lets a closing mark that redo puts back wait again, but not one that undo puts back", { timeout: 60_000 }, async () => {
+  it("lets a typed closing mark that redo puts back wait again, but not one that undo puts back", { timeout: 60_000 }, async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const { editor, root } = await open("One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n");
@@ -731,6 +731,45 @@ describe("math and strikethrough delimiters", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps a pasted, moved or mirrored closing mark as text after undo and redo", { timeout: 60_000 }, async () => {
+    const { editor, root } = await open("Start.\n\nWrite \\$x\\$ for math.\n\nEnd.\n\nNote \\~draft\\~ only.\n");
+    const view = viewOf(editor);
+    const undoThenRedo = () => {
+      undo(view.state, view.dispatch);
+      redo(view.state, view.dispatch);
+    };
+    moveToEnd(view, "Start.");
+    type(view, " ");
+    view.pasteHTML("<span>Let $x$</span>");
+    undoThenRedo();
+    type(view, " be the input");
+    // Cut "Write $x$" and paste it at the end of "End.".
+    moveToEnd(view, "Write");
+    const start = view.state.selection.$from.start();
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, start, start + 9)));
+    const { dom } = view.serializeForClipboard(view.state.selection.content());
+    view.dispatch(view.state.tr.deleteSelection().setMeta("uiEvent", "cut"));
+    moveToEnd(view, "End.");
+    type(view, " ");
+    view.pasteHTML(dom.innerHTML);
+    undoThenRedo();
+    type(view, " again");
+    // The split's Markdown pane mirrors its text here in one change, which
+    // redo puts back whole.
+    editor.setMarkdown(editor.getMarkdown().replace("only.", "only. Done."));
+    moveToEnd(view, "Note");
+    moveTo(view, view.state.selection.from - " only. Done.".length);
+    undoThenRedo();
+    type(view, "!");
+    // Save.
+    editor.reportPendingChange();
+    expect(formulas(root)).toEqual([]);
+    expect(strikes(root)).toEqual([]);
+    expect(editor.getMarkdown()).toBe(
+      "Start. Let \\$x\\$ be the input\n\n&#x20;for math.\n\nEnd. Write \\$x\\$ again\n\nNote \\~draft\\~! only. Done.\n",
+    );
   });
 
   it("keeps a closing mark waiting while the cursor is inside the text it closes", { timeout: 60_000 }, async () => {
