@@ -324,3 +324,23 @@ describe("reloading an open file", () => {
     expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
   });
 });
+
+describe("opening a file", () => {
+  it("reuses an empty untitled tab, unless a file dropped on it is on its way in", async () => {
+    for (const filesPending of [false, true]) {
+      const store = createAppStore();
+      const untitled = store.addTab(blankDoc());
+      store.setFilesPending(untitled, filesPending);
+      const files = new FileService(store, { flush: vi.fn(), showActiveDoc: vi.fn(async () => {}), reloadActiveDoc: vi.fn(async () => {}) });
+
+      const count = store.get().tabs.length;
+
+      await files.openPath(filePath);
+
+      const { tabs, doc } = store.get();
+      expect(tabs).toHaveLength(filesPending ? count + 1 : count);
+      expect(doc).toMatchObject({ filePath, markdown: onDisk.content });
+      if (filesPending) expect(tabs.find((tab) => tab.id === untitled)).toEqual({ id: untitled, doc: blankDoc(), filesPending: true });
+    }
+  });
+});

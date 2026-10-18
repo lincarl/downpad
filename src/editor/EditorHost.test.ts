@@ -1224,6 +1224,25 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
+  it("records that files are on their way into a document from its first drop until its last drop ends", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const pending = () => store.get().tabs.find((tab) => tab.id === "tab-1")?.filesPending ?? false;
+    expect(pending()).toBe(false);
+
+    const first = host.aimDrop()!;
+    const second = host.aimDrop()!;
+    // Opening a file must not put another document in this tab meanwhile.
+    expect(pending()).toBe(true);
+    host.releaseDrop(first);
+    expect(pending()).toBe(true);
+    host.releaseDrop(second);
+    expect(pending()).toBe(false);
+    await host.dispose();
+  });
+
   it("marks a background document unsaved as soon as a file dropped on it is read", async () => {
     const root = document.createElement("div");
     const store = makeStore();

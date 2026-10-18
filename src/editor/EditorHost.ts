@@ -263,6 +263,9 @@ export class EditorHost implements FindController {
     }
     const handle: FileDrop = { tabId: pane.tabId };
     this.drops.set(handle, { pane, target, onPane: under !== null, focus: document.activeElement, at: performance.now() });
+    // The tab keeps this document until the files are in, so opening a file
+    // never puts another document in it (FileService.openPath).
+    this.store.setFilesPending(pane.tabId, true);
     return handle;
   }
 
@@ -412,9 +415,10 @@ export class EditorHost implements FindController {
   /** End a drop once its files are in, or it failed. */
   releaseDrop(drop: FileDrop): void {
     const aimed = this.drops.get(drop);
-    if (!aimed) return;
     this.drops.delete(drop);
-    if (!aimed.target) return;
+    const pending = [...this.drops.keys()].some((other) => other.tabId === drop.tabId);
+    this.store.setFilesPending(drop.tabId, pending);
+    if (!aimed?.target) return;
     aimed.pane.wysiwyg?.releaseDropTarget(aimed.target);
     aimed.pane.raw?.releaseDropTarget(aimed.target);
   }

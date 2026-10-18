@@ -66,6 +66,9 @@ export interface Tab {
    *  because the parser overflows its stack. The tab then shows its Markdown
    *  alone, whatever the window's layout (`shownLayout`). */
   documentViewFailure?: DocumentViewFailure;
+  /** Whether files dropped on the document are still on their way into it
+   *  (§5.4), so the tab must keep this document until they are in. */
+  filesPending?: boolean;
 }
 
 /** Why a tab's Document view could not be built, for the notice that says so. */

@@ -1,8 +1,8 @@
 // File lifecycle: new / open / save / save-as (spec §5.1) with multi-document
 // tabs (§5.19). Reads and writes go through Electron IPC (UTF-8, no BOM,
 // EOL preserved, atomic); dialogs use Electron native dialogs. Opening reuses an
-// empty untitled tab or focuses an already-open file; otherwise a new tab is
-// added. The active tab's document is the canonical markdown string; after it
+// empty untitled tab that no dropped file is on its way into, or focuses an
+// already-open file; otherwise a new tab is added. The active tab's document is the canonical markdown string; after it
 // changes the EditorPresenter re-shows it in the editor.
 
 import { openDialog, saveDialog, ask } from "../ipc/dialogs";
@@ -105,11 +105,13 @@ export class FileService {
     this.recordOpened(path);
   }
 
-  /** True if the active tab is a pristine untitled buffer that open can reuse. */
+  /** True if the active tab is a pristine untitled buffer that open can reuse.
+   *  One that a dropped file is on its way into keeps its document, so the
+   *  file never goes into the one opened (§5.4). */
   private activeIsReusable(): boolean {
     const { tabs, activeTabId } = this.store.get();
     const active = tabs.find((t) => t.id === activeTabId);
-    return !!active && !active.doc.filePath && !active.doc.isDirty && active.doc.markdown.trim() === "";
+    return !!active && !active.filesPending && !active.doc.filePath && !active.doc.isDirty && active.doc.markdown.trim() === "";
   }
 
   /** Point the single backend watcher at the active document's file, or clear
