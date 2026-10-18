@@ -1413,6 +1413,44 @@ test("the empty line after a final list adds no blank sheet to the print", async
   await expect(page.locator(".print-page")).toHaveCount(1);
 });
 
+test("the Markdown version continues a source line taller than a page on the next pages", async () => {
+  const file = path.join(directory, "long-lines.md");
+  // The nested quotes overflow the Markdown parser's stack, so the file prints as
+  // Markdown. Both long lines wrap past a page: one breaks between characters,
+  // the other between words.
+  const quotes = ">".repeat(10_000) + " deep";
+  const paragraph = Array.from({ length: 2_000 }, (_, index) => `word${index + 1}`).join(" ");
+  const lines = ["Before", quotes, `${paragraph} END_MARKER`, "After"];
+  await writeFile(file, lines.join("\n") + "\n");
+  await launch(file);
+  await expect(page.getByRole("alert")).toBeVisible();
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  await expect(page.locator(".print-source").first()).toBeVisible();
+
+  const sheets = await page.locator(".print-page").evaluateAll((pages) =>
+    pages.map((sheet) => {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      return {
+        overflow: body.scrollHeight - body.clientHeight,
+        text: Array.from(sheet.querySelectorAll(".print-flow > *"), (block) => block.textContent).join(""),
+      };
+    }),
+  );
+  // Each line printed as one block, and the page clipped what did not fit.
+  for (const sheet of sheets) expect(sheet.overflow).toBeLessThanOrEqual(0);
+  // Every character prints once, in order.
+  expect(sheets.map((sheet) => sheet.text).join("")).toBe(lines.join(""));
+  expect(sheets.length).toBeGreaterThan(lines.length);
+
+  const pdf = path.join(directory, "long-lines.pdf");
+  await chooseSave(pdf);
+  await page.getByRole("button", { name: "Save as PDF", exact: true }).click();
+  await expect(page.locator(".print-workspace")).toBeHidden({ timeout: 30_000 });
+  // Every sheet reaches the PDF as a page of its own.
+  const pages = (await readFile(pdf)).toString("latin1").match(/\/Type\s*\/Page(?![A-Za-z])/g);
+  expect(pages).toHaveLength(sheets.length);
+});
+
 test("Print submits the document to an installed test printer", async () => {
   const printer = process.env.MD_EASY_TEST_PRINTER;
   test.skip(!printer, "Set MD_EASY_TEST_PRINTER to a disposable virtual printer for native spool verification.");
