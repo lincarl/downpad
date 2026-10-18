@@ -595,6 +595,43 @@ describe("EditorHost changes while a document pane builds", () => {
     },
   );
 
+  /** Replace the active tab's text the way a reload from disk does, then show it. */
+  function reloadFromDisk(store: Store, host: EditorHost, markdown: string): Promise<void> {
+    store.replaceActiveDoc({ ...store.get().doc, markdown, savedMarkdown: markdown, isDirty: false });
+    return host.reloadActiveDoc();
+  }
+
+  it.each([
+    ["the split", false],
+    ["a failing tab", true],
+  ])("keeps the reloaded text when typing lands in the old Markdown pane of %s while the document pane builds", async (_name, failing) => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    if (failing) fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    // The Markdown pane on screen keeps the text from before the reload until
+    // the document pane is built.
+    const typeInOldPane = fakeEditors.rawChange!;
+
+    await changeWhileBuilding(
+      () => reloadFromDisk(store, host, "text from disk"),
+      () => typeInOldPane("original markdown, typed during the reload"),
+    );
+
+    expect(store.get().doc).toMatchObject({ markdown: "text from disk", isDirty: false });
+    // One build for the reload, from the text on disk.
+    expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual(["original markdown", "text from disk"]);
+    expect(fakeEditors.rawText).toBe("text from disk");
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]);
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    // The Markdown pane built for the reload takes edits.
+    fakeEditors.rawChange!("text from disk, typed after");
+    expect(store.get().doc.markdown).toBe("text from disk, typed after");
+    await host.dispose();
+  });
+
   it("builds the document pane again with settings changed while it builds", async () => {
     const root = document.createElement("div");
     const store = makeStore();

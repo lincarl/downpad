@@ -16,7 +16,8 @@
 //
 // Cache invalidation is driven by a per-tab *revision* counter: any real change
 // to a tab's canonical string bumps its rev and stamps the authoring pane as
-// in-sync; every other pane of that tab is now stale. On reveal, a stale pane is
+// in-sync; every other pane of that tab is now stale. A stale pane's change
+// reports are dropped, since they carry older text. On reveal, a stale pane is
 // rebuilt from the canonical string (its undo resets) — so the views can never
 // diverge, yet an untouched view keeps its undo. A pane that falls behind while
 // it builds is built again before it is shown. At most `maxRetainedTabEditors`
@@ -272,8 +273,8 @@ export class EditorHost implements FindController {
    * show it. Markdown pane edits are reported as they happen.
    *
    * Edits only ever arrive through a pane's change report, which the host
-   * drops when the document pane lags the tab. Never read a pane's text here,
-   * which would skip that check and could write older text over a newer edit.
+   * drops when the pane lags the tab. Never read a pane's text here, which
+   * would skip that check and could write older text over a newer edit.
    */
   flush(): void {
     if (this.disposed || !this.activeTabId) return;
@@ -304,7 +305,9 @@ export class EditorHost implements FindController {
    * Show the active tab's document after its canonical string was replaced from
    * outside the editors (open / new / disk-reload). Forces a fresh
    * rebuild (undo resets) and invalidates the tab's panes. Image lookups are
-   * asked again, so an image that has appeared on disk since shows.
+   * asked again, so an image that has appeared on disk since shows. A Markdown
+   * pane on screen keeps the older text until it is built again, after the
+   * document pane, and typing there meanwhile is dropped (`onChange`).
    */
   async reloadActiveDoc(): Promise<void> {
     if (this.disposed || this.switching) return;
@@ -674,10 +677,13 @@ export class EditorHost implements FindController {
       if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
         return;
       }
-      // The document pane reports after typing pauses. If the Markdown pane has
-      // changed the tab since, this pane lags it, and its report would overwrite
-      // that newer edit. The pending mirror sync then brings this pane up to date.
-      if (view === "wysiwyg" && pane.syncedRev !== this.revOf(tabId)) return;
+      // A pane that lags the tab holds older text, and its report would write
+      // that text over the tab's newer text. The document pane reports after
+      // typing pauses, so it lags a newer Markdown edit until the pending mirror
+      // sync brings it up to date. The Markdown pane lags a reload from disk or
+      // a file opened into its tab. It stays on screen and editable while the
+      // new document pane builds, and is built again after it.
+      if (pane.syncedRev !== this.revOf(tabId)) return;
       if (applyEditorMarkdownForTab(this.store, tabId, m)) {
         this.bumpRev(tabId, pane);
         if (this.layout === "split" && tabId === this.activeTabId) this.scheduleSync(pane);

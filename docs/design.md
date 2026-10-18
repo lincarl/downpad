@@ -27,6 +27,8 @@ If the document view cannot be built for a tab, because Milkdown's create fails 
 
 Building the document view can take a moment, for example while local images are looked up, and the Markdown view on screen stays editable meanwhile. If the text or a document setting changes during the build, md-easy builds the view again from the current text and settings before it shows it. So the document view never shows older text, and its edits always reach the tab. If the text changes during each of five builds in a row, md-easy stops and shows the tab's Markdown view with the notice, as for a failed create.
 
+Reloading a file from disk, or opening a file in place of an empty Untitled tab, replaces the tab's text. While the document view is built for the new text, the Markdown view on screen still holds the old text, so md-easy ignores typing there until that view is built again too. That typing would otherwise write the old text back over the new.
+
 Opening a document never changes its text. The document view reports the exact source it was given until the user edits the body there, and an edit there writes the body in Milkdown's Markdown style.
 
 The document view shows the YAML frontmatter in an editable table above the editor. The table writes back only the lines it changes. Each change to the block is a step in the editor's undo history, so undo and redo move through table and body edits in one order. A split mirror sync records the block and the blank lines after it with the body, so its undo restores all three.
