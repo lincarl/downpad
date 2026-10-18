@@ -601,16 +601,16 @@ function keepsWaiting(state: EditorState, pos: number): boolean {
   return span !== null && from > span.open && to <= pos;
 }
 
-/** Whether a backtick at the start of `text`, typed right after the waiting
- *  mark at `pos`, makes Milkdown's inline code shortcut turn the text from an
- *  earlier backtick into code, along with the mark and the span it closes. The
- *  marks then stay code text, as in a file with the same text. A formula or
- *  strikethrough made first ended up in the code, where the formula's text
- *  was lost. The shortcut starts at the nearest backtick before the cursor. A
- *  formula would be one inline node, so a backtick inside it does not count,
- *  and the formula is made first. */
+/** Whether `text`, typed or composed right after the waiting mark at `pos`,
+ *  makes Milkdown's inline code shortcut turn the text from an earlier backtick
+ *  into code, along with the mark and the span it closes. The shortcut runs
+ *  when `text` ends in its only backtick. The marks then stay code text, as in
+ *  a file with the same text. A formula or strikethrough made first ended up
+ *  in the code, where the formula's text was lost. The shortcut starts at the
+ *  nearest backtick before the cursor. A formula would be one inline node, so
+ *  a backtick inside it does not count, and the formula is made first. */
 function codeTakes(state: EditorState, pos: number, text: string): boolean {
-  const span = text.startsWith("`") ? closedSpan(state, pos, text) : null;
+  const span = /^[^`]*`$/.test(text) ? closedSpan(state, pos, text) : null;
   if (!span) return false;
   const end = state.doc.textBetween(pos, pos + 1) === "$" ? span.open : pos + 1;
   return textBefore(state.doc.resolve(end)).includes("`");
@@ -768,11 +768,16 @@ function afterComposition(view: EditorView): void {
   const waiting = waitingIn(view.state);
   // A composition that put nothing after the mark, such as a cancelled one,
   // leaves it waiting, and so does one between the marks of its span, unless
-  // the editor lost focus, which ended the composition.
+  // the editor lost focus, which ended the composition. Milkdown's shortcuts
+  // run next at the cursor, and a composed backtick that makes inline code
+  // takes the mark as code text (`codeTakes`).
   if (waiting) {
     const { selection } = view.state;
     const kept = (selection.empty && selection.from === waiting.pos + 1) || keepsWaiting(view.state, waiting.pos);
-    if (!kept || !view.hasFocus()) dispatchClosing(view, decide(view.state, waiting.pos));
+    const composed = selection.empty ? view.state.doc.textBetween(waiting.pos + 1, Math.max(selection.from, waiting.pos + 1)) : "";
+    if ((!kept || !view.hasFocus()) && !codeTakes(view.state, waiting.pos, composed)) {
+      dispatchClosing(view, decide(view.state, waiting.pos));
+    }
   }
   const { from, empty } = view.state.selection;
   if (empty && closingMark(view.state, from, "") === "wait") view.dispatch(view.state.tr.setMeta(waitingKey, from - 1));

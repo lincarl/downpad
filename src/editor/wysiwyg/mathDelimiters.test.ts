@@ -867,6 +867,20 @@ describe("math and strikethrough delimiters", () => {
     ]);
   });
 
+  it("keeps a formula or struck text as code when the backtick that closes its code span is composed", { timeout: 60_000 }, async () => {
+    const { crepe, root, view } = await openCrepe();
+    // A dead key or input method commits the backtick.
+    type(view, "Use `$y$");
+    await compose(view, "`");
+    type(view, " and `~~z~~");
+    await compose(view, "`");
+    type(view, " end.");
+    expect(formulas(root)).toEqual([]);
+    expect(strikes(root)).toEqual([]);
+    expect([...root.querySelectorAll("code")].map((code) => code.textContent)).toEqual(["$y$", "~~z~~"]);
+    expect(crepe.getMarkdown()).toBe("Use `$y$` and `~~z~~` end.\n");
+  });
+
   it("keeps a mark waiting while a selection covers it, so typing replaces it", { timeout: 60_000 }, async () => {
     const { crepe, root, view } = await openCrepe("One.\n");
     moveToEnd(view, "One.");
