@@ -43,6 +43,7 @@ The interface follows the look of [Mervin PDF](https://github.com/lincarl/mervin
 - The primitives in `src/components/ui` (buttons, fields, check boxes, dialogs, menus, tooltips) carry Mervin's control styles, so surfaces compose them instead of restyling controls.
 - Chrome icons are Lucide icons drawn at a 1px line weight.
 - The document surface has its own light and dark palette, independent of the chrome theme. Find highlights use the same classes in the Document and Markdown views. The frontmatter table is outside the document editor, so its matches are CSS custom highlights with the same names and colors.
+- The find card floats over the bottom right of the editor area and grows upward when its replace row opens. Each find step scrolls the current match into view clear of the card, centring it in the part of the page above the card when it was hidden or covered.
 
 ## Application structure
 

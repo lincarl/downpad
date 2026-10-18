@@ -24,6 +24,7 @@ import {
   type FrontmatterTable,
 } from "../../document/frontmatterTable";
 import { findMatchRanges, type FindOptions } from "./findEngine";
+import { revealSpan } from "./findReveal";
 
 /** Which text of a table row a match is in. */
 export type FrontmatterPart = "key" | "value";
@@ -282,20 +283,13 @@ export function matchRange(panel: Element, match: FrontmatterMatch): Range | nul
   return null;
 }
 
-/** Scroll the cell that shows `match` to the middle of its scrolling page,
- *  unless all of it is already in view. */
-export function revealCell(panel: Element, match: FrontmatterPosition): void {
+/** Scroll `match` into view, clear of the find card, as find does a match in
+ *  the document (`revealSpan`). */
+export function revealCell(panel: Element, match: FrontmatterMatch): void {
   const cell = cellOf(panel, match);
   if (!cell) return;
-  const box = cell.getBoundingClientRect();
-  for (let el = cell.parentElement; el; el = el.parentElement) {
-    if (el.scrollHeight <= el.clientHeight || !/auto|scroll/.test(getComputedStyle(el).overflowY)) continue;
-    const view = el.getBoundingClientRect();
-    if (box.top >= view.top && box.bottom <= view.bottom) return;
-    break;
-  }
-  // jsdom has no scrollIntoView, so the call is optional.
-  cell.scrollIntoView?.({ block: "center", inline: "nearest" });
+  // While a redraw is pending the cell may not hold the match yet.
+  revealSpan(cell, (matchRange(panel, match) ?? cell).getBoundingClientRect());
 }
 
 /** Focus the cell that shows `match` and select the match, so the next
