@@ -17,7 +17,7 @@
 
 import type { MilkdownPlugin } from "@milkdown/kit/ctx";
 import { customInputRulesKey } from "@milkdown/kit/prose";
-import { closeHistory, isHistoryTransaction, redoDepth } from "@milkdown/kit/prose/history";
+import { closeHistory, isHistoryTransaction, redoDepth, undoDepth } from "@milkdown/kit/prose/history";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
 import type { Mark, Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -560,7 +560,7 @@ function nextMarks(state: EditorState, pos: number, tr: Transaction): readonly M
 
 /** The change that closes math or strikethrough with the waiting `$` or `~` at
  *  `pos` where `next` lets it, or null. It sets the marks for the text typed
- *  next (`nextMarks`). */
+ *  next (`nextMarks`), and stops the mark waiting. */
 function closing(state: EditorState, pos: number, next: string): Transaction | null {
   const span = closedSpan(state, pos, next);
   if (!span) return null;
@@ -577,7 +577,7 @@ function closing(state: EditorState, pos: number, next: string): Transaction | n
     tr = state.tr.delete(end - size, end).delete(open, open + size).addMark(open, end - 2 * size, strikethrough.create());
   }
   const marks = nextMarks(state, pos, tr);
-  return marks ? tr.setStoredMarks(marks) : tr;
+  return (marks ? tr.setStoredMarks(marks) : tr).setMeta(waitingKey, null);
 }
 
 /** Dispatch `tr`, which may close a waiting mark, and set the marks it sets
@@ -658,6 +658,9 @@ interface KeptMark {
 interface Guard {
   /** The waiting mark, or null. */
   waiting: Waiting | null;
+  /** One entry for each step that undo can take back, the next one last: the
+   *  mark that waited before the step, or null. */
+  done: readonly (KeptMark | null)[];
   /** One entry for each step that redo can put back, the next one last: the
    *  mark that waited when undo took the step back, or null. */
   undone: readonly (KeptMark | null)[];
@@ -710,7 +713,7 @@ function isEdit(tr: Transaction): boolean {
   return !root || !isHistoryTransaction(root);
 }
 
-/** The waiting mark after `tr`, which is no redo. */
+/** The waiting mark after `tr`, which is no undo or redo. */
 function follow(tr: Transaction, waiting: Waiting | null, before: EditorState, after: EditorState): Waiting | null {
   const set: number | null | undefined = tr.getMeta(waitingKey);
   if (set !== undefined) return set === null ? null : { pos: set, decide: false };
@@ -783,10 +786,12 @@ function afterComposition(view: EditorView): void {
  *  leaving it, or another edit such as a paste. A cursor moved between the
  *  marks, as by a click or Left, keeps it waiting until the cursor leaves the
  *  span, so the text there can still be edited. Changes nobody typed, such as
- *  a heading's new id, leave it waiting. A mark that waited when undo took a
- *  step back waits again once redo puts the step back, while a pasted, moved
- *  or mirrored one that redo puts back stays text. A `$` or `~` in a code
- *  block or inline code, or one that ends up there, is code text. Crepe's and
+ *  a heading's new id, leave it waiting. Undo and redo put back whether a mark
+ *  waited. Undoing a paste or Tab that decided a mark makes it wait again, as
+ *  it did before, a pasted, moved or mirrored mark that redo puts back stays
+ *  text, and undoing a formula or strikethrough that Save or leaving the
+ *  editor made after a pause keeps the text. A `$` or `~` in a code block or
+ *  inline code, or one that ends up there, is code text. Crepe's and
  *  Milkdown's typing shortcuts decided at once, and Milkdown's could strike
  *  from a different `~` than GFM. */
 export const closingDelimiterGuard = $prose(() => {
@@ -795,23 +800,34 @@ export const closingDelimiterGuard = $prose(() => {
   return new Plugin<Guard>({
     key: waitingKey,
     state: {
-      init: () => ({ waiting: null, undone: [] }),
-      /** Follow the waiting mark through changes, note when one means it must
-       *  be decided, and keep the mark that waits when undo takes a step back,
-       *  so that redo makes it wait again. The undo history must come first
-       *  in the editor's plugins, so `after` holds its new depth. */
+      init: () => ({ waiting: null, done: [], undone: [] }),
+      /** Follow the waiting mark through changes, and note when one means it
+       *  must be decided. Keep the mark that waits when a step starts, and
+       *  when undo takes a step back, so that undo and redo make it wait
+       *  again. A step that starts by deciding the mark, such as Save after a
+       *  pause, keeps none, so undoing it leaves the mark as text. The undo
+       *  history must come first in the editor's plugins, so `after` holds
+       *  its new depth. */
       apply(tr, guard, before, after): Guard {
-        let { waiting, undone } = guard;
-        // A redo puts back one step. An undo adds one, or drops the oldest
-        // past the history's depth.
-        if (isHistoryTransaction(tr) && redoDepth(after) === redoDepth(before) - 1) {
-          waiting = restore(after, undone.at(-1));
-          undone = undone.slice(0, -1);
+        let { waiting, done, undone } = guard;
+        const kept = keep(before, waiting);
+        if (isHistoryTransaction(tr)) {
+          // A redo puts back one step. An undo adds one, or drops the oldest
+          // past the history's depth.
+          if (redoDepth(after) === redoDepth(before) - 1) {
+            waiting = restore(after, undone.at(-1));
+            undone = undone.slice(0, -1);
+            done = [...done, kept];
+          } else {
+            waiting = restore(after, done.at(-1));
+            done = done.slice(0, -1);
+            undone = [...undone, kept];
+          }
         } else {
-          if (isHistoryTransaction(tr)) undone = [...undone, keep(before, waiting)];
           waiting = follow(tr, waiting, before, after);
+          if (undoDepth(after) !== undoDepth(before)) done = [...done, tr.getMeta(waitingKey) === null ? null : kept];
         }
-        return { waiting, undone: align(undone, redoDepth(after)) };
+        return { waiting, done: align(done, undoDepth(after)), undone: align(undone, redoDepth(after)) };
       },
     },
     props: {

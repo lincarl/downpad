@@ -677,6 +677,42 @@ describe("math and strikethrough delimiters", () => {
     }
   });
 
+  it("makes a closing mark wait again when the paste or Tab that decided it is undone", { timeout: 60_000 }, async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { editor, root } = await open("Start.\n\n- one\n- two\n");
+      const view = viewOf(editor);
+      // A pause makes the next change start a new undo step.
+      const pause = () => vi.setSystemTime(Date.now() + 700);
+      moveToEnd(view, "Start.");
+      type(view, " Let $x$");
+      pause();
+      view.pasteHTML("<span>be given</span>");
+      expect(formulas(root)).toEqual(["x"]);
+      // Undo takes back the paste and the formula it made. The mark waits
+      // again, as before the paste, so the file holds the formula.
+      undo(view.state, view.dispatch);
+      expect(formulas(root)).toEqual([]);
+      expect(editor.getMarkdown()).toMatch(/^Start\. Let \$x\$\n/);
+      type(view, " here");
+      moveToEnd(view, "two");
+      type(view, " ~old~");
+      pause();
+      press(view, "Tab");
+      expect(strikes(root)).toEqual(["old"]);
+      undo(view.state, view.dispatch);
+      expect(strikes(root)).toEqual([]);
+      type(view, " new");
+      // Save.
+      editor.reportPendingChange();
+      expect(formulas(root)).toEqual(["x"]);
+      expect(strikes(root)).toEqual(["old"]);
+      expect(editor.getMarkdown()).toMatch(/^Start\. Let \$x\$ here\n\n[*-] one\n[*-] two ~~old~~ new\n$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets a typed closing mark that redo puts back wait again, but not one that undo puts back", { timeout: 60_000 }, async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
