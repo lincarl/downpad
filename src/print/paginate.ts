@@ -12,7 +12,8 @@
 // wraps past a page) are split one level down first, so the packer always has
 // pieces it can place. Text splits between the lines it wraps onto, never inside
 // a line, and a quote or a list item between the blocks it holds, each split the
-// same way.
+// same way. What cannot be split, such as an image taller than a page, is shrunk
+// to fit the page rather than cut off at its edge.
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -30,7 +31,7 @@ export const SOURCE_LINE_CLASS = "print-src-line";
  */
 export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Element[][] {
   splitOversized(flow, contentHeightPx);
-  return packByHeight(Array.from(flow.children), contentHeightPx);
+  return packByHeight(Array.from(flow.children) as HTMLElement[], contentHeightPx);
 }
 
 /**
@@ -43,11 +44,12 @@ export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Elem
  * element taller than the limit gets a group to itself rather than an empty page
  * before it.
  */
-export function packByHeight(items: Element[], maxHeightPx: number): Element[][] {
-  const boxes = items.map((item) => {
-    const el = item as HTMLElement;
-    return { top: el.offsetTop, height: el.offsetHeight, marginTop: marginTopOf(el) };
-  });
+export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: number): T[][] {
+  const boxes = items.map((el) => ({
+    top: el.offsetTop,
+    height: el.offsetHeight,
+    marginTop: marginTopOf(el),
+  }));
   return packBoxes(boxes, maxHeightPx).map((group) => group.map((i) => items[i]));
 }
 
@@ -94,10 +96,71 @@ function splitOversized(flow: HTMLElement, contentHeightPx: number): void {
   for (const child of Array.from(flow.children)) {
     const el = child as HTMLElement;
     if (el.offsetHeight <= contentHeightPx) continue;
-    const pieces = splitBlock(el, contentHeightPx);
-    if (!pieces.length) continue;
-    el.replaceWith(...pieces);
+    fitBlock(el, contentHeightPx);
   }
+}
+
+/**
+ * Make a laid-out block taller than `maxHeightPx` fit: split it into pieces in
+ * its place, then shrink whatever cannot be split (scaleToFit), the whole block
+ * or a piece holding one line taller than a page, rather than let the page cut it.
+ */
+function fitBlock(el: HTMLElement, maxHeightPx: number): void {
+  const pieces = splitBlock(el, maxHeightPx);
+  if (!pieces.length) {
+    scaleToFit(el, maxHeightPx);
+    return;
+  }
+  el.replaceWith(...pieces);
+  for (const piece of pieces) {
+    if (oversized.has(piece)) scaleToFit(piece, maxHeightPx);
+  }
+}
+
+/**
+ * Pieces that hold one unit taller than a page, so no split can make them fit:
+ * a line of text, a table row, a wrapped line of code.
+ */
+const oversized = new WeakSet<Element>();
+
+/** Marks a block shrunk to fit a page (scaleToFit). */
+const FIT_CLASS = "print-fit";
+
+/**
+ * Shrink a block that cannot be split until it fits `maxHeightPx`, such as an
+ * image taller than a page, a table with one row taller than a page, or a line
+ * of text holding such an image. The page body cut off everything below its
+ * edge, so the rest of the block was missing from the print.
+ *
+ * The block is scaled with a transform, centred, inside a frame as tall as the
+ * scaled block. A transform leaves the block's own layout alone, so its text
+ * wraps as before, and the frame makes the page leave room for exactly what
+ * shows. The frame takes over the block's margins, and it contains the margins
+ * of the block's first and last children, which would otherwise collapse past
+ * it unscaled: a Mermaid diagram's panel has one, and it pushed the diagram 6px
+ * past the page. A block that already fits, for instance once a child of it was
+ * shrunk, is left alone.
+ */
+function scaleToFit(el: HTMLElement, maxHeightPx: number): void {
+  const style = getComputedStyle(el);
+  const room = Math.max(1, maxHeightPx - marginTopOf(el));
+  const height = Math.max(el.offsetHeight, el.getBoundingClientRect().height);
+  if (height <= room) return;
+  const frame = document.createElement("div");
+  frame.className = FIT_CLASS;
+  frame.style.display = "flow-root";
+  frame.style.marginTop = style.marginTop;
+  frame.style.marginBottom = style.marginBottom;
+  el.style.marginTop = "0px";
+  el.style.marginBottom = "0px";
+  el.replaceWith(frame);
+  frame.appendChild(el);
+  // The children's margins now sit inside the frame, around the block, and
+  // keep their size; only the block itself shrinks.
+  const margins = Math.max(0, frame.getBoundingClientRect().height - height);
+  el.style.transform = `scale(${Math.max(0.01, (room - margins) / height)})`;
+  el.style.transformOrigin = "top center";
+  frame.style.height = `${room}px`;
 }
 
 /**
@@ -118,7 +181,11 @@ function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   const overhead = Math.max(0, el.offsetHeight - inner.offsetHeight);
   const pieces = splitElement(inner, Math.max(1, maxHeightPx - overhead));
   if (inner === el) return pieces;
-  return pieces.map((piece) => rewrap(el, inner, piece));
+  return pieces.map((piece) => {
+    const wrapped = rewrap(el, inner, piece);
+    if (oversized.has(piece)) oversized.add(wrapped);
+    return wrapped;
+  });
 }
 
 /** Dispatch to the splitter for one element's own kind. */
@@ -219,7 +286,8 @@ function splitTable(table: HTMLTableElement, maxHeightPx: number): HTMLTableElem
     table.querySelectorAll<HTMLTableRowElement>("tbody > tr, :scope > tr"),
   ).filter((row) => row !== head.row);
   if (bodyRows.length < 2) return [];
-  const groups = packByHeight(bodyRows, Math.max(1, maxHeightPx - head.heightPx));
+  const rowRoom = Math.max(1, maxHeightPx - head.heightPx);
+  const groups = packByHeight(bodyRows, rowRoom);
   if (groups.length < 2) return [];
 
   // Rows keep the container they came from: Crepe's `<tbody>` carries attributes
@@ -229,6 +297,8 @@ function splitTable(table: HTMLTableElement, maxHeightPx: number): HTMLTableElem
   const container = parent && parent !== table ? parent : null;
 
   return groups.map((rows) => {
+    // Measured before the rows move into a piece that is not laid out.
+    const tooTall = rows.length === 1 && rows[0].offsetHeight > rowRoom;
     const piece = table.cloneNode(false) as HTMLTableElement;
     applyFrozenColumns(piece, frozen);
     if (head.section) piece.appendChild(head.section.cloneNode(true));
@@ -236,6 +306,7 @@ function splitTable(table: HTMLTableElement, maxHeightPx: number): HTMLTableElem
     if (head.row && !head.section) body.appendChild(head.row.cloneNode(true));
     for (const row of rows) body.appendChild(row);
     if (body !== piece) piece.appendChild(body);
+    if (tooTall) oversized.add(piece);
     return piece;
   });
 }
@@ -314,7 +385,8 @@ function applyFrozenColumns(table: HTMLTableElement, frozen: FrozenColumns | nul
  * page: a quote of 120 paragraphs stopped at paragraph 29. Each piece is a copy
  * of the container holding a run of its children. A child that does not fit a
  * page by itself is split first by the same rules, so a long paragraph or a
- * nested quote inside the quote continues on the next page too.
+ * nested quote inside the quote continues on the next page too, and a child that
+ * cannot be split, such as a tall image, is shrunk to fit.
  */
 function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (!holdsBlocks(container)) return [];
@@ -328,11 +400,9 @@ function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElemen
     (Number.parseFloat(style.borderBottomWidth) || 0);
   const room = Math.max(1, maxHeightPx - chrome);
   for (const child of Array.from(container.children) as HTMLElement[]) {
-    if (child.offsetHeight + marginTopOf(child) <= room) continue;
-    const pieces = splitBlock(child, room);
-    if (pieces.length) child.replaceWith(...pieces);
+    if (child.offsetHeight + marginTopOf(child) > room) fitBlock(child, room);
   }
-  const children = Array.from(container.children);
+  const children = Array.from(container.children) as HTMLElement[];
   if (children.length < 2) return [];
   const groups = packByHeight(children, room);
   if (groups.length < 2) return [];
@@ -370,6 +440,7 @@ function splitList(list: HTMLElement, maxHeightPx: number): HTMLElement[] {
     if (item.offsetHeight <= maxHeightPx) continue;
     const pieces = splitListItem(item, maxHeightPx);
     if (pieces.length) item.replaceWith(...pieces);
+    else scaleToFit(item, maxHeightPx);
   }
   const items = listItems(list);
   if (items.length < 2) return [];
@@ -579,10 +650,14 @@ function splitPre(pre: HTMLElement, maxHeightPx: number): HTMLElement[] {
   const groups = packByHeight(holders, maxHeightPx);
   if (groups.length < 2) return [];
   return groups.map((group) => {
+    // A line that wraps past a page, which the unrendered code block can show.
+    // Measured before the line moves into a piece that is not laid out.
+    const tooTall = group.length === 1 && group[0].offsetHeight > maxHeightPx;
     const piece = pre.cloneNode(false) as HTMLElement;
     const codePiece = code.cloneNode(false) as HTMLElement;
     for (const line of group) codePiece.appendChild(line);
     piece.appendChild(codePiece);
+    if (tooTall) oversized.add(piece);
     return piece;
   });
 }
@@ -657,7 +732,9 @@ function splitSourceLine(line: HTMLElement, maxHeightPx: number): HTMLElement[] 
  * splits an element that spans a break, such as bold text or a link, into two
  * copies with the same attributes, so the formatting carries over to the next
  * page. An element laid out as one box (inline code, math, an image) is never
- * cut, and every character lands in exactly one piece.
+ * cut, and every character lands in exactly one piece. A line taller than a
+ * page, which an image in it can make, gets a piece of its own that is marked
+ * `oversized` for the caller to shrink.
  */
 function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
   const run = inlineRun(block);
@@ -767,6 +844,8 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
   const below = outer.bottom - box(last).bottom;
 
   const starts = [0];
+  /** Pieces that hold one line taller than the page, by their first unit. */
+  const tooTall = new Set<number>();
   for (let start = 0; ; ) {
     const top = start === 0 ? outer.top : box(start).top - above;
     const limit = top + budget;
@@ -791,8 +870,11 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
     let fitted = fits(start, cut);
     while (!fitted) {
       const previous = lineStart(cut - 1);
-      // A single line taller than the page still gets a piece of its own.
-      if (previous <= start) break;
+      // A line taller than the page gets a piece of its own, shrunk to fit later.
+      if (previous <= start) {
+        tooTall.add(start);
+        break;
+      }
       tooFar = cut;
       cut = previous;
       fitted = fits(start, cut);
@@ -816,6 +898,7 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
     range.setEnd(block, block.childNodes.length);
     const piece = block.cloneNode(false) as HTMLElement;
     piece.appendChild(range.extractContents());
+    if (tooTall.has(starts[i])) oversized.add(piece);
     pieces.unshift(piece);
   }
   return pieces;

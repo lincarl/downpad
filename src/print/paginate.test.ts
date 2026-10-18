@@ -74,6 +74,8 @@ interface TableOptions {
   shape?: HeaderShape;
   /** colSpan on the first header cell, to exercise the merged-cell guard. */
   headColSpan?: number;
+  /** A body row that is 900px tall rather than 100px. */
+  tallRow?: number;
 }
 
 /**
@@ -83,9 +85,11 @@ interface TableOptions {
  * duplicated rows.
  */
 function measuredTable(count: number, options: TableOptions = {}): HTMLTableElement {
-  const { shape = "crepe", headColSpan = 1 } = options;
+  const { shape = "crepe", headColSpan = 1, tallRow } = options;
+  const rowHeight = (i: number): number => (i === tallRow ? 900 : 100);
+  const rowTop = (i: number): number => Array.from({ length: i }, (_, j) => rowHeight(j)).reduce((a, b) => a + b, 0);
   const table = document.createElement("table");
-  Object.defineProperty(table, "offsetHeight", { value: 40 + 100 * count });
+  Object.defineProperty(table, "offsetHeight", { value: 40 + rowTop(count) });
   Object.defineProperty(table, "offsetWidth", { value: 420 });
 
   const headerRow = document.createElement("tr");
@@ -115,8 +119,12 @@ function measuredTable(count: number, options: TableOptions = {}): HTMLTableElem
 
   for (let i = 0; i < count; i++) {
     const tr = document.createElement("tr");
-    Object.defineProperty(tr, "offsetTop", { value: i * 100 });
-    Object.defineProperty(tr, "offsetHeight", { value: 100 });
+    Object.defineProperty(tr, "offsetTop", { value: rowTop(i) });
+    // A row moved into a piece that is not placed yet measures nothing, as in a
+    // browser, where only what is in the document is laid out.
+    Object.defineProperty(tr, "offsetHeight", {
+      get: () => (tr.closest("table")?.parentElement ? rowHeight(i) : 0),
+    });
     for (const text of [`r${i}`, "M1"]) {
       const td = document.createElement("td");
       td.textContent = text;
@@ -296,18 +304,6 @@ describe("splitIntoPages, splitting an over-tall table", () => {
     const blocks = Array.from(flow.children) as HTMLElement[];
     expect(blocks.length).toBeGreaterThan(1);
     expect(blocks.flatMap(bodyLabels)).toEqual(["r0", "r1", "r2", "r3", "r4", "r5"]);
-  });
-
-  it("leaves a block with nothing splittable in it alone", () => {
-    const block = document.createElement("div");
-    block.className = "milkdown-code-block";
-    Object.defineProperty(block, "offsetHeight", { value: 900 });
-    block.textContent = "a code block the paginator cannot break";
-
-    const flow = flowWith(block);
-    splitIntoPages(flow, 250);
-    // Untouched rather than mangled: one child, still the original element.
-    expect(Array.from(flow.children)).toEqual([block]);
   });
 
   it("leaves a table that fits on one page alone", () => {
@@ -664,10 +660,23 @@ const fakeLayout = (() => {
     return offset;
   }
 
-  const textHeight = (block: HTMLElement): number => {
+  /**
+   * The lines of a text block: each LINE px tall, or as tall as an inline box
+   * with `data-height` on it, which sits on the line with the text on its bottom.
+   */
+  function linesOf(block: HTMLElement): { places: { line: number; column: number }[]; tops: number[]; heights: number[] } {
     const places = wrap(block.textContent ?? "");
-    return PAD * 2 + LINE * (places.length ? places[places.length - 1].line + 1 : 1);
-  };
+    const heights = Array.from({ length: places.length ? places[places.length - 1].line + 1 : 1 }, () => LINE);
+    for (const box of Array.from(block.querySelectorAll<HTMLElement>("[data-height]"))) {
+      const line = places[offsetIn(block, box)].line;
+      heights[line] = Math.max(heights[line], Number(box.dataset.height));
+    }
+    const tops = heights.map((_, i) => heights.slice(0, i).reduce((a, b) => a + b, 0));
+    return { places, tops, heights };
+  }
+
+  const textHeight = (block: HTMLElement): number =>
+    PAD * 2 + linesOf(block).heights.reduce((a, b) => a + b, 0);
 
   /** The fake height of `el`, or null when it carries no mark. */
   function heightOf(el: HTMLElement): number | null {
@@ -679,11 +688,12 @@ const fakeLayout = (() => {
     return null;
   }
 
-  /** The box of `length` characters from `offset` in `block`. */
-  function charBox(block: HTMLElement, offset: number, length: number): DOMRect {
-    const place = wrap(block.textContent ?? "")[offset];
-    const top = PAD + place.line * LINE + (LINE - TEXT) / 2;
-    return DOMRect.fromRect({ x: place.column * CHAR, y: top, width: CHAR * length, height: TEXT });
+  /** The box of `length` characters from `offset` in `block`, or of an inline box `height` px tall there. */
+  function charBox(block: HTMLElement, offset: number, length: number, height?: number): DOMRect {
+    const { places, tops, heights } = linesOf(block);
+    const { line, column } = places[offset];
+    const top = height ? PAD + tops[line] : PAD + tops[line] + heights[line] - LINE + (LINE - TEXT) / 2;
+    return DOMRect.fromRect({ x: column * CHAR, y: top, width: CHAR * length, height: height ?? TEXT });
   }
 
   function override(target: object, name: string, descriptor: PropertyDescriptor): void {
@@ -720,7 +730,8 @@ const fakeLayout = (() => {
           const block = blockOf(this);
           if (!block) return elementBox.call(this);
           if (block === this) return DOMRect.fromRect({ width: COLUMNS * CHAR, height: textHeight(block) });
-          return charBox(block, offsetIn(block, this), (this.textContent ?? "").length);
+          const height = this instanceof HTMLElement && this.dataset.height ? Number(this.dataset.height) : undefined;
+          return charBox(block, offsetIn(block, this), (this.textContent ?? "").length, height);
         },
       });
       override(Range.prototype, "getBoundingClientRect", {
@@ -983,5 +994,89 @@ describe("splitIntoPages, splitting a list item", () => {
     for (const piece of pieces) {
       expect(piece.start).toBe(Number.parseInt(piece.querySelector(".label-wrapper")!.textContent!));
     }
+  });
+});
+
+describe("splitIntoPages, shrinking what cannot be split", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  it("shrinks a block with nothing splittable in it to fit rather than letting the page cut it", () => {
+    // Such a block was left as it was, and the page body cut off all of it below
+    // the first page.
+    const block = document.createElement("div");
+    block.className = "milkdown-image-block";
+    block.style.marginTop = "10px";
+    Object.defineProperty(block, "offsetHeight", { value: 960 });
+    block.innerHTML = '<div class="image-wrapper"><img alt="a tall image"></div>';
+
+    const flow = flowWith(block);
+    splitIntoPages(flow, 250);
+    // The block itself, whole, scaled into a frame as tall as the page has room for.
+    const frame = flow.firstElementChild as HTMLElement;
+    expect(Array.from(flow.children)).toEqual([frame]);
+    expect(frame.className).toBe("print-fit");
+    expect(Array.from(frame.children)).toEqual([block]);
+    expect(frame.style.height).toBe("240px");
+    expect(frame.style.marginTop).toBe("10px");
+    expect(block.style.marginTop).toBe("0px");
+    expect(block.style.transform).toBe("scale(0.25)");
+    expect(block.querySelector("img")).not.toBeNull();
+  });
+
+  it("shrinks a piece holding one row taller than a page, and only that piece", () => {
+    const table = measuredTable(6, { tallRow: 2 });
+    // Measure the pieces: each sums the rows it holds.
+    table.dataset.stack = "";
+    table.querySelector("tbody")!.dataset.stack = "";
+    const flow = flowWith(table);
+    splitIntoPages(flow, 250);
+
+    const frames = Array.from(flow.querySelectorAll<HTMLElement>(".print-fit"));
+    expect(frames).toHaveLength(1);
+    expect(bodyLabels(frames[0])).toEqual(["r2"]);
+    expect(pieces(flow).flatMap(bodyLabels)).toEqual(["r0", "r1", "r2", "r3", "r4", "r5"]);
+  });
+
+  it("gives a line taller than a page a piece of its own and shrinks it", () => {
+    // An image inside a paragraph can make one line taller than a page; no break
+    // between lines can make that line fit.
+    const block = longParagraph(300, "w");
+    const image = document.createElement("span");
+    image.style.display = "inline-block";
+    image.dataset.height = "900";
+    image.textContent = "IMAGE";
+    const words = block.firstChild as Text;
+    block.insertBefore(image, words.splitText(words.data.indexOf("w150")));
+    const text = block.textContent;
+    const flow = flowWith(block);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+    const frames = pieces.filter((piece) => piece.className === "print-fit");
+    expect(frames).toHaveLength(1);
+    expect(frames[0].textContent).toContain("IMAGE");
+    expect(frames[0].style.height).toBe("500px");
+    for (const piece of pieces) expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+  });
+
+  it("shrinks a block inside a quote that cannot be split, and splits the quote around it", () => {
+    const image = sized("div", 900, "IMAGE");
+    image.className = "milkdown-image-block";
+    const quote = stack("blockquote", ...paragraphs(10, "a"), image, ...paragraphs(10, "b"));
+    const text = quote.textContent;
+    const flow = flowWith(quote);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+    const frame = flow.querySelector<HTMLElement>(".print-fit")!;
+    expect(frame.parentElement!.tagName).toBe("BLOCKQUOTE");
+    expect(frame.firstElementChild).toBe(image);
+    expect(frame.style.height).toBe("500px");
   });
 });
