@@ -410,8 +410,11 @@ test("the block handle of a line with a wide missing image chip stays beside the
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("chip-handle.md — md-easy");
   const saved = await readFile(file, "utf8");
-  expect(saved.replace("X", "")).toBe(markdown);
-  expect(saved.indexOf("X")).toBeLessThan(saved.indexOf("![Q3]"));
+  // X went into "the", the word before the chip, and nothing else changed.
+  const typed = saved.indexOf("X");
+  expect(typed).toBeGreaterThanOrEqual(markdown.indexOf("the ![Q3]"));
+  expect(typed).toBeLessThanOrEqual(markdown.indexOf(" ![Q3]"));
+  expect(saved.slice(0, typed) + saved.slice(typed + 1)).toBe(markdown);
 });
 
 test("a missing image chip inside a text selection shows as selected", async () => {
