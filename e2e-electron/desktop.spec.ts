@@ -787,6 +787,44 @@ test("a typed closing mark is decided in a heading, by Tab in a list and by a pa
     .toBe("# Head $x$ and ~~old~~ end\n\n- item\n  - next $y$ more\n\nOne. Let $z$, small\n");
 });
 
+test("undo and redo keep pasted dollars as text and let a mark that a paste or Tab decided wait again", async () => {
+  const file = path.join(directory, "undo-decided.md");
+  await writeFile(file, "Start.\n\nOne.\n\n- one\n- two\n");
+  await launch(file);
+  const paragraphs = page.locator(".milkdown .ProseMirror > p");
+  // Redo puts back pasted text, which keeps its dollars as text.
+  await app!.evaluate(({ clipboard, ClipboardItem }) =>
+    clipboard.write([new ClipboardItem({ "text/html": "<span>Let $x$</span>", "text/plain": "Let $x$" })]),
+  );
+  await typeAtEnd(paragraphs.first(), " ");
+  await page.keyboard.press("ControlOrMeta+v");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.press("ControlOrMeta+y");
+  await page.keyboard.type(" be the input");
+  // A pause makes the paste and Tab their own undo steps. Undoing one takes
+  // back the formula or strikethrough it made, and the mark waits again.
+  await app!.evaluate(({ clipboard }) => clipboard.writeText(", small"));
+  await typeAtEnd(paragraphs.nth(1), " Let $y$");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(0);
+  await page.keyboard.type(" here");
+  await typeAtEnd(page.locator(".milkdown .ProseMirror li p").nth(1), " ~old~");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.type(" new");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("Start. Let \\$x\\$ be the input\n\nOne. Let $y$ here\n\n- one\n- two ~~old~~ new\n");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+});
+
 test("autosave in a pause writes a typed closing mark as Save would and leaves it waiting", async () => {
   const file = path.join(directory, "autosaved.md");
   await writeFile(file, "Start.\n\nNext.\n");
