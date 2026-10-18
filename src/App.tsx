@@ -896,7 +896,8 @@ function documentViewNotice(filePath: string | null, error: string): BannerState
   // two lines in a window about 800 px wide or wider.
   const name = fileLabel(filePath);
   const line = error.split("\n", 1)[0].trim();
-  const detail = line.length > 60 ? `${line.slice(0, 59).trimEnd()}…` : line;
+  const chars = Array.from(line);
+  const detail = chars.length > 60 ? `${chars.slice(0, 59).join("").trimEnd()}…` : line;
   return {
     kind: "error",
     message: text(middleTruncate(name, 40), detail),

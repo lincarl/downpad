@@ -19,6 +19,13 @@ describe("middleTruncate", () => {
     expect(out.endsWith("frag")).toBe(true);
   });
 
+  it("never splits an emoji at the cut", () => {
+    const name = `${"a".repeat(19)}😀${"b".repeat(30)}`;
+    expect(middleTruncate(name, 40)).toBe(`${"a".repeat(19)}😀…${"b".repeat(19)}`);
+    // Two code units, one character: a name of 40 characters is not cut.
+    expect(middleTruncate(`😀${"c".repeat(39)}`, 40)).toBe(`😀${"c".repeat(39)}`);
+  });
+
   it("respects an exact-length boundary", () => {
     const url = "x".repeat(42);
     expect(middleTruncate(url, 42)).toBe(url);
