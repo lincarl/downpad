@@ -34,6 +34,7 @@ import { applySpellcheck } from "./wysiwyg/spellcheck";
 import type { WysiwygContext } from "./wysiwyg/context";
 import type { FindController } from "./wysiwyg/findBar";
 import type { FindCounts, FindOptions } from "./wysiwyg/findEngine";
+import { releaseFindRoom } from "./wysiwyg/findReveal";
 
 type View = "wysiwyg" | "raw";
 
@@ -225,6 +226,8 @@ export class EditorHost implements FindController {
     if (this.layout === "split") this.scrollSync.suppressNext();
   }
   clear(): void {
+    // The search is over, so the room find made below the last line goes too.
+    releaseFindRoom();
     if (this.disposed) return;
     if (this.layout === "markdown") this.activeRaw()?.clearSearch();
     else this.activeWysiwyg()?.clearSearch();

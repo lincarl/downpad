@@ -5,7 +5,9 @@
 //     block's editor only when the block nears the screen, which can be after
 //     the search ran, so a new editor asks for its marks.
 //   - ProseMirror's scrollIntoView does nothing while focus is in the find card,
-//     so the current match is scrolled to directly.
+//     so the current match is scrolled to directly. The card floats over the
+//     bottom right of the page, and the match is scrolled clear of it
+//     (`revealSpan`), also in the Markdown view and the frontmatter table.
 
 import { EditorSelection, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, EditorView as CodeMirror, ViewPlugin, type DecorationSet } from "@codemirror/view";
@@ -116,8 +118,8 @@ function showCodeBlockMatches(view: EditorView, matches: Matches | undefined): v
 }
 
 /**
- * Scroll the find card's current match into view. A match that is already
- * visible stays put.
+ * Scroll the find card's current match into view, clear of the card. A match
+ * that is already visible and clear of the card stays put.
  */
 export function revealMatch(view: EditorView, range: MatchRange): void {
   awaitingEditor.delete(view);
@@ -125,32 +127,144 @@ export function revealMatch(view: EditorView, range: MatchRange): void {
   if (revealCodeBlockMatch(view, range)) return;
   const start = view.coordsAtPos(range.from, 1);
   const end = view.coordsAtPos(range.to, -1);
-  centerIfHidden(view.dom, "y", start.top, end.bottom);
-  // A table wider than the page scrolls the page sideways.
-  centerIfHidden(view.dom, "x", Math.min(start.left, end.left), Math.max(start.right, end.right));
+  revealSpan(view.dom, spanBetween(start, end, () => textBox(view.domAtPos(range.from), view.domAtPos(range.to))));
+}
+
+/** A box in viewport pixels, such as a match's. */
+export interface Span {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 }
 
 /**
- * Scroll the nearest ancestor of `inside` that scrolls along `axis` so the span
- * from `start` to `end` (viewport pixels) is visible. A hidden span is centred,
- * which also keeps it clear of the find card at the top.
+ * The box of a match from caret `start` to caret `end`. A match that wraps
+ * onto later lines runs from `start` to the end of its first line and from the
+ * start of its last line to `end`, so the carets understate how wide it is.
+ * Its width then comes from `text`, the box of its rendered text.
  */
-function centerIfHidden(inside: Element, axis: "x" | "y", start: number, end: number): void {
-  const y = axis === "y";
-  for (let el = inside.parentElement; el; el = el.parentElement) {
-    const overflow = getComputedStyle(el)[y ? "overflowY" : "overflowX"];
-    const overflows = y ? el.scrollHeight > el.clientHeight : el.scrollWidth > el.clientWidth;
-    if (!overflows || !/auto|scroll/.test(overflow)) continue;
-    // The part of the element that shows its content, without borders or scroll bars.
-    const box = el.getBoundingClientRect();
-    const low = y ? box.top + el.clientTop : box.left + el.clientLeft;
-    const high = low + (y ? el.clientHeight : el.clientWidth);
-    if (start >= low && end <= high) return;
-    const by = (start + end) / 2 - (low + high) / 2;
-    if (y) el.scrollTop += by;
-    else el.scrollLeft += by;
-    return;
+function spanBetween(start: Span, end: Span, text: () => DOMRect): Span {
+  const span = {
+    left: Math.min(start.left, end.left),
+    right: Math.max(start.right, end.right),
+    top: start.top,
+    bottom: end.bottom,
+  };
+  // The end caret is on a later line when its middle is below the start caret.
+  if ((end.top + end.bottom) / 2 <= start.bottom) return span;
+  const box = text();
+  return { ...span, left: Math.min(span.left, box.left), right: Math.max(span.right, box.right) };
+}
+
+/** The box of the rendered text between two DOM positions, such as the
+ *  editors' `domAtPos` give. */
+function textBox(from: { node: Node; offset: number }, to: { node: Node; offset: number }): DOMRect {
+  const range = document.createRange();
+  range.setStart(from.node, from.offset);
+  range.setEnd(to.node, to.offset);
+  return range.getBoundingClientRect();
+}
+
+/** The box of the text from `from` to `to` in a CodeMirror editor, or null
+ *  while CodeMirror has not drawn it. */
+export function codeMirrorSpan(cm: CodeMirror, from: number, to: number): Span | null {
+  const start = cm.coordsAtPos(from, 1);
+  const end = cm.coordsAtPos(to, -1);
+  return start && end ? spanBetween(start, end, () => textBox(cm.domAtPos(from), cm.domAtPos(to))) : null;
+}
+
+/** How far above the find card the room below a page's last line lets that line rise. */
+const CARD_GAP = 12;
+
+/** Pages that `revealSpan` gave room below their last line. */
+const pagesWithRoom = new Set<HTMLElement>();
+
+/**
+ * Scroll the page around `inside` so `span` is visible and clear of the find
+ * card, which floats over the bottom right of the page. A span out of view or
+ * under the card is centred in the part of the page above the card, and a page
+ * that scrolls sideways centres it that way too. A span that is visible and
+ * clear of the card stays put.
+ *
+ * Near the end of the document the page can stop before the span is clear of
+ * the card. The page then gets room below its last line, as tall as the card
+ * reaches up into the page plus a gap, until `releaseFindRoom`.
+ *
+ * With `sideways` false, nothing scrolls sideways, for a span that another
+ * scroll is about to move across.
+ */
+export function revealSpan(inside: Element, span: Span, { sideways = true } = {}): void {
+  // Sideways first, as that can move the span under the card.
+  const dx = sideways ? centerSideways(inside, span.left, span.right) : 0;
+  const page = pageOf(inside);
+  if (!page) return;
+  const top = page.getBoundingClientRect().top + page.clientTop;
+  const bottom = top + page.clientHeight;
+  // A span that shares columns with the card shows above it, unless a very
+  // short page leaves no room for it there.
+  const card = cardOver(span.left - dx, span.right - dx);
+  const end = card && card.top - top >= span.bottom - span.top ? Math.min(bottom, card.top) : bottom;
+  if (span.top >= top && span.bottom <= end) return;
+  const from = page.scrollTop;
+  const target = from + (span.top + span.bottom) / 2 - (top + end) / 2;
+  page.scrollTop = target;
+  if (end === bottom || span.bottom - (page.scrollTop - from) <= end + 0.5) return;
+  makeRoom(page, bottom - end + CARD_GAP);
+  page.scrollTop = target;
+}
+
+/** Give `page` at least `room` pixels below its last line. The pages' CSS
+ *  reads it from --find-room. */
+function makeRoom(page: HTMLElement, room: number): void {
+  if (room > (parseFloat(page.style.getPropertyValue("--find-room")) || 0)) {
+    page.style.setProperty("--find-room", `${Math.ceil(room)}px`);
   }
+  pagesWithRoom.add(page);
+}
+
+/** Take away the room `revealSpan` gave pages below their last line, once the
+ *  find card's search is over. A page scrolled into that room moves back. */
+export function releaseFindRoom(): void {
+  for (const page of pagesWithRoom) page.style.removeProperty("--find-room");
+  pagesWithRoom.clear();
+}
+
+/** The page `inside` is on: its outermost ancestor that scrolls vertically,
+ *  even while its content fits. That is the editor area, or a pane of the
+ *  split or of the Markdown view. */
+function pageOf(inside: Element): HTMLElement | null {
+  let page: HTMLElement | null = null;
+  for (let el = inside.parentElement; el; el = el.parentElement) {
+    if (/auto|scroll/.test(getComputedStyle(el).overflowY)) page = el;
+  }
+  return page;
+}
+
+/** The open find card's box, when it shares columns with `left` to `right`. */
+function cardOver(left: number, right: number): DOMRect | null {
+  const box = document.querySelector(".find-bar")?.getBoundingClientRect();
+  return box?.height && box.left < right && box.right > left ? box : null;
+}
+
+/**
+ * Scroll the nearest ancestor of `inside` that scrolls sideways so the span
+ * from `left` to `right` (viewport pixels) is visible, centred when it was
+ * not, as a table wider than the page scrolls the page sideways. Returns how
+ * far the span moved left.
+ */
+function centerSideways(inside: Element, left: number, right: number): number {
+  for (let el = inside.parentElement; el; el = el.parentElement) {
+    if (el.scrollWidth <= el.clientWidth || !/auto|scroll/.test(getComputedStyle(el).overflowX)) continue;
+    // The part of the element that shows its content, without borders or scroll bars.
+    const low = el.getBoundingClientRect().left + el.clientLeft;
+    const high = low + el.clientWidth;
+    if (left >= low && right <= high) return 0;
+    const from = el.scrollLeft;
+    el.scrollLeft = from + (left + right) / 2 - (low + high) / 2;
+    return el.scrollLeft - from;
+  }
+  return 0;
 }
 
 /** Scroll to a match inside a code block. False when `range` is not in one. */
@@ -164,14 +278,21 @@ function revealCodeBlockMatch(view: EditorView, range: MatchRange): boolean {
   const cm = codeMirrorIn(block);
   if (cm) {
     // A long block draws only the lines near the screen, so a line may have no
-    // coordinates yet.
-    const start = cm.coordsAtPos(from, 1);
-    const end = cm.coordsAtPos(to, -1);
-    if (start && end) centerIfHidden(block, "y", start.top, end.bottom);
-    // CodeMirror scrolls a long line sideways, also the page when it is scrolled
-    // sideways, and reaches lines it has not drawn.
-    const y = start && end ? "nearest" : "center";
+    // coordinates yet. CodeMirror scrolls a long line sideways, also the page
+    // when it is scrolled sideways, and reaches lines it has not drawn, so this
+    // scroll is only up or down. Before CodeMirror scrolls, a match far along a
+    // long line lies past the block's edge, and centring on it would scroll the
+    // whole page sideways when a wide table lets it.
+    const span = codeMirrorSpan(cm, from, to);
+    if (span) revealSpan(block, span, { sideways: false });
+    const y = span ? "nearest" : "center";
     cm.dispatch({ effects: CodeMirror.scrollIntoView(EditorSelection.range(from, to), { y }) });
+    // It does so in its next frame, which can move the match under the find
+    // card. CodeMirror asked for that frame first, so this runs after it.
+    requestAnimationFrame(() => {
+      const after = codeMirrorSpan(cm, from, to);
+      if (after) revealSpan(block, after);
+    });
     return true;
   }
   awaitingEditor.set(view, block);
@@ -183,8 +304,6 @@ function revealCodeBlockMatch(view: EditorView, range: MatchRange): boolean {
   const span = document.createRange();
   span.setStart(text, from);
   span.setEnd(text, to);
-  const rect = span.getBoundingClientRect();
-  centerIfHidden(block, "y", rect.top, rect.bottom);
-  centerIfHidden(block, "x", rect.left, rect.right);
+  revealSpan(block, span.getBoundingClientRect());
   return true;
 }

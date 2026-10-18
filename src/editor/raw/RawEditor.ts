@@ -17,6 +17,7 @@ import { base64Collapse, inBase64Payload } from "./base64Collapse";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
+import { codeMirrorSpan, revealSpan } from "../wysiwyg/findReveal";
 
 /** How long edits and caret moves must pause before the find card recounts.
  *  Counting after an edit walks the whole document, which takes about 200ms
@@ -153,6 +154,7 @@ export class RawEditor {
   /**
    * Drive CodeMirror's search state from the application's find card. When no
    * match is selected, select the first one, unless `selectFirst` is false.
+   * With `selectFirst`, the selected match is then scrolled clear of the card.
    */
   searchText(query: string, opts: FindOptions, replacement = "", selectFirst = true): FindCounts {
     const view = this.view;
@@ -183,19 +185,20 @@ export class RawEditor {
         scrollIntoView: true,
       });
     }
+    if (selectFirst) this.revealSelection();
     return { current: current + 1, total: matches.length };
   }
 
   findNext(): FindCounts {
     if (!this.view) return { current: 0, total: 0 };
     findNextMatch(this.view);
-    return this.currentCounts();
+    return this.revealedCounts();
   }
 
   findPrev(): FindCounts {
     if (!this.view) return { current: 0, total: 0 };
     findPreviousMatch(this.view);
-    return this.currentCounts();
+    return this.revealedCounts();
   }
 
   /**
@@ -211,7 +214,7 @@ export class RawEditor {
     // CodeMirror leaves the replacement selected. Move on to the next match, as
     // the document view does, so the next Replace does not edit the first one.
     if (this.view.state.doc !== before) findNextMatch(this.view);
-    return this.currentCounts();
+    return this.revealedCounts();
   }
 
   replaceAll(replacement: string, query: string, opts: FindOptions): FindCounts {
@@ -250,6 +253,30 @@ export class RawEditor {
       ({ from, to }) => selection.from === from && selection.to === to,
     );
     return { current: current < 0 ? 0 : current + 1, total: matches.length };
+  }
+
+  /** The current match and total, with the current match scrolled clear of
+   *  the find card. */
+  private revealedCounts(): FindCounts {
+    const counts = this.currentCounts();
+    if (counts.current) this.revealSelection();
+    return counts;
+  }
+
+  /**
+   * Scroll the selected match clear of the find card, which CodeMirror knows
+   * nothing of (`revealSpan`). CodeMirror scrolls to the match in its next
+   * frame. It asked for that frame first, so this runs after it, before the
+   * page is painted.
+   */
+  private revealSelection(): void {
+    requestAnimationFrame(() => {
+      const view = this.view;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      const span = codeMirrorSpan(view, from, to);
+      if (span) revealSpan(view.scrollDOM, span);
+    });
   }
 
   /** Call `notify` once changes pause, restarting the wait on every change. */

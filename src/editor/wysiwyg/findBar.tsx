@@ -40,7 +40,7 @@ interface FindBarHandle {
 }
 
 /**
- * The find card: Mervin's floating search panel over the top right of the
+ * The find card: Mervin's floating search panel over the bottom right of the
  * document. Ctrl+F (or the toolbar's Find button) opens it with the field
  * focused, Ctrl+H adds the replace row, and Escape or Close hides it, clears
  * the highlights and returns focus to the document, with the current match
