@@ -614,3 +614,177 @@ describe("splitIntoPages, splitting a Markdown source line", () => {
     });
   });
 });
+
+/**
+ * A fake layout for text blocks, since jsdom lays nothing out. A block marked
+ * `data-text-layout` wraps its text word by word at COLUMNS monospace columns,
+ * in lines of LINE px with the glyphs TEXT px tall in the middle, inside PAD px
+ * of padding. Copies of the block (the splitter's trial pieces and the pieces
+ * themselves) keep the mark, so they measure by the same rules. An element laid
+ * out as an inline block is one box over the columns its text takes.
+ */
+const textLayout = (() => {
+  const LINE = 18;
+  const TEXT = 14;
+  const PAD = 4;
+  const CHAR = 7;
+  const COLUMNS = 40;
+  const saved: [object, string, PropertyDescriptor | undefined][] = [];
+
+  /** Where each character of `text` is laid out: words wrap, spaces hang. */
+  function wrap(text: string): { line: number; column: number }[] {
+    const places: { line: number; column: number }[] = [];
+    let line = 0;
+    let column = 0;
+    for (const word of text.split(/(?<= )/)) {
+      if (column > 0 && column + word.trimEnd().length > COLUMNS) {
+        line++;
+        column = 0;
+      }
+      for (let i = 0; i < word.length; i++) places.push({ line, column: column++ });
+    }
+    return places;
+  }
+
+  const blockOf = (node: Node): HTMLElement | null =>
+    (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>("[data-text-layout]") ?? null;
+
+  /** The offset of `node`'s first character in its block's text. */
+  function offsetIn(block: HTMLElement, node: Node): number {
+    let offset = 0;
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      if (node === text || node.contains(text)) return offset;
+      offset += (text as Text).data.length;
+    }
+    return offset;
+  }
+
+  const heightOf = (block: HTMLElement): number => {
+    const places = wrap(block.textContent ?? "");
+    return PAD * 2 + LINE * (places.length ? places[places.length - 1].line + 1 : 1);
+  };
+
+  /** The box of `length` characters from `offset` in `block`. */
+  function charBox(block: HTMLElement, offset: number, length: number): DOMRect {
+    const place = wrap(block.textContent ?? "")[offset];
+    const top = PAD + place.line * LINE + (LINE - TEXT) / 2;
+    return DOMRect.fromRect({ x: place.column * CHAR, y: top, width: CHAR * length, height: TEXT });
+  }
+
+  function override(target: object, name: string, descriptor: PropertyDescriptor): void {
+    saved.push([target, name, Object.getOwnPropertyDescriptor(target, name)]);
+    Object.defineProperty(target, name, { configurable: true, ...descriptor });
+  }
+
+  return {
+    LINE,
+    PAD,
+    wrap,
+    install(): void {
+      const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
+      override(HTMLElement.prototype, "offsetHeight", {
+        get(this: HTMLElement) {
+          return this.matches("[data-text-layout]") ? heightOf(this) : height.get!.call(this);
+        },
+      });
+      const elementBox = Element.prototype.getBoundingClientRect;
+      override(Element.prototype, "getBoundingClientRect", {
+        value(this: Element) {
+          const block = blockOf(this);
+          if (!block) return elementBox.call(this);
+          if (block === this) return DOMRect.fromRect({ width: COLUMNS * CHAR, height: heightOf(block) });
+          return charBox(block, offsetIn(block, this), (this.textContent ?? "").length);
+        },
+      });
+      override(Range.prototype, "getBoundingClientRect", {
+        value(this: Range) {
+          const block = blockOf(this.startContainer)!;
+          return charBox(block, offsetIn(block, this.startContainer) + this.startOffset, 1);
+        },
+      });
+    },
+    uninstall(): void {
+      for (const [target, name, descriptor] of saved.reverse()) {
+        if (descriptor) Object.defineProperty(target, name, descriptor);
+        else Reflect.deleteProperty(target, name);
+      }
+      saved.length = 0;
+    },
+  };
+})();
+
+describe("splitIntoPages, splitting a paragraph or heading", () => {
+  beforeEach(() => textLayout.install());
+  afterEach(() => textLayout.uninstall());
+
+  const words = (from: number, to: number): string =>
+    Array.from({ length: to - from }, (_, i) => `word${from + i}`).join(" ");
+
+  /**
+   * A block of 400 words with formatting that crosses where the pages break:
+   * bold text, a link and two inline-code boxes.
+   */
+  function formattedBlock(tag: string): HTMLElement {
+    const block = document.createElement(tag);
+    block.dataset.textLayout = "";
+    block.innerHTML =
+      `${words(0, 100)} <strong class="mark">${words(100, 250)}</strong> ` +
+      `<code style="display: inline-block">x=1</code> ${words(250, 262)} ` +
+      `<a href="https://example.com/a" class="link">${words(262, 300)}</a> ` +
+      `${words(300, 399)} <code style="display: inline-block">y=2</code>`;
+    return block;
+  }
+
+  it.each([
+    ["paragraph", "P"],
+    ["heading", "H2"],
+  ])(
+    "continues a %s taller than a page between its wrapped lines, keeping its formatting",
+    (_kind, tag) => {
+      // A text block printed as one block, so the page body clipped everything
+      // after its first page.
+      const block = formattedBlock(tag);
+      const text = block.textContent!;
+      const strong = block.querySelector("strong")!.textContent;
+      const link = block.querySelector("a")!.textContent;
+      const flow = document.createElement("div");
+      flow.append(block);
+
+      splitIntoPages(flow, 500);
+
+      const pieces = Array.from(flow.children) as HTMLElement[];
+      expect(pieces.length).toBeGreaterThan(2);
+      // Every character prints once, in order.
+      expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+      const places = textLayout.wrap(text);
+      let start = 0;
+      pieces.forEach((piece, index) => {
+        expect(piece.tagName).toBe(tag);
+        // A piece starts where a wrapped line starts...
+        if (start > 0) expect(places[start]).toEqual({ line: places[start - 1].line + 1, column: 0 });
+        // ...and fills a page with whole lines: 27 lines of 18px and the padding fit in 500px.
+        const end = start + piece.textContent!.length;
+        const lines = places[end - 1].line - places[start].line + 1;
+        if (index < pieces.length - 1) expect(lines).toBe(27);
+        else expect(lines).toBeLessThanOrEqual(27);
+        start = end;
+      });
+      // Bold text and the link continue on the next page with their attributes.
+      const bold = pieces.flatMap((piece) => Array.from(piece.querySelectorAll("strong")));
+      expect(bold.length).toBeGreaterThan(1);
+      for (const part of bold) expect(part.className).toBe("mark");
+      expect(bold.map((part) => part.textContent).join("")).toBe(strong);
+      const links = pieces.flatMap((piece) => Array.from(piece.querySelectorAll("a")));
+      expect(links.length).toBeGreaterThan(1);
+      for (const part of links) {
+        expect(part.getAttribute("href")).toBe("https://example.com/a");
+        expect(part.className).toBe("link");
+      }
+      expect(links.map((part) => part.textContent).join("")).toBe(link);
+      // Inline code prints whole, once each.
+      const code = pieces.flatMap((piece) => Array.from(piece.querySelectorAll("code")));
+      expect(code.map((box) => box.textContent)).toEqual(["x=1", "y=2"]);
+    },
+  );
+});

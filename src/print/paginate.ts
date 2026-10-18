@@ -7,8 +7,9 @@
 // document rather than a screenshot of a scrolling page.
 //
 // Blocks that are themselves taller than a page (a long table, a long list, a
-// long code block, a Markdown source line that wraps past a page) are split one
-// level down first, so the packer always has pieces it can place.
+// long code block, a paragraph or heading, a Markdown source line that wraps past
+// a page) are split one level down first, so the packer always has pieces it can
+// place. Text splits between the lines it wraps onto, never inside a line.
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -42,8 +43,7 @@ export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Elem
 export function packByHeight(items: Element[], maxHeightPx: number): Element[][] {
   const boxes = items.map((item) => {
     const el = item as HTMLElement;
-    const marginTop = Number.parseFloat(getComputedStyle(el).marginTop) || 0;
-    return { top: el.offsetTop, height: el.offsetHeight, marginTop };
+    return { top: el.offsetTop, height: el.offsetHeight, marginTop: marginTopOf(el) };
   });
   return packBoxes(boxes, maxHeightPx).map((group) => group.map((i) => items[i]));
 }
@@ -122,6 +122,7 @@ function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
 function splitElement(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (el.classList.contains("cm-scroller")) return splitCodeMirror(el, maxHeightPx);
   if (el.classList.contains(SOURCE_LINE_CLASS)) return splitSourceLine(el, maxHeightPx);
+  if (TEXT_TAGS.has(el.tagName)) return splitText(el, maxHeightPx);
   switch (el.tagName) {
     case "TABLE":
       return splitTable(el as HTMLTableElement, maxHeightPx);
@@ -141,7 +142,11 @@ function splitElement(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
  * one, and only the one that makes it over-tall is worth splitting.
  */
 function splittableIn(block: HTMLElement): HTMLElement | null {
-  if (SPLITTABLE_TAGS.has(block.tagName) || block.classList.contains(SOURCE_LINE_CLASS)) {
+  if (
+    SPLITTABLE_TAGS.has(block.tagName) ||
+    TEXT_TAGS.has(block.tagName) ||
+    block.classList.contains(SOURCE_LINE_CLASS)
+  ) {
     return block;
   }
   let tallest: HTMLElement | null = null;
@@ -152,6 +157,9 @@ function splittableIn(block: HTMLElement): HTMLElement | null {
 }
 
 const SPLITTABLE_TAGS = new Set(["TABLE", "UL", "OL", "PRE"]);
+
+/** Blocks of inline content, split between the lines they wrap onto (splitText). */
+const TEXT_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
 
 /** `.cm-scroller` is Crepe's code block: CodeMirror, not a `<pre>` (splitCodeMirror). */
 const SPLITTABLE_SELECTOR = "table, ul, ol, pre, .cm-scroller";
@@ -503,4 +511,265 @@ function splitSourceLine(line: HTMLElement, maxHeightPx: number): HTMLElement[] 
     piece.textContent = text.data.slice(start, starts[index + 1]);
     return piece;
   });
+}
+
+/**
+ * Split a paragraph or heading taller than a page between the lines it wraps
+ * onto, keeping its inline formatting whole on both sides of each break.
+ *
+ * The Document version printed such a block as one piece, and the page body
+ * clipped it, so a 9,000-word paragraph printed its first page and nothing more.
+ * Where the wrapped lines start is read from the laid-out block: units on one
+ * line overlap vertically, and the first unit of a line sits lower and back at
+ * the start of the line. A trial copy of each piece, laid out where the block
+ * is, then confirms that the piece fits, so the break is exact even where a line
+ * holds inline code, math or an image taller than the text.
+ *
+ * The pieces are cut out of the block with a DOM range. It moves whole nodes and
+ * splits an element that spans a break, such as bold text or a link, into two
+ * copies with the same attributes, so the formatting carries over to the next
+ * page. An element laid out as one box (inline code, math, an image) is never
+ * cut, and every character lands in exactly one piece.
+ */
+function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
+  const run = inlineRun(block);
+  const end = run.length;
+  if (end < 2) return [];
+  const budget = Math.max(1, maxHeightPx - marginTopOf(block));
+  const range = document.createRange();
+
+  /** The text node or element holding unit `index`, and the unit's offset in it. */
+  const locate = (index: number): { item: Text | Element; offset: number } => {
+    let low = 0;
+    let high = run.items.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (run.starts[middle] <= index) low = middle;
+      else high = middle - 1;
+    }
+    return { item: run.items[low], offset: index - run.starts[low] };
+  };
+  /** The box unit `index` was laid out in; empty for a character without one. */
+  const box = (index: number): DOMRect => {
+    const { item, offset } = locate(index);
+    if (!(item instanceof Text)) return item.getBoundingClientRect();
+    range.setStart(item, offset);
+    range.setEnd(item, offset + 1);
+    return range.getBoundingClientRect();
+  };
+  const rtl = getComputedStyle(block).direction === "rtl";
+  /**
+   * Whether `next`, the unit after `previous`, starts a wrapped line. It does
+   * when it moved down by more than half a unit and back towards the start of
+   * the line, or when it sits wholly below `previous` without moving forward.
+   * Units on one line share a baseline, so neither holds for them, not even for
+   * a superscript, a small image on the bottom of the line or a right-to-left
+   * run inside a left-to-right line.
+   */
+  const startsLine = (previous: DOMRect, next: DOMRect): boolean => {
+    const back = rtl ? next.right > previous.right + 0.5 : next.left < previous.left - 0.5;
+    const forward = rtl ? next.right < previous.right - 0.5 : next.left > previous.left + 0.5;
+    const lower = next.top - previous.top > Math.min(previous.height, next.height) / 2;
+    return (lower && back) || (next.top >= previous.bottom - 0.5 && !forward);
+  };
+  /** The first unit of the line that holds unit `index`. */
+  const lineStart = (index: number): number => {
+    let next = box(index);
+    let start = index;
+    for (let i = index - 1; i >= 0; i--) {
+      const previous = box(i);
+      if (!hasBox(previous)) continue;
+      if (hasBox(next) && startsLine(previous, next)) return start;
+      next = previous;
+      start = i;
+    }
+    return 0;
+  };
+  /** The first unit of the line after the one that holds unit `index`, or `end`. */
+  const nextLineStart = (index: number): number => {
+    let previous = box(index);
+    for (let i = index + 1; i < end; i++) {
+      const next = box(i);
+      if (!hasBox(next)) continue;
+      if (hasBox(previous) && startsLine(previous, next)) return i;
+      previous = next;
+    }
+    return end;
+  };
+  /**
+   * The DOM position just before unit `index`, moved out of the elements that
+   * start there so a piece doesn't end with empty copies of them. A position
+   * inside a text node moves back to the start of its grapheme cluster, so a
+   * character made of several code units is never cut.
+   */
+  const pointBefore = (index: number): { node: Node; offset: number } => {
+    if (index === 0) return { node: block, offset: 0 };
+    if (index === end) return { node: block, offset: block.childNodes.length };
+    const { item, offset } = locate(index);
+    let node: Node = item;
+    let at = item instanceof Text ? graphemeStart(item.data, offset) : 0;
+    while (at === 0 && node !== block && node.parentNode) {
+      at = Array.prototype.indexOf.call(node.parentNode.childNodes, node);
+      node = node.parentNode;
+    }
+    return { node, offset: at };
+  };
+  /** Whether units [from, to) fit the page, laid out as the piece will be. */
+  const fits = (from: number, to: number): boolean => {
+    const start = pointBefore(from);
+    const stop = pointBefore(to);
+    range.setStart(start.node, start.offset);
+    range.setEnd(stop.node, stop.offset);
+    const probe = block.cloneNode(false) as HTMLElement;
+    probe.appendChild(range.cloneContents());
+    block.before(probe);
+    const height = probe.offsetHeight;
+    probe.remove();
+    return height <= budget;
+  };
+
+  let first = 0;
+  while (first < end - 1 && !hasBox(box(first))) first++;
+  let last = end - 1;
+  while (last > 0 && !hasBox(box(last))) last--;
+  const outer = block.getBoundingClientRect();
+  // The room above the first line's text and below the last line's: the block's
+  // padding and the lines' half-leading. It turns a unit's box into its line's.
+  const above = box(first).top - outer.top;
+  const below = outer.bottom - box(last).bottom;
+
+  const starts = [0];
+  for (let start = 0; ; ) {
+    const top = start === 0 ? outer.top : box(start).top - above;
+    const limit = top + budget;
+    let cut = end;
+    if (outer.bottom - top > budget + 1) {
+      // The first unit whose line ends below the page, give or take a line.
+      // Units on later lines sit lower, so search for it.
+      let low = start + 1;
+      let high = end;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        const unit = box(middle);
+        if (hasBox(unit) && unit.bottom + below > limit) high = middle;
+        else low = middle + 1;
+      }
+      cut = lineStart(Math.min(low, end - 1));
+      if (cut <= start) cut = nextLineStart(start);
+    }
+    // Confirm the estimate: step back a line at a time until the piece fits,
+    // then forward while one more line still fits.
+    let tooFar = end + 1;
+    let fitted = fits(start, cut);
+    while (!fitted) {
+      const previous = lineStart(cut - 1);
+      // A single line taller than the page still gets a piece of its own.
+      if (previous <= start) break;
+      tooFar = cut;
+      cut = previous;
+      fitted = fits(start, cut);
+    }
+    while (fitted && cut < end) {
+      const next = nextLineStart(cut);
+      if (next >= tooFar || !fits(start, next)) break;
+      cut = next;
+    }
+    if (cut >= end) break;
+    starts.push(cut);
+    start = cut;
+  }
+  if (starts.length < 2) return [];
+
+  // Cut from the end, so the positions of the earlier breaks stay valid.
+  const points = starts.map(pointBefore);
+  const pieces: HTMLElement[] = [];
+  for (let i = points.length - 1; i >= 0; i--) {
+    range.setStart(points[i].node, points[i].offset);
+    range.setEnd(block, block.childNodes.length);
+    const piece = block.cloneNode(false) as HTMLElement;
+    piece.appendChild(range.extractContents());
+    pieces.unshift(piece);
+  }
+  return pieces;
+}
+
+/** A text block's content as one run of units a line can start at. */
+interface InlineRun {
+  /** Text nodes and elements laid out as one box, in document order. */
+  items: (Text | Element)[];
+  /** Each item's first unit: a text node has one unit per code unit of its text. */
+  starts: number[];
+  /** Units in the run. */
+  length: number;
+}
+
+/**
+ * Collect the units of a text block. Plain inline elements (bold, links, a
+ * link's printed URL) are looked through. Anything else is one unit: replaced
+ * content such as images, and boxes such as Crepe's inline code and math, which
+ * are inline blocks. Content that takes no part in the lines, hidden or
+ * positioned out of the flow, is skipped and goes with the piece around it.
+ */
+function inlineRun(block: HTMLElement): InlineRun {
+  const items: (Text | Element)[] = [];
+  const walk = (parent: Node): void => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child instanceof Text) {
+        if (child.data) items.push(child);
+        continue;
+      }
+      if (!(child instanceof Element)) continue;
+      const style = getComputedStyle(child);
+      if (style.display === "none" || OUT_OF_FLOW.has(style.position)) continue;
+      if (style.float && style.float !== "none") continue;
+      const plain =
+        style.display === "inline" && !ATOMIC_TAGS.has(child.tagName) && !child.classList.contains("katex");
+      if (plain) walk(child);
+      else items.push(child);
+    }
+  };
+  walk(block);
+  const starts: number[] = [];
+  let length = 0;
+  for (const item of items) {
+    starts.push(length);
+    length += item instanceof Text ? item.data.length : 1;
+  }
+  return { items, starts, length };
+}
+
+/** Elements printed as one box even when laid out inline: replaced content and line breaks. */
+const ATOMIC_TAGS = new Set([
+  "IMG",
+  "BR",
+  "svg",
+  "math",
+  "VIDEO",
+  "CANVAS",
+  "IFRAME",
+  "OBJECT",
+  "EMBED",
+  "INPUT",
+  "BUTTON",
+  "SELECT",
+  "TEXTAREA",
+]);
+
+const OUT_OF_FLOW = new Set(["absolute", "fixed"]);
+
+/** Whether a measured box exists: a character with no glyph measures empty. */
+function hasBox(rect: DOMRect): boolean {
+  return rect.width > 0 || rect.height > 0;
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** The start of the grapheme cluster that holds `offset` in `text`. */
+function graphemeStart(text: string, offset: number): number {
+  return graphemes.segment(text).containing(offset)?.index ?? offset;
+}
+
+/** An element's top margin, which a page has to make room for above it. */
+function marginTopOf(el: Element): number {
+  return Number.parseFloat(getComputedStyle(el).marginTop) || 0;
 }
