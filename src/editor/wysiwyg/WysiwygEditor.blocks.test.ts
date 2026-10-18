@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
-import { closeHistory, undo } from "@milkdown/kit/prose/history";
+import { closeHistory, redo, undo } from "@milkdown/kit/prose/history";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -261,6 +261,24 @@ describe("an edit in the document view", () => {
     expect(editor.getMarkdown()).toBe(DOC);
     typeAfter(view, "Edit this", " one");
     expect(editor.getMarkdown()).toBe(DOC.replace("Edit this line.", "Edit this one line."));
+  });
+
+  it("writes the text it wrote before a split mirror sync again when undo takes the sync back", { timeout: 60_000 }, async () => {
+    const markdown = 'Intro.\n\nHidden text with [a link][guide].\n\nLine one  \ntwo.\n\n[guide]: https://g.example "Guide"\n';
+    const { editor, view } = await open(markdown);
+    typeAfter(view, "Intro", " A");
+    const saved = markdown.replace("Intro.", "Intro A.");
+    expect(editor.getMarkdown()).toBe(saved);
+    view.dispatch(closeHistory(view.state.tr));
+    // The Markdown pane adds text to the paragraph with the reference link.
+    const mirrored = saved.replace("[a link][guide].", "[a link][guide]. B.");
+    editor.setMarkdown(mirrored);
+    expect(editor.getMarkdown()).toBe(mirrored);
+    view.dispatch(closeHistory(view.state.tr));
+    undo(view.state, view.dispatch);
+    expect(editor.getMarkdown()).toBe(saved);
+    redo(view.state, view.dispatch);
+    expect(editor.getMarkdown()).toBe(mirrored);
   });
 
   it("writes and reads only the blocks an edit changed in a long file", { timeout: 60_000 }, async () => {

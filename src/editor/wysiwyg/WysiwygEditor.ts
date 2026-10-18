@@ -53,6 +53,7 @@ import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
 import { SourceBaseline, outlinePlugin, type MarkdownTools, type OutlineNode } from "./sourceBaseline";
+import { baselineOf, baselineState, setBaseline, type BaselineSlot } from "./baselineHistory";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
 import { changedCell, focusCaret, showsBlock } from "./frontmatterFind";
 import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } from "./frontmatterHistory";
@@ -119,8 +120,13 @@ export class WysiwygEditor {
   private showFmPanel = false;
   /** The body Crepe last parsed (at mount or `setMarkdown`). `getMarkdown`
    *  writes each top-level block the user has not changed since as its exact
-   *  source, and Milkdown's form only for the blocks they changed. */
+   *  source, and Milkdown's form only for the blocks they changed. It takes
+   *  the baseline of the body the document came from from the editor state,
+   *  where undo across a split mirror sync brings back the one before it
+   *  (baselineHistory.ts), and this one when the state has none. */
   private baseline: SourceBaseline | null = null;
+  /** Where the baseline of the body the editor opened with goes. */
+  private opened: BaselineSlot = { baseline: null };
   /** The outline of the last text Crepe's parser read, which `rememberSource`
    *  hands to the baseline so the source is not parsed again. */
   private parsed: { text: string; outline: readonly OutlineNode[] | null } | null = null;
@@ -275,6 +281,9 @@ export class WysiwygEditor {
     this.crepe.editor.use(mathDelimiters);
     // Keep where each top-level node of a parsed text starts and ends.
     this.crepe.editor.use(outlinePlugin((text, outline) => (this.parsed = { text, outline })));
+    // Keep which body the document came from in the editor state, so undo of
+    // a split mirror sync writes the body from before it with its own text.
+    this.crepe.editor.use(baselineState(this.opened));
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
@@ -341,7 +350,7 @@ export class WysiwygEditor {
     const mirrored = this.pendingBody;
     this.pendingBody = null;
     if (mirrored !== null) this.replaceBody(mirrored);
-    else this.rememberSource(split.body);
+    else this.rememberSource(split.body, this.opened);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
     // Crepe adds an empty last line below a final list, code block, quote,
     // table, rule or image in the first transaction after create. Make that an
@@ -447,15 +456,18 @@ export class WysiwygEditor {
     if (!this.crepe) return;
     try {
       // Milkdown's replaceAll, with the frontmatter block and the blank lines
-      // after it, which setMarkdown has just stored, in the same transaction.
+      // after it, which setMarkdown has just stored, and the new body's
+      // baseline in the same transaction.
+      const slot: BaselineSlot = { baseline: null };
       this.crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
         const doc = ctx.get(parserCtx)(body);
         const tr = view.state.tr.replace(0, view.state.doc.content.size, new Slice(doc.content, 0, 0));
-        view.dispatch(setFrontmatter(view.state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator }));
+        setFrontmatter(view.state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator });
+        view.dispatch(setBaseline(view.state, tr, slot));
       });
       // The doc updates synchronously with the dispatch.
-      this.rememberSource(body);
+      this.rememberSource(body, slot);
     } catch {
       // Editor torn down mid-sync; ignore.
     }
@@ -595,6 +607,7 @@ export class WysiwygEditor {
     this.root = null;
     this.crepeRoot = null;
     this.baseline = null;
+    this.opened = { baseline: null };
     this.parsed = null;
     this.pendingBody = null;
     const crepe = this.crepe;
@@ -616,9 +629,9 @@ export class WysiwygEditor {
     return this.destroyPromise;
   }
 
-  /** Record the body Crepe just parsed, so `getMarkdown` can keep its exact
-   *  text for the blocks the user does not change. */
-  private rememberSource(source: string): void {
+  /** Record the body Crepe just parsed in `slot`, so `getMarkdown` can keep
+   *  its exact text for the blocks the user does not change. */
+  private rememberSource(source: string, slot: BaselineSlot): void {
     const parsed = this.parsed;
     this.parsed = null;
     this.baseline =
@@ -634,6 +647,7 @@ export class WysiwygEditor {
         };
         return new SourceBaseline(source, ctx.get(editorViewCtx).state.doc, tools, parsed?.text === source ? parsed.outline : undefined);
       }) ?? null;
+    slot.baseline = this.baseline;
   }
 
   /** Crepe's document as Markdown, with the source text of unchanged blocks,
@@ -643,8 +657,10 @@ export class WysiwygEditor {
     if (!this.crepe) return null;
     try {
       return this.crepe.editor.action((ctx) => {
-        const doc = decidedDoc(ctx.get(editorViewCtx));
-        return this.baseline ? this.baseline.write(doc) : ctx.get(serializerCtx)(doc);
+        const view = ctx.get(editorViewCtx);
+        const baseline = baselineOf(view.state) ?? this.baseline;
+        const doc = decidedDoc(view);
+        return baseline ? baseline.write(doc) : ctx.get(serializerCtx)(doc);
       });
     } catch {
       return null;
