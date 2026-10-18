@@ -275,16 +275,35 @@ function oneLine(value: string): string {
     .replace(/\r\n?|\n/g, " ");
 }
 
+/** `\verb` and its text, which TeX reads as it is, written so that a table
+ *  cell holds them (`inTableCell`). `\verb` ends before a `|` in the text that
+ *  follows a backslash and starts again, in braces, so a `^` or `_` before it
+ *  still takes all of it. A `|` that ends it after a backslash gives way to a
+ *  character the text does not hold. */
+function verbInCell(verb: string, delimiter: string): string {
+  const start = verb.slice(0, verb.charAt(5) === "*" ? 6 : 5);
+  const text = verb.slice(start.length + 1, -1);
+  const end = delimiter === "|" && escapes(text) ? ([..."!+,./:;=?"].find((c) => !text.includes(c)) ?? delimiter) : delimiter;
+  const body = text.replace(/(?<=\\)\|/g, `${end}${start}${end}|`);
+  const written = `${start}${end}${body}${end}`;
+  return (body === text ? written : `{${written}}`).replace(/\|/g, "\\|");
+}
+
 /** `value` written so that a table cell holds it. GFM ends a cell at a `|`
  *  that no backslash escapes, so a `|` is written `\|`, as remark-gfm writes
  *  one in inline code, and GitHub, VS Code and md-easy read it back as `|`. No
- *  backslash may come before such a `|`, so TeX's `\|` is written `\Vert`,
- *  which TeX reads the same, with a space before a letter or `@`, which KaTeX
- *  reads as part of a command's name. A cell is one line (`oneLine`). */
+ *  backslash may come before such a `|`, so TeX's command `\|` is written
+ *  `\Vert`, which TeX reads the same, with a space before a letter or `@`,
+ *  which KaTeX reads as part of a command's name. The text of `\verb` keeps
+ *  its `\|` (`verbInCell`). A cell is one line (`oneLine`). */
 function inTableCell(value: string): string {
-  return oneLine(value).replace(/(\\*)\|([a-zA-Z@]?)/g, (_match, backslashes: string, letter: string) =>
-    backslashes.length % 2 ? `${backslashes.slice(1)}\\Vert${letter && " "}${letter}` : `${backslashes}\\|${letter}`,
-  );
+  const line = oneLine(value);
+  return line.replace(TEX_TOKEN, (token: string, starred: string | undefined, plain: string | undefined, offset: number) => {
+    if (token === "|") return "\\|";
+    if (token === "\\|") return /[a-zA-Z@]/.test(line.charAt(offset + 2)) ? "\\Vert " : "\\Vert";
+    const delimiter = starred ?? plain;
+    return delimiter === undefined ? token : verbInCell(token, delimiter);
+  });
 }
 
 /** Wraps remark-math's inline math writer so every formula reads back as the

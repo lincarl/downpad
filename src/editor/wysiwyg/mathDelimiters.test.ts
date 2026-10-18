@@ -305,6 +305,11 @@ describe("math and strikethrough delimiters", () => {
     ["\\|@x", "$\\Vert @x$", "\\Vert @x"],
     // An escaped backslash escapes nothing.
     ["a \\\\| b", "$a \\\\\\| b$", "a \\\\| b"],
+    // The text of `\verb` is read as it is, so its `\|` stays. `\verb` ends
+    // before that `|` and starts again, in braces for the `^`, and a `|` that
+    // ends it after a backslash gives way to another character.
+    ["x^\\verb!\\|! \\verb!y|z!", "$x^{\\verb!\\!\\verb!\\|!} \\verb!y\\|z!$", "x^{\\verb!\\!\\verb!|!} \\verb!y|z!"],
+    ["\\verb|a\\| \\verb|b|", "$\\verb!a\\! \\verb\\|b\\|$", "\\verb!a\\! \\verb|b|"],
     // A cell is one line, and a line ending ends a `%` comment.
     ["a\n|b|", "$a \\|b\\|$", "a |b|"],
     ["a % c\n+b", "$a +b$", "a +b"],
