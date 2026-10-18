@@ -172,10 +172,19 @@ function scaleToFit(el: HTMLElement, maxHeightPx: number): void {
  * block's own tag name matched nothing and left an over-tall table to be clipped
  * at the page edge, losing its last rows. Look inside the block, split what is
  * found, then rebuild the wrappers around each piece.
+ *
+ * Rebuilding the wrappers keeps only the path to the split element, so a block
+ * that holds more than that splits between its children instead. A Mermaid
+ * code block is one: its diagram sits below the code, and splitting only the
+ * code left the diagram out of every piece.
  */
 function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   const inner = splittableIn(el);
   if (!inner) return [];
+  const beside = Array.from(el.children).some(
+    (child) => !child.contains(inner) && (child as HTMLElement).offsetHeight > 0,
+  );
+  if (inner !== el && beside && holdsBlocks(el)) return splitContainer(el, maxHeightPx);
   // The wrappers occupy height of their own (padding, borders, sibling chrome);
   // leave room for it so a rebuilt piece still fits on the page.
   const overhead = Math.max(0, el.offsetHeight - inner.offsetHeight);

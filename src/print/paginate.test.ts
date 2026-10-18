@@ -1080,3 +1080,37 @@ describe("splitIntoPages, shrinking what cannot be split", () => {
     expect(frame.style.height).toBe("500px");
   });
 });
+
+describe("splitIntoPages, splitting a code block with a diagram", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  it("keeps a Mermaid diagram when its code is taller than a page", () => {
+    // Only the code was split, and the code block was rebuilt around each piece
+    // of it, which left the diagram below the code out of the print.
+    const host = codeBlock(60).querySelector<HTMLElement>(".codemirror-host")!;
+    // Measure the split pieces too: a scroller is as tall as the lines it holds.
+    host.dataset.stack = "";
+    host.querySelector<HTMLElement>(".cm-editor")!.dataset.stack = "";
+    host.querySelector<HTMLElement>(".cm-scroller")!.dataset.row = "";
+    host.querySelector<HTMLElement>(".cm-content")!.dataset.stack = "";
+    const panel = sized("div", 300, "DIAGRAM");
+    panel.className = "preview-panel";
+    const block = stack("div", host, panel);
+    block.className = "milkdown-code-block";
+    const flow = flowWith(block);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const piece of pieces) {
+      expect(piece.className).toBe("milkdown-code-block");
+      expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+    }
+    expect(pieces.flatMap(codeLinesOf)).toEqual(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`));
+    // The diagram prints once, after the last of the code.
+    expect(flow.querySelectorAll(".preview-panel")).toHaveLength(1);
+    expect(pieces[pieces.length - 1].lastElementChild).toBe(panel);
+  });
+});
