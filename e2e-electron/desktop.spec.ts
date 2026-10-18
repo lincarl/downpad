@@ -342,22 +342,54 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(page).toHaveTitle("one.md — md-easy");
 });
 
-test("End with the caret before a missing image chip that starts a line keeps the caret in that line", async () => {
-  const file = path.join(directory, "chip-end.md");
-  await writeFile(file, "Ends with ![End](end/missing.png)\n\n![Start](start/missing.png) starts here.\n");
+test("End with the caret before images that start a line moves the caret to the end of the line", async () => {
+  const file = path.join(directory, "image-end.md");
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
+  await writeFile(file, [
+    "Ends with ![End](end/missing.png)",
+    "![Start](start/missing.png) starts here.",
+    "![Pixel](image.png)![Gone](gone.png) start here.",
+    "Break\\\n![Pixel](image.png) after a line break.",
+    "| Cells |\n| --- |\n| ![Cell](cell/missing.png) in a cell |",
+    "![Pixel](image.png)![Gone](gone.png) are selected.",
+  ].join("\n\n") + "\n");
   await launch(file);
-  const line = page.locator(".milkdown .ProseMirror > p").nth(1);
-  await expect(line.locator(".md-image-missing")).toHaveAttribute("data-md-path", "start/missing.png");
-  const box = (await line.boundingBox())!;
-  await page.mouse.click(box.x + box.width - 2, box.y + box.height / 2);
-  await page.keyboard.press("Home");
-  await page.keyboard.press("End");
-  await page.keyboard.type("Z");
+  const editor = page.locator(".milkdown .ProseMirror");
+  await expect(editor.locator(".md-image-missing")).toHaveCount(5);
+  const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
+  await expect.poll(loaded).toBe(3);
+  /** Click at the end of `line`'s last row, go to the start of that row with
+   *  Home, press `key` and type `text`. */
+  const typeAfter = async (key: string, line: Locator, text: string) => {
+    const end = await line.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const last = [...range.getClientRects()].at(-1)!;
+      return { x: last.right - 1, y: last.top + last.height / 2 };
+    });
+    await page.mouse.click(end.x, end.y);
+    await page.keyboard.press("Home");
+    await page.keyboard.press(key);
+    await page.keyboard.type(text);
+  };
+  const paragraph = (text: string) => editor.locator("p").filter({ hasText: text });
+  await typeAfter("End", paragraph("starts here."), "1");
+  await typeAfter("End", paragraph("start here."), "2");
+  await typeAfter("End", paragraph("after a line break."), "3");
+  await typeAfter("End", editor.locator("td"), "4");
+  // Shift+End selects the whole line, which the typing replaces.
+  await typeAfter("Shift+End", paragraph("are selected."), "5");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page).toHaveTitle("chip-end.md — md-easy");
-  const [before, after] = (await readFile(file, "utf8")).split("\n\n");
-  expect(before).toBe("Ends with ![End](end/missing.png)");
-  expect(after).toContain("Z");
+  await expect(page).toHaveTitle("image-end.md — md-easy");
+  const blocks = (await readFile(file, "utf8")).split("\n\n");
+  expect(blocks.slice(0, 4)).toEqual([
+    "Ends with ![End](end/missing.png)",
+    "![Start](start/missing.png) starts here.1",
+    "![Pixel](image.png)![Gone](gone.png) start here.2",
+    "Break\\\n![Pixel](image.png) after a line break.3",
+  ]);
+  expect(blocks[4]).toMatch(/^\| !\[Cell\]\(cell\/missing\.png\) in a cell4 *\|$/m);
+  expect(blocks[5]).toBe("5\n");
 });
 
 test("the block handle of a line with a wide missing image chip stays beside the line", async () => {
