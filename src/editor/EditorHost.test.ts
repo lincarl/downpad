@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import { Store } from "../state/store";
-import type { AppState } from "../state/types";
+import { hasUnsavedChanges, type AppState } from "../state/types";
 
 interface Deferred {
   promise: Promise<void>;
@@ -1243,7 +1243,7 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
-  it("marks a background document unsaved as soon as a file dropped on it is read", async () => {
+  it("counts a background document a file waits for as unsaved, even after a save of it completes", async () => {
     const root = document.createElement("div");
     const store = makeStore();
     const host = new EditorHost(root, store);
@@ -1251,14 +1251,20 @@ describe("EditorHost file drops", () => {
     const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
     const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
     await openSecondTab(store, host);
+    const tab = (id: string) => store.get().tabs.find((t) => t.id === id)!;
 
     const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    // A save that started before the drop marks the text saved.
+    store.patchDocById("tab-1", { isDirty: false });
 
-    // Closing the window right now asks before the file is lost.
-    expect(store.get().tabs[0]!.doc.isDirty).toBe(true);
-    expect(store.get().doc.isDirty).toBe(false);
+    // Closing the document or the window right now asks before the file is lost.
+    expect(hasUnsavedChanges(tab("tab-1"))).toBe(true);
+    expect(hasUnsavedChanges(tab(store.get().activeTabId!))).toBe(false);
     await showFirstTab(store, host);
     expect(await inserted).toBe(true);
+    host.releaseDrop(drop);
+    expect(tab("tab-1").filesPending).toBe(false);
     await host.dispose();
   });
 
@@ -1345,16 +1351,19 @@ describe("EditorHost file drops", () => {
 
     const inFront = host.untilInFront(drop);
     expect(await settled(inFront)).toBe(false);
-    expect(store.get().tabs[0]!.doc.isDirty).toBe(true);
+    expect(hasUnsavedChanges(store.get().tabs[0]!)).toBe(true);
     await showFirstTab(store, host);
     expect(await inFront).toBe(true);
-    // In front, the untouched document is clean again, so a cancelled save
-    // leaves nothing unsaved.
-    expect(store.get().doc.isDirty).toBe(false);
+    // A save the user cancels then ends the drop, which leaves the untouched
+    // document clean.
+    host.releaseDrop(drop);
+    expect(hasUnsavedChanges(store.get().tabs[0]!)).toBe(false);
 
     // Once the document is closed, it is never in front.
+    const later = host.aimDrop()!;
     await openSecondTab(store, host);
-    const closed = host.untilInFront(drop);
+    const closed = host.untilInFront(later);
+    expect(await settled(closed)).toBe(false);
     store.closeTab("tab-1");
     await host.discardTab("tab-1");
     expect(await closed).toBe(false);

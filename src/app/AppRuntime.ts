@@ -19,7 +19,7 @@ import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
-import { layoutFromDefaultView, shownLayout } from "../state/types";
+import { hasUnsavedChanges, layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
 import { preparePrintJob } from "../print/printDocument";
 import { PrintWorkspace } from "../print/PrintWorkspace";
@@ -407,7 +407,7 @@ export class AppRuntime {
     this.editorHost.flush();
     const tab = this.store.get().tabs.find((t) => t.id === id);
     if (!tab) return;
-    if (tab.doc.isDirty && !(await this.files.confirmCloseTab(tabLabel(tab)))) return;
+    if (hasUnsavedChanges(tab) && !(await this.files.confirmCloseTab(tabLabel(tab)))) return;
     const wasActive = this.store.get().activeTabId === id;
     const nextActive = this.store.closeTab(id);
     // Free the closed tab's editor pane(s) — including a background tab's, which

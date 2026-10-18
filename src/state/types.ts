@@ -67,7 +67,8 @@ export interface Tab {
    *  alone, whatever the window's layout (`shownLayout`). */
   documentViewFailure?: DocumentViewFailure;
   /** Whether files dropped on the document are still on their way into it
-   *  (§5.4), so the tab must keep this document until they are in. */
+   *  (§5.4). The tab keeps this document until they are in, and counts as
+   *  unsaved meanwhile (`hasUnsavedChanges`). */
   filesPending?: boolean;
 }
 
@@ -77,6 +78,12 @@ export interface DocumentViewFailure {
   message: string;
   /** Whether the user dismissed the notice for this failure. */
   dismissed: boolean;
+}
+
+/** Whether closing a tab would lose changes: unsaved edits to its document,
+ *  or files dropped on it that are not in yet (§5.4, §5.19). */
+export function hasUnsavedChanges(tab: Tab): boolean {
+  return tab.doc.isDirty || tab.filesPending === true;
 }
 
 /** A fresh, empty untitled document buffer. */

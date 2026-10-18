@@ -263,8 +263,9 @@ export class EditorHost implements FindController {
     }
     const handle: FileDrop = { tabId: pane.tabId };
     this.drops.set(handle, { pane, target, onPane: under !== null, focus: document.activeElement, at: performance.now() });
-    // The tab keeps this document until the files are in, so opening a file
-    // never puts another document in it (FileService.openPath).
+    // Until the files are in, the tab keeps this document, so opening a file
+    // never puts another document in it (FileService.openPath), and it counts
+    // as unsaved, so closing it or the window asks first, even after a save.
     this.store.setFilesPending(pane.tabId, true);
     return handle;
   }
@@ -275,12 +276,12 @@ export class EditorHost implements FindController {
    * drop's earlier files, or at the caret of the pane being edited. A file
    * only goes into a document that is in front. One dropped on a document
    * that is behind another tab by now waits until that document is shown
-   * again, and the document counts as unsaved meanwhile. If by then the pane
-   * it was dropped on is gone, hidden or behind the document's latest edit,
-   * as after a reload from disk, a layout switch, an edit in the other view,
-   * or after the editor was dropped from memory, it goes in at the caret of
-   * the pane being edited. Resolves false, inserting nothing, once the
-   * document is closed.
+   * again, and the document counts as unsaved until the drop ends. If by
+   * then the pane it was dropped on is gone, hidden or behind the document's
+   * latest edit, as after a reload from disk, a layout switch, an edit in
+   * the other view, or after the editor was dropped from memory, it goes in
+   * at the caret of the pane being edited. Resolves false, inserting
+   * nothing, once the document is closed.
    *
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
@@ -329,19 +330,12 @@ export class EditorHost implements FindController {
    * Resolve true once the document a drop belongs to is in front, as it must
    * be before it can be saved for a file read for it, such as an image that
    * needs an attachments folder beside an untitled document (§5.5). While it
-   * is behind another tab, the file waits, and the document counts as unsaved
-   * meanwhile. In front again, it gets back the unsaved mark it had, unless
-   * its text or saved text changed, so a save the user then cancels leaves an
-   * untouched document clean. Resolves false once the document is closed.
+   * is behind another tab, the file waits. Resolves false once the document
+   * is closed.
    */
   async untilInFront(drop: FileDrop): Promise<boolean> {
-    const before = this.store.get().tabs.find((t) => t.id === drop.tabId)?.doc;
     while (this.store.get().activeTabId !== drop.tabId) {
       if (!(await this.waitWhileBehind(drop))) return false;
-    }
-    const now = this.store.get().tabs.find((t) => t.id === drop.tabId)?.doc;
-    if (before && now && now.markdown === before.markdown && now.savedMarkdown === before.savedMarkdown) {
-      this.store.patchDocById(drop.tabId, { isDirty: before.isDirty });
     }
     return this.dropOpen(drop);
   }
@@ -352,12 +346,10 @@ export class EditorHost implements FindController {
   }
 
   /** Wait until the next document is shown, for a file of a drop whose
-   *  document is behind another tab. The waiting file is an unsaved change,
-   *  so closing that document or the window asks first. Resolves false at
-   *  once if the document is closed. */
+   *  document is behind another tab. Resolves false at once if the document
+   *  is closed. */
   private async waitWhileBehind(drop: FileDrop): Promise<boolean> {
     if (!this.dropOpen(drop)) return false;
-    this.store.patchDocById(drop.tabId, { isDirty: true });
     await this.nextPresent();
     return true;
   }

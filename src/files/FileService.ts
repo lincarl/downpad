@@ -9,7 +9,7 @@ import { openDialog, saveDialog, ask } from "../ipc/dialogs";
 import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
-import { blankDoc, type DocumentState } from "../state/types";
+import { blankDoc, hasUnsavedChanges, type DocumentState } from "../state/types";
 import type { Store } from "../state/store";
 
 const MD_FILTERS = [
@@ -111,7 +111,7 @@ export class FileService {
   private activeIsReusable(): boolean {
     const { tabs, activeTabId } = this.store.get();
     const active = tabs.find((t) => t.id === activeTabId);
-    return !!active && !active.filesPending && !active.doc.filePath && !active.doc.isDirty && active.doc.markdown.trim() === "";
+    return !!active && !hasUnsavedChanges(active) && !active.doc.filePath && active.doc.markdown.trim() === "";
   }
 
   /** Point the single backend watcher at the active document's file, or clear
@@ -236,9 +236,10 @@ export class FileService {
     this.store.patchDocById(tabId, { savedMarkdown: previous, isDirty: current.markdown !== previous });
   }
 
-  /** Whether any open tab has unsaved changes (window-close guard, §5.19). */
+  /** Whether any open tab has unsaved changes (window-close guard, §5.19),
+   *  counting files dropped on a document that are not in yet. */
   anyDirty(): boolean {
-    return this.store.get().tabs.some((t) => t.doc.isDirty);
+    return this.store.get().tabs.some(hasUnsavedChanges);
   }
 
   /** Confirm discarding a single named tab before closing it (§5.19). */
@@ -248,7 +249,7 @@ export class FileService {
 
   /** Confirm discarding all unsaved tabs on window close (§5.19). */
   async confirmDiscardAll(): Promise<boolean> {
-    const n = this.store.get().tabs.filter((t) => t.doc.isDirty).length;
+    const n = this.store.get().tabs.filter(hasUnsavedChanges).length;
     const what = n === 1 ? "1 document has" : `${n} documents have`;
     return this.confirmDiscard(`${what} unsaved changes. Discard them and close?`);
   }
