@@ -362,10 +362,12 @@ function blankLinesAround(before: string, after: string): [string, string] {
  * split's Markdown pane makes it while the user types there, so the rest of
  * the source stays as written instead of in Milkdown's form. The top-level
  * blocks the insert changed are written in Milkdown's form, with a blank line
- * on each side. The changed source must read back as `after`. Null when it
- * would not, as for text after a code fence that is not closed yet, when it
- * would take out a link reference definition, or when the source's top-level
- * blocks do not line up with the document's, as for an empty body.
+ * on each side. A list that would join a list next to it with the same
+ * marker takes the other marker. The changed source must read back as
+ * `after`. Null when it would not, as for text after a code fence that is not
+ * closed yet, when it would take out a link reference definition, or when
+ * the source's top-level blocks do not line up with the document's, as for an
+ * empty body.
  */
 export function sourceEditBetween(ctx: Ctx, before: Node, after: Node, body: string): SourceEdit | null {
   const source = sourceBlocks(ctx, body);
@@ -399,11 +401,31 @@ export function sourceEditBetween(ctx: Ctx, before: Node, after: Node, body: str
   const [open, close] = blankLinesAround(body.slice(0, from), body.slice(to));
   const serialize = ctx.get(serializerCtx);
   const parse = ctx.get(parserCtx);
-  const text = serialize(after.type.create(null, written)).replace(/\n+$/, "");
-  if (!text) return null;
-  const insert = open + text + close;
-  const changed = body.slice(0, from) + insert + body.slice(to);
-  return serialize(parse(changed)).trimEnd() === serialize(after).trimEnd() ? { from, to, insert, assoc } : null;
+  const shown = serialize(after).trimEnd();
+  for (const text of writtenForms(serialize, after.type, written)) {
+    const insert = open + text + close;
+    const changed = body.slice(0, from) + insert + body.slice(to);
+    if (serialize(parse(changed)).trimEnd() === shown) return { from, to, insert, assoc };
+  }
+  return null;
+}
+
+/**
+ * The ways to write `blocks` in Milkdown's form, to try in turn. Written on
+ * their own, a list takes the default marker, so it would join a list next to
+ * it in the source with that marker. The second way writes a first block
+ * that is a list with the other marker, as remark does after a list.
+ */
+function writtenForms(serialize: (doc: Node) => string, docType: Node["type"], blocks: Node[]): string[] {
+  const write = (nodes: Node[]) => serialize(docType.create(null, nodes)).replace(/\n+$/, "");
+  const alone = write(blocks);
+  const forms = alone ? [alone] : [];
+  if (isList(blocks[0])) {
+    const lead = write([blocks[0]]);
+    const led = write([blocks[0], ...blocks]);
+    if (lead && led.startsWith(lead)) forms.push(led.slice(lead.length).replace(/^\n+/, ""));
+  }
+  return forms;
 }
 
 /**

@@ -342,6 +342,18 @@ describe("the source change for a file dropped on the split's document pane", ()
     expect(dropInSource(opened, source, 300, 128)).toBe(changed.replace("LINK", LINK_A));
   });
 
+  it.each([
+    ["the list after it", "* a\n* b\n\n- c\n- d\n\nEnd.\n", "b", "* a\n* b\n* LINK\n\n- c\n- d\n\nEnd.\n"],
+    ["the list before it", "- a\n- b\n\n* c\n* d\n\nEnd.\n", "d", "- a\n- b\n\n* c\n* d\n* LINK\n\nEnd.\n"],
+    ["the numbered list before it", "1. a\n2. b\n\n1) x\n2) y\n\nEnd.\n", "y", "1. a\n2. b\n\n1) x\n2) y\n3) LINK\n\nEnd.\n"],
+  ])("writes a list with the other marker where it would join %s", async (_which, source, item, changed) => {
+    const opened = await open(source);
+    place(opened, block("list_item", item), 140, 170);
+    place(opened, block("paragraph", item), 140, 170, 60);
+
+    expect(dropInSource(opened, source, 300, 169)).toBe(changed.replace("LINK", LINK_A));
+  });
+
   it("finds no source change where the file would go into a code block that is not closed yet", async () => {
     const source = "Intro.\n\nMiddle.\n\n```js\nlet a = 1;";
     const opened = await open(source);
