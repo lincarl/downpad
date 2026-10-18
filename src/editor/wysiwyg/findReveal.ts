@@ -154,12 +154,22 @@ export function codeMirrorSpan(cm: CodeMirror, from: number, to: number): Span |
   return start && end ? spanBetween(start, end) : null;
 }
 
+/** How far above the find card the room below a page's last line lets that line rise. */
+const CARD_GAP = 12;
+
+/** Pages that `revealSpan` gave room below their last line. */
+const pagesWithRoom = new Set<HTMLElement>();
+
 /**
  * Scroll the page around `inside` so `span` is visible and clear of the find
  * card, which floats over the bottom right of the page. A span out of view or
  * under the card is centred in the part of the page above the card, and a page
  * that scrolls sideways centres it that way too. A span that is visible and
  * clear of the card stays put.
+ *
+ * Near the end of the document the page can stop before the span is clear of
+ * the card. The page then gets room below its last line, as tall as the card
+ * reaches up into the page plus a gap, until `releaseFindRoom`.
  */
 export function revealSpan(inside: Element, span: Span): void {
   // Sideways first, as that can move the span under the card.
@@ -173,7 +183,28 @@ export function revealSpan(inside: Element, span: Span): void {
   const card = cardOver(span.left - dx, span.right - dx);
   const end = card && card.top - top >= span.bottom - span.top ? Math.min(bottom, card.top) : bottom;
   if (span.top >= top && span.bottom <= end) return;
-  page.scrollTop += (span.top + span.bottom) / 2 - (top + end) / 2;
+  const from = page.scrollTop;
+  const target = from + (span.top + span.bottom) / 2 - (top + end) / 2;
+  page.scrollTop = target;
+  if (end === bottom || span.bottom - (page.scrollTop - from) <= end + 0.5) return;
+  makeRoom(page, bottom - end + CARD_GAP);
+  page.scrollTop = target;
+}
+
+/** Give `page` at least `room` pixels below its last line. The pages' CSS
+ *  reads it from --find-room. */
+function makeRoom(page: HTMLElement, room: number): void {
+  if (room > (parseFloat(page.style.getPropertyValue("--find-room")) || 0)) {
+    page.style.setProperty("--find-room", `${Math.ceil(room)}px`);
+  }
+  pagesWithRoom.add(page);
+}
+
+/** Take away the room `revealSpan` gave pages below their last line, once the
+ *  find card's search is over. A page scrolled into that room moves back. */
+export function releaseFindRoom(): void {
+  for (const page of pagesWithRoom) page.style.removeProperty("--find-room");
+  pagesWithRoom.clear();
 }
 
 /** The page `inside` is on: its outermost ancestor that scrolls vertically,

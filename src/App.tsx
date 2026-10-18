@@ -133,10 +133,12 @@ function AppContent({ store }: { store: Store }) {
             )}
             hidden={!editorVisible}
           >
+            {/* Find can give the page more room below its last line, to lift a
+                match there clear of the find card (findReveal.ts). */}
             <div
               className={cn(
                 "editor-column mx-auto w-full max-w-[var(--editor-width)]",
-                "px-6 pt-4 pb-16",
+                "px-6 pt-4 pb-[max(4rem,var(--find-room,0px))]",
               )}
             >
               <EditorIsland
