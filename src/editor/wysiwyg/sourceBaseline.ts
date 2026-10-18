@@ -28,12 +28,13 @@
 // It writes Milkdown's form of the whole document instead whenever a window
 // does not read back that way, even with blank lines at its joins. It also
 // does so when the source's blocks do not match the document's one for one,
-// when a changed block held a definition, when a new footnote could change how
-// a kept block reads, when a kept definition could turn text in a changed block
-// into a link, when indented code could end in another place than in
-// the source, when text follows a block that read as it did only at the very
-// end of the source, or when reading the windows back would take longer than
-// writing the whole document.
+// when a changed block held a definition, when a new footnote or a definition
+// in a changed block's raw HTML could change how a kept block reads, when a
+// kept definition could turn text in a changed block into a link, when
+// indented code could end in another place than in the source, when text
+// follows a block that read as it did only at the very end of the source, or
+// when reading the windows back would take longer than writing the whole
+// document.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { RemarkParser } from "@milkdown/kit/transformer";
@@ -208,6 +209,10 @@ const FENCE = /^ {0,3}(`{3,}|~{3,}|\${2,})/;
 /** How a line that can only be paragraph text starts, which is with a letter,
  *  a digit or a character no other block starts with (see `plainLine`). */
 const PLAIN_START = /^[\p{L}\p{N}\\("'!&*_`~]/u;
+/** A line that could start a link reference or footnote definition, after
+ *  any indent and quote or list markers, such as `> - [label]: /url` or
+ *  `[^note]: Text`. Its label may go on over line breaks. */
+const DEFINITION_LINE = /^(?:[ \t>]|[*+-][ \t]|\d{1,9}[.)][ \t])*\[(?:\\[\s\S]|[^\\[\]])+\]:/m;
 
 /** The body Crepe parsed, which writes later states of the document with the
  *  source text of every top-level block that still says the same. */
@@ -380,7 +385,7 @@ export class SourceBaseline {
     }
     if (!passTo(layout.items.length)) return null;
     if (pieces.length === 0) return "";
-    if (addsFootnote(pieces, layout) || linksToKeptDefinition(pieces, layout)) return null;
+    if (addsFootnote(pieces, layout) || addsDefinition(pieces) || linksToKeptDefinition(pieces, layout)) return null;
     const gaps = this.join(pieces, layout);
     if (!gaps) return null;
     return layout.lead + pieces.map((piece, k) => piece.text + (gaps[k] ?? "")).join("") + layout.tail;
@@ -1099,6 +1104,25 @@ function addsFootnote(pieces: readonly Piece[], layout: SourceLayout): boolean {
     ({ block }) => block?.type.name === "footnote_definition" && !layout.footnotes.has(referenceLabel(String(block.attrs.label))),
   );
   return added && pieces.some((piece) => piece.item >= 0 && piece.text.includes("[^"));
+}
+
+/**
+ * Whether a block Milkdown wrote could add a link reference or footnote
+ * definition that changes how a kept block reads. Milkdown writes the raw
+ * text of HTML as it is. A comment or `<pre>` can hold blank lines, and once
+ * text comes before it in a paragraph or heading, a blank line there ends the
+ * block, so a line such as `[draft]: /url` or `[^1]: Note` after it reads as
+ * a definition for the whole body. Milkdown's whole body escapes the brackets
+ * of all other text, but a kept block keeps the file's `[draft]` or `[^1]`.
+ * Any such line counts, except a changed footnote's own first line, and
+ * only if a kept block has text in brackets. A code block holds none.
+ */
+function addsDefinition(pieces: readonly Piece[]): boolean {
+  const added = pieces.some(({ item, text, block }) => {
+    if (item >= 0 || !block || block.type.name === "code_block") return false;
+    return DEFINITION_LINE.test(block.type.name === "footnote_definition" ? text.slice(firstLine(text).length) : text);
+  });
+  return added && pieces.some((piece) => piece.item >= 0 && piece.text.includes("["));
 }
 
 /**

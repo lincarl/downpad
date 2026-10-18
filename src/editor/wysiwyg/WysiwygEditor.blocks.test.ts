@@ -760,6 +760,39 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => view.dispatch(view.state.tr.insertText("[^1]", 2)),
       "---\n\n\\[^1]<table><tr><td>x</td></tr></table>\n[t]: /url\n  'title'\n\n2. two\n3. three\n\n- <custom-tag>\n",
     ],
+    // Milkdown writes the raw text of an HTML block as it is. Once text comes
+    // before a comment or `<pre>` with blank lines in it, a blank line ends
+    // that text, and a line in it reads as a definition for the whole file.
+    // Kept text such as `[draft]` would then read as a link or footnote.
+    [
+      "a comment with a definition in it merged into a paragraph",
+      "# Release notes\n\nStatus [draft] until review.\n\nIntro paragraph.\n\n<!--\n\n[draft]: https://example.com/old-draft\n\n-->\n\nTail.\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(blockWith(view, "Intro paragraph.").to)),
+      "# Release notes\n\nStatus \\[draft] until review.\n\nIntro paragraph.<!--\n\n[draft]: https://example.com/old-draft\n\n-->\n\nTail.\n",
+    ],
+    [
+      "a comment with a footnote in it merged into a paragraph",
+      "# Notes\n\nA claim [^1] stays as typed.\n\nIntro paragraph.\n\n<!--\n\n[^1]: a note kept for later\n\n-->\n\nTail.\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(blockWith(view, "Intro paragraph.").to)),
+      "# Notes\n\nA claim \\[^1] stays as typed.\n\nIntro paragraph.<!--\n\n[^1]: a note kept for later\n\n-->\n\nTail.\n",
+    ],
+    [
+      "text typed before a `<pre>` with a definition in it",
+      "# Release notes\n\nStatus [draft] until review.\n\n<pre>\n\n> [draft]: https://example.com/old-draft\n\n</pre>\n\nTail.\n",
+      // The `<pre>` is the block right below the paragraph.
+      (view: EditorView) => view.dispatch(view.state.tr.insertText("Note: ", blockWith(view, "until review.").to + 1)),
+      "# Release notes\n\nStatus \\[draft] until review.\n\nNote: <pre>\n\n> [draft]: https://example.com/old-draft\n\n</pre>\n\nTail.\n",
+    ],
+    [
+      "a heading made of text and a comment with a definition in it",
+      "Status [draft] until review.\n\nIntro paragraph.\n\n<!--\n\n[draft]: https://example.com/old-draft\n\n-->\n",
+      (view: EditorView) => {
+        view.dispatch(view.state.tr.join(blockWith(view, "Intro paragraph.").to));
+        const { from } = blockWith(view, "Intro paragraph.");
+        view.dispatch(view.state.tr.setBlockType(from + 1, from + 1, view.state.schema.nodes.heading, { level: 2 }));
+      },
+      "Status \\[draft] until review.\n\nIntro paragraph.<!--\n\n[draft]: https://example.com/old-draft\n\n-->\n---\n",
+    ],
     // Milkdown writes a heading with line breaks in setext form. Starting with
     // a comment, it reads as the comment and a paragraph "===", which would
     // take in the next line.
@@ -799,12 +832,38 @@ describe("a definition the file keeps", () => {
     expect(editor.getMarkdown()).toBe(markdown.replace("See [ref]", "See now [ref]"));
   });
 
+  it("keeps the file's text when a changed block adds a definition but no kept block has brackets", { timeout: 60_000 }, async () => {
+    const markdown = "* Status draft until review.\n\nIntro paragraph.\n\n<!--\n\n[draft]: /old\n\n-->\n\nTail.\n";
+    const { editor, view } = await open(markdown);
+    // A definition changes only how text in brackets reads.
+    view.dispatch(view.state.tr.join(blockWith(view, "Intro paragraph.").to));
+    expect(editor.getMarkdown()).toBe(markdown.replace("Intro paragraph.\n\n<!--", "Intro paragraph.<!--"));
+  });
+
+  it("keeps the file's text when a line like a definition is typed in a code block", { timeout: 60_000 }, async () => {
+    const markdown = "See [the docs][d].\n\n```\nlet a = b\n```\n\n[d]: https://d.example\n";
+    const { editor, view } = await open(markdown);
+    // Text in a code block is never a definition.
+    typeAfter(view, "let a = b", "\n[x]: /other");
+    expect(editor.getMarkdown()).toBe(markdown.replace("let a = b", "let a = b\n[x]: /other"));
+  });
+
   it("keeps the file's text when the label is typed in a code block", { timeout: 60_000 }, async () => {
     const markdown = "Intro.\n\n```\nlet a = b\n```\n\nUses [ref].\n\n[ref]: https://r.example\n";
     const { editor, view } = await open(markdown);
     // Text in a code block is never a reference.
     typeAfter(view, "let a = b", "[ref]");
     expect(editor.getMarkdown()).toBe(markdown.replace("let a = b", "let a = b[ref]"));
+  });
+});
+
+describe("a changed footnote", () => {
+  it("keeps the file's text where kept blocks use its label", { timeout: 60_000 }, async () => {
+    const markdown = "A claim[^1] here, with [a link][r].\n\n[^1]: The note.\n\n[r]: https://r.example\n";
+    const { editor, view } = await open(markdown);
+    // The changed footnote's own line defines the label it already had.
+    typeAfter(view, "The note", " now");
+    expect(editor.getMarkdown()).toBe(markdown.replace("The note.", "The note now."));
   });
 });
 
