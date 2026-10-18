@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import type { Node } from "@milkdown/kit/prose/model";
+import { splitBlock } from "@milkdown/kit/prose/commands";
 import { undo } from "@milkdown/kit/prose/history";
 import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -417,6 +418,37 @@ describe("a file dropped on the split's Markdown pane while the user types in th
     type(opened, " Typed.");
 
     expect(opened.getMarkdown()).toBe(`First line. Typed.\n\n${LINK_A}\n\nSecond line.\n`);
+  });
+
+  /** Open three paragraphs with the caret at the end, in a pane the user types in. */
+  async function typingAtEnd(): Promise<WysiwygEditor> {
+    const opened = await open("First para.\n\nSecond para.\n\nThird para.\n");
+    const view = viewOf(opened);
+    vi.spyOn(view, "hasFocus").mockReturnValue(true);
+    view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+    return opened;
+  }
+
+  it("keeps a space just typed at the end of a line", async () => {
+    const opened = await typingAtEnd();
+    type(opened, " typed ");
+
+    // The Markdown pane has this pane's report, and the file dropped there.
+    opened.setMarkdown(`First para.${LINK_A}\n\nSecond para.\n\nThird para. typed \n`);
+    type(opened, "more");
+
+    expect(opened.getMarkdown()).toBe(`First para.${LINK_A}\n\nSecond para.\n\nThird para. typed more\n`);
+  });
+
+  it("keeps a new empty last line the caret is on", async () => {
+    const opened = await typingAtEnd();
+    const view = viewOf(opened);
+    splitBlock(view.state, view.dispatch);
+
+    opened.setMarkdown(`First para.${LINK_A}\n\nSecond para.\n\nThird para.\n`);
+    type(opened, "more");
+
+    expect(opened.getMarkdown()).toBe(`First para.${LINK_A}\n\nSecond para.\n\nThird para.\n\nmore\n`);
   });
 });
 

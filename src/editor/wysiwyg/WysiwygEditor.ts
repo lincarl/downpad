@@ -501,8 +501,9 @@ export class WysiwygEditor {
    * Positions outside the changed blocks keep their place, such as the caret
    * and the targets of drops, through the sync and its undo and redo. The user
    * can be typing here while a file dropped on the Markdown pane goes in
-   * there. The table keeps its cells unless one still shows text the block no
-   * longer has.
+   * there. Then a block the sync leaves alone keeps what only this pane
+   * holds, such as a space typed at the end of a line. The table keeps its
+   * cells unless one still shows text the block no longer has.
    *
    * The replacement is reported like an edit after a ~200ms pause
    * (`scheduleChange`). That report carries `markdown` itself, because every
@@ -544,10 +545,12 @@ export class WysiwygEditor {
       // has just stored, and the new body's baseline go in the same
       // transaction. A file dropped on this pane while the other one was
       // edited still goes in where it was dropped, since the drop targets map
-      // through it.
+      // through it. While the user types here, what only the editor holds
+      // stays.
+      const typedIn = this.withView((view) => view.hasFocus(), false);
       const slot: BaselineSlot = { baseline: null };
       this.crepe.editor.action(
-        mirrorMarkdown(body, (state, tr) =>
+        mirrorMarkdown(body, typedIn, (state, tr) =>
           setBaseline(state, setFrontmatter(state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator }), slot),
         ),
       );

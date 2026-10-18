@@ -488,11 +488,16 @@ function changedPart(
  * only the part that changed. Positions outside the changes keep their place
  * through the sync and through its undo and redo, and so do the caret, the
  * selection and the targets of drops. The user can be typing in this pane
- * while a file dropped on the Markdown pane goes in there. `extend` can add
- * steps to the same transaction, such as the frontmatter's.
+ * while a file dropped on the Markdown pane goes in there. Then, with
+ * `keepEditorOnly`, the blocks are compared as the document reads back from
+ * its Markdown, so a block the sync does not change keeps what only the
+ * editor holds, such as a space just typed at the end of a line, or a new
+ * empty last line. `extend` can add steps to the same transaction, such as
+ * the frontmatter's.
  */
 export function mirrorMarkdown(
   markdown: string,
+  keepEditorOnly: boolean,
   extend: (state: EditorState, tr: Transaction) => Transaction = (_state, tr) => tr,
 ) {
   return (ctx: Ctx): void => {
@@ -502,7 +507,20 @@ export function mirrorMarkdown(
     if (!next) return;
     const { state } = view;
     const { doc } = state;
-    const runs = differingRuns(doc.childCount, next.childCount, (a, b) => sameBlock(doc.child(a), next.child(b)), 50_000);
+    // The document as its Markdown reads back, block for block. The empty
+    // lines at its end have no Markdown.
+    let compared = doc;
+    let count = doc.childCount;
+    if (keepEditorOnly) {
+      const read = parse(ctx.get(serializerCtx)(doc));
+      let kept = doc.childCount;
+      while (read && kept > read.childCount && isEmptyParagraph(doc.child(kept - 1))) kept -= 1;
+      if (read && kept === read.childCount) {
+        compared = read;
+        count = kept;
+      }
+    }
+    const runs = differingRuns(count, next.childCount, (a, b) => sameBlock(compared.child(a), next.child(b)), 50_000);
     const starts = blockStarts(doc);
     const nextStarts = blockStarts(next);
     const tr = state.tr;
