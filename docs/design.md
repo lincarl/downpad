@@ -23,6 +23,10 @@ Each open document has one canonical Markdown string. The document and source ed
 - Markdown view exposes the source directly. It parses GitHub Flavored Markdown with a leading YAML frontmatter block, and colors it with VS Code's default Markdown and YAML token colors (Light+ and Dark+).
 - Split view shows both and synchronizes changes between them.
 
+If the document view cannot be built for a tab, because Milkdown's create fails (for example when the parser overflows its stack on deeply nested quotes), the tab records the error and shows its Markdown view alone, whatever the window's layout. The layout control shows Markdown while that tab is active, and the window's layout and the `defaultView` setting stay as they are. The notice bar under the tabs explains the fallback and offers Try again. Any other banner, such as a file changed on disk, takes the bar first. Try again, choosing Document or Split, or reloading the file builds the document view again from the tab's current text. A failed create still ends, because md-easy skips Milkdown's destroy for an editor that is still creating. That destroy would otherwise try again every 50 ms forever. The print workspace prints the Markdown version of a document it cannot render.
+
+Building the document view can take a moment, for example while local images are looked up, and the Markdown view on screen stays editable meanwhile. If the text or a document setting changes during the build, md-easy builds the view again from the current text and settings before it shows it. So the document view never shows older text, and its edits always reach the tab. If the text changes during each of five builds in a row, md-easy stops and shows the tab's Markdown view with the notice, as for a failed create.
+
 Opening a document never changes its text. The document view reports the exact source it was given until the user edits the body there, and an edit there writes the body in Milkdown's Markdown style.
 
 The document view shows the YAML frontmatter in an editable table above the editor. The table writes back only the lines it changes. Each change to the block is a step in the editor's undo history, so undo and redo move through table and body edits in one order. A split mirror sync records the block and the blank lines after it with the body, so its undo restores all three.
@@ -75,7 +79,7 @@ Electron provides native windows, file associations, single-instance behavior, n
 
 Undo and Redo in the native menus (the spell-check menu that Shift+right-click opens, and the macOS Edit menu) go to the renderer, which runs the focused editor's undo history. Chromium's own undo knows nothing of those histories. A plain text field, such as the find card's, keeps Chromium's undo.
 
-The print workspace mounts a rendered copy of the document in the app window. Electron prints that document using the selected printer or writes a PDF. Printing waits for the workspace to finish rendering before starting the job.
+The print workspace mounts a rendered copy of the document in the app window. Electron prints that document using the selected printer or writes a PDF. Printing waits for the workspace to finish rendering before starting the job. md-easy lays out the sheets itself and breaks pages between blocks. A table, list, or code block taller than a page continues on the next page, and so does a line of the Markdown version, split between the lines it wraps onto.
 
 The frontend can also run in a browser-backed development environment with platform operations represented by adapters. This allows most interface and editing behavior to be tested independently of the desktop shell.
 

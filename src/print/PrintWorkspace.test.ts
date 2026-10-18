@@ -55,7 +55,7 @@ class TestResizeObserver implements ResizeObserver {
 
 const JOB: PrintJob = {
   markdown: "# Notes\n",
-  documentNode: null,
+  documentNode: document.createElement("div"),
   docTitle: "notes.md",
 };
 
@@ -203,6 +203,21 @@ describe("PrintWorkspace React view", () => {
     // React owns the surrounding preview while the pagination renderer owns the
     // page nodes within its dedicated slot; re-rendering must keep that boundary.
     expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
+  });
+
+  it("prints the Markdown version of a document md-easy could not render, keeping the saved choice", () => {
+    act(() => workspace!.open({ ...JOB, documentNode: null }));
+
+    expect(radio("Markdown").checked).toBe(true);
+    expect(radio("Document").disabled).toBe(true);
+    expect(printRenderMocks.renderPrintPages.mock.calls[0]?.[0]).toMatchObject({ version: "markdown" });
+    expect(document.querySelector(".print-ws-hint")?.textContent).toBe(
+      "md-easy can't show this document in the Document view, so it prints the Markdown source.",
+    );
+
+    editInput("Scale", "120");
+    act(() => workspace!.close());
+    expect(saveSettings.mock.calls[0]?.[0]).toMatchObject({ printVersion: "document", printScalePercent: 120 });
   });
 
   it("switches orientation with radios and describes the paper under the preview", () => {

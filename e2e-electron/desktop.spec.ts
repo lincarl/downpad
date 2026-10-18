@@ -554,6 +554,49 @@ test("launching with a file builds its document editor once", async () => {
   expect(await page.evaluate(() => Reflect.get(window, "editorBuilds"))).toBe(2);
 });
 
+test("a file the document view cannot show opens in the Markdown view with a notice, and Try again shows it once fixed", async () => {
+  const deep = path.join(directory, "deep.md");
+  const normal = path.join(directory, "normal.md");
+  // Nesting this deep overflows the Markdown parser's stack.
+  await writeFile(deep, ">".repeat(10_000) + " deep\n");
+  await writeFile(normal, "# Normal file\n");
+  await launch(deep);
+  const notice = page.getByRole("alert");
+  await expect(notice).toHaveText(
+    "md-easy can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.Try again",
+  );
+  const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
+  await expect(markdown).toContainText("> deep");
+  await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(1);
+  await expect(page.getByRole("radio", { name: "Markdown", exact: true })).toHaveAttribute("aria-checked", "true");
+
+  // Startup finished, so the shortcuts work. Other tabs show no notice.
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.getByRole("tab", { name: "Untitled", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(notice).toHaveCount(0);
+  await chooseOpen(normal);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Normal file");
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toHaveAttribute("aria-checked", "true");
+
+  await page.getByRole("tab", { name: "deep.md", exact: true }).click();
+  await expect(notice).toBeVisible();
+  // Dismissing the notice puts focus in the Markdown view, not on the clicked
+  // tab. Choosing Document tries again, and the failure brings the notice back.
+  await notice.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(markdown).toBeFocused();
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(notice).toBeVisible();
+  await markdown.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText("# Fixed\n\nNo longer deep.\n");
+  await notice.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Fixed");
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toBeFocused();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toHaveAttribute("aria-checked", "true");
+});
+
 test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   const file = path.join(directory, "recovered.md");
   await writeFile(file, "# Before the crash\n");
@@ -1368,6 +1411,44 @@ test("the empty line after a final list adds no blank sheet to the print", async
   });
   expect(roomBelowList).toBeLessThan(8);
   await expect(page.locator(".print-page")).toHaveCount(1);
+});
+
+test("the Markdown version continues a source line taller than a page on the next pages", async () => {
+  const file = path.join(directory, "long-lines.md");
+  // The nested quotes overflow the Markdown parser's stack, so the file prints as
+  // Markdown. Both long lines wrap past a page: one breaks between characters,
+  // the other between words.
+  const quotes = ">".repeat(10_000) + " deep";
+  const paragraph = Array.from({ length: 2_000 }, (_, index) => `word${index + 1}`).join(" ");
+  const lines = ["Before", quotes, `${paragraph} END_MARKER`, "After"];
+  await writeFile(file, lines.join("\n") + "\n");
+  await launch(file);
+  await expect(page.getByRole("alert")).toBeVisible();
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  await expect(page.locator(".print-source").first()).toBeVisible();
+
+  const sheets = await page.locator(".print-page").evaluateAll((pages) =>
+    pages.map((sheet) => {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      return {
+        overflow: body.scrollHeight - body.clientHeight,
+        text: Array.from(sheet.querySelectorAll(".print-flow > *"), (block) => block.textContent).join(""),
+      };
+    }),
+  );
+  // Each line printed as one block, and the page clipped what did not fit.
+  for (const sheet of sheets) expect(sheet.overflow).toBeLessThanOrEqual(0);
+  // Every character prints once, in order.
+  expect(sheets.map((sheet) => sheet.text).join("")).toBe(lines.join(""));
+  expect(sheets.length).toBeGreaterThan(lines.length);
+
+  const pdf = path.join(directory, "long-lines.pdf");
+  await chooseSave(pdf);
+  await page.getByRole("button", { name: "Save as PDF", exact: true }).click();
+  await expect(page.locator(".print-workspace")).toBeHidden({ timeout: 30_000 });
+  // Every sheet reaches the PDF as a page of its own.
+  const pages = (await readFile(pdf)).toString("latin1").match(/\/Type\s*\/Page(?![A-Za-z])/g);
+  expect(pages).toHaveLength(sheets.length);
 });
 
 test("Print submits the document to an installed test printer", async () => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import { packByHeight, splitIntoPages } from "./paginate";
 
 /** jsdom does no layout, so the measurements the packer reads are stubbed. */
@@ -525,5 +525,92 @@ describe("splitIntoPages, splitting a Crepe list", () => {
       Array.from(p.querySelectorAll("li")).map((li) => li.textContent),
     );
     expect(items).toEqual(Array.from({ length: 40 }, (_, i) => `item ${i + 1}`));
+  });
+});
+
+describe("splitIntoPages, splitting a Markdown source line", () => {
+  /** Line box and text box heights of the fake layout below. */
+  const LINE_BOX = 18;
+  const TEXT_BOX = 14;
+  /** The wrapped line each character of a laid-out text node sits on. */
+  const wrappedLines = new Map<Node, number[]>();
+
+  beforeEach(() => {
+    // jsdom has no layout and no Range geometry. A character's box is its line's
+    // text box, centred in the line box as Chromium reports it.
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value(this: Range) {
+        const line = wrappedLines.get(this.startContainer)![this.startOffset];
+        const top = line * LINE_BOX + (LINE_BOX - TEXT_BOX) / 2;
+        return DOMRect.fromRect({ x: 0, y: top, width: 7, height: TEXT_BOX });
+      },
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
+    wrappedLines.clear();
+  });
+
+  /**
+   * A `.print-src-line` laid out as if in a monospace face `columns` characters
+   * wide: it wraps before a word that would not fit, and the spaces after a word
+   * stay at the end of its line, as `white-space: pre-wrap` hangs them.
+   */
+  function sourceLine(text: string, columns: number): HTMLElement {
+    const lines: number[] = [];
+    let line = 0;
+    let column = 0;
+    for (const word of text.split(/(?<= )/)) {
+      if (column > 0 && column + word.trimEnd().length > columns) {
+        line++;
+        column = 0;
+      }
+      for (let i = 0; i < word.length; i++) lines.push(line);
+      column += word.length;
+    }
+    const el = document.createElement("div");
+    el.className = "print-src-line";
+    el.textContent = text;
+    wrappedLines.set(el.firstChild!, lines);
+    const height = (line + 1) * LINE_BOX;
+    Object.defineProperty(el, "offsetHeight", { value: height });
+    el.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 0, width: 280, height });
+    return el;
+  }
+
+  it("continues a line taller than a page on the next pages, between its wrapped lines", () => {
+    // Each source line printed as one block, so a line taller than a page was
+    // clipped at the page edge and everything after its first page was lost.
+    const words = Array.from({ length: 400 }, (_, i) => `word${i}`).join(" ");
+    const before = sourceLine("# Notes", 40);
+    const long = sourceLine(words, 40);
+    const after = sourceLine("The end.", 40);
+    const lineOf = wrappedLines.get(long.firstChild!)!;
+    const flow = document.createElement("div");
+    flow.append(before, long, after);
+
+    splitIntoPages(flow, 500);
+
+    const blocks = Array.from(flow.children) as HTMLElement[];
+    expect(blocks[0]).toBe(before);
+    expect(blocks[blocks.length - 1]).toBe(after);
+    const pieces = blocks.slice(1, -1);
+    expect(pieces.length).toBeGreaterThan(1);
+    // Every character prints once, in order.
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(words);
+    let start = 0;
+    pieces.forEach((piece, index) => {
+      expect(piece.className).toBe("print-src-line");
+      const end = start + piece.textContent!.length;
+      // A piece starts where a wrapped line starts...
+      if (start > 0) expect(lineOf[start]).toBe(lineOf[start - 1] + 1);
+      // ...and fills a page with whole lines: 27 lines of 18px fit in 500px.
+      const lines = lineOf[end - 1] - lineOf[start] + 1;
+      if (index < pieces.length - 1) expect(lines).toBe(27);
+      else expect(lines).toBeLessThanOrEqual(27);
+      start = end;
+    });
   });
 });

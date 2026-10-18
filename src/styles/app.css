@@ -1338,7 +1338,8 @@ body {
 /* stylelint-enable no-descending-specificity */
 
 /* The Markdown version: raw source, one block per line so breaks land between
-   lines (printRender.ts → markdownFlow). */
+   lines (printRender.ts → markdownFlow). A line taller than a page is split
+   between the lines it wraps onto (paginate.ts → splitSourceLine). */
 .print-source {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 12px;

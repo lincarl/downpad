@@ -26,13 +26,15 @@ export const linkUrlKey = new PluginKey<LinkUrlState>("md-easy-link-url");
 
 const MAX_URL = 42;
 
-/** Middle-truncate a long URL: keep the head and tail, elide the middle. */
+/** Middle-truncate a long URL: keep the head and tail, elide the middle.
+ *  Counts code points, so a cut never splits an emoji's surrogate pair. */
 export function middleTruncate(url: string, max: number = MAX_URL): string {
-  if (url.length <= max) return url;
+  const chars = Array.from(url);
+  if (chars.length <= max) return url;
   const keep = max - 1; // room for the ellipsis
   const head = Math.ceil(keep / 2);
   const tail = Math.floor(keep / 2);
-  return `${url.slice(0, head)}…${url.slice(url.length - tail)}`;
+  return `${chars.slice(0, head).join("")}…${chars.slice(chars.length - tail).join("")}`;
 }
 
 function linkMarkHref(node: ProseNode): string | null {

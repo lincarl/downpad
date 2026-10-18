@@ -19,7 +19,7 @@ import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
-import { layoutFromDefaultView } from "../state/types";
+import { layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
 import { preparePrintJob } from "../print/printDocument";
 import { PrintWorkspace } from "../print/PrintWorkspace";
@@ -36,6 +36,9 @@ export interface AppRuntimeHosts {
 export interface AppRuntimeCallbacks {
   setRecentSummary(text: string): void;
 }
+
+/** The notice bar action that tries a tab's failed Document view again. */
+export const RETRY_DOCUMENT_VIEW = "retry-document-view";
 
 export class AppRuntime {
   private readonly files: FileService;
@@ -217,11 +220,25 @@ export class AppRuntime {
   }
 
   handleBannerAction(id: string): void {
-    this.desktopEvents.handleBannerAction(id);
+    if (id === RETRY_DOCUMENT_VIEW) void this.retryDocumentView();
+    else this.desktopEvents.handleBannerAction(id);
   }
 
   dismissBanner(): void {
-    this.store.set({ banner: null });
+    // The notice bar shows the app's banner, or else the active tab's Document
+    // view failure (App.tsx), so dismiss whichever it shows.
+    const { banner, tabs, activeTabId } = this.store.get();
+    if (banner) {
+      this.store.set({ banner: null });
+      return;
+    }
+    const failure = tabs.find((tab) => tab.id === activeTabId)?.documentViewFailure;
+    if (!activeTabId || !failure) return;
+    this.store.setDocumentViewFailure(activeTabId, { ...failure, dismissed: true });
+    // The bar remembers where focus was when it appeared, which for this notice
+    // can be the clicked tab, the page body or another tab's editor. The user
+    // was working in this tab's Markdown view, so continue there.
+    this.editorHost.focusEditor();
   }
 
   revealPath(path: string): void {
@@ -304,20 +321,36 @@ export class AppRuntime {
 
   /** Switch which editor panes are shown — document only, the split, or Markdown
    *  only (§6.1). A no-op with no document open or on the Recent view (the toolbar
-   *  disables the control there) and when the layout is unchanged. */
+   *  disables the control there) and when the tab already shows that layout.
+   *  A tab shown in Markdown because its Document view failed tries that view
+   *  again when the document or the split is chosen. */
   private async setLayout(layout: EditorLayout): Promise<void> {
     if (this.switchingView) return;
     if (!this.store.get().activeTabId) return; // nothing to show
     if (this.store.get().view === "recent") return; // handled in the editor only
-    if (this.store.get().editorLayout === layout) return;
+    if (shownLayout(this.store.get()) === layout) return;
+    await this.changePanes(async () => {
+      this.store.set({ editorLayout: layout });
+      await this.editorHost.setLayout(layout);
+    });
+  }
+
+  /** Try the active tab's Document view again (the notice's Try again). */
+  private async retryDocumentView(): Promise<void> {
+    if (this.switchingView) return;
+    await this.changePanes(() => this.editorHost.retryDocumentView());
+  }
+
+  /** Change which of the active tab's editors are shown. An open find card
+   *  then searches the editor shown afterwards. */
+  private async changePanes(change: () => Promise<void>): Promise<void> {
     this.switchingView = true;
     try {
       // Clear the outgoing editor's highlights (clear acts on the current
       // layout's editor); an open find card then searches the newly shown one.
       const searching = this.findBar.isOpen();
       if (searching) this.editorHost.clear();
-      this.store.set({ editorLayout: layout });
-      await this.editorHost.setLayout(layout);
+      await change();
       if (searching) this.findBar.refresh();
     } finally {
       this.switchingView = false;

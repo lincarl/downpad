@@ -13,7 +13,7 @@
 //     Crepe parsed, not Milkdown's rewrite of it.
 
 import { Crepe } from "@milkdown/crepe";
-import { remarkStringifyOptionsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { $prose, insert } from "@milkdown/kit/utils";
 import { Slice } from "@milkdown/kit/prose/model";
@@ -565,7 +565,9 @@ export class WysiwygEditor {
       // If disposal races mount, let create settle first. Its rejection is the
       // abandoned mount's concern; cleanup still gets a chance to run.
       if (creating) await creating.catch(() => {});
-      if (crepe) await crepe.destroy();
+      // A failed create leaves Milkdown in its creating state, where destroy()
+      // tries again every 50 ms forever. Such an editor has nothing to destroy.
+      if (crepe && crepe.editor.status !== EditorStatus.OnCreate) await crepe.destroy();
       // Release the closed document's diagrams from the theme watcher.
       pruneMermaidPreviews();
     })();

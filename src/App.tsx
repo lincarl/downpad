@@ -32,9 +32,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Store } from "@/state/store";
-import type { EditorLayout, Tab } from "@/state/types";
+import { shownLayout, type BannerState, type EditorLayout, type Tab } from "@/state/types";
 import { StoreProvider, useAppState } from "@/app/StoreProvider";
-import { AppRuntime } from "@/app/AppRuntime";
+import { AppRuntime, RETRY_DOCUMENT_VIEW } from "@/app/AppRuntime";
 import { AppRuntimeProvider, useAppRuntime } from "@/app/AppRuntimeContext";
 import { useOwnedAppRuntime } from "@/app/useAppRuntime";
 import { useDocumentTitle } from "@/app/useDocumentTitle";
@@ -58,6 +58,7 @@ import { byteLength, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
 import { showContextMenu } from "@/shell/contextMenu";
 import { EditorIsland } from "@/editor/EditorIsland";
+import { middleTruncate } from "@/editor/wysiwyg/linkView";
 import type { EditorHost } from "@/editor/EditorHost";
 
 export interface AppProps {
@@ -106,7 +107,7 @@ function AppContent({ store }: { store: Store }) {
   useDocumentTitle(state.activeTabId, state.doc.filePath, state.doc.isDirty);
 
   const editorVisible = state.view !== "recent";
-  const editorLayout = editorVisible ? state.editorLayout : "document";
+  const editorLayout = editorVisible ? shownLayout(state) : "document";
 
   return (
     <AppRuntimeProvider runtime={runtime}>
@@ -166,7 +167,8 @@ function AppContent({ store }: { store: Store }) {
 
 function Toolbar() {
   const runtime = useAppRuntime();
-  const { view, activeTabId, editorLayout, settings, find } = useAppState((state) => state);
+  const { view, activeTabId, settings, find } = useAppState((state) => state);
+  const editorLayout = useAppState(shownLayout);
   const inEditor = view !== "recent" && activeTabId !== null;
   const documentIsDark =
     settings.editorTheme === "dark" ||
@@ -350,7 +352,7 @@ function useToolbarMenu() {
 /** The hamburger menu: file actions, document actions, view choices and Settings. */
 function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDark: boolean }) {
   const runtime = useAppRuntime();
-  const editorLayout = useAppState((state) => state.editorLayout);
+  const editorLayout = useAppState(shownLayout);
   const { open, setOpen, triggerRef, activate, menuProps } = useToolbarMenu();
   const layout = (value: EditorLayout, label: string, icon: LucideIcon): MenuItem => ({
     label,
@@ -814,14 +816,23 @@ function DocumentTab({
 /**
  * The notice bar under the tab row, in the look of Mervin's wait bar: a notice
  * band with a line along its bottom edge, the message, push buttons and a close.
+ * It shows the app's banner, or else the notice that the active tab's Document
+ * view failed.
  */
 function Banner() {
   const runtime = useAppRuntime();
-  const banner = useAppState((state) => state.banner);
-  const visible = banner !== null;
+  const appBanner = useAppState((state) => state.banner);
+  const failure = useAppState((state) =>
+    state.view === "recent" ? undefined : state.tabs.find((tab) => tab.id === state.activeTabId)?.documentViewFailure,
+  );
+  const filePath = useAppState((state) => state.doc.filePath);
+  const notice = !appBanner && failure && !failure.dismissed ? documentViewNotice(filePath, failure.message) : null;
+  const banner = appBanner ?? notice;
+  const shown = appBanner ? "banner" : notice ? "notice" : null;
   // Answering or dismissing the bar removes the focused button; focus then goes
-  // back to where it was when the bar appeared instead of the page body.
-  useEffect(() => (visible ? captureFocus() : undefined), [visible]);
+  // back to where it was when the bar appeared instead of the page body. The
+  // failure notice that shows again after the app's banner counts as a new bar.
+  useEffect(() => (shown ? captureFocus() : undefined), [shown]);
   if (!banner) return <div className="banner row-start-3" hidden />;
   const error = banner.kind === "error";
   return (
@@ -836,7 +847,15 @@ function Banner() {
       aria-atomic="true"
     >
       {error && <TriangleAlert aria-hidden="true" className="shrink-0 text-ink-danger" {...SMALL_ICON} />}
-      <AlertDescription className="banner-message flex-1 text-[12px] leading-4 text-inherit">
+      <AlertDescription
+        className={cn(
+          "banner-message flex-1 text-[12px] leading-4 text-inherit",
+          // Two lines at most in a narrow window, breaking an over-long token
+          // such as a file URL. The tooltip has the uncut text.
+          notice && "line-clamp-2 [overflow-wrap:anywhere]",
+        )}
+        title={notice?.fullMessage}
+      >
         {banner.message}
       </AlertDescription>
       <div className="flex shrink-0 items-center gap-1.5">
@@ -866,6 +885,25 @@ function Banner() {
       </TooltipLabel>
     </Alert>
   );
+}
+
+/** The notice for a tab shown in Markdown because its Document view failed,
+ *  with its uncut text for the tooltip. */
+function documentViewNotice(filePath: string | null, error: string): BannerState & { fullMessage: string } {
+  const text = (name: string, detail: string): string =>
+    `md-easy can't show ${name} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Markdown view.`;
+  // The error's first line and the file name, cut short so the notice stays
+  // two lines in a window about 800 px wide or wider.
+  const name = fileLabel(filePath);
+  const line = error.split("\n", 1)[0].trim();
+  const chars = Array.from(line);
+  const detail = chars.length > 60 ? `${chars.slice(0, 59).join("").trimEnd()}…` : line;
+  return {
+    kind: "error",
+    message: text(middleTruncate(name, 40), detail),
+    fullMessage: text(name, line),
+    actions: [{ id: RETRY_DOCUMENT_VIEW, label: "Try again" }],
+  };
 }
 
 const STATUS_BAR_CLASS = cn(
