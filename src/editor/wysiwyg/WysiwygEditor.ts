@@ -503,7 +503,8 @@ export class WysiwygEditor {
    * can be typing here while a file dropped on the Markdown pane goes in
    * there. Then a block the sync leaves alone keeps what only this pane
    * holds, such as a space typed at the end of a line. The table keeps its
-   * cells unless one still shows text the block no longer has.
+   * cells unless one still shows text the block no longer has, and is not
+   * drawn again while its block stays the same.
    *
    * The replacement is reported like an edit after a ~200ms pause
    * (`scheduleChange`). That report carries `markdown` itself, because every
@@ -517,21 +518,27 @@ export class WysiwygEditor {
   setMarkdown(markdown: string): void {
     if (!this.crepe) return;
     const split = splitFrontmatter(markdown);
+    // The table shows the block it has already. Drawing it again would put
+    // the caret of a cell being typed in at the cell's start, since React
+    // writes the cell's text again when it differs from what React drew.
+    const blockChanged = split.frontmatter !== this.frontmatterBlock;
     this.frontmatterBlock = split.frontmatter;
     this.frontmatterSeparator = split.separator;
-    // Draw the table at once, so the check below sees it.
-    flushSync(() => this.syncFrontmatterPanel());
-    // A cell whose typed text the Markdown pane took back can still show that
-    // text (`showsBlock`), and the next keystroke there would write it back.
-    // Then draw a new table. Otherwise React patches the cells it has, so a
-    // click that brought this pane up to date (EditorHost's catch-up on
-    // pointerdown) still lands in its cell.
-    if (this.fmPanel && this.frontmatterBlock != null && !showsBlock(this.fmPanel, this.frontmatterBlock)) {
-      this.fmTableKey += 1;
-      flushSync(() => this.renderFrontmatter());
+    if (blockChanged) {
+      // Draw the table at once, so the check below sees it.
+      flushSync(() => this.syncFrontmatterPanel());
+      // A cell whose typed text the Markdown pane took back can still show
+      // that text (`showsBlock`), and the next keystroke there would write it
+      // back. Then draw a new table. Otherwise React patches the cells it has,
+      // so a click that brought this pane up to date (EditorHost's catch-up
+      // on pointerdown) still lands in its cell.
+      if (this.fmPanel && this.frontmatterBlock != null && !showsBlock(this.fmPanel, this.frontmatterBlock)) {
+        this.fmTableKey += 1;
+        flushSync(() => this.renderFrontmatter());
+      }
+      // Find again in a table this added; redraws of a shown table refresh on their own.
+      this.find.refresh();
     }
-    // Find again in a table this added; redraws of a shown table refresh on their own.
-    this.find.refresh();
     if (this.createPromise) this.pendingBody = split.body;
     else this.replaceBody(split.body);
   }

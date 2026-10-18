@@ -254,6 +254,25 @@ describe("undo in the frontmatter table", () => {
     expect(document.activeElement).toBe(status);
   });
 
+  it("keeps the caret in a cell being typed in when the split mirrors an edit to the body", { timeout: 60_000 }, async () => {
+    const { editor } = await open();
+    const value = cell(1, "value");
+    value.focus();
+    // A key press types into the cell's own text, with the caret after it.
+    const text = value.firstChild as Text;
+    text.appendData("X");
+    window.getSelection()!.collapse(text, text.length);
+    value.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // A file dropped on the Markdown pane goes into the body there.
+    editor.setMarkdown(FILE.replace("draft\n", "draftX\n").replace("The draft body.", "The draft body. [a.csv](a.csv)"));
+
+    const selection = window.getSelection()!;
+    expect(selection.anchorNode).toBe(value.firstChild);
+    expect(selection.anchorOffset).toBe("draftX".length);
+    expect(document.activeElement).toBe(value);
+  });
+
   it("takes back a mirrored Markdown edit to the frontmatter along with the body", { timeout: 60_000 }, async () => {
     const { editor } = await open();
     editor.setMarkdown(FILE.replace("Draft", "Mirrored").replace("The draft", "The mirrored"));
