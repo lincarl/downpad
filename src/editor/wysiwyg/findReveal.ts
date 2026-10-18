@@ -170,10 +170,13 @@ const pagesWithRoom = new Set<HTMLElement>();
  * Near the end of the document the page can stop before the span is clear of
  * the card. The page then gets room below its last line, as tall as the card
  * reaches up into the page plus a gap, until `releaseFindRoom`.
+ *
+ * With `sideways` false, nothing scrolls sideways, for a span that another
+ * scroll is about to move across.
  */
-export function revealSpan(inside: Element, span: Span): void {
+export function revealSpan(inside: Element, span: Span, { sideways = true } = {}): void {
   // Sideways first, as that can move the span under the card.
-  const dx = centerSideways(inside, span.left, span.right);
+  const dx = sideways ? centerSideways(inside, span.left, span.right) : 0;
   const page = pageOf(inside);
   if (!page) return;
   const top = page.getBoundingClientRect().top + page.clientTop;
@@ -255,11 +258,13 @@ function revealCodeBlockMatch(view: EditorView, range: MatchRange): boolean {
   const cm = codeMirrorIn(block);
   if (cm) {
     // A long block draws only the lines near the screen, so a line may have no
-    // coordinates yet.
+    // coordinates yet. CodeMirror scrolls a long line sideways, also the page
+    // when it is scrolled sideways, and reaches lines it has not drawn, so this
+    // scroll is only up or down. Before CodeMirror scrolls, a match far along a
+    // long line lies past the block's edge, and centring on it would scroll the
+    // whole page sideways when a wide table lets it.
     const span = codeMirrorSpan(cm, from, to);
-    if (span) revealSpan(block, span);
-    // CodeMirror scrolls a long line sideways, also the page when it is scrolled
-    // sideways, and reaches lines it has not drawn.
+    if (span) revealSpan(block, span, { sideways: false });
     const y = span ? "nearest" : "center";
     cm.dispatch({ effects: CodeMirror.scrollIntoView(EditorSelection.range(from, to), { y }) });
     // It does so in its next frame, which can move the match under the find

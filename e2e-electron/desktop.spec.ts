@@ -1459,6 +1459,44 @@ test("find scrolls to each match and highlights matches inside code blocks", asy
   await expect(current).toBeInViewport({ ratio: 1 });
 });
 
+test("find reaches a match far along a code line without scrolling the page sideways", async () => {
+  // A table wider than the page lets the page scroll sideways, and the code
+  // block's line runs far past the block's right edge.
+  const columns = Array.from({ length: 14 }, (_, index) => index + 1);
+  const table = [
+    `| ${columns.map((column) => `Column${column}heading`).join(" | ")} |`,
+    `| ${columns.map(() => "---").join(" | ")} |`,
+    `| ${columns.map((column) => `value${column}value`).join(" | ")} |`,
+  ].join("\n");
+  const code = ["```js", `const line = "${"q".repeat(160)} needle";`, "```"].join("\n");
+  const file = path.join(directory, "find-code-line.md");
+  await writeFile(file, ["# Find", table, "A needle in a paragraph.", code].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Find");
+  const input = page.getByRole("textbox", { name: "Find in document" });
+  const count = page.locator(".find-count");
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(input).toBeFocused();
+  for (const [layout, pageSelector] of [["Document", ".editor-area"], ["Split", ".editor-pane-wysiwyg"]] as const) {
+    await page.getByRole("radio", { name: layout, exact: true }).click();
+    const block = page.locator(`${pageSelector} .milkdown-code-block`);
+    // Crepe draws the block's editor once the block is on screen.
+    await expect(block.locator(".cm-editor")).toBeVisible();
+    expect(await page.locator(pageSelector).evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    await input.fill("");
+    await input.fill("needle");
+    await expect(count).toHaveText("1 of 2");
+    await input.press("Enter");
+    await expect(count).toHaveText("2 of 2");
+    await expect(block.locator(".md-find-current")).toBeInViewport({ ratio: 1 });
+    await twoFrames();
+    expect(await currentMatchProblem()).toBe("");
+    // The block scrolls its line to the match, and the page stays where it is.
+    expect(await block.locator(".cm-scroller").evaluate((scroller) => scroller.scrollLeft)).toBeGreaterThan(0);
+    expect(await page.locator(pageSelector).evaluate((element) => element.scrollLeft)).toBe(0);
+  }
+});
+
 test("the document page runs to the end of a long document", async () => {
   const file = path.join(directory, "long.md");
   const paragraphs = Array.from({ length: 120 }, (_, index) => `Paragraph ${index + 1}.`);
