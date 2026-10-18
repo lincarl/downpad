@@ -717,6 +717,31 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
       "Intro.</div>\n[q] here\n\n> Quote [a](https://q.example).\n",
     ],
+    // Parentheses that are no link destination leave `[ref]` a reference.
+    [
+      "bracketed text before parentheses with a space in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[ref](not a link) here\n\nUses [ref].\n\n[ref]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[ref](not a link) here\n\nUses [ref](https://r.example).\n",
+    ],
+    [
+      "bracketed text before parentheses with an unclosed < in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[ref](<x) here\n\nUses [ref].\n\n[ref]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[ref](<x) here\n\nUses [ref](https://r.example).\n",
+    ],
+    [
+      "bracketed text before parentheses with a backslash and a space in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[ref](a\\ b) here\n\nUses [ref].\n\n[ref]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[ref](a\\ b) here\n\nUses [ref](https://r.example).\n",
+    ],
+    [
+      "bracketed text before parentheses with a control character in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[ref](\u0001) here\n\nUses [ref].\n\n[ref]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[ref](\u0001) here\n\nUses [ref](https://r.example).\n",
+    ],
     [
       "bracketed text in HTML joined to the paragraph above",
       "Inline $x$ math.\n\n</div>\nUses [ref] and [t] links.\n\t\n<div>\nblock\n</div>\n    code a\n    code b\n  \n-     code in item\n\n[ref]: /r\n[t]: /t\n",
@@ -761,6 +786,15 @@ describe("a definition the file keeps", () => {
     const markdown = "Intro.\n\nSee [ref](https://x.example).\n\nUses [ref].\n\n[ref]: https://r.example\n";
     const { editor, view } = await open(markdown);
     // An inline link takes the place of a reference, so its text is no label.
+    typeAfter(view, "See", " now");
+    expect(editor.getMarkdown()).toBe(markdown.replace("See [ref]", "See now [ref]"));
+  });
+
+  it("keeps the file's text for changed links with a title, a space or parentheses in the URL", { timeout: 60_000 }, async () => {
+    const markdown =
+      'Intro.\n\nSee [ref](https://x.example/a_\\(b\\) "T") and [ref](<https://x.example/a b>).\n\nUses [ref].\n\n[ref]: https://r.example\n';
+    const { editor, view } = await open(markdown);
+    // These are the forms Milkdown writes such links in.
     typeAfter(view, "See", " now");
     expect(editor.getMarkdown()).toBe(markdown.replace("See [ref]", "See now [ref]"));
   });

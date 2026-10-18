@@ -1107,8 +1107,9 @@ function addsFootnote(pieces: readonly Piece[], layout: SourceLayout): boolean {
  * inline, as `[text](url)`, and escapes the brackets of other text, but some
  * text keeps them as they are, such as the raw text of an HTML block that an
  * edit merged into a paragraph. Next to a definition with the same label, a
- * `[label]`, `[label][]` or `[text][label]` there reads as a link. A code
- * block holds no references.
+ * `[label]`, `[label][]` or `[text][label]` there reads as a link, and so
+ * does `[label](not a link)`, whose parentheses are no link destination. A
+ * code block holds no references.
  */
 function linksToKeptDefinition(pieces: readonly Piece[], layout: SourceLayout): boolean {
   const kept = new Set(pieces.flatMap(({ item }) => (item >= 0 ? layout.items[item].defines.map(referenceLabel) : [])));
@@ -1120,15 +1121,34 @@ function linksToKeptDefinition(pieces: readonly Piece[], layout: SourceLayout): 
 
 /** The label of each `[...]` in `text` that could be a link reference (see
  *  `referenceLabel`). That is every innermost bracketed text that is not
- *  escaped, and not the text of an inline link. */
+ *  escaped, and not the text of an inline link (`inlineLinkAt`). */
 function bracketLabels(text: string): string[] {
   const labels: string[] = [];
   // An escape is matched first, so an escaped bracket neither opens nor
   // closes a label.
-  for (const match of text.matchAll(/\\.|\[((?:\\.|[^\\[\]])*)\](?!\()/g)) {
-    if (match[1] !== undefined && /\S/.test(match[1])) labels.push(referenceLabel(match[1]));
+  for (const match of text.matchAll(/\\.|\[((?:\\.|[^\\[\]])*)\]/g)) {
+    const label = match[1];
+    if (label !== undefined && /\S/.test(label) && !inlineLinkAt(text, match.index + match[0].length)) {
+      labels.push(referenceLabel(label));
+    }
   }
   return labels;
+}
+
+/** The destination and optional title of an inline link, such as `(url)`,
+ *  `(<url with spaces>)` or `(url "title")`, as Milkdown writes them. Only
+ *  forms micromark always reads as a link's destination match. */
+const INLINE_LINK_TAIL =
+  /\((?:<(?:[^<>\n\r\\]|\\[^\n\r])*>|(?!<)(?:[^\s()\\\x00-\x1f\x7f]|\\[!-\/:-@[-`{-~])*)(?:[ \t]+(?:"(?:[^"\\\n\r]|\\[^\n\r])*"|'(?:[^'\\\n\r]|\\[^\n\r])*'))?[ \t]*\)/y;
+
+/** Whether an inline link's destination starts at `at`, right after the
+ *  `]` of its text, so that text is no reference. A `(` that does not start
+ *  one, as in `[label](not a link)`, leaves `[label]` to read as a reference
+ *  to its definition. Forms this does not know, such as a destination with
+ *  unescaped parentheses, count as no link, which writes the whole body. */
+function inlineLinkAt(text: string, at: number): boolean {
+  INLINE_LINK_TAIL.lastIndex = at;
+  return INLINE_LINK_TAIL.test(text);
 }
 
 /** A link or footnote label as micromark compares it, with runs of
