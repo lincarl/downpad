@@ -36,4 +36,10 @@ describe("the printed document", () => {
   ])("keeps %s", (_name, html, blocks) => {
     expect(printedBlocks(html)).toEqual(blocks);
   });
+
+  it("prints a missing image without the hover text that asks for a click", () => {
+    const missing = '<p>A <span class="milkdown-image-inline md-image-missing" title="Missing image. Click to locate it." data-md-path="gone.png"><img class="image-inline" src="data:," alt="Gone" title="Chart"></span></p>';
+
+    expect(printedBlocks(missing)).toEqual([missing.replace(' title="Missing image. Click to locate it."', "")]);
+  });
 });
