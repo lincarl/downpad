@@ -36,6 +36,8 @@ const fakeEditors = vi.hoisted(() => ({
   rawChange: null as ((text: string) => void) | null,
   /** The Markdown pane's current text. */
   rawText: null as string | null,
+  /** Whether each reveal of a Markdown pane asked it to take focus. */
+  rawShowFocus: [] as boolean[],
   /** Each pane's find change callback, to simulate an edit with the card open. */
   wysiwygFindChange: null as (() => void) | null,
   rawFindChange: null as (() => void) | null,
@@ -126,7 +128,9 @@ vi.mock("./raw/RawEditor", () => ({
     }
 
     destroy(): void {}
-    onShow(): void {}
+    onShow(focus = true): void {
+      fakeEditors.rawShowFocus.push(focus);
+    }
   },
 }));
 
@@ -181,6 +185,7 @@ beforeEach(() => {
   fakeEditors.wysiwygChange = null;
   fakeEditors.rawChange = null;
   fakeEditors.rawText = null;
+  fakeEditors.rawShowFocus = [];
   fakeEditors.wysiwygFindChange = null;
   fakeEditors.rawFindChange = null;
 });
@@ -348,11 +353,16 @@ describe("EditorHost document view failure", () => {
     await host.reloadActiveDoc();
     store.setDocumentViewFailure("tab-1", { message: "create failed", dismissed: true });
 
+    expect(fakeEditors.rawShowFocus).toEqual([true]);
+
     fakeEditors.mountPromise = Promise.reject(new Error("failed again"));
     await host.retryDocumentView();
     expect(fakeEditors.mountCalls).toBe(2);
     expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
     expect(failureOf(store, "tab-1")).toEqual({ message: "failed again", dismissed: false });
+    // Focus stays on Try again, so pressing Enter again tries again instead of
+    // typing a line break into the Markdown view.
+    expect(fakeEditors.rawShowFocus).toEqual([true, false]);
     await host.dispose();
   });
 

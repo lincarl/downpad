@@ -331,12 +331,14 @@ export class EditorHost implements FindController {
 
   /** Try again to build the active tab's Document view after it failed (the
    *  notice's Try again), from the tab's current text. In the Markdown layout
-   *  the view is built hidden, so a success is ready when the layout changes. */
+   *  the view is built hidden, so a success is ready when the layout changes.
+   *  A retry that fails again changes nothing on screen, so focus stays on
+   *  Try again instead of moving into the Markdown view. */
   async retryDocumentView(): Promise<void> {
     if (this.disposed || this.switching) return;
     this.switching = true;
     try {
-      await this.present({ retry: true });
+      await this.present({ retry: true, keepFocusOnFailure: true });
     } finally {
       this.switching = false;
     }
@@ -506,8 +508,11 @@ export class EditorHost implements FindController {
    *  When the document pane cannot be built, the tab shows its Markdown alone
    *  and the failure is recorded on the tab for the notice bar. Later reveals
    *  leave the document pane unbuilt until `retry`, or a `rebuild` after the
-   *  tab's text was replaced, tries again. */
-  private async present(opts: { rebuild?: boolean; retry?: boolean } = {}): Promise<void> {
+   *  tab's text was replaced, tries again. With `keepFocusOnFailure`, a build
+   *  that fails leaves focus where it is. */
+  private async present(
+    opts: { rebuild?: boolean; retry?: boolean; keepFocusOnFailure?: boolean } = {},
+  ): Promise<void> {
     if (this.disposed) return;
     const id = this.store.get().activeTabId;
     if (!id) return;
@@ -559,7 +564,7 @@ export class EditorHost implements FindController {
     // re-measures (focus=false) so it doesn't steal focus or fight the document.
     // In the Markdown-only view the raw source is the sole pane, so it takes focus.
     wysiwygPane?.wysiwyg?.onShow();
-    rawPane?.raw?.onShow(layout === "markdown");
+    rawPane?.raw?.onShow(layout === "markdown" && !(failure && opts.keepFocusOnFailure));
     // Keep the two visible panes' scroll positions in sync (§5.3); rewires to the
     // current pair on every reveal, and disconnects whenever it isn't the split.
     this.syncScroll(wysiwygPane, rawPane);
