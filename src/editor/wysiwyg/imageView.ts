@@ -5,15 +5,16 @@
 //      data:/http: pass through; a relative/absolute file path is resolved
 //      against the document dir and turned into an Electron asset URL so linked
 //      images render inline. A local image that cannot be loaded gets an empty
-//      data: URL, which fails at once, so an image block shows the missing-image
-//      placeholder and an inline image its broken-image icon. Answers are kept
-//      for the window, so an image asked about before (see preloadImages.ts)
-//      shows its URL from its first render.
-//   2. onImageLoadError — when an image fails to load, mark its block as a
-//      missing-image placeholder (broken icon + path) and make it click-to-
-//      relocate via a file dialog (updates the node's src). missingImages keeps
-//      the placeholder in step with the document: it shows the node's current
-//      path, and goes once an image loads in the block or its path is cleared.
+//      data: URL, which fails at once, so the image shows as missing. Answers
+//      are kept for the window, so an image asked about before (see
+//      preloadImages.ts) shows its URL from its first render.
+//   2. onImageLoadError — when an image fails to load, show it as missing: an
+//      image block as a placeholder with the broken icon and its path, an inline
+//      image as a chip in its line with the icon and its path. A click on either
+//      relocates it via a file dialog (updates the node's src). missingImages
+//      reports the errors of inline images, which Crepe does not, and keeps both
+//      in step with the document. They show the node's current path, and go
+//      once an image loads there or the path is cleared.
 //   3. Node helpers (isImageNode / imageAttrs / setImageAttrs / lookups) reused
 //      by the image context menu (imageContextMenu.ts).
 
@@ -111,17 +112,23 @@ async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => vo
   setImageAttrs(view, found.pos, found.node, { src: path });
 }
 
-/** Show an image block that failed to load as the missing-image placeholder,
- *  which a click relocates. missingImages removes the placeholder again. */
+/** The hover text of a missing inline image, whose chip shows only its path.
+ *  An image block's placeholder shows these words as its text. */
+const LOCATE_HINT = "Missing image. Click to locate it.";
+
+/** Show an image that failed to load as missing, which a click relocates: an
+ *  image block as the missing-image placeholder, an inline image as a chip with
+ *  its path. missingImages shows it as an image again. */
 function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => void): void {
   const img = event.target as HTMLElement | null;
   if (!img) return;
-  const host = (img.closest?.(".milkdown-image-block") as HTMLElement | null) ?? img;
+  const host = (img.closest?.(".milkdown-image-block, .milkdown-image-inline") as HTMLElement | null) ?? img;
   const view = viewRef.current;
   const info = view ? imageNodeAtDom(view, img) : null;
   const src = info ? imageAttrs(info.node).src : (img.getAttribute?.("src") ?? "");
   host.classList.add("md-image-missing");
   host.dataset.mdPath = src;
+  if (host.classList.contains("milkdown-image-inline")) host.title = LOCATE_HINT;
   if (!host.dataset.mdRelocateBound) {
     host.dataset.mdRelocateBound = "1";
     // Crepe draws a new <img> after the path is cleared, so find the node from
@@ -139,16 +146,19 @@ function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => vo
 function unmarkMissing(host: HTMLElement): void {
   host.classList.remove("md-image-missing");
   delete host.dataset.mdPath;
+  host.removeAttribute("title");
 }
 
-/** Keeps the images shown as missing in step with the document. An image that
- *  loads shows again, also in an <img> Crepe draws anew. After each change to
- *  the document a missing image shows its node's current path, since another
- *  path md-easy cannot load keeps the same empty URL and gives no new error.
- *  One whose path was cleared shows Crepe's input for a path instead. Load
- *  events do not bubble, so the plugin catches them on their way down to the
- *  image. */
-export function missingImages() {
+/** Shows missing inline images as missing too, and keeps the images shown as
+ *  missing in step with the document. `onError` is the onImageLoadError Crepe
+ *  calls for image blocks. Crepe reports no load errors of inline images, so the
+ *  plugin passes those to it. An image that loads shows again, also in an <img>
+ *  Crepe draws anew. After each change to the document a missing image shows its
+ *  node's current path, since another path md-easy cannot load keeps the same
+ *  empty URL and gives no new error. One whose path was cleared shows Crepe's
+ *  input for a path instead. Load and error events do not bubble, so the plugin
+ *  catches them on their way down to the image. */
+export function missingImages(onError: (event: Event) => void) {
   return $prose(
     () =>
       new Plugin({
@@ -158,7 +168,12 @@ export function missingImages() {
             const host = event.target.closest<HTMLElement>(".md-image-missing");
             if (host) unmarkMissing(host);
           };
+          const onInlineError = (event: Event): void => {
+            const img = event.target;
+            if (img instanceof HTMLImageElement && img.parentElement?.classList.contains("milkdown-image-inline")) onError(event);
+          };
           editorView.dom.addEventListener("load", onLoad, true);
+          editorView.dom.addEventListener("error", onInlineError, true);
           return {
             update: (view, prevState) => {
               if (view.state.doc === prevState.doc) return;
@@ -170,7 +185,10 @@ export function missingImages() {
                 else unmarkMissing(host);
               }
             },
-            destroy: () => editorView.dom.removeEventListener("load", onLoad, true),
+            destroy: () => {
+              editorView.dom.removeEventListener("load", onLoad, true);
+              editorView.dom.removeEventListener("error", onInlineError, true);
+            },
           };
         },
       }),
@@ -178,10 +196,9 @@ export function missingImages() {
 }
 
 /** The src shown for a local image md-easy cannot load. It fails at once without a
- *  request or a console message, so an image block shows the missing-image
- *  placeholder and an inline image its broken-image icon. The raw path would be
- *  looked up next to md-easy's own page, again by every copy of the document such
- *  as the print preview. */
+ *  request or a console message, so the image shows as missing. The raw path would
+ *  be looked up next to md-easy's own page, again by every copy of the document
+ *  such as the print preview. */
 const UNAVAILABLE_IMAGE = "data:,";
 
 /** The longest the first render of a document waits for the main process to

@@ -232,8 +232,9 @@ export class WysiwygEditor {
     this.crepe.editor.use(linkViewPlugin(context));
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
-    // Keep missing images in step with their paths and images (§5.5).
-    this.crepe.editor.use(missingImages());
+    // Show missing inline images as missing too, and keep missing images in
+    // step with their paths and images (§5.5).
+    this.crepe.editor.use(missingImages(imageConfig.onImageLoadError));
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);

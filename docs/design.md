@@ -35,6 +35,8 @@ Each tab owns its own document state, including its path, content, save status, 
 
 Milkdown and CodeMirror manage their own editor DOM and lifecycles. React owns the surrounding application interface, including tabs, toolbars, dialogs, settings, recent files, and print views.
 
+The document view marks an image that fails to load on the image's element, and CSS draws the missing-image placeholder or chip from that mark, so it never reaches the document or its Markdown. Crepe reports load errors only for images on their own line, so md-easy catches the errors of inline images itself. After each change to the document a missing image shows its node's current path, and it shows as an image again once one loads there.
+
 ## Interface design
 
 The interface follows the look of [Mervin PDF](https://github.com/lincarl/mervin-pdf). Dark mode uses Mervin's "Nord" chrome and light mode its "Cool slate" chrome.

@@ -228,6 +228,38 @@ test("opening a file with local images makes no failed loads", async () => {
   expect(errors).toEqual([]);
 });
 
+test("a missing inline image shows its path in a chip, which a click locates", async () => {
+  const file = path.join(directory, "inline.md");
+  const markdown = "# Inline\n\nThe chart ![Chart](charts/missing.png) and ![Pixel](image.png) in a line.\n\n![Gone](missing.png)\n";
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
+  await writeFile(path.join(directory, "found.png"), onePixelPng);
+  await writeFile(file, markdown);
+  await launch(file);
+  const chip = page.locator(".milkdown-image-inline.md-image-missing");
+  await expect(chip).toHaveAttribute("data-md-path", "charts/missing.png");
+  await expect(chip).toHaveAttribute("title", "Missing image. Click to locate it.");
+  await expect(chip).toBeVisible();
+  await expect(chip.locator("img")).toBeHidden();
+  // The working inline image and the missing image block are as they were.
+  const loaded = (name: string) => page.getByRole("img", { name, exact: true }).evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth > 0);
+  await expect.poll(() => loaded("Pixel")).toBe(true);
+  await expect(page.locator(".milkdown-image-inline.md-image-missing")).toHaveCount(1);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
+  await expect(page).toHaveTitle("inline.md — md-easy");
+
+  const found = path.join(directory, "found.png");
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedFile] });
+  }, found);
+  await chip.click();
+
+  await expect(page.locator(".milkdown-image-inline.md-image-missing")).toHaveCount(0);
+  await expect.poll(() => loaded("Chart")).toBe(true);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText(`The chart ![Chart](${found}) and`);
+  expect(await readFile(file, "utf8")).toBe(markdown);
+});
+
 test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");

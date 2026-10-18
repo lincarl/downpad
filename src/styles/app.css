@@ -1126,10 +1126,10 @@ body {
   white-space: pre-wrap;
 }
 
-/* Missing image (§5.5): when an image fails to load, its block is marked and
-   styled as a click-to-relocate placeholder showing the broken icon + path.
-   Crepe's image wrapper (broken <img>, caption toggle, resize handle) is hidden
-   so the icon and the text are the placeholder's only content. */
+/* Missing image (§5.5): when an image fails to load, it is marked and shows the
+   broken icon and its path, and a click on it locates the file. An image block
+   becomes a placeholder. Crepe's image wrapper (broken <img>, caption toggle,
+   resize handle) is hidden so the icon and the text are its only content. */
 .editor-host .milkdown-image-block.md-image-missing,
 .editor-host img.md-image-missing {
   position: relative;
@@ -1143,10 +1143,6 @@ body {
   background: var(--doc-fill);
   color: var(--doc-muted);
   cursor: pointer;
-}
-
-.editor-host .milkdown-image-block.md-image-missing:hover {
-  color: var(--editor-surface-fg);
 }
 
 .editor-host .milkdown-image-block.md-image-missing > .image-wrapper {
@@ -1171,6 +1167,58 @@ body {
   line-height: 18px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* An inline image becomes a chip in its line of text with the icon and its
+   path. Its text is 12px next to 16px body text, scaled with the document text
+   size (§5.20), so the chip is as tall as a line of body text. */
+.editor-host .milkdown-image-inline.md-image-missing {
+  align-items: center;
+  gap: 0.5em;
+  max-width: 100%;
+  padding: 0.0833em 0.6667em;
+  border: 1px dashed var(--doc-line-strong);
+  border-radius: 4px;
+  background: var(--doc-fill);
+  color: var(--doc-muted);
+  font: calc(12px * var(--editor-font-scale)) / 1.6667 var(--font-ui);
+  cursor: pointer;
+}
+
+/* Crepe rests an inline image on the bottom of the text, which suits body
+   text. Next to a heading's larger letters that sits too low, so there the chip
+   is centred on the letters instead. */
+.editor-host :is(h1, h2, h3, h4, h5, h6) .milkdown-image-inline.md-image-missing {
+  vertical-align: middle;
+}
+
+.editor-host .milkdown-image-inline.md-image-missing > img {
+  display: none;
+}
+
+.editor-host .milkdown-image-inline.md-image-missing::before {
+  width: 1.3333em;
+  height: 1.3333em;
+}
+
+/* A path too long for the column is cut short with an ellipsis. It is clamped
+   to one line rather than kept from wrapping, so a table can still narrow the
+   chip's column to fit the page. A path that cannot wrap would make its cell
+   as wide as the whole path. */
+.editor-host .milkdown-image-inline.md-image-missing::after {
+  content: attr(data-md-path);
+  display: -webkit-box;
+  overflow: hidden;
+  font: inherit;
+  word-break: break-all;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+/* The placeholder and the chip darken under the pointer. This rule follows the
+   chip's colour so it wins over it. */
+.editor-host .md-image-missing:hover {
+  color: var(--editor-surface-fg);
 }
 
 /* Crepe's selection toolbar floats over the page like Mervin's floating

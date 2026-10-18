@@ -219,3 +219,35 @@ describe("a missing image", () => {
     expect(block.classList).not.toContain("md-image-missing");
   });
 });
+
+describe("a missing inline image", () => {
+  it("shows its path in a chip, which a click locates", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
+    const root = await open("![Lost](lost.png)\n\nInline ![inline](pic.png) and ![gone](gone.png).\n");
+    // jsdom loads no images, so tell each view how its image fared.
+    for (const image of root.querySelectorAll("img")) {
+      image.dispatchEvent(new Event(image.getAttribute("src") === "data:," ? "error" : "load"));
+    }
+    const block = root.querySelector<HTMLElement>(".milkdown-image-block")!;
+    const [working, chip] = root.querySelectorAll<HTMLElement>(".milkdown-image-inline");
+    expect(chip.classList).toContain("md-image-missing");
+    expect(chip.dataset.mdPath).toBe("gone.png");
+    expect(chip.title).toBe("Missing image. Click to locate it.");
+    expect(working.classList).not.toContain("md-image-missing");
+    // The block's placeholder shows those words, so it has no hover text.
+    expect(block.classList).toContain("md-image-missing");
+    expect(block.dataset.mdPath).toBe("lost.png");
+    expect(block.hasAttribute("title")).toBe(false);
+
+    native.openDialog.mockResolvedValue("/docs/pic.png");
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const image = chip.querySelector("img")!;
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    expect(editor!.getMarkdown()).toBe("![Lost](lost.png)\n\nInline ![inline](pic.png) and ![gone](/docs/pic.png).\n");
+    image.dispatchEvent(new Event("load"));
+    expect(chip.classList).not.toContain("md-image-missing");
+    expect(chip.hasAttribute("title")).toBe(false);
+    expect(native.openDialog).toHaveBeenCalledTimes(1);
+  });
+});
