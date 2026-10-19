@@ -80,6 +80,21 @@ async function chooseSave(file: string): Promise<void> {
   }, file);
 }
 
+/** Make the next Save As dialog wait until the returned function is called,
+ *  then choose `file`, as a user who takes a while to pick a folder. The
+ *  dialog sets `saveAsked` once it opens. */
+async function holdSaveDialog(file: string): Promise<() => Promise<void>> {
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    const answer = new Promise((resolve) => Reflect.set(globalThis, "answerSave", resolve));
+    dialog.showSaveDialog = async () => {
+      Reflect.set(globalThis, "saveAsked", true);
+      await answer;
+      return { canceled: false, filePath: selectedFile };
+    };
+  }, file);
+  return () => app!.evaluate(() => (Reflect.get(globalThis, "answerSave") as () => void)());
+}
+
 /** The clipboard's text with line endings as "\n". Windows puts "\r\n" there. */
 async function clipboardText(): Promise<string> {
   const text = await app!.evaluate(({ clipboard }) => clipboard.readText());
@@ -1652,13 +1667,20 @@ async function holdCommand(command: string): Promise<void> {
     const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
     const release = new Promise((resolve) => Reflect.set(globalThis, "releaseHeld", resolve));
     BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, name, ...args) => {
-      if (name === held) {
-        Reflect.set(globalThis, "heldAsked", true);
-        await release;
-      }
-      return invoke(event, name, ...args);
+      if (name !== held) return invoke(event, name, ...args);
+      Reflect.set(globalThis, "heldAsked", true);
+      await release;
+      const answer = await invoke(event, name, ...args);
+      Reflect.set(globalThis, "heldAnswered", true);
+      return answer;
     });
   }, command);
+}
+
+/** Resolve once the main process has sent the app its answer to the
+ *  request that `holdCommand` held. */
+async function untilHeldAnswered(): Promise<void> {
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "heldAnswered") === true)).toBe(true);
 }
 
 /** Resolve once the app has asked for the command that `holdCommand` holds. */
@@ -1833,7 +1855,33 @@ test("a file dropped on a document that is saved in another folder while the fil
   expect(await exists(path.join(directory, "original", "attachments"))).toBe(false);
 });
 
-test("an image dropped on a document that is saved in another folder while the image is written links to it from there", async () => {
+test("a file dropped on a document whose Save As dialog is open once the file is read goes in beside it where it is saved", async () => {
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("data.csv")]);
+  await untilHeld();
+  // The user starts Save As during the read and is still in its dialog when
+  // the read ends.
+  const answerSave = await holdSaveDialog(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "saveAsked") === true)).toBe(true);
+  await releaseHeld();
+  await untilHeldAnswered();
+  await answerSave();
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await expect(page.locator(".ProseMirror p", { hasText: "data.csv" })).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toBe("First line.\n\n[data.csv](attachments/data.csv)\n\nSecond line.\n");
+  expect(await readFile(path.join(directory, "moved", "attachments", "data.csv"), "utf8")).toBe("a,b\n");
+  expect(await exists(path.join(directory, "original", "attachments"))).toBe(false);
+});
+
+test("an image dropped on a document that is saved in another folder while the image is written is written again beside it there", async () => {
   await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
   const original = path.join(directory, "original", "notes.md");
   const saved = path.join(directory, "moved", "notes.md");
@@ -1848,14 +1896,13 @@ test("an image dropped on a document that is saved in another folder while the i
   await page.keyboard.press("ControlOrMeta+Shift+s");
   await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
   await releaseHeld();
-  // The image was written beside the document's old place, and shows from there.
   const image = page.locator(".ProseMirror .milkdown-image-block img");
   await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0)).toBe(true);
   await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(\.\.\/original\/attachments\/img-[^)]+\.png\)\n\nSecond line\.\n$/);
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\n$/);
   const link = /\]\(([^)]+)\)/.exec(await readFile(saved, "utf8"))![1]!;
-  expect(await exists(path.join(path.dirname(saved), link))).toBe(true);
+  expect(await readFile(path.join(path.dirname(saved), link))).toEqual(await readFile(path.join(directory, "pixel.png")));
 });
 
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {

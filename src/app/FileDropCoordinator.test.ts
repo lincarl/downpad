@@ -27,7 +27,8 @@ const link = "[data.csv](attachments/data.csv)";
  * aim, insert, release, new document and open. As in EditorHost, a file only
  * goes into the document it was dropped on while that document is in front,
  * and waits while it is behind another tab. An insert logs which tab was in
- * front then.
+ * front then. While a test holds `saveAs.underWay`, a Save As of the document
+ * is under way, so `untilPathSettled` waits for it.
  */
 function setup() {
   const store = createAppStore();
@@ -39,18 +40,18 @@ function setup() {
    *  files were dropped on, else its path or "untitled". */
   const tab = (tabId: string | null): string =>
     tabId === droppedOn ? "dropped-on" : (store.get().tabs.find((t) => t.id === tabId)?.doc.filePath ?? "untitled");
-  /** Resolve once a tab is in front. */
-  const untilActive = (tabId: string): Promise<void> =>
+  /** Resolve true once a tab is in front, or false once it is closed. */
+  const untilActive = (tabId: string): Promise<boolean> =>
     new Promise((resolve) => {
-      if (store.get().activeTabId === tabId) return resolve();
-      const stop = store.select(
-        (state) => state.activeTabId === tabId,
-        (inFront) => {
-          if (!inFront) return;
-          stop();
-          resolve();
-        },
-      );
+      const state = (): boolean | null =>
+        store.get().activeTabId === tabId ? true : store.get().tabs.some((t) => t.id === tabId) ? null : false;
+      if (state() !== null) return resolve(state()!);
+      const stop = store.subscribe(() => {
+        const now = state();
+        if (now === null) return;
+        stop();
+        resolve(now);
+      });
     });
   const editorHost: FileDropDependencies["editorHost"] = {
     aimDrop: vi.fn((at?: DropPoint) => {
@@ -58,21 +59,21 @@ function setup() {
       const tabId = store.get().activeTabId;
       return tabId === null ? null : { tabId };
     }),
-    insertDropped: async (drop: FileDrop, markdown: string | (() => string)) => {
-      await untilActive(drop.tabId);
-      const text = typeof markdown === "string" ? markdown : markdown();
-      log.push(`insert ${text} into ${tab(drop.tabId)} with ${tab(store.get().activeTabId)} in front`);
+    insertDropped: async (drop: FileDrop, markdown: string) => {
+      if (!(await untilActive(drop.tabId))) return false;
+      log.push(`insert ${markdown} into ${tab(drop.tabId)} with ${tab(store.get().activeTabId)} in front`);
       return true;
     },
     releaseDrop: (drop: FileDrop) => {
       log.push(`release ${tab(drop.tabId)}`);
     },
-    untilInFront: async (drop: FileDrop) => {
-      await untilActive(drop.tabId);
-      return true;
-    },
+    untilInFront: (drop: FileDrop) => untilActive(drop.tabId),
   };
+  const saveAs: { underWay: Promise<void> | null } = { underWay: null };
   const files: FileDropDependencies["files"] = {
+    untilPathSettled: async () => {
+      while (saveAs.underWay) await saveAs.underWay;
+    },
     newDocument: async () => {
       log.push("new document");
       store.addTab(blankDoc());
@@ -84,7 +85,14 @@ function setup() {
     save: async () => true,
   };
   const coordinator = new FileDropCoordinator({ store, files, editorHost, showActiveDoc: async () => {} });
-  return { store, log, files, editorHost, coordinator, droppedOn };
+  return { store, log, files, editorHost, coordinator, droppedOn, saveAs };
+}
+
+/** A promise and the function that resolves it. */
+function held<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
 }
 
 /** Let pending promise callbacks run. */
@@ -222,28 +230,64 @@ describe("FileDropCoordinator", () => {
     expect(log).toContain(`insert ${link} into dropped-on with dropped-on in front`);
   });
 
+  it("copies a file beside the document where a Save As under way once the file is read puts it", async () => {
+    const { store, log, coordinator, saveAs } = setup();
+    const read = held<ImageBytes>();
+    disk.readImageBytes.mockReturnValueOnce(read.promise);
+    const handled = coordinator.handle(["/drop/data.csv"], point);
+    await settle();
+    // The user starts Save As during the read, and is still in its dialog.
+    const saved = held();
+    saveAs.underWay = saved.promise;
+    read.resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "text/csv" });
+    await settle();
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    store.patchDoc({ filePath: "/moved/notes.md" });
+    saveAs.underWay = null;
+    saved.resolve();
+    await handled;
+    expect(disk.writeAttachment).toHaveBeenCalledOnce();
+    expect(disk.writeAttachment).toHaveBeenCalledWith("/moved/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
+    expect(log).toContain(`insert ${link} into dropped-on with dropped-on in front`);
+  });
+
   it.each([
     ["a file", "/drop/data.csv", (src: string) => `[data.csv](${src})`],
     ["an image stored as a file", "/drop/pic.png", (src: string) => `![](${src})`],
-  ])("links %s from the document's new folder when the document is saved there while the copy is written", async (_kind, dropped, markdown) => {
+  ])("stores %s again beside the document when the document is saved in another folder while it is written", async (_kind, dropped, markdown) => {
     const { store, log, coordinator } = setup();
     store.set((state) => ({ settings: { ...state.settings, embedImagesAsBase64: false } }));
-    let written = "";
-    let finishWrite = () => {};
-    disk.writeAttachment.mockImplementationOnce(
-      (_docPath, folder, name) =>
-        new Promise((resolve) => {
-          written = `${folder}/${name}`;
-          finishWrite = () => resolve(written);
-        }),
-    );
+    const write = held<string>();
+    disk.writeAttachment.mockReturnValueOnce(write.promise);
     const handled = coordinator.handle([dropped], point);
     await settle();
-    expect(written).not.toBe("");
+    expect(disk.writeAttachment).toHaveBeenCalledOnce();
+    const [docPath, folder, name] = disk.writeAttachment.mock.calls[0]!;
+    expect(docPath).toBe("/docs/notes.md");
     store.patchDoc({ filePath: "/moved/notes.md" });
-    finishWrite();
+    write.resolve(`${folder}/${name}`);
     await handled;
-    // The copy stays beside the document's old place, /docs/notes.md.
-    expect(log).toContain(`insert ${markdown(`../docs/${written}`)} into dropped-on with dropped-on in front`);
+    // The copy beside the old place stays, and the link leads to the new one.
+    expect(disk.writeAttachment).toHaveBeenCalledTimes(2);
+    expect(disk.writeAttachment).toHaveBeenLastCalledWith("/moved/notes.md", folder, name, expect.any(Uint8Array));
+    expect(log).toContain(`insert ${markdown(`${folder}/${name}`)} into dropped-on with dropped-on in front`);
+  });
+
+  it("stores no copy of a file dropped on a document that is closed while the file is read", async () => {
+    const { store, log, coordinator, droppedOn } = setup();
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    store.activateTab(droppedOn);
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const read = held<ImageBytes>();
+    disk.readImageBytes.mockReturnValueOnce(read.promise);
+    const handled = coordinator.handle(["/drop/data.csv"], point);
+    await settle();
+    store.closeTab(droppedOn);
+    read.resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "text/csv" });
+    await handled;
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    expect(warned).toHaveBeenCalledWith("md-easy: data.csv was not inserted, because the document it was dropped on was closed");
+    warned.mockRestore();
   });
 });

@@ -1285,27 +1285,6 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
-  it("asks for a dropped file's Markdown only as the file goes in, once its document is shown again", async () => {
-    const root = document.createElement("div");
-    const store = makeStore();
-    const host = new EditorHost(root, store);
-    await host.reloadActiveDoc();
-    const drop = host.aimDrop()!;
-    await openSecondTab(store, host);
-    // Such as a link that depends on where the document is saved by then.
-    const markdown = vi.fn(() => "[a.csv](attachments/a.csv)");
-
-    const inserted = host.insertDropped(drop, markdown);
-    expect(await settled(inserted)).toBe(false);
-    expect(markdown).not.toHaveBeenCalled();
-    await showFirstTab(store, host);
-
-    expect(await inserted).toBe(true);
-    expect(markdown).toHaveBeenCalledOnce();
-    expect(fakeEditors.markdown).toMatch(/\[a\.csv\]\(attachments\/a\.csv\)$/);
-    await host.dispose();
-  });
-
   it("records that files are on their way into a document from its first drop until its last drop ends", async () => {
     const root = document.createElement("div");
     const store = makeStore();

@@ -3,7 +3,6 @@ import {
   isRemoteOrData,
   isAbsolutePath,
   dirName,
-  rebaseLink,
   resolveImagePath,
   resolveMarkdownLinkTarget,
 } from "./pathResolve";
@@ -124,38 +123,5 @@ describe("resolveMarkdownLinkTarget", () => {
 
   it("returns null for a relative .md link with no document to anchor it", () => {
     expect(resolveMarkdownLinkTarget("chapter1.md", null)).toBeNull();
-  });
-});
-
-describe("rebaseLink", () => {
-  it("links from a document's new folder to the file its old link named", () => {
-    expect(rebaseLink("attachments/data.csv", "/home/me/old/notes.md", "/home/me/new/notes.md")).toBe(
-      "../old/attachments/data.csv",
-    );
-    expect(rebaseLink("attachments/data.csv", "/home/me/notes.md", "/home/me/new/deeper/notes.md")).toBe(
-      "../../attachments/data.csv",
-    );
-    expect(rebaseLink("assets/./img/a b.png", "/home/me/notes.md", "/notes.md")).toBe("home/me/assets/img/a b.png");
-  });
-
-  it("works out Windows paths without case, and gives a file on another drive or share its absolute path", () => {
-    expect(rebaseLink("attachments/data.csv", "C:\\Notes\\old\\a.md", "c:\\notes\\NEW\\a.md")).toBe(
-      "../old/attachments/data.csv",
-    );
-    expect(rebaseLink("attachments/data.csv", "C:\\Notes\\a.md", "c:\\notes\\b.md")).toBe("attachments/data.csv");
-    expect(rebaseLink("attachments/data.csv", "C:\\notes\\a.md", "D:\\notes\\a.md")).toBe(
-      "C:/notes/attachments/data.csv",
-    );
-    expect(rebaseLink("attachments/data.csv", "\\\\srv\\share\\a.md", "C:\\a.md")).toBe(
-      "//srv/share/attachments/data.csv",
-    );
-  });
-
-  it("keeps a link between documents in the same folder, and one that is no relative path", () => {
-    expect(rebaseLink("./attachments/data.csv", "/home/me/a.md", "/home/me/b.md")).toBe("./attachments/data.csv");
-    expect(rebaseLink("data:image/png;base64,AQID", "/home/me/old/a.md", "/home/me/new/a.md")).toBe(
-      "data:image/png;base64,AQID",
-    );
-    expect(rebaseLink("/srv/data.csv", "/home/me/old/a.md", "/home/me/new/a.md")).toBe("/srv/data.csv");
   });
 });

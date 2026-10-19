@@ -261,6 +261,47 @@ describe("saving document snapshots", () => {
     expect(store.get().doc).toEqual(replacement);
   });
 
+  it("tells when no save that can move a document is under way, through the Save As dialog and its write", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    // A plain Save keeps the document where it is, so nothing waits for it.
+    const save = files.save();
+    await files.untilPathSettled(tabId);
+    await save;
+
+    const settled = vi.fn();
+    const dialog = deferred<string | null>();
+    const write = deferred<FileMeta>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saveAs = files.saveAs();
+    void files.untilPathSettled(tabId).then(settled);
+    await vi.waitFor(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    dialog.resolve("/moved/notes.md");
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
+    expect(settled).not.toHaveBeenCalled();
+    write.resolve({ modifiedMs: 300 });
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(store.get().doc.filePath).toBe("/moved/notes.md");
+    expect(await saveAs).toBe(true);
+  });
+
+  it("tells when a save of an untitled document is no longer under way, also after the user cancels it", async () => {
+    const { store, files } = setup(true);
+    store.patchDoc({ filePath: null });
+    const tabId = store.get().activeTabId!;
+    const settled = vi.fn();
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const save = files.save();
+    void files.untilPathSettled(tabId).then(settled);
+    await vi.waitFor(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    expect(settled).not.toHaveBeenCalled();
+    dialog.resolve(null);
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(await save).toBe(false);
+  });
+
   it("continues a queued save after the earlier write fails", async () => {
     const { store, files } = setup(true);
     const first = deferred<FileMeta>();
