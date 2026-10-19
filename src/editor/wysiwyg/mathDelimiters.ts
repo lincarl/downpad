@@ -254,10 +254,27 @@ function besideFormula(node: unknown, parent: { children?: readonly { type: stri
   return index >= 0 && (siblings[index - 1]?.type === "inlineMath" || siblings[index + 1]?.type === "inlineMath");
 }
 
-/** One part of a formula as KaTeX reads it: `\verb` and its text, a command,
- *  a comment that a line ending ends, with that line ending, or another
- *  character. A `%` starts a comment, unless it is part of `\%` or `\verb`. */
-const TEX_TOKEN = /\\verb\*([^]).*?\1|\\verb([^*a-zA-Z]).*?\2|\\[a-zA-Z@]+|\\[^]|%[^\n]*\n|[^]/g;
+/** A pattern for the text between a pair of braces, as KaTeX reads a command's
+ *  argument, with braces inside it nested up to `depth` deep. A backslash
+ *  escapes the character after it. */
+const bracedText = (depth: number): string =>
+  String.raw`(?:[^\\{}]|\\[^]` + (depth > 0 ? String.raw`|\{${bracedText(depth - 1)}\}` : "") + ")*";
+
+/** One part of a formula as KaTeX reads it: `\verb` and its text, a command
+ *  with the URL it takes, a command, a comment that a line ending ends, with
+ *  that line ending, or another character. A `%` starts a comment, unless it
+ *  is part of `\%`, `\verb` or a URL. KaTeX reads a `%` as a character in the
+ *  URL that `\url` or `\href` takes, or `\includegraphics` after its options,
+ *  so the text after the `%` in `\url{a%20b}` stays. Without braces the URL is
+ *  the next character, command or `\verb`, such as the `%` in `\url%`. The
+ *  third group is a URL in braces, nested up to three deep. */
+const TEX_TOKEN = new RegExp(
+  String.raw`\\verb\*([^]).*?\1|\\verb([^*a-zA-Z]).*?\2|` +
+    String.raw`\\(?:url|href|includegraphics(?:[ \t\r\n]*\[[^\]{}%]*\])?)(?![a-zA-Z@])[ \t\r\n]*\{(${bracedText(3)})\}|` +
+    String.raw`\\(?:url|href)(?![a-zA-Z@])[ \t\r\n]*(?:%|\\(?!verb(?![a-zA-Z@]))[a-zA-Z@]+)|` +
+    String.raw`\\[a-zA-Z@]+|\\[^]|%[^\n]*\n|[^]`,
+  "g",
+);
 
 /** `value` on one line, which TeX reads the same. A line ending is read as a
  *  space, but it also ends a `%` comment, so such a comment is left out, with a
@@ -268,7 +285,7 @@ function oneLine(value: string): string {
   return value
     .replace(TEX_TOKEN, (token) => {
       const comment = token.startsWith("%") && token.endsWith("\n");
-      const part = !comment ? token : /^\\[a-zA-Z@]+$/.test(previous) ? " " : "";
+      const part = !comment ? token : /\\[a-zA-Z@]+$/.test(previous) ? " " : "";
       previous = token;
       return part;
     })
@@ -295,12 +312,15 @@ function verbInCell(verb: string, delimiter: string): string {
  *  backslash may come before such a `|`, so TeX's command `\|` is written
  *  `\Vert`, which TeX reads the same, with a space before a letter or `@`,
  *  which KaTeX reads as part of a command's name. The text of `\verb` keeps
- *  its `\|` (`verbInCell`). A cell is one line (`oneLine`). */
+ *  its `\|` (`verbInCell`). KaTeX reads the parts of a URL as it reads the
+ *  rest, except `%`, so a URL is written the same way, and a `\|` in it becomes
+ *  `\Vert` too. A cell is one line (`oneLine`). */
 function inTableCell(value: string): string {
   const line = oneLine(value);
-  return line.replace(TEX_TOKEN, (token: string, starred: string | undefined, plain: string | undefined, offset: number) => {
+  return line.replace(TEX_TOKEN, (token: string, starred: string | undefined, plain: string | undefined, url: string | undefined, offset: number) => {
     if (token === "|") return "\\|";
     if (token === "\\|") return /[a-zA-Z@]/.test(line.charAt(offset + 2)) ? "\\Vert " : "\\Vert";
+    if (url !== undefined) return `${token.slice(0, -url.length - 1)}${inTableCell(url)}}`;
     const delimiter = starred ?? plain;
     return delimiter === undefined ? token : verbInCell(token, delimiter);
   });

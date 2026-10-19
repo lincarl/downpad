@@ -262,6 +262,13 @@ describe("math and strikethrough delimiters", () => {
     ["$a % comment\n+b$ items.", "$$a +b$$2 items.", "a +b"],
     ["$\\alpha%\nb$ items.", "$$\\alpha b$$2 items.", "\\alpha b"],
     ["$\\verb!%! x\n+y$ items.", "$$\\verb!%! x +y$$2 items.", "\\verb!%! x +y"],
+    // KaTeX reads a `%` in a URL as a character, but a `%` in the text of
+    // `\href` still starts a comment. Without braces the URL is the next
+    // character or command, so `%` there is the URL and `\alpha` is kept
+    // apart from the `b` after the comment.
+    ["$\\url{a%20b}\n+c$ items.", "$$\\url{a%20b} +c$$2 items.", "\\url{a%20b} +c"],
+    ["$\\href{u%{v}}{t % c\n}+y$ items.", "$$\\href{u%{v}}{t }+y$$2 items.", "\\href{u%{v}}{t }+y"],
+    ["$\\url%c\n{a} \\url\\alpha%\nb$ items.", "$$\\url%c {a} \\url\\alpha b$$2 items.", "\\url%c {a} \\url\\alpha b"],
   ])("saves %j with a digit typed after the formula so it opens the same way", { timeout: 60_000 }, async (paragraph, saved, math) => {
     const rest = "\n\n## Later heading\n\nAfter.\n";
     const { crepe, root, view } = await openCrepe(paragraph + rest);
@@ -313,6 +320,8 @@ describe("math and strikethrough delimiters", () => {
     // A cell is one line, and a line ending ends a `%` comment.
     ["a\n|b|", "$a \\|b\\|$", "a |b|"],
     ["a % c\n+b", "$a +b$", "a +b"],
+    // A `%` in a URL starts no comment, and a `|` there still ends no cell.
+    ["\\url{a%20b|c}\n+d", "$\\url{a%20b\\|c} +d$", "\\url{a%20b|c} +d"],
   ])("saves the formula %j in a table cell so the table opens with the same cells", { timeout: 60_000 }, async (value, written, math) => {
     const { crepe, root, view } = await openCrepe("| a | b |\n| --- | --- |\n| c $q$ ok | d |\n");
     view.dispatch(view.state.tr.setNodeMarkup(formulaAt(view), undefined, { value }));
@@ -358,12 +367,17 @@ describe("math and strikethrough delimiters", () => {
     expect(formulas((await open(editor.getMarkdown())).root)).toEqual(math);
   });
 
-  it("leaves out a comment that a line ending ends when it saves a formula next to another on one line", { timeout: 60_000 }, async () => {
-    const { editor, root } = await open("Edit.\n\n$\\$ % c\n+5$$y$ q\n");
+  it.each([
+    // A line ending ends a `%` comment, so the comment is left out, but a `%`
+    // in a URL starts no comment.
+    ["$\\$ % c\n+5$$y$ q", "$\\$ +5$$y$ q", ["$+5", "y"]],
+    ["$\\$ \\url{a%20b}\n+c$$y$ q", "$\\$ \\url{a%20b} +c$$y$ q", ["$\\url+c", "y"]],
+  ])("saves %j next to another formula on one line so it shows the same", { timeout: 60_000 }, async (paragraph, saved, math) => {
+    const { editor, root } = await open(`Edit.\n\n${paragraph}\n`);
     const before = shown(root);
-    expect(before).toEqual(["$+5", "y"]);
+    expect(before).toEqual(math);
     edit(editor);
-    expect(editor.getMarkdown()).toBe("Edited.\n\n$\\$ +5$$y$ q\n");
+    expect(editor.getMarkdown()).toBe(`Edited.\n\n${saved}\n`);
     expect(shown((await open(editor.getMarkdown())).root)).toEqual(before);
   });
 
