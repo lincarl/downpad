@@ -127,4 +127,23 @@ describe("a file dropped on base64 image data in the Markdown view", () => {
 
     expect(opened.getText()).toBe(`First line.\n\n${block}\n\n${LINK}!\n\n[b.csv](attachments/b.csv)\n\n${rest.replace(/^\n/, "")}`);
   });
+
+  // These take in all the text after them, so the files go in before them.
+  it.each([
+    ["a code fence not closed yet", "First line.\n\n", `\`\`\`html\n${html}\n`],
+    ["an HTML comment not closed yet", "First line.\n", `<!-- old figure\n${html}\n`],
+    ["a code fence not closed yet that starts the text", "", `\`\`\`html\n${html}`],
+  ])("goes in before the block that holds it, not into it, in %s", (_where, start, block) => {
+    const text = `${start}${block}`;
+    const opened = open(text);
+    const { view } = opened as unknown as { view: EditorView };
+    vi.spyOn(view, "posAtCoords").mockReturnValue(text.indexOf(pngData));
+    const target = opened.dropTargetAt(10, 10);
+    opened.insertText(LINK, target);
+    opened.insertText("!");
+    opened.insertText("[b.csv](attachments/b.csv)", target, false);
+
+    const lead = start ? "First line.\n\n" : "";
+    expect(opened.getText()).toBe(`${lead}${LINK}!\n\n[b.csv](attachments/b.csv)\n\n${block}`);
+  });
 });

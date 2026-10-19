@@ -74,6 +74,17 @@ function changedRange(before: string, after: string): { from: number; to: number
   return { from, to, insert: after.slice(from, end) };
 }
 
+/** The line breaks that put text going in at `at` in a paragraph of its own,
+ *  with a blank line on each side, apart from the start and the end of the
+ *  text. At the start of a line with text, it goes in before that line, and
+ *  otherwise after the line `at` ends. */
+function blankLinesAt(doc: Text, at: number): [string, string] {
+  const line = doc.lineAt(at);
+  const blank = (number: number): boolean => number < 1 || number > doc.lines || !doc.line(number).text.trim();
+  if (at === line.from && !blank(line.number)) return [blank(line.number - 1) ? "" : "\n", "\n\n"];
+  return ["\n\n", blank(line.number + 1) ? "" : "\n"];
+}
+
 /** The lines of a text, each with the line break that ends it. */
 const linesOf = (text: string): string[] => text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 
@@ -207,23 +218,15 @@ export class RawEditor {
    *  pane, after any file of the same drop, or else at the caret. At the caret
    *  it goes in after any selection, such as the find card's current match,
    *  and never replaces it. A target that asks for a new block gets the text
-   *  as a paragraph of its own at the end of its line. The caret moves after
-   *  the text, unless `moveCaret` is off, for a user who has moved on since
-   *  the drop. Then the selection stays where it was, before text inserted at
-   *  its end. */
+   *  as a paragraph of its own before or after its line (`blankLinesAt`). The
+   *  caret moves after the text, unless `moveCaret` is off, for a user who
+   *  has moved on since the drop. Then the selection stays where it was,
+   *  before text inserted at its end. */
   insertText(text: string, target: DropTarget | null = null, moveCaret = true): void {
     if (!this.view || !text) return;
     const aimed = target && this.dropTargets.has(target) ? target : null;
     const at = aimed ? aimed.pos : this.view.state.selection.main.to;
-    let before = "";
-    let after = "";
-    if (aimed?.newBlock) {
-      const { doc } = this.view.state;
-      const line = doc.lineAt(at);
-      before = "\n\n";
-      // A blank line after it too, unless one follows already.
-      if (line.number < doc.lines && doc.line(line.number + 1).text.trim()) after = "\n";
-    }
+    const [before, after] = aimed?.newBlock ? blankLinesAt(this.view.state.doc, at) : ["", ""];
     const end = at + before.length + text.length;
     this.view.dispatch({
       changes: { from: at, insert: before + text + after },

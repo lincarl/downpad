@@ -8,10 +8,10 @@
 // collapsed or not (`inBase64Payload`). The data is not text anyone searches
 // for, and Replace all would corrupt the image. That includes a data: URI
 // written as text, such as in a code sample, which the document view still
-// searches. A file dropped on the payload goes in after the image or the
-// block that holds the data instead (`dropOutsidePayload`).
+// searches. A file dropped on the payload goes in after the image, or beside
+// the block that holds the data, instead (`dropOutsidePayload`).
 
-import { ensureSyntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, language } from "@codemirror/language";
 import { ViewPlugin, Decoration, WidgetType, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { StateEffect, RangeSetBuilder, type EditorState, type Extension, type Text } from "@codemirror/state";
 import { formatSize } from "../../document/docSize";
@@ -61,8 +61,10 @@ const PARSE_BUDGET_MS = 200;
  * such as in a reference definition, HTML or code, the data has no end the
  * file could follow inside its line, so the file goes in as a paragraph of
  * its own (`newBlock`) after the top-level block that holds the data, which
- * keeps a table, a list or an HTML block in one piece. Without the text's
- * structure in time, that is after the line.
+ * keeps a table, a list or an HTML block in one piece. A code fence or an
+ * HTML comment that is not closed yet takes in all the text after it, so
+ * then the file goes in before the block. Without the text's structure in
+ * time, the file goes in after the line.
  */
 export function dropOutsidePayload(state: EditorState, pos: number): { pos: number; newBlock: boolean } {
   const { doc } = state;
@@ -77,7 +79,17 @@ export function dropOutsidePayload(state: EditorState, pos: number): { pos: numb
     node = node.parent;
   }
   if (link) return { pos: link.to, newBlock: false };
-  return { pos: doc.lineAt(node?.parent ? node.to : end).to, newBlock: true };
+  if (!node?.parent) return { pos: doc.lineAt(end).to, newBlock: true };
+  if (!node.nextSibling && takesInTextAfter(state, node.from)) return { pos: doc.lineAt(node.from).from, newBlock: true };
+  return { pos: doc.lineAt(node.to).to, newBlock: true };
+}
+
+/** Whether the last top-level block, which starts at `from`, would take in a
+ *  paragraph put after it, as a code fence or an HTML comment that is not
+ *  closed yet does. Parses that block again with the paragraph after it. */
+function takesInTextAfter(state: EditorState, from: number): boolean {
+  const tree = state.facet(language)?.parser.parse(`${state.sliceDoc(from)}\n\nx`);
+  return tree?.topNode.lastChild?.name !== "Paragraph";
 }
 
 class CollapsedWidget extends WidgetType {
