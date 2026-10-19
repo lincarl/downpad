@@ -2700,12 +2700,14 @@ test("a column menu closes when a Markdown edit in the split changes its table, 
   await page.keyboard.type("Z");
   await expect(table.locator(".selectedCell")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+s");
-  // Z goes into the paragraph, wherever the click put the caret there.
+  // Z goes into the paragraph, wherever the click put the caret there. The
+  // table keeps the text the Markdown pane has, since the document pane did
+  // not change it.
   await expect.poll(async () => {
     const saved = await readFile(file, "utf8");
     const z = saved.indexOf("Z");
     return z >= 0 && z < saved.indexOf("|") && saved.replace("Z", "");
-  }).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1x  | b1    |\n| a2   | b2    |\n");
+  }).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| --- | --- |\n| a1x | b1 |\n| a2 | b2 |\n");
 });
 
 test("a faded column handle or menu shows again under the pointer coming back from above the table, and takes the click", async () => {
