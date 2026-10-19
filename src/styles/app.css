@@ -1108,6 +1108,13 @@ body {
   pointer-events: none;
 }
 
+/* The URL is generated content, so a click on it puts the caret at the
+   link's end. Chromium put a click on DOM text there at the paragraph's start.
+   Unscoped so the printed clone (printRender.ts) shows the URL as before. */
+.md-link-url::after {
+  content: " (" attr(data-url) ")";
+}
+
 /* Mermaid diagrams (§5.2): rendered preview below the editable code source. */
 .editor-host .mermaid-preview {
   display: flex;

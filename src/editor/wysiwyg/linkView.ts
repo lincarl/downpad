@@ -1,16 +1,22 @@
 // Link rendering for the WYSIWYG view (spec §5.6). Crepe renders links as a
-// plain `link` mark; this plugin adds the "text-and-url" presentation — the URL
-// shown in a muted suffix after the link text, middle-truncated, full URL on
-// hover — and Ctrl/Cmd-click to open in the browser. In "text-only" mode no
-// suffix is drawn (traditional rendering); Ctrl-click still opens. A click
-// opens the link of the image or the text under the pointer, never the next
-// one.
+// plain `link` mark. This plugin adds the "text-and-url" presentation, the URL
+// shown in a muted suffix after the link text, middle-truncated, with the full
+// URL as its title. It also opens a link in the browser on Ctrl/Cmd-click. In
+// "text-only" mode no suffix is drawn (traditional rendering); Ctrl-click still
+// opens. A click opens the link of the image or the text under the pointer,
+// never the next one.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
 // so it never becomes part of the document or the serialized markdown. It is
 // drawn outside every mark. ProseMirror otherwise draws a widget inside the
 // marks of the text after it, so a link's suffix landed inside a link right
 // after it, and a Ctrl/Cmd-click on the suffix opened that other link.
+//
+// The suffix draws its URL as CSS generated content, with no text in the DOM.
+// Chromium has no caret position inside text that can be neither edited nor
+// selected, and a click on such text put the caret at the start of the
+// paragraph. Chromium puts a click on generated content after the suffix,
+// which ProseMirror reads as the link's end.
 //
 // A plain caret at a link's end, where typed text goes outside the link
 // (linkEdges.ts), is drawn after the suffix, where that text shows. A caret
@@ -155,11 +161,14 @@ function suffixesFor(state: EditorState): DecorationSet | undefined {
   return set.remove([suffix]).add(state.doc, [after]);
 }
 
+/** The suffix element for `href`. The URL it shows is CSS generated content
+ *  from `data-url` (see `.md-link-url::after`), not text in the DOM, so a
+ *  click on it puts the caret at the link's end (see the header). */
 function makeSuffix(href: string): () => HTMLElement {
   return () => {
     const span = document.createElement("span");
     span.className = "md-link-url";
-    span.textContent = ` (${middleTruncate(href)})`;
+    span.dataset.url = middleTruncate(href);
     span.title = href;
     return span;
   };

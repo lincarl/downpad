@@ -134,9 +134,13 @@ describe("link URL suffixes", () => {
   it("draws each suffix outside the link that comes right after it", () => {
     const doc = schema.nodes.doc.create(null, [p(text("a", "https://a.example"), text("b", "https://b.example"), text(" c"))]);
     const view = new EditorView(document.createElement("div"), { state: EditorState.create({ doc, plugins: [linkUrlPlugin(ctx)] }) });
-    const drawn = [...view.dom.querySelectorAll(".md-link-url")].map((suffix) => `${suffix.textContent} in ${suffix.parentElement?.nodeName}`);
+    // The URL shows through CSS, with no text in the DOM that a click could
+    // land in (see linkView.ts).
+    const drawn = [...view.dom.querySelectorAll<HTMLElement>(".md-link-url")].map(
+      (suffix) => `${suffix.dataset.url} in ${suffix.parentElement?.nodeName}, text ${JSON.stringify(suffix.textContent)}`,
+    );
     view.destroy();
-    expect(drawn).toEqual([" (https://a.example) in P", " (https://b.example) in P"]);
+    expect(drawn).toEqual(['https://a.example in P, text ""', 'https://b.example in P, text ""']);
   });
 
   it("keeps the key of a suffix that only moved", () => {
