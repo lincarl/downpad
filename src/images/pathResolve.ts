@@ -1,9 +1,11 @@
 // Resolving a markdown `src`/`href` to an absolute filesystem path (spec §5.5,
 // §5.6, §5.7). Used to (a) display linked/relative images via the Electron asset
-// protocol, (b) read image bytes for "Copy image", and (c) decide whether a
+// protocol, (b) read image bytes for "Copy image", (c) decide whether a
 // double-clicked link points at a local markdown file to open in a tab
-// (resolveMarkdownLinkTarget). Pure string logic so it's testable; the actual
-// asset-URL conversion / byte reads / tab-opening live with the callers.
+// (resolveMarkdownLinkTarget), and (d) link a dropped file from the folder its
+// document was saved in while the file was written (rebaseLink, §5.4). Pure
+// string logic so it's testable; the actual asset-URL conversion / byte reads /
+// tab-opening live with the callers.
 
 /** A `data:`, `http(s):`, `blob:`, `asset:`, or `file:` URL — not a local path to resolve. */
 export function isRemoteOrData(url: string): boolean {
@@ -74,6 +76,44 @@ export function collapseDotSegments(joined: string): string {
   }
   const result = out.join("/");
   return leadingSlash ? `/${result}` : result;
+}
+
+/** A path's root, such as `C:`, `//server/share`, or "" for a POSIX path,
+ *  and the names below it, with `.` and `..` worked out. */
+function pathParts(path: string): { root: string; names: string[] } {
+  const unified = path.replace(/\\/g, "/");
+  const root = /^\/\/[^/]+\/[^/]+|^[A-Za-z]:/.exec(unified)?.[0] ?? "";
+  const names: string[] = [];
+  for (const name of unified.slice(root.length).split("/")) {
+    if (name === "..") names.pop();
+    else if (name !== "" && name !== ".") names.push(name);
+  }
+  return { root, names };
+}
+
+/**
+ * The link from a document at `docPath` to the file that the relative `link`
+ * names from a document at `linkedFrom`. That is the link to an attachment
+ * from where its document is now, after the document was saved in another
+ * folder. The result is relative, with forward slashes, such as
+ * `../notes/attachments/data.csv`, or the file's absolute path when it is on
+ * another drive or share. A link between documents in the same folder stays
+ * as it is, and so does one that is not a relative path, such as a data URI.
+ */
+export function rebaseLink(link: string, linkedFrom: string, docPath: string): string {
+  const from = dirName(linkedFrom);
+  const to = dirName(docPath);
+  if (from === to || isRemoteOrData(link) || isAbsolutePath(link)) return link;
+  const target = pathParts(`${from}/${link}`);
+  const base = pathParts(to);
+  // Windows paths start with a drive or a share, and their names ignore case.
+  const windows = target.root !== "" || base.root !== "";
+  const same = (a: string, b: string): boolean => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (!same(target.root, base.root)) return `${target.root}/${target.names.join("/")}`;
+  let shared = 0;
+  const most = Math.min(base.names.length, target.names.length);
+  while (shared < most && same(base.names[shared], target.names[shared])) shared++;
+  return [...base.names.slice(shared).map(() => ".."), ...target.names.slice(shared)].join("/");
 }
 
 /**

@@ -290,7 +290,9 @@ export class EditorHost implements FindController {
    * latest edit, as after a reload from disk, a layout switch, an edit in
    * the other view, or after the editor was dropped from memory, it goes in
    * at the caret of the pane being edited. Resolves false, inserting
-   * nothing, once the document is closed.
+   * nothing, once the document is closed. `markdown` can be a function,
+   * which gives the Markdown right as the file goes in, such as a link that
+   * depends on where the document is saved by then.
    *
    * The visible panes catch up before and after, so the split's other pane
    * holds the insert at once. A pane the files were dropped on takes focus,
@@ -307,19 +309,20 @@ export class EditorHost implements FindController {
    * pane would write the block the file joins in its own form under the
    * user's caret.
    */
-  async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
+  async insertDropped(drop: FileDrop, markdown: string | (() => string)): Promise<boolean> {
     let place = this.dropPlace(drop);
     while (!place) {
       if (!(await this.waitWhileBehind(drop))) return false;
       place = this.dropPlace(drop);
     }
+    const text = typeof markdown === "string" ? markdown : markdown();
     const aimed = this.drops.get(drop)!;
     const { pane, target } = place;
     const typedIn = this.focusedSplitRaw()?.raw;
     if (pane.wysiwyg && target && typedIn) {
       // If the source edit cannot be found, the document pane's own report
       // goes to the Markdown pane, as for any edit there.
-      const edit = pane.wysiwyg.insertMarkdownWithSource(markdown, target, typedIn.getText());
+      const edit = pane.wysiwyg.insertMarkdownWithSource(text, target, typedIn.getText());
       if (edit) typedIn.applyDropEdit(edit);
       this.flush();
       return true;
@@ -327,7 +330,7 @@ export class EditorHost implements FindController {
     // The file's text goes into a Markdown pane's line, often the one the user
     // types in, where their next keys would land after the file.
     const stay = !this.movedOn(aimed) && !(pane.raw && !aimed.focusMoved && this.typingIn(pane));
-    const next = pane.wysiwyg ? pane.wysiwyg.insertMarkdown(markdown, target, stay) : (pane.raw?.insertText(markdown, target, stay) ?? null);
+    const next = pane.wysiwyg ? pane.wysiwyg.insertMarkdown(text, target, stay) : (pane.raw?.insertText(text, target, stay) ?? null);
     this.followFile(aimed, pane, next);
     this.flush();
     if (aimed.onPane && stay) {

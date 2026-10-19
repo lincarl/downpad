@@ -8,7 +8,8 @@
 
 import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
-import { resolveImageSrc, type ImageStoreContext } from "../images/imageStore";
+import { resolveImageSrc } from "../images/imageStore";
+import { rebaseLink } from "../images/pathResolve";
 import { readImageBytes, writeAttachment } from "../ipc/commands";
 import { baseName, classifyDrop } from "../paste/dropHandler";
 import { mdImage, mdLink } from "../paste/mdLink";
@@ -152,21 +153,20 @@ export class FileDropCoordinator {
     return this.dependencies.store.get().tabs.some((tab) => tab.id === tabId);
   }
 
-  /** Context for storing a dropped image, with the path of the document it
-   *  was dropped on. */
-  private dropImageContext(drop: FileDrop): ImageStoreContext {
-    return {
-      getSettings: () => this.dependencies.store.get().settings,
-      getFilePath: () => this.tabFilePath(drop.tabId),
-      requestSave: () => this.saveDropDocument(drop),
-    };
-  }
-
-  /** Embed a dropped image where its drop goes in. */
+  /** Embed a dropped image where its drop goes in. An image stored in the
+   *  attachments folder goes beside the document as it is once the image is
+   *  read, or once it is saved, if the image asked for that. */
   private async embedDroppedImage(path: string, drop: FileDrop): Promise<void> {
     const { bytes, mime } = await readImageBytes(path);
-    const src = await resolveImageSrc(bytes, mime, this.dropImageContext(drop));
-    if (src) await this.insertDropped(drop, mdImage("", src), path);
+    // The store asks for the path right before it writes the image, so the
+    // last path it got is the one an attachment's link is relative to.
+    let storedBeside: string | null = null;
+    const src = await resolveImageSrc(bytes, mime, {
+      getSettings: () => this.dependencies.store.get().settings,
+      getFilePath: () => (storedBeside = this.tabFilePath(drop.tabId)),
+      requestSave: () => this.saveDropDocument(drop),
+    });
+    if (src) await this.insertDropped(drop, () => mdImage("", this.linkFromDocument(drop, storedBeside, src)), path);
     else if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
   }
 
@@ -178,24 +178,40 @@ export class FileDropCoordinator {
       if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
       return;
     }
-    const filePath = this.tabFilePath(drop.tabId);
-    if (!filePath) return;
     const { bytes } = await readImageBytes(path);
+    // The user may have saved the document in another folder during the
+    // read, so the copy goes beside the document as it is now.
+    const filePath = this.tabFilePath(drop.tabId);
+    if (!filePath) {
+      if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
+      return;
+    }
     const name = baseName(path);
-    const rel = await writeAttachment(
+    const link = await writeAttachment(
       filePath,
       this.dependencies.store.get().settings.attachmentsFolderName,
       name,
       bytes,
     );
-    await this.insertDropped(drop, mdLink(name, rel), path);
+    await this.insertDropped(drop, () => mdLink(name, this.linkFromDocument(drop, filePath, link)), path);
+  }
+
+  /** The link to a dropped file from the document it was dropped on, as that
+   *  document is saved now. `link` names the file from the document saved at
+   *  `linkedFrom`, beside which the file was written. A document saved in
+   *  another folder since then links back to the file there. A data URI, or
+   *  a link without `linkedFrom`, stays as it is. */
+  private linkFromDocument(drop: FileDrop, linkedFrom: string | null, link: string): string {
+    const filePath = this.tabFilePath(drop.tabId);
+    return linkedFrom && filePath ? rebaseLink(link, linkedFrom, filePath) : link;
   }
 
   /** Insert a dropped file's Markdown into the document it was dropped on,
-   *  once that document is in front. If the document is closed first, it gets
-   *  nothing and no other document gets it instead. A copy in the attachments
-   *  folder stays there. */
-  private async insertDropped(drop: FileDrop, markdown: string, path: string): Promise<void> {
+   *  once that document is in front. The Markdown comes from `markdown` right
+   *  as it goes in. If the document is closed first, it gets nothing and no
+   *  other document gets it instead. A copy in the attachments folder stays
+   *  there. */
+  private async insertDropped(drop: FileDrop, markdown: () => string, path: string): Promise<void> {
     if (!(await this.dependencies.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(path);
   }
 }

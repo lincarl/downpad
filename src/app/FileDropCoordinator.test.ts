@@ -58,9 +58,10 @@ function setup() {
       const tabId = store.get().activeTabId;
       return tabId === null ? null : { tabId };
     }),
-    insertDropped: async (drop: FileDrop, markdown: string) => {
+    insertDropped: async (drop: FileDrop, markdown: string | (() => string)) => {
       await untilActive(drop.tabId);
-      log.push(`insert ${markdown} into ${tab(drop.tabId)} with ${tab(store.get().activeTabId)} in front`);
+      const text = typeof markdown === "string" ? markdown : markdown();
+      log.push(`insert ${text} into ${tab(drop.tabId)} with ${tab(store.get().activeTabId)} in front`);
       return true;
     },
     releaseDrop: (drop: FileDrop) => {
@@ -200,5 +201,49 @@ describe("FileDropCoordinator", () => {
     expect(disk.writeAttachment).toHaveBeenCalledWith("/docs/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
     expect(logged).toHaveBeenCalledWith("md-easy: could not insert gone.png", expect.any(Error));
     logged.mockRestore();
+  });
+
+  it("copies a file beside the document that was saved in another folder while the file was read", async () => {
+    const { store, log, coordinator } = setup();
+    let finishRead = () => {};
+    disk.readImageBytes.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRead = () => resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "text/csv" });
+      }),
+    );
+    const handled = coordinator.handle(["/drop/data.csv"], point);
+    await settle();
+    // Save As puts the document in another folder.
+    store.patchDoc({ filePath: "/moved/notes.md" });
+    finishRead();
+    await handled;
+    expect(disk.writeAttachment).toHaveBeenCalledOnce();
+    expect(disk.writeAttachment).toHaveBeenCalledWith("/moved/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
+    expect(log).toContain(`insert ${link} into dropped-on with dropped-on in front`);
+  });
+
+  it.each([
+    ["a file", "/drop/data.csv", (src: string) => `[data.csv](${src})`],
+    ["an image stored as a file", "/drop/pic.png", (src: string) => `![](${src})`],
+  ])("links %s from the document's new folder when the document is saved there while the copy is written", async (_kind, dropped, markdown) => {
+    const { store, log, coordinator } = setup();
+    store.set((state) => ({ settings: { ...state.settings, embedImagesAsBase64: false } }));
+    let written = "";
+    let finishWrite = () => {};
+    disk.writeAttachment.mockImplementationOnce(
+      (_docPath, folder, name) =>
+        new Promise((resolve) => {
+          written = `${folder}/${name}`;
+          finishWrite = () => resolve(written);
+        }),
+    );
+    const handled = coordinator.handle([dropped], point);
+    await settle();
+    expect(written).not.toBe("");
+    store.patchDoc({ filePath: "/moved/notes.md" });
+    finishWrite();
+    await handled;
+    // The copy stays beside the document's old place, /docs/notes.md.
+    expect(log).toContain(`insert ${markdown(`../docs/${written}`)} into dropped-on with dropped-on in front`);
   });
 });

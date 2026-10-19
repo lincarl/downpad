@@ -1671,6 +1671,11 @@ async function releaseHeld(): Promise<void> {
   await app!.evaluate(() => (Reflect.get(globalThis, "releaseHeld") as () => void)());
 }
 
+/** Whether a file or folder exists. */
+async function exists(file: string): Promise<boolean> {
+  return stat(file).then(() => true, () => false);
+}
+
 test("files dropped on the document go in where they were dropped", async () => {
   const file = path.join(directory, "drop-on-document.md");
   await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
@@ -1805,6 +1810,52 @@ test("the files of a drop after one that cannot be read go in, and the drop's Ma
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[good.csv](attachments/good.csv)\n\nSecond line.\n");
   expect(await readFile(path.join(directory, "attachments", "good.csv"), "utf8")).toBe("a,b\n");
   await expect(page.getByRole("tab", { name: /drop-gone\.md/ }).locator(".tab-dot")).toBeHidden();
+});
+
+test("a file dropped on a document that is saved in another folder while the file is read goes in beside it there", async () => {
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("data.csv")]);
+  await untilHeld();
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await releaseHeld();
+  await expect(page.locator(".ProseMirror p", { hasText: "data.csv" })).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toBe("First line.\n\n[data.csv](attachments/data.csv)\n\nSecond line.\n");
+  expect(await readFile(path.join(directory, "moved", "attachments", "data.csv"), "utf8")).toBe("a,b\n");
+  expect(await exists(path.join(directory, "original", "attachments"))).toBe(false);
+});
+
+test("an image dropped on a document that is saved in another folder while the image is written links to it from there", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("write_attachment");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await pngFile("pixel.png")]);
+  await untilHeld();
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await releaseHeld();
+  // The image was written beside the document's old place, and shows from there.
+  const image = page.locator(".ProseMirror .milkdown-image-block img");
+  await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0)).toBe(true);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(\.\.\/original\/attachments\/img-[^)]+\.png\)\n\nSecond line\.\n$/);
+  const link = /\]\(([^)]+)\)/.exec(await readFile(saved, "utf8"))![1]!;
+  expect(await exists(path.join(path.dirname(saved), link))).toBe(true);
 });
 
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
