@@ -45,6 +45,9 @@ const fakeEditors = vi.hoisted(() => ({
   /** Each pane's find change callback, to simulate an edit with the card open. */
   wysiwygFindChange: null as (() => void) | null,
   rawFindChange: null as (() => void) | null,
+  /** When each document pane build starts and ends, and when the host forgets
+   *  the image answers, in order. */
+  events: [] as string[],
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -63,11 +66,13 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
     ): Promise<void> {
       fakeEditors.mountCalls += 1;
       fakeEditors.mounted.push({ markdown, bullet: style.bullet });
+      fakeEditors.events.push(`build ${markdown}`);
       fakeEditors.duringMount?.();
       this.onChange = cb.onChange;
       fakeEditors.wysiwygChange = cb.onChange;
       fakeEditors.wysiwygFindChange = cb.onFindChange ?? null;
       await fakeEditors.mountPromise;
+      fakeEditors.events.push(`built ${markdown}`);
     }
 
     getMarkdown(): string {
@@ -143,6 +148,12 @@ vi.mock("./raw/RawEditor", () => ({
 
 vi.mock("./wysiwyg/spellcheck", () => ({ applySpellcheck: vi.fn() }));
 
+vi.mock("./wysiwyg/imageView", () => ({
+  forgetImageAnswers: (): void => {
+    fakeEditors.events.push("forget image answers");
+  },
+}));
+
 import { EditorHost } from "./EditorHost";
 
 /** The classes of the visible panes. */
@@ -203,6 +214,7 @@ beforeEach(() => {
   fakeEditors.rawShowFocus = [];
   fakeEditors.wysiwygFindChange = null;
   fakeEditors.rawFindChange = null;
+  fakeEditors.events = [];
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -685,6 +697,14 @@ describe("EditorHost changes while a document pane builds", () => {
     if (newTab) {
       expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]);
       expect(fakeEditors.rawText).toBe("");
+      // The build for the reload keeps the image answers it waited for.
+      expect(fakeEditors.events.slice(-5)).toEqual([
+        "build text from disk",
+        "built text from disk",
+        "forget image answers",
+        "build ",
+        "built ",
+      ]);
     } else {
       expect(shownPanes(root)).toEqual(secondPanes);
     }
@@ -723,8 +743,17 @@ describe("EditorHost changes while a document pane builds", () => {
       );
 
       expect(store.get().doc).toMatchObject({ markdown: "text from disk", isDirty: false });
-      // The build that began before the reload is done again from the text on disk.
-      expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual(["original markdown", "text from disk"]);
+      // The build that began before the reload is done again from the text on
+      // disk, which asks about its images again. The first build keeps the
+      // image answers it waited for.
+      expect(fakeEditors.events).toEqual([
+        "forget image answers",
+        "build original markdown",
+        "built original markdown",
+        "forget image answers",
+        "build text from disk",
+        "built text from disk",
+      ]);
       expect(root.querySelectorAll(".editor-pane-wysiwyg")).toHaveLength(1);
       expect(shown(root)).toEqual(
         layout === "split"

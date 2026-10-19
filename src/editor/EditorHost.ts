@@ -89,6 +89,13 @@ export class EditorHost implements FindController {
    *  panes ran. Their panes went stale then (`reloadActiveDoc`). Like a reload,
    *  the next showing of each tries a failed Document view again (`present`). */
   private readonly replacedTabs = new Set<string>();
+  /** Set when an open or a reload during another change of panes asked to
+   *  forget the image answers (`reloadActiveDoc`). The next document pane built
+   *  forgets them first, or the change does as it ends. A document pane already
+   *  building keeps the answers it waited for, because one that lost them would
+   *  render its images with their raw paths, looked up next to md-easy's own
+   *  page. */
+  private forgetImagesBeforeBuild = false;
   /** Terminal lifecycle state. `unmount` clears editors but leaves this host
    *  reusable; `dispose` permanently rejects future work for React cleanup. */
   private disposed = false;
@@ -320,14 +327,18 @@ export class EditorHost implements FindController {
    * While another change of panes runs, the tab's panes go stale at once, so
    * the panes that change builds or shows take no typing that would write the
    * older text back. It then shows the active tab again, and this waits for it.
+   * The image answers are forgotten before the next document pane is built.
    */
   async reloadActiveDoc(): Promise<void> {
     if (this.disposed) return;
-    forgetImageAnswers();
     const id = this.store.get().activeTabId;
     if (id) this.bumpRev(id); // no author → every pane of this tab is now stale
-    if (!this.changing) return this.runPaneChange(() => this.present({ rebuild: true }));
+    if (!this.changing) {
+      forgetImageAnswers();
+      return this.runPaneChange(() => this.present({ rebuild: true }));
+    }
     if (id) this.replacedTabs.add(id);
+    this.forgetImagesBeforeBuild = true;
     return this.queueShow();
   }
 
@@ -488,6 +499,7 @@ export class EditorHost implements FindController {
       } finally {
         this.showQueued = false;
         this.changing = null;
+        this.forgetPendingImageAnswers();
         finish();
       }
     }
@@ -498,6 +510,13 @@ export class EditorHost implements FindController {
   private queueShow(): Promise<void> {
     this.showQueued = true;
     return this.changing ?? Promise.resolve();
+  }
+
+  /** Forget the image answers if a reload during a change of panes asked to. */
+  private forgetPendingImageAnswers(): void {
+    if (!this.forgetImagesBeforeBuild) return;
+    this.forgetImagesBeforeBuild = false;
+    forgetImageAnswers();
   }
 
   private active(): Pane | null {
@@ -720,6 +739,7 @@ export class EditorHost implements FindController {
     };
 
     if (view === "wysiwyg") {
+      this.forgetPendingImageAnswers();
       const editor = new WysiwygEditor();
       pane.wysiwyg = editor;
       try {
