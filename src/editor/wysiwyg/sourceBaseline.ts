@@ -33,10 +33,10 @@
 // kept definition could turn text in a changed block into a link, when
 // indented code could end in another place than in the source, when text
 // follows a block that read as it did only at the very end of the source,
-// when a list or footnote that ends in a block the source left open, such as
-// a fence with no closing line, has other text after it than in the source,
-// or when reading the windows back would take longer than writing the whole
-// document.
+// when the text after a list or footnote that ends in a block the source left
+// open, such as a fence with no closing line, would change what that block
+// holds, or when reading the windows back would take longer than writing the
+// whole document.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import type { RemarkParser } from "@milkdown/kit/transformer";
@@ -48,6 +48,8 @@ export type MdRoot = ReturnType<RemarkParser["parse"]>;
 interface MdNode {
   type: string;
   identifier?: string;
+  /** The text of a code, math or HTML node. */
+  value?: string;
   children?: readonly MdNode[];
   position?: { start: { line?: number; offset?: number }; end: { offset?: number } };
 }
@@ -83,9 +85,9 @@ export interface OutlineNode {
   defines: readonly string[];
   /** The blocks its first line opens (`opens`). */
   opens: string;
-  /** Whether it is a list or footnote whose last block the text left open
-   *  (`leftOpen`). */
-  endsOpen: boolean;
+  /** For a list or footnote whose last block the text left open, that block's
+   *  type and value (`leftOpen`). */
+  leftOpen?: string;
 }
 
 /**
@@ -124,9 +126,10 @@ interface SourceItem {
   defines: readonly string[];
   /** The blocks its first line opens in the source (`opens`). */
   opens: string;
-  /** Whether it is a list or footnote whose last block the source left open
-   *  (`leftOpen`). It reads as it does only with the source's text after it. */
-  endsOpen: boolean;
+  /** For a list or footnote whose last block the source left open, that
+   *  block's type and value (`leftOpen`). The line after the item decides how
+   *  many of the line breaks below it that block holds. */
+  leftOpen?: string;
   /** What ends it, worked out when a join needs it (`itemEnding`). */
   ending?: Ending;
   /** Whether it read in the source as it reads at the start of a text, worked
@@ -412,11 +415,13 @@ export class SourceBaseline {
    * back in windows (`reads`). When a window does not read as its pieces, the
    * join where it went wrong gets a blank line and the window is read again.
    * A few joins could change how a kept block reads in a way no window shows
-   * (`codeMayMove`, `codeMayEnd`, `readsOnlyAtEnd`), and so could any join
-   * below a list or footnote left open at its end, or the end of the body
-   * after one (`leftOpen`). They make the whole body be written. The budget
-   * for reading back is spent the same way whether or not a window's result
-   * is cached, so a document always gets the same text.
+   * (`codeMayMove`, `codeMayEnd`, `readsOnlyAtEnd`), and make the whole body
+   * be written. A join below a list or footnote that the source left open at
+   * its end (`leftOpen`) is always read back, because the line below decides
+   * what its open block holds, and so is such a list or footnote that becomes
+   * the last block, with the text after it (`endsAlike`). The budget for
+   * reading back is spent the same way whether or not a window's result is
+   * cached, so a document always gets the same text.
    *
    * A window starts at the top of the body, below a join the rules settle,
    * where the parser starts afresh as it does in the window, or below a join
@@ -429,10 +434,6 @@ export class SourceBaseline {
    * how the window reads.
    */
   private join(pieces: readonly Piece[], layout: SourceLayout): string[] | null {
-    // A source item that reads as it does only with the source's text after
-    // it, and would end the body where it did not end the source.
-    const { item: last } = pieces[pieces.length - 1];
-    if (last >= 0 && last < layout.items.length - 1 && layout.items[last].endsOpen) return null;
     const budget = Math.max(this.source.length / PARSE_COST, MIN_BUDGET);
     const gaps: string[] = [];
     const windows: Window[] = [];
@@ -465,14 +466,18 @@ export class SourceBaseline {
         gap = (above.item >= 0 ? layout.gaps[above.item] : below.item > 0 ? layout.gaps[below.item - 1] : undefined) ?? BLANK_LINE;
         fresh = below.item < 0 || itemFresh(layout, below.item);
         if (below.item >= 0 && codeMayMove(layout, below.item, above, gap)) return null;
-        if (above.item >= 0 && (readsOnlyAtEnd(layout, above.item) || layout.items[above.item].endsOpen)) return null;
+        if (above.item >= 0 && readsOnlyAtEnd(layout, above.item)) return null;
+        // What a block left open at the end of the list or footnote above holds
+        // depends on the line below, so the join is read back even where the
+        // rules keep the pieces apart.
+        const leftOpen = above.item >= 0 && layout.items[above.item].leftOpen !== undefined;
         const ending = endingOf(above, layout);
-        if (!apart(ending, above.text, gap, below.text)) {
+        if (leftOpen || !apart(ending, above.text, gap, below.text)) {
           if (above.item >= 0 && codeMayEnd(layout, above.item)) return null;
           // Read the file's gap back if that fits the budget. Otherwise a blank
           // line, if the rules show that it keeps the pieces apart.
           if (spent + size + pieceCost(above) + gap.length + headCost(below) <= budget) open = true;
-          else if (apart(ending, above.text, BLANK_LINE, below.text)) gap = BLANK_LINE;
+          else if (!leftOpen && apart(ending, above.text, BLANK_LINE, below.text)) gap = BLANK_LINE;
           else return null;
         }
       }
@@ -489,7 +494,14 @@ export class SourceBaseline {
       }
     }
     end(pieces.length - 1);
+    // A list or footnote left open at its end that becomes the last block
+    // takes in the line breaks of the text after it.
+    const { item: last } = pieces[pieces.length - 1];
+    const tail = tailOf(pieces, layout);
+    const lastOpen = last >= 0 && last < layout.items.length - 1 && layout.items[last].leftOpen !== undefined;
+    if (lastOpen) spent += layout.items[last].text.length + tail.length;
     if (spent > budget) return null;
+    if (lastOpen && !this.endsAlike(layout, last, tail)) return null;
 
     for (const window of windows) {
       // Each join of the window gets a blank line at most once.
@@ -509,7 +521,9 @@ export class SourceBaseline {
    * join above the window, when its first piece reads wrongly from its start.
    *
    * Each source item read in full must be one node over its exact text that
-   * opens the same blocks on its first line as in the source (`opens`). Each
+   * opens the same blocks on its first line as in the source (`opens`). A list
+   * or footnote left open at its end may run on over the line breaks below
+   * it, but its open block must hold the same text as in the source. Each
    * block Milkdown wrote must read as that document block in Milkdown's form,
    * or as that form reads on its own (`readsAs`). The first node of the head
    * piece must start where it starts and open the blocks it opens in the
@@ -594,7 +608,8 @@ export class SourceBaseline {
       if (piece.item >= 0) {
         const item = layout.items[piece.item];
         if (!first || startOf(first) !== start + item.lead || opens(first) !== item.opens) return k - 1;
-        if (own.length !== 1 || first.position?.end.offset !== end) return k;
+        const ends = item.leftOpen === undefined ? first.position?.end.offset === end : openText(lastBlock(first)) === item.leftOpen;
+        if (own.length !== 1 || !ends) return k;
       } else {
         if (!first || startOf(first) < start || startOf(first) > start + indentOf(piece.text)) return k - 1;
         if ((last.position?.end.offset ?? Infinity) > end) return k;
@@ -624,6 +639,28 @@ export class SourceBaseline {
     const alone = `${piece.text}\n`;
     const own = childrenOf(this.tools.toDoc(this.tools.parse(alone), alone));
     return read.length === own.length && read.every((node, k) => this.key(node) === this.key(own[k]));
+  }
+
+  /**
+   * Whether source item `k`, a list or footnote whose last block the source
+   * left open (`leftOpen`), holds the same text in that block as the last
+   * piece of the body, with `after` below it. The source can have more or
+   * fewer line breaks after it than the body has at its end. Cached with the
+   * windows.
+   */
+  private endsAlike(layout: SourceLayout, k: number, after: string): boolean {
+    const item = layout.items[k];
+    const text = item.text + after;
+    const key = `${text}\u0000end ${k}`;
+    let wrong = this.windows.get(key) ?? this.lastWindows.get(key);
+    if (wrong === undefined) {
+      const nodes = this.tools.parse(text).children;
+      const node = nodes[0];
+      const alike = nodes.length === 1 && startOf(node) === item.lead && opens(node) === item.opens;
+      wrong = alike && openText(lastBlock(node)) === item.leftOpen ? null : 0;
+    }
+    this.windows.set(key, wrong);
+    return wrong === null;
   }
 
   /** The blocks the first line of `piece` should open (`opens`). Those are
@@ -736,43 +773,58 @@ export function outlineOf(tree: MdNode, text: string): OutlineNode[] | null {
       holdsDefinition,
       defines,
       opens: opens(node),
-      endsOpen: leftOpen(node, text),
+      leftOpen: leftOpen(node, text),
     });
   }
   return outline;
 }
 
 /**
- * Whether `node`, a top-level node of `text`, is a list or footnote whose last
- * block `text` left open: a fenced code or math block with no closing fence,
- * or HTML such as a comment with no `-->`. That block runs on to the end of
- * the list or footnote, and takes in the blank lines below it or not,
- * depending on the line after them. It does before a quote or another item,
- * and does not before a heading or a paragraph. So its code or HTML can
- * change when other text follows. A quote ends such a block at its own end,
- * also inside a list. A closing fence counts only when it is indented no
- * further than its opening fence, so a closed block can count as open, which
- * only writes the whole body.
+ * For `node`, a top-level node of `text`, that is a list or footnote whose
+ * last block `text` left open, that block's type and value (`openText`). Such
+ * a block is a fenced code or math block with no closing fence, or HTML that
+ * ends at its end marker, such as a comment with no `-->` or a `<pre>` with no
+ * `</pre>`. It runs on to the end of the list or footnote, and holds the line
+ * breaks below it or not, depending on the line after them. It does before a
+ * quote, another list or footnote or at the end of the text, and does not
+ * before a paragraph, heading, rule, table, code, HTML or a definition. So its
+ * value can change when other text follows. A quote ends such a block at its
+ * own end, also inside a list. A closing fence counts only when it is
+ * indented no further than its opening fence, so a closed block can count as
+ * open, which only makes the joins below it be read back.
  */
-function leftOpen(node: MdNode, text: string): boolean {
-  let last: MdNode | undefined = node;
-  while (last && RUNS_ON.has(last.type)) last = last.children?.[last.children.length - 1];
-  if (!last || last === node) return false;
+function leftOpen(node: MdNode, text: string): string | undefined {
+  const last = lastBlock(node);
+  if (!last) return undefined;
   const start = startOf(last);
   const block = text.slice(start, last.position?.end.offset);
-  if (last.type === "html") return htmlEnding(block) === "open";
+  if (last.type === "html") return htmlEnding(block) === "open" ? openText(last) : undefined;
   const fence = last.type === "code" || last.type === "math" ? FENCE.exec(block) : null;
   // Indented code ends before the blank lines below it.
-  if (!fence) return false;
+  if (!fence) return undefined;
   const close = /^( *)(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(block.slice(block.lastIndexOf("\n") + 1));
   const column = start - (text.lastIndexOf("\n", start - 1) + 1);
-  return !(
+  const closed =
     block.includes("\n") &&
     close &&
     close[2][0] === fence[1][0] &&
     close[2].length >= fence[1].length &&
-    close[1].length <= column
-  );
+    close[1].length <= column;
+  return closed ? undefined : openText(last);
+}
+
+/** The last block of `node` below the lists, list items and footnotes it ends
+ *  in. Undefined when `node` is none of those. */
+function lastBlock(node: MdNode): MdNode | undefined {
+  let last: MdNode | undefined = node;
+  while (last && RUNS_ON.has(last.type)) last = last.children?.[last.children.length - 1];
+  return last === node ? undefined : last;
+}
+
+/** The type and value of `block`, which tell whether a block left open holds
+ *  the same text (see `leftOpen`). */
+function openText(block: MdNode | undefined): string | undefined {
+  return block && `${block.type}\n${block.value ?? ""}`;
 }
 
 /**
@@ -1309,7 +1361,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       holdsDefinition: node.holdsDefinition,
       defines: node.defines,
       opens: node.opens,
-      endsOpen: node.endsOpen,
+      leftOpen: node.leftOpen,
     });
     end = start + text.length;
   }

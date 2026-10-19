@@ -565,6 +565,49 @@ describe("a join between a changed block and the file's text", () => {
     expect(editor.getMarkdown()).toBe(expected);
   });
 
+  // A code block or comment the file left open at the end of a list or
+  // footnote holds the line breaks below it before a quote, another list or
+  // the end of the file, and not before a paragraph. Where the text after it
+  // leaves it holding the same, the file's text reads back as the document.
+  it.each([
+    [
+      "a quote below a list that ends in an open comment is edited",
+      "* Notes\n\n  <!-- draft: more to come\n\n> Quote.\n",
+      (view: EditorView) => typeAfter(view, "Quote.", " Edited"),
+      "* Notes\n\n  <!-- draft: more to come\n\n> Quote. Edited\n",
+    ],
+    [
+      "a paragraph is added below a list that ends in an open fence",
+      "* Run:\n\n  ```sh\n  echo hello\n",
+      (view: EditorView) => {
+        const { paragraph } = view.state.schema.nodes;
+        view.dispatch(view.state.tr.insert(blockWith(view, "echo hello").to, paragraph.create(null, view.state.schema.text("Done."))));
+      },
+      "* Run:\n\n  ```sh\n  echo hello\n\nDone.\n",
+    ],
+    [
+      "a list that ends in an open comment becomes the last block",
+      "* Notes\n\n  <!-- draft\n> Quote.\n",
+      (view: EditorView) => deleteBlock(view, "Quote."),
+      "* Notes\n\n  <!-- draft\n",
+    ],
+    // Below the comment, the paragraph the quote became would leave it without
+    // its line break. A blank line gives the comment the same text again.
+    [
+      "a quote below a list that ends in an open comment becomes a paragraph",
+      "* Notes\n\n  <!-- draft\n> Quote.\n",
+      (view: EditorView) => {
+        const quote = blockWith(view, "Quote.");
+        view.dispatch(view.state.tr.replaceWith(quote.from, quote.to, quote.node.child(0)));
+      },
+      "* Notes\n\n  <!-- draft\n\nQuote.\n",
+    ],
+  ])("keeps the file's text when %s", { timeout: 60_000 }, async (_name, markdown, edit, expected) => {
+    const { editor, view } = await open(markdown);
+    edit(view);
+    expect(editor.getMarkdown()).toBe(expected);
+  });
+
   it("keeps a list that ends in a closed fence when the block below it goes", { timeout: 60_000 }, async () => {
     const { editor, view } = await open("* Run:\n\n  ```sh\n  echo hello\n  ```\n\n> Done.\n");
     deleteBlock(view, "Done.");
