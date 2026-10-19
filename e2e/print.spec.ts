@@ -341,12 +341,7 @@ test("a paragraph, quote and list item taller than a page continue on the next s
     "The end.",
   ].join("\n");
 
-  await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
-  await page.click(".toolbar-view button:has-text('Split')");
-  await page.locator(".editor-pane-raw .cm-content").click();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.insertText(markdown);
+  await typeDocument(page, markdown);
   await expect(page.locator(`${wysiwyg} blockquote blockquote p`)).toHaveCount(60);
   await expect(page.locator(`${wysiwyg} li`).last()).toContainText("Last item");
   const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
@@ -417,12 +412,7 @@ test("a Hebrew or Arabic paragraph taller than a page continues on the next shee
     "The end.",
   ].join("\n");
 
-  await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
-  await page.click(".toolbar-view button:has-text('Split')");
-  await page.locator(".editor-pane-raw .cm-content").click();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.insertText(markdown);
+  await typeDocument(page, markdown);
   await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
   const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
 
