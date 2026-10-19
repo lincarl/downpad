@@ -1697,6 +1697,58 @@ test("a Markdown file dropped with other files opens in its own tab once the oth
   );
 });
 
+test("a Markdown file dropped with other files opens at once when the user shows another tab while those are read", async () => {
+  const file = path.join(directory, "drop-switch.md");
+  const shown = path.join(directory, "shown.md");
+  const dropped = path.join(directory, "dropped.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await writeFile(shown, "# Shown\n");
+  await writeFile(dropped, "# Dropped\n");
+  await launch(file);
+  const tab = (name: RegExp) => page.getByRole("tab", { name });
+  const shownHeading = page.locator(`.editor-pane:not([hidden]) ${heading}`);
+  await chooseOpen(shown);
+  await expect(shownHeading).toHaveText("Shown");
+  await tab(/drop-switch\.md/).click();
+  const secondLine = page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "Second line." });
+  await expect(secondLine).toBeVisible();
+  // Hold the image's read in the main process until released, as for a large
+  // file or one on a slow share. Electron keeps the handlers of ipcMain.handle
+  // in `_invokeHandlers`, and a handler on the window's own `ipc` runs in
+  // their place.
+  await app!.evaluate(({ BrowserWindow, ipcMain }) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
+    const read = new Promise((resolve) => Reflect.set(globalThis, "releaseRead", resolve));
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, command, ...args) => {
+      if (command === "read_image_bytes") {
+        Reflect.set(globalThis, "readAsked", true);
+        await read;
+      }
+      return invoke(event, command, ...args);
+    });
+  });
+  await dropBelow(secondLine, [await pngFile("pixel.png"), dropped]);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "readAsked") === true)).toBe(true);
+  // While the image is read, the user shows another tab. The Markdown file
+  // opens then, as it would alone, rather than wait with the image.
+  await tab(/shown\.md/).click();
+  await expect(shownHeading).toHaveText("Dropped");
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await app!.evaluate(() => (Reflect.get(globalThis, "releaseRead") as () => void)());
+  // The image waits for its document. Back there, it goes in where it was
+  // dropped, and that document stays in front.
+  await tab(/drop-switch\.md/).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block")).toHaveCount(1);
+  await page.waitForTimeout(500);
+  await expect(tab(/drop-switch\.md/)).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first()).toHaveText("First line.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(
+    /^First line\.\n\nSecond line\.\n\n!\[\]\(data:image\/png;base64,[^)]+\)\n\nThird line\.\n$/,
+  );
+});
+
 test("two Markdown files dropped together each open in a tab of their own", async () => {
   const file = path.join(directory, "drop-two.md");
   const first = path.join(directory, "first.md");

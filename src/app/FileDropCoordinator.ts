@@ -26,29 +26,36 @@ export class FileDropCoordinator {
 
   /**
    * Handle the files of one drop. Each Markdown file opens as an opened file
-   * does. The other files go into the document they were dropped on: images
-   * embed where they were dropped, or at the caret, and other files are
-   * copied into the attachments folder and linked the same way. Those go in
-   * first and the Markdown files open after, so no new tab puts the document
-   * behind it while they are read. If another tab is in front by the time a
-   * file is read, the file waits until that document is shown again, and the
-   * Markdown files open once it is in. Call this while handling the drop
-   * event, because it reads where the files go from `point` before it first
-   * awaits.
+   * does, in drop order, so the last one ends in front. The other files go
+   * into the document they were dropped on. Images embed where they were
+   * dropped, or at the caret, and other files are copied into the attachments
+   * folder and linked the same way. A file only goes into the document in
+   * front, so those files go in first and the Markdown files open once they
+   * are in. A new tab would otherwise put the document behind it while they
+   * are read. If the document goes behind another tab before then, its files
+   * wait until it is shown again, and the Markdown files open at once rather
+   * than wait with them. Call this while handling the drop event, because it
+   * reads where the files go from `point` before it first awaits.
    */
   async handle(paths: string[], point: DropPoint): Promise<void> {
     const markdown = paths.filter((path) => classifyDrop(path) === "md");
     const others = paths.filter((path) => classifyDrop(path) !== "md");
+    let inserted: Promise<void> = Promise.resolve();
     try {
-      if (others.length > 0) await this.insertFiles(others, point);
+      const drop = others.length > 0 ? await this.aim(point) : null;
+      if (drop) {
+        inserted = this.insertFiles(others, drop);
+        await this.untilInsertedOrBehind(inserted, drop.tabId);
+      }
     } finally {
       for (const path of markdown) await this.openMarkdown(path);
     }
+    await inserted;
   }
 
-  /** Put dropped files that are not Markdown files into the document they
-   *  were dropped on, in the order they were dropped. */
-  private async insertFiles(paths: string[], point: DropPoint): Promise<void> {
+  /** Aim a drop's files that are not Markdown files at the document they were
+   *  dropped on. Resolves null if no document can take them. */
+  private async aim(point: DropPoint): Promise<FileDrop | null> {
     const { store, files, editorHost } = this.dependencies;
     // Aim now, during the drop event, while the drop point is over the text the
     // file was dropped on. Reading the file comes after. With no document open,
@@ -59,22 +66,48 @@ export class FileDropCoordinator {
     if (!activeTabId) await files.newDocument();
     else if (view === "recent") await this.dependencies.showActiveDoc();
     else drop = editorHost.aimDrop(point);
-    drop ??= editorHost.aimDrop();
-    if (!drop) return;
+    return drop ?? editorHost.aimDrop();
+  }
+
+  /** Put a drop's files that are not Markdown files into the document they
+   *  were dropped on, in the order they were dropped, and end the drop. */
+  private async insertFiles(paths: string[], drop: FileDrop): Promise<void> {
     try {
       for (const path of paths) {
         if (classifyDrop(path) === "image") await this.embedDroppedImage(path, drop);
         else await this.attachDroppedFile(path, drop);
       }
     } finally {
-      editorHost.releaseDrop(drop);
+      this.dependencies.editorHost.releaseDrop(drop);
     }
   }
 
-  /** Open a dropped Markdown file as `FileService.openPath` does (§5.19): in
-   *  a tab of its own, in place of an empty untitled document, or by showing
-   *  its tab if it is open already. A file that cannot be opened leaves the
-   *  drop's other Markdown files to open. */
+  /** Resolve once a drop's files are in, or once the document they were
+   *  dropped on is no longer in front, whichever comes first. A new tab can
+   *  no longer put that document behind it then, and its files wait for it
+   *  anyway. Rejects if putting the files in fails first. */
+  private async untilInsertedOrBehind(inserted: Promise<void>, tabId: string): Promise<void> {
+    const { store } = this.dependencies;
+    let stop = (): void => {};
+    const behind = new Promise<void>((resolve) => {
+      stop = store.select(
+        (state) => state.activeTabId === tabId,
+        (inFront) => {
+          if (!inFront) resolve();
+        },
+      );
+    });
+    try {
+      if (store.get().activeTabId === tabId) await Promise.race([inserted, behind]);
+    } finally {
+      stop();
+    }
+  }
+
+  /** Open a dropped Markdown file as `FileService.openPath` does (§5.19). It
+   *  opens in a tab of its own, or in place of an empty untitled document, or
+   *  shows its tab if it is open already. A file that cannot be opened leaves
+   *  the drop's other Markdown files to open. */
   private async openMarkdown(path: string): Promise<void> {
     try {
       await this.dependencies.files.openPath(path);
