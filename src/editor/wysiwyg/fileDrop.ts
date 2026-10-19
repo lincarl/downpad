@@ -245,10 +245,25 @@ function keepSelection(tr: Transaction, selection: Selection): Transaction {
 }
 
 /**
+ * Put the caret after inserted content that ends at `end` (`placeCaret`), or
+ * with `moveCaret` off keep the user's selection (`keepSelection`). A text
+ * caret on an empty line the content took has no text left to stay in, so
+ * it goes after the content too, instead of selecting an image there, which
+ * the next key would replace.
+ */
+function caretAfterInsert(tr: Transaction, selection: Selection, moveCaret: boolean, end: number, endsInText: boolean): Transaction {
+  if (!moveCaret) {
+    keepSelection(tr, selection);
+    if (tr.selection instanceof TextSelection || !(selection instanceof TextSelection)) return tr;
+  }
+  return placeCaret(tr, end, endsInText).scrollIntoView();
+}
+
+/**
  * Milkdown action that inserts Markdown's blocks at a drop target
- * (`placeBlocks`) and puts the caret after them (`placeCaret`), or with
- * `moveCaret` off leaves the selection where it was. The target moves past
- * the blocks, so the next file of the drop follows.
+ * (`placeBlocks`) and puts the caret after them, or with `moveCaret` off
+ * leaves the selection where it was (`caretAfterInsert`). The target moves
+ * past the blocks, so the next file of the drop follows.
  */
 export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret = true) {
   return (ctx: Ctx): void => {
@@ -262,8 +277,7 @@ export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret =
     // The editor maps the target through this transaction. From where the
     // inserted blocks began, mapping takes it to their end.
     target.pos = tr.mapping.invert().map(end);
-    if (!moveCaret) view.dispatch(keepSelection(tr, selection));
-    else view.dispatch(placeCaret(tr, end, doc.lastChild.isTextblock).scrollIntoView());
+    view.dispatch(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock));
   };
 }
 
@@ -283,8 +297,8 @@ function insideText($pos: ResolvedPos): boolean {
  * its rest never starts with a space, which Markdown would drop. At the start
  * of a line a file goes in before the line's block, and at its end after it,
  * as at a drop on that edge (`placeBlocks`), so a heading is never split. The
- * caret then goes after the file (`placeCaret`), or with `moveCaret` off
- * stays where it was, before the file.
+ * caret then goes after the file, or with `moveCaret` off stays where it
+ * was, before the file (`caretAfterInsert`).
  */
 export function insertAtSelection(markdown: string, moveCaret = true) {
   return (ctx: Ctx): void => {
@@ -303,8 +317,7 @@ export function insertAtSelection(markdown: string, moveCaret = true) {
       if (!placeBlocks(tr, { pos: edge }, doc)) return;
     }
     if (!tr.docChanged) return;
-    if (!moveCaret) view.dispatch(keepSelection(tr, selection));
-    else view.dispatch(placeCaret(tr, changeEnd(tr), doc.lastChild.isTextblock).scrollIntoView());
+    view.dispatch(caretAfterInsert(tr, selection, moveCaret, changeEnd(tr), doc.lastChild.isTextblock));
   };
 }
 

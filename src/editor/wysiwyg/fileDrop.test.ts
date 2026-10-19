@@ -544,6 +544,19 @@ describe("a file dropped away from the document text", () => {
     expect(opened.getMarkdown()).toBe(`- One\n- ${LINK_A} typed\n- Two\n`);
   });
 
+  it.each([
+    ["on the document", true],
+    ["away from the text", false],
+  ])("puts the caret after an image dropped %s that took the empty line the caret was on, for a user who has moved on", async (_where, onDocument) => {
+    const opened = await open("");
+    // Below the text, or at the caret.
+    opened.insertMarkdown(IMAGE, onDocument ? opened.dropTargetAt(300, 400) : null, false);
+    expect(viewOf(opened).state.selection).not.toBeInstanceOf(NodeSelection);
+    type(opened, "x");
+
+    expect(opened.getMarkdown()).toBe(`${IMAGE}\n\nx\n`);
+  });
+
   it("goes in after a selected image, not over it", async () => {
     const opened = await open(`First line.\n\n${IMAGE}\n\nSecond line.\n`);
     const view = viewOf(opened);
