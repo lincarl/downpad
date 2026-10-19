@@ -2794,6 +2794,55 @@ test("a faded row handle, row menu or add-row button shows under a pointer that 
   await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1   | b1    |\n|      |       |\n| a3   | b3    |\n\nAfter.\n");
 });
 
+test("the add-column and add-row buttons select the new column or row and open its menu", async () => {
+  const file = path.join(directory, "table-add.md");
+  await writeFile(file, "Intro paragraph above the table.\n\n| Name | Notes |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n");
+  await launch(file);
+  const table = page.locator(".milkdown .ProseMirror table.children");
+  const colHandle = page.locator('[data-role="col-drag-handle"]');
+  const rowHandle = page.locator('[data-role="row-drag-handle"]');
+  const a1Cell = table.locator("td").filter({ hasText: "a1" });
+  let a1 = (await a1Cell.boundingBox())!;
+
+  // Crepe shows a column's add button on the table's top edge while the
+  // pointer is within 8 px of the column's border. Follow the border up to it.
+  await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
+  const addColumn = page.locator('[data-role="y-line-drag-handle"]');
+  await expect(addColumn).toHaveAttribute("data-show", "true");
+  const plusColumn = await centerOf(addColumn.locator(".add-button"));
+  await page.mouse.move(a1.x + a1.width - 2, plusColumn.y, { steps: 10 });
+  await page.mouse.move(plusColumn.x, plusColumn.y, { steps: 2 });
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(table.locator("tr").first().locator("th")).toHaveCount(3);
+  const newColumn = table.locator("tr").locator("th, td").filter({ hasText: /^$/ });
+  await expect(newColumn).toHaveCount(3);
+  for (const cell of await newColumn.all()) await expect(cell).toHaveClass(/selectedCell/);
+  await expect(table.locator(".selectedCell")).toHaveCount(3);
+  await expect(colHandle).toHaveCSS("opacity", "1");
+  await expect(colHandle.locator(".button-group")).toBeVisible();
+
+  // A row's add button sits on the table's left edge while the pointer is
+  // within 8 px of the row's border. Follow the border to it.
+  a1 = (await a1Cell.boundingBox())!;
+  await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
+  const addRow = page.locator('[data-role="x-line-drag-handle"]');
+  await expect(addRow).toHaveAttribute("data-show", "true");
+  const plusRow = await centerOf(addRow.locator(".add-button"));
+  await page.mouse.move(plusRow.x + 2, a1.y + a1.height - 2, { steps: 10 });
+  await page.mouse.move(plusRow.x, plusRow.y, { steps: 2 });
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(table.locator("tr")).toHaveCount(4);
+  await expect(table.locator("tr").nth(2).locator(".selectedCell")).toHaveCount(3);
+  await expect(table.locator(".selectedCell")).toHaveCount(3);
+  await expect(rowHandle).toHaveCSS("opacity", "1");
+  await expect(rowHandle.locator(".button-group")).toBeVisible();
+  await expect(colHandle.locator(".button-group")).toBeHidden();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name |    | Notes |\n| ---- | :- | ----- |\n| a1   |    | b1    |\n|      |    |       |\n| a2   |    | b2    |\n");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);

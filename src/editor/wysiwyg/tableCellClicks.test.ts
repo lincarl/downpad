@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Crepe's table view had ProseMirror draw a table again, with new cells, when
 // only the selection in it changed. These tests use the real editor to check
-// that md-easy's table view keeps the cells then, and still closes a row or
+// that md-easy's table view keeps the cells then, unless a whole row or column
+// is selected, whose menu Crepe's new view opens, and that it closes a row or
 // column menu once its selection is gone.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,7 +31,14 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** Mount the document editor on the table document and return its view. */
+/** Wait for the next frame, in which a new Crepe table view opens the menu of
+ *  a selected row or column. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/** Mount the document editor on the table document and return its view, once
+ *  the table view has done what it does a frame after it is drawn. */
 async function open() {
   const root = document.createElement("div");
   document.body.append(root);
@@ -40,6 +48,7 @@ async function open() {
     getFilePath: () => null,
     requestSave: async () => false,
   });
+  await nextFrame();
   return (editor as unknown as { crepe: Crepe }).crepe.editor.ctx.get(editorViewCtx);
 }
 
@@ -60,64 +69,77 @@ function cellParagraph(text: string): HTMLParagraphElement {
   return paragraph;
 }
 
+/** The open state of the row or column menu, `role` being its handle's. */
+function menuShows(role: "col-drag-handle" | "row-drag-handle"): string | undefined {
+  return document.querySelector<HTMLElement>(`[data-role="${role}"] .button-group`)?.dataset.show;
+}
+
 describe("md-easy's table view", () => {
   it("keeps the cells when a cell selection ends, so a press on a cell still lands", { timeout: 60_000 }, async () => {
     const view = await open();
     const cells = cellPositions(view.state.doc);
-    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[5]!)));
-    expect(document.querySelectorAll(".selectedCell")).toHaveLength(4);
-    const paragraph = cellParagraph("short text");
+    // "short text" and "a2", which make neither a whole row nor a whole column.
+    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[4]!)));
+    expect(document.querySelectorAll(".selectedCell")).toHaveLength(2);
+    let paragraph = cellParagraph("short text");
     // The split's catch-up replaces the whole document with the same text, as
     // after a Markdown edit outside the table, which ends the cell selection.
     editor!.setMarkdown(markdown);
     expect(document.querySelectorAll(".selectedCell")).toHaveLength(0);
     expect(paragraph.isConnected).toBe(true);
     // Changing only the selection keeps the cells too.
-    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[5]!)));
+    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[4]!)));
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
+    expect(paragraph.isConnected).toBe(true);
+    // Selecting both body rows draws the table again, and the catch-up that
+    // ends that selection keeps the new cells.
+    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[5]!)));
+    expect(document.querySelectorAll(".selectedCell")).toHaveLength(4);
+    paragraph = cellParagraph("short text");
+    editor!.setMarkdown(markdown);
     expect(paragraph.isConnected).toBe(true);
     expect(editor!.getMarkdown()).toBe(markdown);
   });
 
-  it("closes a column menu once the column selection ends, and keeps it open while it lasts", { timeout: 60_000 }, async () => {
+  it("opens the menu of a whole row or column once it is selected, and closes it once that selection ends", { timeout: 60_000 }, async () => {
     const view = await open();
     const cells = cellPositions(view.state.doc);
-    const menu = document.querySelector<HTMLElement>('[data-role="col-drag-handle"] .button-group');
-    if (!menu) throw new Error("no column menu");
-    // Select the first column and open its menu, as a click on its handle does.
+    // Selecting the first column, as a click on its handle or on the button
+    // that adds a column does, draws the table again, and Crepe's new view
+    // opens the column's menu.
     view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[0]!))));
-    menu.dataset.show = "true";
-    // Another change of the highlights in the table leaves the menu open.
-    view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[4]!), view.state.doc.resolve(cells[0]!))));
-    expect(menu.dataset.show).toBe("true");
-    // A row selection is not a column, so the column menu's Delete would
-    // remove the row. The menu closes.
+    await nextFrame();
+    expect(menuShows("col-drag-handle")).toBe("true");
+    // Cells that make no whole column close the menu.
+    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[0]!, cells[2]!)));
+    expect(menuShows("col-drag-handle")).toBe("false");
+    // A whole row opens the row's menu, and a caret closes it.
     view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[3]!)));
-    expect(menu.dataset.show).toBe("false");
-    view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[0]!))));
-    menu.dataset.show = "true";
+    await nextFrame();
+    expect(menuShows("row-drag-handle")).toBe("true");
+    expect(menuShows("col-drag-handle")).toBe("false");
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
-    expect(menu.dataset.show).toBe("false");
+    expect(menuShows("row-drag-handle")).toBe("false");
   });
 
   it("closes a column menu when a change to the table's content ends the column selection", { timeout: 60_000 }, async () => {
     const view = await open();
     const cells = cellPositions(view.state.doc);
-    const menu = document.querySelector<HTMLElement>('[data-role="col-drag-handle"] .button-group');
-    if (!menu) throw new Error("no column menu");
     view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[0]!))));
-    menu.dataset.show = "true";
+    await nextFrame();
+    expect(menuShows("col-drag-handle")).toBe("true");
     // Aligning the column, as the menu's own buttons do, changes the table and
     // keeps the column selected, so the menu stays open.
     const align = view.state.tr;
     for (const cell of [cells[0]!, cells[2]!, cells[4]!]) align.setNodeAttribute(cell, "alignment", "center");
     view.dispatch(align);
     expect(view.state.selection instanceof CellSelection && view.state.selection.isColSelection()).toBe(true);
-    expect(menu.dataset.show).toBe("true");
+    expect(menuShows("col-drag-handle")).toBe("true");
     // The split's sync after a Markdown edit of a cell replaces the document
     // with the edited text, which ends the column selection.
+    const menu = document.querySelector('[data-role="col-drag-handle"] .button-group');
     editor!.setMarkdown(markdown.replace("| a2 |", "| a2x |"));
-    expect(document.querySelector("td p")?.closest(".milkdown-table-block")?.contains(menu)).toBe(true);
-    expect(menu.dataset.show).toBe("false");
+    expect(menu?.isConnected).toBe(true);
+    expect(menuShows("col-drag-handle")).toBe("false");
   });
 });

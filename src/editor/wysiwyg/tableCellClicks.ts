@@ -17,7 +17,10 @@
 // right after a Markdown edit first brings that pane up to date, which ends its
 // cell selection. The cell the press landed on was then gone, so the click
 // placed no caret and the focus left both panes. This view updates a table
-// whose content is unchanged in place. After every update it closes a row or
+// whose content is unchanged in place, unless a whole row or column is selected
+// in it. Crepe's new view opens the menu of a selected row or column, such as
+// after a click on its handle or on the button that adds it, so the table is
+// still drawn again then. After every other update this view closes a row or
 // column menu whose selection is gone, which Crepe's view did not do when the
 // content changed. Crepe fades the handles once the pointer leaves the table
 // and leaves them, with any menu open in them, where they were. A faded handle
@@ -30,8 +33,15 @@ import { CellSelection, findTable } from "@milkdown/kit/prose/tables";
 import { tableSchema } from "@milkdown/kit/preset/gfm";
 import { $view } from "@milkdown/kit/utils";
 
+/** Whether the selection is a whole row, and a whole column, of a table. */
+interface SelectedLines {
+  row: boolean;
+  col: boolean;
+}
+
 /** Crepe's table view, without its own handling of a press in a cell, and
- *  keeping the cells of a table whose content has not changed. */
+ *  keeping the cells of a table whose content has not changed while no whole
+ *  row or column is selected in it. */
 class CaretTableView extends TableNodeView {
   override stopEvent(event: Event): boolean {
     const { target, type } = event;
@@ -43,19 +53,30 @@ class CaretTableView extends TableNodeView {
     return super.stopEvent(event);
   }
 
-  /** Update the table in place when its content is unchanged, where Crepe's
-   *  view returns false and so has ProseMirror draw it again. ProseMirror then
-   *  redraws only the selection and highlights inside it. After any update,
-   *  close a menu whose selection is gone. */
+  /** Update the table in place when its content is unchanged and no whole row
+   *  or column is selected in it, where Crepe's view returns false and so has
+   *  ProseMirror draw it again. ProseMirror then redraws only the selection and
+   *  highlights inside it. While a whole row or column is selected, Crepe's
+   *  view still has the table drawn again, because its new view opens the
+   *  menu of that row or column. After an update that keeps this view, close
+   *  a menu whose selection is gone. */
   override update(node: Node): boolean {
-    if (node.eq(this.node)) {
+    const lines = this.selectedLines(node);
+    if (!node.eq(this.node) || lines.row || lines.col) {
+      if (!super.update(node)) return false;
+    } else {
       this.node = node;
       this.nodeRef.value = node;
-    } else if (!super.update(node)) {
-      return false;
     }
-    this.closeStaleMenus(node);
+    this.closeStaleMenus(lines);
     return true;
+  }
+
+  /** Whether the selection is a whole row, and a whole column, of `table`. */
+  private selectedLines(table: Node): SelectedLines {
+    const { selection } = this.view.state;
+    const here = selection instanceof CellSelection && findTable(selection.$anchorCell)?.node === table;
+    return { row: here && selection.isRowSelection(), col: here && selection.isColSelection() };
   }
 
   /** Close the row or column menu once its selection is gone. Drawing the
@@ -64,13 +85,8 @@ class CaretTableView extends TableNodeView {
    *  Markdown edit of a cell in the split. Its buttons act on the current
    *  selection, and its Delete removes rows for any cell selection that is
    *  not a column. */
-  private closeStaleMenus(table: Node): void {
-    const { selection } = this.view.state;
-    const here = selection instanceof CellSelection && findTable(selection.$anchorCell)?.node === table;
-    const open = {
-      "col-drag-handle": here && selection.isColSelection(),
-      "row-drag-handle": here && selection.isRowSelection(),
-    };
+  private closeStaleMenus(lines: SelectedLines): void {
+    const open = { "col-drag-handle": lines.col, "row-drag-handle": lines.row };
     for (const [role, keep] of Object.entries(open)) {
       const menu = this.dom.querySelector<HTMLElement>(`[data-role="${role}"] .button-group`);
       if (menu && !keep) menu.dataset.show = "false";
@@ -79,7 +95,8 @@ class CaretTableView extends TableNodeView {
 }
 
 /** Crepe's table node view with a click in a cell placing the caret, and the
- *  cells kept while only the selection in the table changes. Use it after
+ *  cells kept while only the selection in the table changes, unless it becomes
+ *  a whole row or column. Use it after
  *  Crepe's Table feature, whose settings the view reads, so it replaces
  *  Crepe's view. */
 export const tableCellClicks = $view(
