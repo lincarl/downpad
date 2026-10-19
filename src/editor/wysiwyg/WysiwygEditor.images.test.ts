@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
-import { undoDepth } from "@milkdown/kit/prose/history";
+import { undo, undoDepth } from "@milkdown/kit/prose/history";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 
@@ -122,6 +122,22 @@ describe("the first render", () => {
 
     expect(root.querySelector(".ProseMirror p")?.textContent).toBe("New text.");
     expect(editor!.getMarkdown()).toBe("![Block](pic.png)\n\nNew text.\n");
+  });
+
+  it("writes the text it opened with when undo takes back a split mirror made while it waits", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockImplementation(() => new Promise(() => {}));
+    const opened = "![Block](pic.png)\n\nLine  \nnext.\n";
+    const { mounting } = start(opened);
+    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalled());
+
+    // The Markdown pane changes the paragraph while the document pane is still being built.
+    editor!.setMarkdown(opened.replace("next.", "next, typed."));
+    await mounting;
+    const view = viewOf(editor!);
+    undo(view.state, view.dispatch);
+
+    // Milkdown would write the line break as a backslash.
+    expect(editor!.getMarkdown()).toBe(opened);
   });
 });
 

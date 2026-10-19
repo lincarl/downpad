@@ -40,21 +40,21 @@ const PLAIN_TEXT: FindOptions = { caseSensitive: true, wholeWord: false, regex: 
 
 describe("escapes in text that ends in a space", () => {
   it.each([
-    ["a character reference", "&amp;copy; **bold**\n", "\\&copy; **bold**\n"],
-    ["a literal tag", "&lt;b&gt; text **bold**\n", "\\<b> text **bold**\n"],
-    ["an escaped heading marker", "\\# not a heading **b**\n", "\\# not a heading **b**\n"],
+    ["a character reference", "&amp;copy; **bold**\n", "\\&copy; **bolder**\n"],
+    ["a literal tag", "&lt;b&gt; text **bold**\n", "\\<b> text **bolder**\n"],
+    ["an escaped heading marker", "\\# not a heading **bold**\n", "\\# not a heading **bolder**\n"],
     [
       "an escaped pipe in a table cell",
-      "| a |\n| - |\n| x \\| y **z** |\n",
-      "| a            |\n| ------------ |\n| x \\| y **z** |\n",
+      "| a |\n| - |\n| x \\| y **bold** |\n",
+      "| a                 |\n| ----------------- |\n| x \\| y **bolder** |\n",
     ],
   ])("keeps %s before bold text", { timeout: 60_000 }, async (_name, markdown, expected) => {
-    // An opened file can be reported as its exact text until it changes, so
-    // edit the first line to make the editor write the whole body.
-    const editor = await open(`Edit.\n\n${markdown}`);
-    editor.search("Edit.", PLAIN_TEXT);
-    editor.replaceAll("Edited.", "Edit.", PLAIN_TEXT);
-    expect(editor.getMarkdown()).toBe(`Edited.\n\n${expected}`);
+    // The editor writes only the blocks an edit changes, so change the bold
+    // word to make it write the block under test.
+    const editor = await open(markdown);
+    editor.search("bold", PLAIN_TEXT);
+    editor.replaceAll("bolder", "bold", PLAIN_TEXT);
+    expect(editor.getMarkdown()).toBe(expected);
   });
 
   it.each([

@@ -3,7 +3,8 @@
 // documentation sites read.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Editor, defaultValueCtx, editorViewCtx, schemaCtx } from "@milkdown/kit/core";
+import type { Crepe } from "@milkdown/crepe";
+import { Editor, defaultValueCtx, editorViewCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { DOMParser, DOMSerializer } from "@milkdown/kit/prose/model";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -41,10 +42,15 @@ async function open(markdown: string): Promise<WysiwygEditor> {
   return editor;
 }
 
-const PLAIN_SEARCH = { caseSensitive: true, wholeWord: false, regex: false };
+/** Milkdown's form of the open document, which is how the editor writes a
+ *  block that an edit changed. */
+function written(opened: WysiwygEditor): string {
+  const { crepe } = opened as unknown as { crepe: Crepe };
+  return crepe.editor.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc));
+}
 
 describe("code fence info", () => {
-  it("keeps the info after the language when the document is edited", { timeout: 60_000 }, async () => {
+  it("keeps the info after the language when a code block is written", { timeout: 60_000 }, async () => {
     const blocks = [
       '```js title="app.js"\nlet x = 1;\n```',
       "```python {linenos=true}\nx = 1\n```",
@@ -55,11 +61,9 @@ describe("code fence info", () => {
       "```latex\n\\frac{a}{b}\n```",
       '```latex title="a.tex"\n\\frac{a}{b}\n```',
     ].join("\n\n");
-    const editor = await open(`Edit.\n\n${blocks}\n`);
-    // Edit through Find and Replace, so the document is serialized anew.
-    expect(editor.search("Edit.", PLAIN_SEARCH).total).toBe(1);
-    editor.replaceAll("Edited.", "Edit.", PLAIN_SEARCH);
-    expect(editor.getMarkdown()).toBe(`Edited.\n\n${blocks}\n`);
+    // An edit writes only the blocks it changes, so write the whole document
+    // the way a changed block is written.
+    expect(written(await open(`${blocks}\n`))).toBe(`${blocks}\n`);
   });
 
   it("keeps the info when a code block is copied and pasted", async () => {

@@ -2358,6 +2358,61 @@ test("find reaches a match far along a code line without scrolling the page side
   }
 });
 
+test("a one-word edit in the document view saves only that line", async () => {
+  const file = path.join(directory, "release.md");
+  // The document view writes almost every block here in its own way: the
+  // setext and closed headings, the reference links and their definitions, the
+  // ")" and "*" lists, the table's spacing, the two-space line break, the
+  // character references and escapes, the indented and "~~~" code, the "***"
+  // rule and the two blank lines.
+  const markdown = [
+    "---",
+    "title: Release notes",
+    "---",
+    "",
+    "Release notes",
+    "=============",
+    "",
+    "Thanks to everyone who tested",
+    "",
+    "See the [changelog][log] and the [FAQ].",
+    "",
+    "",
+    "## Steps ##",
+    "",
+    "1) Back up the data",
+    "2) Install the update",
+    "",
+    "* Restart the server",
+    "* Check the logs",
+    "",
+    "| Feature | Status |",
+    "|:--------|-------:|",
+    "| Sync    | Done   |",
+    "",
+    "Line one with two spaces  ",
+    "line two, &copy; 2026 &amp; \\[not a link\\].",
+    "",
+    "    indented code",
+    "",
+    "~~~",
+    "fenced with tildes",
+    "~~~",
+    "",
+    "***",
+    "",
+    '[log]: https://example.com/changelog "Changelog"',
+    "[FAQ]: https://example.com/faq",
+    "",
+  ].join("\n");
+  await writeFile(file, markdown);
+  await launch(file);
+  await typeAtEnd(page.locator(".milkdown .ProseMirror > p", { hasText: "Thanks to everyone" }), " early");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(markdown.replace("who tested\n", "who tested early\n"));
+  await expect(page).toHaveTitle("release.md — md-easy");
+});
+
 test("the document page runs to the end of a long document", async () => {
   const file = path.join(directory, "long.md");
   const paragraphs = Array.from({ length: 120 }, (_, index) => `Paragraph ${index + 1}.`);
