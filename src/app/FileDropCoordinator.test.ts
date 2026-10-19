@@ -7,12 +7,14 @@ import { FileDropCoordinator, type FileDropDependencies } from "./FileDropCoordi
 
 const disk = vi.hoisted(() => ({
   readImageBytes: vi.fn<(path: string) => Promise<ImageBytes>>(),
+  /** Gives the copy's link from the document, as the main process does. */
+  writeAttachment: vi.fn<(docPath: string, folder: string, name: string) => Promise<string>>(),
 }));
 
 vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   readImageBytes: disk.readImageBytes,
-  writeAttachment: async (_docPath: string, folder: string, name: string) => `${folder}/${name}`,
+  writeAttachment: disk.writeAttachment,
 }));
 
 /** Where the files were dropped, on a line of the document. */
@@ -90,6 +92,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 beforeEach(() => {
   disk.readImageBytes.mockReset();
   disk.readImageBytes.mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mime: "image/png" });
+  disk.writeAttachment.mockReset();
+  disk.writeAttachment.mockImplementation(async (_docPath, folder, name) => `${folder}/${name}`);
 });
 
 describe("FileDropCoordinator", () => {
@@ -177,10 +181,24 @@ describe("FileDropCoordinator", () => {
     logged.mockRestore();
   });
 
-  it("still opens the Markdown files when another file of the drop cannot be read", async () => {
+  it("puts the files after one that cannot be read into the document, then opens the Markdown files", async () => {
     const { log, coordinator } = setup();
-    disk.readImageBytes.mockRejectedValue(new Error("unreadable"));
-    await expect(coordinator.handle(["/drop/a.md", "/drop/pic.png", "/drop/b.md"], point)).rejects.toThrow("unreadable");
-    expect(log).toEqual(["aim at the drop point", "release dropped-on", "open /drop/a.md", "open /drop/b.md"]);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const read = disk.readImageBytes.getMockImplementation()!;
+    disk.readImageBytes.mockImplementation(async (path) => {
+      if (path === "/drop/gone.png") throw new Error("missing");
+      return read(path);
+    });
+    await coordinator.handle(["/drop/gone.png", "/drop/data.csv", "/drop/pic.png", "/drop/a.md"], point);
+    expect(log).toEqual([
+      "aim at the drop point",
+      `insert ${link} into dropped-on with dropped-on in front`,
+      `insert ${image} into dropped-on with dropped-on in front`,
+      "release dropped-on",
+      "open /drop/a.md",
+    ]);
+    expect(disk.writeAttachment).toHaveBeenCalledWith("/docs/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
+    expect(logged).toHaveBeenCalledWith("md-easy: could not insert gone.png", expect.any(Error));
+    logged.mockRestore();
   });
 });

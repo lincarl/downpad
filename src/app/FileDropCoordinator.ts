@@ -2,7 +2,9 @@
 // in a tab. Other dropped files go into the document they were dropped on, an
 // image as an image and any other file as a link to its copy in the
 // attachments folder. EditorHost decides where in that document each file
-// goes, and holds a file back while its document is behind another tab.
+// goes, and holds a file back while its document is behind another tab. A
+// file that cannot be read or stored is left out, and the drop's other files
+// still go in.
 
 import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
@@ -29,13 +31,15 @@ export class FileDropCoordinator {
    * does, in drop order, so the last one ends in front. The other files go
    * into the document they were dropped on. Images embed where they were
    * dropped, or at the caret, and other files are copied into the attachments
-   * folder and linked the same way. A file only goes into the document in
-   * front, so those files go in first and the Markdown files open once they
-   * are in. A new tab would otherwise put the document behind it while they
-   * are read. If the document goes behind another tab before then, its files
-   * wait until it is shown again, and the Markdown files open at once rather
-   * than wait with them. Call this while handling the drop event, because it
-   * reads where the files go from `point` before it first awaits.
+   * folder and linked the same way. A file that cannot be read or stored is
+   * logged and left out, and the others still go in. A file only goes into
+   * the document in front, so those files go in first and the Markdown files
+   * open once they are in. A new tab would otherwise put the document behind
+   * it while they are read. If the document goes behind another tab before
+   * then, its files wait until it is shown again, and the Markdown files open
+   * at once rather than wait with them. Call this while handling the drop
+   * event, because it reads where the files go from `point` before it first
+   * awaits.
    */
   async handle(paths: string[], point: DropPoint): Promise<void> {
     const markdown = paths.filter((path) => classifyDrop(path) === "md");
@@ -70,12 +74,18 @@ export class FileDropCoordinator {
   }
 
   /** Put a drop's files that are not Markdown files into the document they
-   *  were dropped on, in the order they were dropped, and end the drop. */
+   *  were dropped on, in the order they were dropped, and end the drop. A
+   *  file that cannot be read or stored, such as one deleted since the drop,
+   *  is logged and left out, and the files after it still go in. */
   private async insertFiles(paths: string[], drop: FileDrop): Promise<void> {
     try {
       for (const path of paths) {
-        if (classifyDrop(path) === "image") await this.embedDroppedImage(path, drop);
-        else await this.attachDroppedFile(path, drop);
+        try {
+          if (classifyDrop(path) === "image") await this.embedDroppedImage(path, drop);
+          else await this.attachDroppedFile(path, drop);
+        } catch (error) {
+          console.error(`md-easy: could not insert ${baseName(path)}`, error);
+        }
       }
     } finally {
       this.dependencies.editorHost.releaseDrop(drop);
@@ -85,7 +95,7 @@ export class FileDropCoordinator {
   /** Resolve once a drop's files are in, or once the document they were
    *  dropped on is no longer in front, whichever comes first. A new tab can
    *  no longer put that document behind it then, and its files wait for it
-   *  anyway. Rejects if putting the files in fails first. */
+   *  anyway. */
   private async untilInsertedOrBehind(inserted: Promise<void>, tabId: string): Promise<void> {
     const { store } = this.dependencies;
     let stop = (): void => {};

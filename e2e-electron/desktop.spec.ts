@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { WebPreferences } from "electron";
@@ -1642,6 +1642,35 @@ async function csvFile(name: string): Promise<string> {
   return file;
 }
 
+/** Hold each request for a main process command, such as `read_image_bytes`,
+ *  until `releaseHeld`, as for a large file or one on a slow share. Electron
+ *  keeps the handlers of ipcMain.handle in `_invokeHandlers`, and a handler
+ *  on the window's own `ipc` runs in their place. */
+async function holdCommand(command: string): Promise<void> {
+  await app!.evaluate(({ BrowserWindow, ipcMain }, held) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
+    const release = new Promise((resolve) => Reflect.set(globalThis, "releaseHeld", resolve));
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, name, ...args) => {
+      if (name === held) {
+        Reflect.set(globalThis, "heldAsked", true);
+        await release;
+      }
+      return invoke(event, name, ...args);
+    });
+  }, command);
+}
+
+/** Resolve once the app has asked for the command that `holdCommand` holds. */
+async function untilHeld(): Promise<void> {
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "heldAsked") === true)).toBe(true);
+}
+
+/** Let the requests that `holdCommand` holds go on. */
+async function releaseHeld(): Promise<void> {
+  await app!.evaluate(() => (Reflect.get(globalThis, "releaseHeld") as () => void)());
+}
+
 test("files dropped on the document go in where they were dropped", async () => {
   const file = path.join(directory, "drop-on-document.md");
   await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
@@ -1712,30 +1741,15 @@ test("a Markdown file dropped with other files opens at once when the user shows
   await tab(/drop-switch\.md/).click();
   const secondLine = page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "Second line." });
   await expect(secondLine).toBeVisible();
-  // Hold the image's read in the main process until released, as for a large
-  // file or one on a slow share. Electron keeps the handlers of ipcMain.handle
-  // in `_invokeHandlers`, and a handler on the window's own `ipc` runs in
-  // their place.
-  await app!.evaluate(({ BrowserWindow, ipcMain }) => {
-    type Handler = (event: unknown, ...args: unknown[]) => unknown;
-    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
-    const read = new Promise((resolve) => Reflect.set(globalThis, "releaseRead", resolve));
-    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, command, ...args) => {
-      if (command === "read_image_bytes") {
-        Reflect.set(globalThis, "readAsked", true);
-        await read;
-      }
-      return invoke(event, command, ...args);
-    });
-  });
+  await holdCommand("read_image_bytes");
   await dropBelow(secondLine, [await pngFile("pixel.png"), dropped]);
-  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "readAsked") === true)).toBe(true);
+  await untilHeld();
   // While the image is read, the user shows another tab. The Markdown file
   // opens then, as it would alone, rather than wait with the image.
   await tab(/shown\.md/).click();
   await expect(shownHeading).toHaveText("Dropped");
   await expect(page.getByRole("tab")).toHaveCount(3);
-  await app!.evaluate(() => (Reflect.get(globalThis, "releaseRead") as () => void)());
+  await releaseHeld();
   // The image waits for its document. Back there, it goes in where it was
   // dropped, and that document stays in front.
   await tab(/drop-switch\.md/).click();
@@ -1766,6 +1780,31 @@ test("two Markdown files dropped together each open in a tab of their own", asyn
   await page.getByRole("tab", { name: /drop-two\.md/ }).click();
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", "Second line."]);
   await expect(page.getByRole("tab", { name: /drop-two\.md/ }).locator(".tab-dot")).toBeHidden();
+});
+
+test("the files of a drop after one that cannot be read go in, and the drop's Markdown file opens", async () => {
+  const file = path.join(directory, "drop-gone.md");
+  const dropped = path.join(directory, "dropped.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await writeFile(dropped, "# Dropped\n");
+  await launch(file);
+  const errors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  const gone = await pngFile("gone.png");
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [gone, await csvFile("good.csv"), dropped]);
+  await untilHeld();
+  // The image is deleted before it is read.
+  await unlink(gone);
+  await releaseHeld();
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Dropped");
+  await page.getByRole("tab", { name: /drop-gone\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", /good\.csv/, "Second line."]);
+  expect(errors).toContainEqual(expect.stringContaining("md-easy: could not insert gone.png"));
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[good.csv](attachments/good.csv)\n\nSecond line.\n");
+  expect(await readFile(path.join(directory, "attachments", "good.csv"), "utf8")).toBe("a,b\n");
+  await expect(page.getByRole("tab", { name: /drop-gone\.md/ }).locator(".tab-dot")).toBeHidden();
 });
 
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
