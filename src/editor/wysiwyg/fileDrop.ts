@@ -571,12 +571,12 @@ export function mirrorMarkdown(
   return (ctx: Ctx): void => {
     const view = ctx.get(editorViewCtx);
     const parse = ctx.get(parserCtx);
-    const next = parse(markdown);
-    if (!next) return;
     const { state } = view;
     const { doc } = state;
     // The document as its Markdown reads back, block for block. The empty
-    // lines at its end have no Markdown.
+    // lines at its end have no Markdown. This parse comes first, so the last
+    // parse is of `markdown`, whose outline the editor keeps for the body's
+    // source (`outlinePlugin`).
     let compared = doc;
     let count = doc.childCount;
     if (keepEditorOnly) {
@@ -588,6 +588,8 @@ export function mirrorMarkdown(
         count = kept;
       }
     }
+    const next = parse(markdown);
+    if (!next) return;
     const runs = differingRuns(count, next.childCount, (a, b) => sameBlock(compared.child(a), next.child(b)), 50_000);
     const starts = blockStarts(doc);
     const nextStarts = blockStarts(next);
