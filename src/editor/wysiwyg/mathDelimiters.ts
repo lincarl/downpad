@@ -958,8 +958,9 @@ export const closingDelimiterGuard = $prose(() => {
     /** Set the marks for the text typed next again once a change nobody
      *  made cleared them (`Guard.marks`). Decide a waiting mark once a change
      *  says so, in the same update, so views drawn for that change already
-     *  see the result. Crepe's list items restore the cursor to where it was
-     *  when they were drawn. */
+     *  see the result. Crepe's list items put back the cursor they saw when
+     *  they were drawn once the next frame comes, unless a key, click or edit
+     *  came first (patches/@milkdown__components@7.22.3.patch). */
     appendTransaction(_transactions, _before, state) {
       const marks = waitingKey.getState(state)?.marks;
       if (marks && state.storedMarks !== marks) return state.tr.setStoredMarks(marks);
