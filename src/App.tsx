@@ -111,8 +111,11 @@ function AppContent({ store }: { store: Store }) {
 
   return (
     <AppRuntimeProvider runtime={runtime}>
+      {/* The single column is exactly as wide as the window. A row that needs
+          more room, such as the status bar with a long path, fits its own
+          content to it instead of making every row wider than the window. */}
       <div
-        className="app grid h-screen grid-rows-[39px_46px_auto_minmax(0,1fr)_22px] overflow-hidden bg-window text-ink"
+        className="app grid h-screen grid-cols-[minmax(0,1fr)] grid-rows-[39px_46px_auto_minmax(0,1fr)_22px] overflow-hidden bg-window text-ink"
         data-testid="app-shell"
       >
         <Toolbar />
@@ -151,7 +154,9 @@ function AppContent({ store }: { store: Store }) {
           {/* The find card floats over the bottom right of the document, 12px
               above the status bar and clear of the 12px scroll bar, like
               Mervin's panel stack. It grows upward when the replace row opens.
-              Find scrolls each match clear of it (findReveal.ts). */}
+              Its left end stays at least 12px from the left edge, and a narrower card
+              moves its options under the find field (findBar.tsx). Find
+              scrolls each match clear of it (findReveal.ts). */}
           <div
             ref={findHostRef}
             className="find-host pointer-events-none absolute right-6 bottom-3 z-20 flex max-w-[calc(100%-36px)] justify-end"
@@ -932,6 +937,8 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
   const words = countWords(doc.markdown);
   return (
     <footer className={STATUS_BAR_CLASS}>
+      {/* A path too long for the room left of the word count ends in an
+          ellipsis. Its tooltip has the whole path. */}
       <span
         className="status-left min-w-0 overflow-hidden text-ellipsis whitespace-nowrap"
         title={path}

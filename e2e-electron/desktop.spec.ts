@@ -1976,6 +1976,76 @@ test("find lifts a match at the end of a long document clear of the card", async
   expect(await cardInsets()).toEqual(withReplace);
 });
 
+/** The find card's fields, buttons and check boxes that end outside the
+ *  editor area or that a click on their middle would miss. */
+function cardControlProblems(): Promise<string[]> {
+  return page.evaluate(() => {
+    const area = document.querySelector(".main-region")!.getBoundingClientRect();
+    const controls = [...document.querySelectorAll<HTMLElement>(".find-bar input, .find-bar button")];
+    return controls.flatMap((control) => {
+      if (!control.getClientRects().length) return [];
+      const box = control.getBoundingClientRect();
+      const name = control.getAttribute("aria-label") ?? control.closest("label")?.textContent ?? control.textContent;
+      const where = `${name} at ${Math.round(box.left)}-${Math.round(box.right)} across`;
+      if (box.left < area.left || box.right > area.right || box.top < area.top || box.bottom > area.bottom) {
+        return [`${where} is outside the editor area`];
+      }
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return hit && control.contains(hit) ? [] : [`${where} is covered`];
+    });
+  });
+}
+
+test("the find card fits a narrow window and find lifts a match clear of it", async () => {
+  const file = path.join(directory, "find-narrow.md");
+  await writeFile(file, LONG_DOCUMENT);
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror p").first()).toHaveText("Paragraph 1 of the notes.");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  const replace = page.getByRole("textbox", { name: "Replace with" });
+  const fieldWidths = () =>
+    page.evaluate(() => [".find-field", ".find-replace-row input"].map((field) => document.querySelector(field)!.getBoundingClientRect().width));
+  await page.keyboard.press("ControlOrMeta+h");
+  await find.fill("needle");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  const wideFields = await fieldWidths();
+  await page.keyboard.press("Escape");
+  for (const width of [600, 520, 480]) {
+    await app!.evaluate(({ BrowserWindow }, contentWidth) => BrowserWindow.getAllWindows()[0]!.setContentSize(contentWidth, 600), width);
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+    // Opening the card searches again and scrolls to the match.
+    await page.keyboard.press("ControlOrMeta+f");
+    await expect(page.locator(".find-count")).toHaveText("1 of 1");
+    expect(await cardControlProblems()).toEqual([]);
+    await expect.poll(currentMatchProblem).toBe("");
+    await page.keyboard.press("Control+h");
+    await expect(replace).toBeVisible();
+    expect(await cardControlProblems()).toEqual([]);
+    // The fields keep the width they have in a wide window, and the card
+    // keeps its place 12px above the status bar and clear of the scroll bar.
+    expect(await fieldWidths()).toEqual(wideFields);
+    const insets = await cardInsets();
+    expect([insets.bottom, insets.right]).toEqual([12, 24]);
+    await twoFrames();
+    expect(await currentMatchProblem()).toBe("");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".find-bar")).toBeHidden();
+  }
+
+  // The card is taller in a narrow window. The user scrolls up until the match
+  // is under it, and the next find step lifts the match clear.
+  await page.keyboard.press("ControlOrMeta+h");
+  await expect(replace).toBeVisible();
+  await expect.poll(currentMatchProblem).toBe("");
+  await page.locator(".editor-area").evaluate((element) => {
+    const match = document.querySelector(".md-find-current")!.getBoundingClientRect();
+    element.scrollTop -= document.querySelector(".find-bar")!.getBoundingClientRect().top + 8 - match.top;
+  });
+  expect(await currentMatchProblem()).toContain("under the card");
+  await find.press("Enter");
+  await expect.poll(currentMatchProblem).toBe("");
+});
+
 test("find in the Markdown view lifts a match on the last line clear of the card", async () => {
   const file = path.join(directory, "find-end-markdown.md");
   await writeFile(file, LONG_DOCUMENT);
@@ -2439,6 +2509,37 @@ test("the document page fills the window for a short document", async () => {
     page: area.querySelector(".editor-column")!.getBoundingClientRect().bottom,
   }));
   expect(Math.round(bottoms.page)).toBe(Math.round(bottoms.view));
+});
+
+test("a long path in the status bar is cut short to fit a narrow window", async () => {
+  // Folders long enough that the path needs more room than a 600px window has.
+  const folder = path.join(directory, "quarterly-planning-documents", "team-meetings-and-weekly-reviews", "october-sessions");
+  await mkdir(folder, { recursive: true });
+  const file = path.join(folder, "notes.md");
+  await writeFile(file, "# Notes\n\nOne paragraph.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Notes");
+  await expect(page.locator(".status-left")).toHaveText(file);
+  await expect(page.locator(".status-left")).toHaveAttribute("title", file);
+  for (const width of [600, 480]) {
+    await app!.evaluate(({ BrowserWindow }, contentWidth) => BrowserWindow.getAllWindows()[0]!.setContentSize(contentWidth, 600), width);
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+    const layout = await page.getByTestId("app-shell").evaluate((shell) => {
+      const status = shell.querySelector(".status-left")!;
+      return {
+        shell: shell.scrollWidth,
+        rows: [...shell.children].map((row) => row.getBoundingClientRect().right),
+        wordCount: shell.querySelector(".status-right")!.getBoundingClientRect().right,
+        path: { shown: status.clientWidth, whole: status.scrollWidth },
+      };
+    });
+    // The toolbar, tabs, editor and status bar, with its word count, end
+    // inside the window, and only the path gives way.
+    expect(layout.shell).toBe(width);
+    expect(Math.max(...layout.rows)).toBeLessThanOrEqual(width);
+    expect(layout.wordCount).toBeLessThanOrEqual(width);
+    expect(layout.path.whole).toBeGreaterThan(layout.path.shown);
+  }
 });
 
 test("an edit in the document view keeps the blank line after the frontmatter", async () => {

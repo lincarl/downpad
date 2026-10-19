@@ -237,7 +237,9 @@ const FindBarView = forwardRef<
     <div
       ref={cardRef}
       className={cn(
-        "find-bar pointer-events-auto flex flex-col gap-1.5 rounded-[10px] border bg-popover py-[7px] pr-[5px] pl-[7px] text-[12px] text-ink",
+        // The card is never wider than the find host, which leaves 12px on
+        // the left, so a field would give way before the card left the window.
+        "find-bar pointer-events-auto flex min-w-0 flex-col gap-1.5 rounded-[10px] border bg-popover py-[7px] pr-[5px] pl-[7px] text-[12px] text-ink",
         "border-line-popover dark:border-line-strong",
       )}
       role="search"
@@ -245,84 +247,106 @@ const FindBarView = forwardRef<
       hidden={!open}
       onKeyDown={onCardKey}
     >
-      <div className="find-row flex items-center gap-0.5">
-        <label
-          className={cn(
-            fieldClassName,
-            "find-field relative flex w-[236px] min-w-0 shrink-0 cursor-text items-center gap-0 border-line-popover-control px-0",
-            // A 2px accent ring while focused, drawn outside so the text never moves.
-            "focus-within:border-accent focus-within:outline-1 focus-within:outline-solid focus-within:outline-accent",
-          )}
-        >
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-1.5 text-ink-faint"
-            size={16}
-            absoluteStrokeWidth
-            strokeWidth={1}
-          />
-          <input
-            ref={inputRef}
-            type="text"
-            className="find-input h-full min-w-0 flex-1 border-0 bg-transparent pr-2 pl-[30px] text-[12px] text-ink-primary outline-none placeholder:text-ink-faint"
-            placeholder="Find in document"
-            aria-label="Find in document"
-            value={query}
-            onChange={(event) => {
-              const value = event.target.value;
-              setQuery(value);
-              runSearch(value);
-            }}
-            onKeyDown={onFindKey}
-          />
-          <span
-            className="find-count shrink-0 pr-2 whitespace-nowrap text-ink-soft empty:hidden"
-            aria-live="polite"
-          >
-            {countText}
-          </span>
-        </label>
-        <span className="w-1" />
-        <TooltipLabel text="Previous match (Shift+Enter)">
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn(ICON_BUTTON_CLASS, "find-prev")}
-            aria-label="Previous match"
-            disabled={noMatches}
-            onClick={() => apply(controller.prev())}
-          >
-            <ChevronUp aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
-          </Button>
-        </TooltipLabel>
-        <TooltipLabel text="Next match (Enter)">
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn(ICON_BUTTON_CLASS, "find-next")}
-            aria-label="Next match"
-            disabled={noMatches}
-            onClick={() => apply(controller.next())}
-          >
-            <ChevronDown aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
-          </Button>
-        </TooltipLabel>
-        <CardSeparator />
-        <FindToggle label="Match case" active={options.caseSensitive} onClick={() => toggle("caseSensitive")} />
-        <span className="w-2.5" />
-        <FindToggle label="Whole word" active={options.wholeWord} onClick={() => toggle("wholeWord")} />
-        <CardSeparator />
-        <TooltipLabel text="Close (Esc)">
-          <Button
-            type="button"
-            variant="ghost"
-            className="find-close size-7 border-transparent p-0 text-ink-soft"
-            aria-label="Close find"
-            onClick={close}
-          >
-            <X aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
-          </Button>
-        </TooltipLabel>
+      {/* Close stays at the top right. When the card is too narrow for one
+          row, in a narrow window, the options move to a line of their own
+          under the field. */}
+      <div className="find-top flex items-start">
+        {/* The 21px gap parts the arrows from the options and holds the
+            separator between them. A gap parts items on one line only, so
+            options that wrap start their line flush with the field, and this
+            row clips the separator they carry. The row reaches 4px into the
+            card's padding so the clip leaves the focus rings whole. */}
+        <div className="find-row -ml-1 flex min-w-0 flex-auto flex-wrap items-center gap-x-[21px] gap-y-1.5 overflow-x-clip pl-1">
+          <div className="flex min-w-0 items-center gap-0.5">
+            <label
+              className={cn(
+                fieldClassName,
+                "find-field relative flex w-[236px] min-w-0 cursor-text items-center gap-0 border-line-popover-control px-0",
+                // A 2px accent ring while focused, drawn outside so the text never moves.
+                "focus-within:border-accent focus-within:outline-1 focus-within:outline-solid focus-within:outline-accent",
+              )}
+            >
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-1.5 text-ink-faint"
+                size={16}
+                absoluteStrokeWidth
+                strokeWidth={1}
+              />
+              <input
+                ref={inputRef}
+                type="text"
+                className="find-input h-full min-w-0 flex-1 border-0 bg-transparent pr-2 pl-[30px] text-[12px] text-ink-primary outline-none placeholder:text-ink-faint"
+                placeholder="Find in document"
+                aria-label="Find in document"
+                value={query}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setQuery(value);
+                  runSearch(value);
+                }}
+                onKeyDown={onFindKey}
+              />
+              <span
+                className="find-count shrink-0 pr-2 whitespace-nowrap text-ink-soft empty:hidden"
+                aria-live="polite"
+              >
+                {countText}
+              </span>
+            </label>
+            <span className="w-1" />
+            <TooltipLabel text="Previous match (Shift+Enter)">
+              <Button
+                type="button"
+                variant="ghost"
+                className={cn(ICON_BUTTON_CLASS, "find-prev")}
+                aria-label="Previous match"
+                disabled={noMatches}
+                onClick={() => apply(controller.prev())}
+              >
+                <ChevronUp aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
+              </Button>
+            </TooltipLabel>
+            <TooltipLabel text="Next match (Enter)">
+              <Button
+                type="button"
+                variant="ghost"
+                className={cn(ICON_BUTTON_CLASS, "find-next")}
+                aria-label="Next match"
+                disabled={noMatches}
+                onClick={() => apply(controller.next())}
+              >
+                <ChevronDown aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
+              </Button>
+            </TooltipLabel>
+          </div>
+          {/* Not positioned. Chromium paints a positioned box on its own, and
+              there it draws these labels, which have no background of their
+              own, with grayscale instead of subpixel antialiasing. */}
+          <div className="find-options flex items-center gap-0.5">
+            {/* The separator's margins take back its room, so it sits in the
+                gap left of the options and they start where they would
+                without it. */}
+            <span aria-hidden="true" className="-ml-[11px] mr-2 h-[18px] w-px shrink-0 bg-line" />
+            <FindToggle label="Match case" active={options.caseSensitive} onClick={() => toggle("caseSensitive")} />
+            <span className="w-2.5" />
+            <FindToggle label="Whole word" active={options.wholeWord} onClick={() => toggle("wholeWord")} />
+          </div>
+        </div>
+        <div className="flex h-[29px] shrink-0 items-center gap-0.5 pl-0.5">
+          <CardSeparator />
+          <TooltipLabel text="Close (Esc)">
+            <Button
+              type="button"
+              variant="ghost"
+              className="find-close size-7 border-transparent p-0 text-ink-soft"
+              aria-label="Close find"
+              onClick={close}
+            >
+              <X aria-hidden="true" size={16} absoluteStrokeWidth strokeWidth={1} />
+            </Button>
+          </TooltipLabel>
+        </div>
       </div>
       <div className="find-row find-replace-row flex items-center gap-1.5" hidden={mode !== "replace"}>
         <input
@@ -376,12 +400,26 @@ function FindToggle({
   active: boolean;
   onClick(): void;
 }) {
+  // The find or replace field focus was in when the pointer went down on the
+  // toggle.
+  const before = useRef<HTMLInputElement | null>(null);
   return (
-    // A click keeps the caret in the field, as in Mervin; the keyboard keeps
-    // focus on the check box.
+    // A click keeps the caret in the find or replace field it was in, as in
+    // Mervin. A click from anywhere else focuses the check box, and so does
+    // the keyboard. A click on a label focuses its check box after the click
+    // event, so the field takes focus back then.
     <label
       className="find-toggle flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink dark:text-ink-soft"
-      onMouseDown={(event) => event.preventDefault()}
+      onMouseDown={(event) => {
+        const active = document.activeElement;
+        before.current = active instanceof HTMLInputElement && active.type !== "checkbox" ? active : null;
+        if (before.current) event.preventDefault();
+      }}
+      onClick={(event) => {
+        const field = before.current;
+        before.current = null;
+        if (event.detail > 0 && field) setTimeout(() => field.focus());
+      }}
     >
       <Checkbox checked={active} onChange={onClick} />
       <span>{label}</span>
