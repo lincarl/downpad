@@ -631,3 +631,109 @@ test("every printed sheet holds its blocks inside the page and the document's te
     });
   }
 });
+
+test("quotes and list items that begin with a heading, and quotes around a table or code, fit their sheets from 50% to 200% on A4 and A5", async ({ page }) => {
+  // A heading's top margin collapses with the margin of a quote that begins
+  // with it, into one margin above the quote, and a table or code block in a
+  // quote shares its margin with the quote's the same way. The paginator left
+  // room for the quote's own 4 px above a quote that started a sheet rather
+  // than the heading's 28 px, so the page body cut off the end of a sheet that
+  // the quote filled, 33 px past the body at 200% on A4. This prints such
+  // quotes, quotes around a table and a code block, and lists whose items
+  // begin with headings, with a running header and page numbers, at four
+  // scales on three kinds of sheet.
+  test.setTimeout(240_000);
+  const words = (label: string, count: number): string =>
+    Array.from({ length: count }, (_, i) => `${label}${i}`).join(" ");
+  // Notes and paragraphs of many lengths, so some note starts a sheet and
+  // fills it at every setup.
+  const notes = Array.from({ length: 48 }, (_, k) => [
+    `> ## Note ${k}`,
+    ">",
+    `> ${words(`n${k}x`, 15 + ((13 * k) % 80))}`,
+    "",
+    ...Array.from({ length: k % 3 }, (_, j) => [words(`p${k}y${j}z`, 15 + ((29 * k + 41 * j) % 80)), ""]).flat(),
+  ]).flat();
+  const items = Array.from({ length: 24 }, (_, k) => [
+    `- ## Item ${k}`,
+    "",
+    `  ${words(`i${k}x`, 10 + ((17 * k) % 90))}`,
+    "",
+  ]).flat();
+  const code = Array.from({ length: 150 }, (_, i) => `export const step${i + 1} = ${i + 1};`);
+  const markdown = [
+    "# Notes",
+    "",
+    ...notes,
+    `> ## Long note`,
+    ">",
+    `> ${words("long", 1500)}`,
+    "",
+    "> | A | B |",
+    "> | --- | --- |",
+    ...Array.from({ length: 70 }, (_, i) => `> | qa${i} | qb ${i} |`),
+    "",
+    "> ```ts",
+    ...code.map((line) => `> ${line}`),
+    "> ```",
+    "",
+    ...items,
+    `- ## Long item`,
+    "",
+    `  ${words("li", 1500)}`,
+    "",
+    "The end.",
+  ].join("\n");
+  // Code blocks print their lines and line numbers, and a split table repeats
+  // its header, so both are compared on their own.
+  const leaveOut = ".milkdown-code-block, tr[data-is-header]";
+
+  await typeDocument(page, markdown);
+  await expect(page.locator(`${wysiwyg} > p`).last()).toHaveText("The end.");
+  await expect(page.locator(`${wysiwyg} blockquote h2`)).toHaveCount(49);
+  await expect(page.locator(`${wysiwyg} li h2`)).toHaveCount(25);
+  const documentText = await page.locator(wysiwyg).evaluate((node, leaveOut) => {
+    const copy = node.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
+    return copy.textContent!.replace(/\s+/g, "");
+  }, leaveOut);
+
+  await page.click('button[aria-label="Print"]');
+  const workspace = page.locator(".print-workspace");
+  await expect(page.locator(".print-page").first()).toBeVisible();
+  await workspace.getByLabel("Document title in header").check();
+  await workspace.getByLabel("Page numbers in footer").check();
+  await expect(page.locator(".print-page").first().locator(".print-page-header")).toBeVisible();
+
+  for (const [paper, orientation, margins, line] of [
+    ["a4", "Portrait", "normal", "A4 · Portrait"],
+    ["a4", "Landscape", "normal", "A4 · Landscape"],
+    ["a5", "Landscape", "wide", "A5 · Landscape"],
+  ] as const) {
+    await workspace.getByLabel("Paper size").selectOption(paper);
+    await workspace.getByRole("radio", { name: orientation, exact: true }).check();
+    await workspace.getByLabel("Margins").selectOption(margins);
+    await expect(workspace.locator(".print-ws-paper")).toContainText(line);
+
+    for (const [percent, transform] of [
+      [50, "matrix(0.5, 0, 0, 0.5, 0, 0)"],
+      [100, "none"],
+      [150, "matrix(1.5, 0, 0, 1.5, 0, 0)"],
+      [200, "matrix(2, 0, 0, 2, 0, 0)"],
+    ] as const) {
+      const field = workspace.getByLabel("Scale", { exact: true });
+      await field.fill(String(percent));
+      await field.press("Enter");
+      await expect(page.locator(".print-page .print-flow").first()).toHaveCSS("transform", transform);
+
+      const { overflow, texts } = await printedSheets(page, leaveOut);
+      const printedCode = await page
+        .locator(".print-page .print-flow")
+        .evaluateAll((flows) => flows.flatMap((flow) => Array.from(flow.querySelectorAll(".cm-line, .print-code-line"), (part) => part.textContent)));
+      const at = `${line}, ${margins} margins, at ${percent}%`;
+      expect.soft(overflow, `${at}: nothing reaches past its page body`).toBeLessThanOrEqual(0.5);
+      expect.soft(texts.join(""), `${at}: every character prints once, in order`).toBe(documentText);
+      expect.soft(printedCode, `${at}: every line of code prints once, in order`).toEqual(code);
+    }
+  }
+});
