@@ -32,8 +32,10 @@
 // in a changed block's raw HTML could change how a kept block reads, when a
 // kept definition could turn text in a changed block into a link, when
 // indented code could end in another place than in the source, when text
-// follows a block that read as it did only at the very end of the source, or
-// when reading the windows back would take longer than writing the whole
+// follows a block that read as it did only at the very end of the source,
+// when a list or footnote that ends in a block the source left open, such as
+// a fence with no closing line, has other text after it than in the source,
+// or when reading the windows back would take longer than writing the whole
 // document.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
@@ -81,6 +83,9 @@ export interface OutlineNode {
   defines: readonly string[];
   /** The blocks its first line opens (`opens`). */
   opens: string;
+  /** Whether it is a list or footnote whose last block the text left open
+   *  (`leftOpen`). */
+  endsOpen: boolean;
 }
 
 /**
@@ -119,6 +124,9 @@ interface SourceItem {
   defines: readonly string[];
   /** The blocks its first line opens in the source (`opens`). */
   opens: string;
+  /** Whether it is a list or footnote whose last block the source left open
+   *  (`leftOpen`). It reads as it does only with the source's text after it. */
+  endsOpen: boolean;
   /** What ends it, worked out when a join needs it (`itemEnding`). */
   ending?: Ending;
   /** Whether it read in the source as it reads at the start of a text, worked
@@ -197,6 +205,9 @@ const PARSE_COST = 10;
 const MIN_BUDGET = 2_000;
 /** The syntax tree types of the blocks that hold other blocks. */
 const CONTAINERS: ReadonlySet<string> = new Set(["blockquote", "list", "listItem", "footnoteDefinition"]);
+/** The syntax tree types of the blocks that go on over blank lines, so a block
+ *  left open at their end takes the blank lines in (see `leftOpen`). */
+const RUNS_ON: ReadonlySet<string> = new Set(["list", "listItem", "footnoteDefinition"]);
 /** The syntax tree and ProseMirror types of the blocks that stay open over
  *  blank lines, lists and footnotes (see `codeMayMove`). */
 const STAYS_OPEN: ReadonlySet<string> = new Set(["list", "footnoteDefinition", "bullet_list", "ordered_list", "footnote_definition"]);
@@ -401,9 +412,11 @@ export class SourceBaseline {
    * back in windows (`reads`). When a window does not read as its pieces, the
    * join where it went wrong gets a blank line and the window is read again.
    * A few joins could change how a kept block reads in a way no window shows
-   * (`codeMayMove`, `codeMayEnd`, `readsOnlyAtEnd`), and make the whole body
-   * be written. The budget for reading back is spent the same way whether or
-   * not a window's result is cached, so a document always gets the same text.
+   * (`codeMayMove`, `codeMayEnd`, `readsOnlyAtEnd`), and so could any join
+   * below a list or footnote left open at its end, or the end of the body
+   * after one (`leftOpen`). They make the whole body be written. The budget
+   * for reading back is spent the same way whether or not a window's result
+   * is cached, so a document always gets the same text.
    *
    * A window starts at the top of the body, below a join the rules settle,
    * where the parser starts afresh as it does in the window, or below a join
@@ -416,6 +429,10 @@ export class SourceBaseline {
    * how the window reads.
    */
   private join(pieces: readonly Piece[], layout: SourceLayout): string[] | null {
+    // A source item that reads as it does only with the source's text after
+    // it, and would end the body where it did not end the source.
+    const { item: last } = pieces[pieces.length - 1];
+    if (last >= 0 && last < layout.items.length - 1 && layout.items[last].endsOpen) return null;
     const budget = Math.max(this.source.length / PARSE_COST, MIN_BUDGET);
     const gaps: string[] = [];
     const windows: Window[] = [];
@@ -448,7 +465,7 @@ export class SourceBaseline {
         gap = (above.item >= 0 ? layout.gaps[above.item] : below.item > 0 ? layout.gaps[below.item - 1] : undefined) ?? BLANK_LINE;
         fresh = below.item < 0 || itemFresh(layout, below.item);
         if (below.item >= 0 && codeMayMove(layout, below.item, above, gap)) return null;
-        if (above.item >= 0 && readsOnlyAtEnd(layout, above.item)) return null;
+        if (above.item >= 0 && (readsOnlyAtEnd(layout, above.item) || layout.items[above.item].endsOpen)) return null;
         const ending = endingOf(above, layout);
         if (!apart(ending, above.text, gap, below.text)) {
           if (above.item >= 0 && codeMayEnd(layout, above.item)) return null;
@@ -628,7 +645,7 @@ export class SourceBaseline {
   private sourceLayout(): SourceLayout | null {
     if (this.layout === undefined) {
       try {
-        this.outline ??= outlineOf(this.tools.parse(this.source));
+        this.outline ??= outlineOf(this.tools.parse(this.source), this.source);
         this.layout = this.outline && layOut(this.source, this.outline, this.blocks);
       } catch {
         this.layout = null;
@@ -680,15 +697,16 @@ export function outlinePlugin(report: (text: string, outline: readonly OutlineNo
       if (!parse) return;
       this.parser = (text, file) => {
         const tree = parse(text, file);
-        report(text, outlineOf(tree));
+        report(text, outlineOf(tree, text));
         return tree;
       };
     },
   );
 }
 
-/** The top-level nodes of `tree`, or null when one has no position. */
-export function outlineOf(tree: MdNode): OutlineNode[] | null {
+/** The top-level nodes of `tree`, which remark read from `text`, or null when
+ *  one has no position. */
+export function outlineOf(tree: MdNode, text: string): OutlineNode[] | null {
   const outline: OutlineNode[] = [];
   for (const node of tree.children ?? []) {
     const start = node.position?.start.offset;
@@ -718,9 +736,43 @@ export function outlineOf(tree: MdNode): OutlineNode[] | null {
       holdsDefinition,
       defines,
       opens: opens(node),
+      endsOpen: leftOpen(node, text),
     });
   }
   return outline;
+}
+
+/**
+ * Whether `node`, a top-level node of `text`, is a list or footnote whose last
+ * block `text` left open: a fenced code or math block with no closing fence,
+ * or HTML such as a comment with no `-->`. That block runs on to the end of
+ * the list or footnote, and takes in the blank lines below it or not,
+ * depending on the line after them. It does before a quote or another item,
+ * and does not before a heading or a paragraph. So its code or HTML can
+ * change when other text follows. A quote ends such a block at its own end,
+ * also inside a list. A closing fence counts only when it is indented no
+ * further than its opening fence, so a closed block can count as open, which
+ * only writes the whole body.
+ */
+function leftOpen(node: MdNode, text: string): boolean {
+  let last: MdNode | undefined = node;
+  while (last && RUNS_ON.has(last.type)) last = last.children?.[last.children.length - 1];
+  if (!last || last === node) return false;
+  const start = startOf(last);
+  const block = text.slice(start, last.position?.end.offset);
+  if (last.type === "html") return htmlEnding(block) === "open";
+  const fence = last.type === "code" || last.type === "math" ? FENCE.exec(block) : null;
+  // Indented code ends before the blank lines below it.
+  if (!fence) return false;
+  const close = /^( *)(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(block.slice(block.lastIndexOf("\n") + 1));
+  const column = start - (text.lastIndexOf("\n", start - 1) + 1);
+  return !(
+    block.includes("\n") &&
+    close &&
+    close[2][0] === fence[1][0] &&
+    close[2].length >= fence[1].length &&
+    close[1].length <= column
+  );
 }
 
 /**
@@ -1257,6 +1309,7 @@ function layOut(source: string, outline: readonly OutlineNode[], blocks: readonl
       holdsDefinition: node.holdsDefinition,
       defines: node.defines,
       opens: node.opens,
+      endsOpen: node.endsOpen,
     });
     end = start + text.length;
   }

@@ -565,6 +565,12 @@ describe("a join between a changed block and the file's text", () => {
     expect(editor.getMarkdown()).toBe(expected);
   });
 
+  it("keeps a list that ends in a closed fence when the block below it goes", { timeout: 60_000 }, async () => {
+    const { editor, view } = await open("* Run:\n\n  ```sh\n  echo hello\n  ```\n\n> Done.\n");
+    deleteBlock(view, "Done.");
+    expect(editor.getMarkdown()).toBe("* Run:\n\n  ```sh\n  echo hello\n  ```\n");
+  });
+
   it("gets a blank line when reading the join back would take longer than writing the whole body", { timeout: 60_000 }, async () => {
     // The list starts on its own line under the quote, but only reading the
     // whole quote back would tell.
@@ -783,6 +789,31 @@ describe("an edit near text that reads as it does only where it is", () => {
         view.dispatch(view.state.tr.insert(view.state.doc.content.size, paragraph.create(null, view.state.schema.text("After."))));
       },
       "- one\n- two\n\n<custom-tag>\n\nAfter.\n",
+    ],
+    // A code block or comment the file left open at the end of a list or
+    // footnote takes in the blank lines below it, or not, depending on the
+    // line after them.
+    [
+      "a list that ends in an open fence, with a quote added below it",
+      "- Run:\n\n  ```sh\n  echo hello\n",
+      (view: EditorView) => {
+        const { blockquote, paragraph } = view.state.schema.nodes;
+        const quote = blockquote.create(null, paragraph.create(null, view.state.schema.text("Done.")));
+        view.dispatch(view.state.tr.insert(blockWith(view, "echo hello").to, quote));
+      },
+      "- Run:\n\n  ```sh\n  echo hello\n  ```\n\n> Done.\n",
+    ],
+    [
+      "a list that ends in an open fence and becomes the last block",
+      "- Run:\n\n  ```sh\n  echo hello\n\n> Done.\n",
+      (view: EditorView) => deleteBlock(view, "Done."),
+      "- Run:\n\n  ```sh\n  echo hello\n\n  ```\n",
+    ],
+    [
+      "a footnote that ends in an open comment and becomes the last block",
+      "Text[^1].\n\n[^1]: Note.\n\n    <!-- draft\n\n> Quote.\n",
+      (view: EditorView) => deleteBlock(view, "Quote."),
+      "Text[^1].\n\n[^1]: Note.\n\n    <!-- draft\n\n",
     ],
     // Milkdown writes the raw text of an HTML block that an edit merged into
     // a paragraph as it is. Next to a definition the file keeps, its `[ref]`
