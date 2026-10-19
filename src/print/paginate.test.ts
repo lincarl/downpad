@@ -76,6 +76,8 @@ interface TableOptions {
   headColSpan?: number;
   /** A body row that is 900px tall rather than 100px. */
   tallRow?: number;
+  /** Px the table is taller than its rows, as a collapsed border makes it. */
+  border?: number;
 }
 
 /**
@@ -85,15 +87,18 @@ interface TableOptions {
  * duplicated rows.
  */
 function measuredTable(count: number, options: TableOptions = {}): HTMLTableElement {
-  const { shape = "crepe", headColSpan = 1, tallRow } = options;
+  const { shape = "crepe", headColSpan = 1, tallRow, border = 0 } = options;
   const rowHeight = (i: number): number => (i === tallRow ? 900 : 100);
   const rowTop = (i: number): number => Array.from({ length: i }, (_, j) => rowHeight(j)).reduce((a, b) => a + b, 0);
   const table = document.createElement("table");
-  Object.defineProperty(table, "offsetHeight", { value: 40 + rowTop(count) });
+  Object.defineProperty(table, "offsetHeight", { value: 40 + rowTop(count) + border });
+  const head = shape === "none" ? 0 : 40;
+  table.getBoundingClientRect = () => DOMRect.fromRect({ height: head + rowTop(count) + border });
   Object.defineProperty(table, "offsetWidth", { value: 420 });
 
   const headerRow = document.createElement("tr");
   Object.defineProperty(headerRow, "offsetHeight", { value: 40 });
+  headerRow.getBoundingClientRect = () => DOMRect.fromRect({ height: 40 });
   ["Feature", "Status"].forEach((text, i) => {
     const cell = document.createElement(shape === "attribute-only" ? "td" : "th");
     cell.textContent = text;
@@ -125,6 +130,7 @@ function measuredTable(count: number, options: TableOptions = {}): HTMLTableElem
     Object.defineProperty(tr, "offsetHeight", {
       get: () => (tr.closest("table")?.parentElement ? rowHeight(i) : 0),
     });
+    tr.getBoundingClientRect = () => DOMRect.fromRect({ y: head + rowTop(i), height: rowHeight(i) });
     for (const text of [`r${i}`, "M1"]) {
       const td = document.createElement("td");
       td.textContent = text;
@@ -623,9 +629,12 @@ describe("splitIntoPages, splitting a Markdown source line", () => {
  * - `data-columns` on an element inside such a block makes each of its
  *   characters that many columns wide, as a bold face can be wider than the
  *   regular one.
- * - `data-stack` stacks its children, each starting where the one before ends.
+ * - `data-stack` stacks its children, each starting where the one before ends,
+ *   inside its own vertical padding.
  * - `data-row` sets its children side by side and is as tall as the tallest.
  * - `data-height` is that many px tall.
+ * - A line of code that print rebuilds (`.print-code-line`) is LINE px tall.
+ * - The box of an element measured by these rules is its offsetTop and height.
  * Copies of an element (the splitter's trial pieces and the pieces themselves)
  * keep the mark, so they measure by the same rules.
  */
@@ -710,8 +719,10 @@ const fakeLayout = (() => {
   function heightOf(el: HTMLElement): number | null {
     if (el.dataset.height) return Number(el.dataset.height);
     if (el.matches("[data-text-layout]")) return textHeight(el);
+    if (el.classList.contains("print-code-line")) return LINE;
     const children = Array.from(el.children) as HTMLElement[];
-    if (el.matches("[data-stack]")) return children.reduce((sum, child) => sum + child.offsetHeight, 0);
+    const padding = (Number.parseFloat(el.style.paddingTop) || 0) + (Number.parseFloat(el.style.paddingBottom) || 0);
+    if (el.matches("[data-stack]")) return children.reduce((sum, child) => sum + child.offsetHeight, padding);
     if (el.matches("[data-row]")) return Math.max(0, ...children.map((child) => child.offsetHeight));
     return null;
   }
@@ -751,7 +762,7 @@ const fakeLayout = (() => {
         get(this: HTMLElement) {
           const parent = this.parentElement;
           if (!parent?.matches("[data-stack]")) return top.get!.call(this);
-          let offset = parent.offsetTop;
+          let offset = parent.offsetTop + (Number.parseFloat(parent.style.paddingTop) || 0);
           for (let sibling = this.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
             offset += (sibling as HTMLElement).offsetHeight;
           }
@@ -762,7 +773,10 @@ const fakeLayout = (() => {
       override(Element.prototype, "getBoundingClientRect", {
         value(this: Element) {
           const block = blockOf(this);
-          if (!block) return elementBox.call(this);
+          if (!block) {
+            const height = this instanceof HTMLElement ? heightOf(this) : null;
+            return height === null ? elementBox.call(this) : DOMRect.fromRect({ y: (this as HTMLElement).offsetTop, height });
+          }
           if (block === this) return DOMRect.fromRect({ width: COLUMNS * CHAR, height: textHeight(block) });
           const height = this instanceof HTMLElement && this.dataset.height ? Number(this.dataset.height) : undefined;
           return charBox(block, offsetIn(block, this), (this.textContent ?? "").length, height);
@@ -1250,5 +1264,72 @@ describe("splitIntoPages, splitting a code block with a diagram", () => {
     // The diagram prints once, after the last of the code.
     expect(flow.querySelectorAll(".preview-panel")).toHaveLength(1);
     expect(pieces[pieces.length - 1].lastElementChild).toBe(panel);
+  });
+});
+
+describe("splitIntoPages, fitting each piece of a block with its top margin and padding", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  // Each rebuilt piece repeats the block's 4 px top margin, which the page
+  // makes room for above it, and the splitters left it out. Pieces of a table
+  // or code block reached past the page by it, and by the padding of a code
+  // block CodeMirror had not drawn yet.
+
+  it("fits each piece of a table with the block's top margin and the table's border", () => {
+    const block = wrappedTable(measuredTable(6, { border: 1 }));
+    block.style.marginTop = "4px";
+    const flow = flowWith(block);
+
+    splitIntoPages(flow, 256);
+
+    const parts = Array.from(flow.children) as HTMLElement[];
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.flatMap(bodyLabels)).toEqual(["r0", "r1", "r2", "r3", "r4", "r5"]);
+    // The margin, the wrappers (12), the header (40), the rows and the border fit.
+    for (const part of parts) expect(4 + 12 + 40 + bodyLabels(part).length * 100 + 1).toBeLessThanOrEqual(256);
+  });
+
+  it("fits each piece of a CodeMirror code block with the block's top margin", () => {
+    const block = codeBlock(60);
+    block.style.marginTop = "4px";
+    const flow = flowWith(block);
+
+    splitIntoPages(flow, 470);
+
+    const parts = Array.from(flow.children) as HTMLElement[];
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.flatMap(codeLinesOf)).toEqual(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`));
+    // The margin, the block's chrome (28), the content's padding (8) and the lines fit.
+    for (const part of parts) expect(4 + 28 + 8 + codeLinesOf(part).length * 18).toBeLessThanOrEqual(470);
+  });
+
+  it("fits each piece of a code block CodeMirror has not drawn with the block's margin and padding", () => {
+    // Crepe shows a code block outside the window as a plain `pre` until it
+    // scrolls into view, so a long document prints most of its code that way.
+    const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+    const code = document.createElement("code");
+    code.dataset.stack = "";
+    code.textContent = lines.join("\n");
+    const pre = stack("pre", code);
+    pre.className = "milkdown-code-block-placeholder";
+    pre.style.padding = "4px 0";
+    // Before the split the code is one text node, LINE px a line.
+    Object.defineProperty(code, "offsetHeight", { get: () => (code.childElementCount || lines.length) * fakeLayout.LINE });
+    const block = stack("div", pre);
+    block.className = "milkdown-code-block";
+    block.style.padding = "8px 20px 20px";
+    block.style.marginTop = "4px";
+    const flow = flowWith(block);
+
+    splitIntoPages(flow, 500);
+
+    const parts = Array.from(flow.children) as HTMLElement[];
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.flatMap((part) => Array.from(part.querySelectorAll(".print-code-line"), (line) => line.textContent))).toEqual(lines);
+    for (const part of parts) {
+      expect(part.className).toBe("milkdown-code-block");
+      expect(part.offsetHeight + 4).toBeLessThanOrEqual(500);
+    }
   });
 });

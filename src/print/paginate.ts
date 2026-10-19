@@ -193,11 +193,14 @@ function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
     (child) => !child.contains(inner) && (child as HTMLElement).offsetHeight > 0,
   );
   if (inner !== el && beside && holdsBlocks(el)) return splitContainer(el, maxHeightPx);
-  // The wrappers occupy height of their own (padding, borders, sibling chrome);
-  // leave room for it so a rebuilt piece still fits on the page.
-  const overhead = Math.max(0, el.offsetHeight - inner.offsetHeight);
+  if (inner === el) return splitElement(el, maxHeightPx);
+  // The wrappers occupy height of their own (padding, borders, sibling chrome),
+  // and every rebuilt piece repeats the block's top margin, which the page
+  // makes room for above it. Leave room for both so a piece still fits on the
+  // page. Without the margin, pieces of a table or code block reached 4 px past
+  // the page.
+  const overhead = Math.max(0, el.offsetHeight - inner.offsetHeight) + marginTopOf(el);
   const pieces = splitElement(inner, Math.max(1, maxHeightPx - overhead));
-  if (inner === el) return pieces;
   return pieces.map((piece) => {
     const wrapped = rewrap(el, inner, piece);
     if (oversized.has(piece)) oversized.add(wrapped);
@@ -309,7 +312,9 @@ function splitTable(table: HTMLTableElement, maxHeightPx: number): HTMLTableElem
     table.querySelectorAll<HTMLTableRowElement>("tbody > tr, :scope > tr"),
   ).filter((row) => row !== head.row);
   if (bodyRows.length < 2) return [];
-  const rowRoom = Math.max(1, maxHeightPx - head.heightPx);
+  // Whatever height the table has beyond its rows, such as its collapsed
+  // border, every piece has too.
+  const rowRoom = Math.max(1, maxHeightPx - head.heightPx - heightBeyond(table, Array.from(table.rows)));
   const groups = packByHeight(bodyRows, rowRoom);
   if (groups.length < 2) return [];
 
@@ -682,12 +687,17 @@ function splitPre(pre: HTMLElement, maxHeightPx: number): HTMLElement[] {
     return span;
   });
   code.replaceChildren(...holders);
-  const groups = packByHeight(holders, maxHeightPx);
+  // Whatever height the block has beyond its lines, such as its padding, every
+  // piece has too, as in splitCodeMirror. Packing the lines alone let a piece
+  // of Crepe's placeholder for a code block CodeMirror has not drawn yet reach
+  // past the page by its 8 px of padding.
+  const room = Math.max(1, maxHeightPx - heightBeyond(pre, holders));
+  const groups = packByHeight(holders, room);
   if (groups.length < 2) return [];
   return groups.map((group) => {
     // A line that wraps past a page, which the unrendered code block can show.
     // Measured before the line moves into a piece that is not laid out.
-    const tooTall = group.length === 1 && group[0].offsetHeight > maxHeightPx;
+    const tooTall = group.length === 1 && group[0].offsetHeight > room;
     const piece = pre.cloneNode(false) as HTMLElement;
     const codePiece = code.cloneNode(false) as HTMLElement;
     for (const line of group) codePiece.appendChild(line);
@@ -1064,6 +1074,17 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /** The start of the grapheme cluster that holds `offset` in `text`. */
 function graphemeStart(text: string, offset: number): number {
   return graphemes.segment(text).containing(offset)?.index ?? offset;
+}
+
+/**
+ * How much taller `el` is than the run of `units` it stacks, such as its
+ * padding and borders. Read from the laid-out boxes, since summing rounded
+ * heights of many units can come out taller than the element.
+ */
+function heightBeyond(el: Element, units: Element[]): number {
+  if (!units.length) return 0;
+  const run = units[units.length - 1].getBoundingClientRect().bottom - units[0].getBoundingClientRect().top;
+  return Math.max(0, el.getBoundingClientRect().height - run);
 }
 
 /** An element's top margin, which a page has to make room for above it. */
