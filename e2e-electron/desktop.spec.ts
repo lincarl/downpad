@@ -352,7 +352,77 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(page).toHaveTitle("one.md — md-easy");
 });
 
-test("End with the caret before images that start a line moves the caret to the end of the line", async () => {
+test("Ctrl or Cmd+click and double-click on either half of a character follow only that character's link", async () => {
+  const file = path.join(directory, "text-links.md");
+  await writeFile(path.join(directory, "two.md"), "# Two\n");
+  await writeFile(file, [
+    "A [link](https://example.com/link)s and more.",
+    "Plain[next](https://example.com/next) text.",
+    "[home](https://example.com/home)[second](https://example.com/second) links.",
+    "Ends with [them](https://example.com/them)",
+    "A file [two](two.md) here.",
+    "Plain line.",
+  ].join("\n\n") + "\n");
+  // Without the URL after each link, the text after a link starts right at
+  // its last character.
+  await writeFile(path.join(directory, "profile", "settings.toml"), 'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nlinkDisplay = "text-only"\n');
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const editor = page.locator(".milkdown .ProseMirror");
+  await expect(editor.locator("a")).toHaveCount(6);
+  const plain = editor.locator("p").filter({ hasText: "Plain line." });
+  /** The point `fraction` of the way across the character at `index` of the
+   *  text node that reads `text`. A negative `index` counts from the end. */
+  const pointOn = (text: string, index: number, fraction: number) =>
+    editor.evaluate((element, [text, index, fraction]) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent === text ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
+      const node = walker.nextNode()!;
+      const start = index < 0 ? text.length + index : index;
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, start + 1);
+      const box = range.getBoundingClientRect();
+      return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+    }, [text, index, fraction] as const);
+  /** Ctrl or Cmd+click `fraction` of the way across a character, then click
+   *  plain text, so no link's preview covers the next target. */
+  const ctrlClick = async (text: string, index: number, fraction: number) => {
+    const point = await pointOn(text, index, fraction);
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+    await plain.click({ position: { x: 2, y: 8 } });
+  };
+  // ProseMirror puts a click on a character's right half after the character,
+  // where the plain text or the link after it starts.
+  await ctrlClick("link", -1, 0.75);
+  await ctrlClick("s and more.", 0, 0.25);
+  await ctrlClick("Plain", -1, 0.75);
+  await ctrlClick("home", -1, 0.75);
+  await ctrlClick("second", 0, 0.25);
+  // A link that ends its paragraph opens on its last character's right half,
+  // and not on a click right of it.
+  await ctrlClick("them", -1, 1.5);
+  await ctrlClick("them", -1, 0.75);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([
+    "https://example.com/link",
+    "https://example.com/home",
+    "https://example.com/second",
+    "https://example.com/them",
+  ]);
+  // A double-click on the right half of a link to a Markdown file opens that file.
+  const point = await pointOn("two", -1, 0.75);
+  await page.mouse.dblclick(point.x, point.y);
+  await expect(page).toHaveTitle("two.md — md-easy");
+});
+
+test("End with the caret before images or formulas that start a line moves the caret to the end of the line", async () => {
   const file = path.join(directory, "image-end.md");
   await writeFile(path.join(directory, "image.png"), onePixelPng);
   await writeFile(file, [
@@ -361,18 +431,36 @@ test("End with the caret before images that start a line moves the caret to the 
     "![Pixel](image.png)![Gone](gone.png) start here.",
     "Break\\\n![Pixel](image.png) after a line break.",
     "| Cells |\n| --- |\n| ![Cell](cell/missing.png) in a cell |",
+    "| Formulas |\n| --- |\n| $v$ in a formula cell |",
     "![Pixel](image.png)![Gone](gone.png) are selected.",
+    "$x^2$ starts with a formula.",
+    "![Pixel](image.png)$y$ start with an image.",
+    "Break\\\n$z$ after a line break.",
+    "Kept\\\n![Pixel](image.png)$k$ are selected past a line break.",
+    "Twice\\\n![Pixel](image.png) is selected twice.",
+    "Less\\\n$s$ is selected less.",
+    "Home\\\n![Pixel](image.png) goes back home.",
+    "Join\\\n![Pixel](image.png) joins the line above.",
+    "Inserted\\\n![Pixel](image.png) takes inserted text.",
+    "Emoji\\\n![Pixel](image.png) takes an emoji.",
+    "Ends\\\n![Pixel](image.png) ends the inserted text.",
+    "Composed\\\n![Pixel](image.png) takes a composition.",
+    "Formula\\\n$c$ is composed over.",
+    "Edge\\\n![Pixel](image.png)$e$ keeps the formula.",
+    "Merged\\\n![Pixel](image.png) joins by composing.",
   ].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
-  await expect.poll(loaded).toBe(3);
+  await expect.poll(loaded).toBe(14);
+  await expect(editor.locator("[data-type=math_inline]")).toHaveCount(8);
   /** Click at the end of the text on `line`'s last row, go to the start of
-   *  that row with Home, press `key` and type `text`. The click is on the
-   *  text, because a click right of the text in a table cell selects the
-   *  cell's paragraph. */
-  const typeAfter = async (key: string, line: Locator, text: string) => {
+   *  that row with Home, press `keys` and type `text`, or put it in with
+   *  `insert`. The click is on the text, because a click right of the text in
+   *  a table cell selects the cell's paragraph. */
+  const typeAfter = async (keys: string | string[], line: Locator, text: string, insert: (text: string) => Promise<unknown> = (text) => page.keyboard.type(text)) => {
+    await line.scrollIntoViewIfNeeded();
     const end = await line.evaluate((element) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
       let last: Node | null = null;
@@ -384,16 +472,45 @@ test("End with the caret before images that start a line moves the caret to the 
     });
     await page.mouse.click(end.x, end.y);
     await page.keyboard.press("Home");
-    await page.keyboard.press(key);
-    await page.keyboard.type(text);
+    for (const key of [keys].flat()) await page.keyboard.press(key);
+    await insert(text);
   };
   const paragraph = (text: string) => editor.locator("p").filter({ hasText: text });
   await typeAfter("End", paragraph("starts here."), "1");
   await typeAfter("End", paragraph("start here."), "2");
-  await typeAfter("End", paragraph("after a line break."), "3");
-  await typeAfter("End", editor.locator("td"), "4");
+  await typeAfter("End", paragraph("after a line break.").first(), "3");
+  await typeAfter("End", editor.locator("td").filter({ hasText: "in a cell" }), "4");
   // Shift+End selects the whole line, which the typing replaces.
   await typeAfter("Shift+End", paragraph("are selected."), "5");
+  await typeAfter("End", paragraph("starts with a formula."), "6");
+  await typeAfter("End", paragraph("start with an image."), "7");
+  await typeAfter("End", paragraph("after a line break.").last(), "8");
+  await typeAfter("End", editor.locator("td").filter({ hasText: "in a formula cell" }), "9");
+  // After a line break, Shift+End selects the line without the break, which
+  // Chromium's own Shift+End takes in too.
+  await typeAfter("Shift+End", paragraph("are selected past a line break."), "0");
+  // Chromium moves the anchor before the break when it extends the selection
+  // again, and the selection keeps it after the break.
+  await typeAfter(["Shift+End", "Shift+End"], paragraph("is selected twice."), "a");
+  await typeAfter(["Shift+End", "Shift+ArrowLeft"], paragraph("is selected less."), "b");
+  await typeAfter(["Shift+End", "Shift+Home"], paragraph("goes back home."), "c");
+  // Typing over a selection that ends right after the break replaces it.
+  await typeAfter("Shift+ArrowLeft", paragraph("joins the line above."), "d");
+  // Text that comes without a key press, as from an input method or the emoji
+  // panel, and a character Chromium types as two halves keep the break too.
+  await typeAfter("Shift+End", paragraph("takes inserted text."), "é", (text) => page.keyboard.insertText(text));
+  const session = await page.context().newCDPSession(page);
+  await typeAfter("Shift+End", paragraph("takes an emoji."), "😀", (text) => session.send("Input.dispatchKeyEvent", { type: "char", text, unmodifiedText: text }));
+  await typeAfter("Shift+ArrowLeft", paragraph("ends the inserted text."), "è", (text) => page.keyboard.insertText(text));
+  // So does an input method's composition, which Chromium cannot cancel.
+  const compose = async (text: string) => {
+    await session.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+    await session.send("Input.insertText", { text });
+  };
+  await typeAfter("Shift+End", paragraph("takes a composition."), "漢", compose);
+  await typeAfter("Shift+End", paragraph("is composed over."), "字", compose);
+  await typeAfter("Shift+ArrowRight", paragraph("keeps the formula."), "界", compose);
+  await typeAfter("Shift+ArrowLeft", paragraph("joins by composing."), "合", compose);
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — md-easy");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
@@ -404,7 +521,25 @@ test("End with the caret before images that start a line moves the caret to the 
     "Break\\\n![Pixel](image.png) after a line break.3",
   ]);
   expect(blocks[4]).toMatch(/^\| !\[Cell\]\(cell\/missing\.png\) in a cell4 *\|$/m);
-  expect(blocks[5]).toBe("5\n");
+  expect(blocks[5]).toMatch(/^\| \$v\$ in a formula cell9 *\|$/m);
+  expect(blocks.slice(6)).toEqual([
+    "5",
+    "$x^2$ starts with a formula.6",
+    "![Pixel](image.png)$y$ start with an image.7",
+    "Break\\\n$z$ after a line break.8",
+    "Kept\\\n0",
+    "Twice\\\na",
+    "Less\\\nb.",
+    "Home\\\nc![Pixel](image.png) goes back home.",
+    "Joind![Pixel](image.png) joins the line above.",
+    "Inserted\\\né",
+    "Emoji\\\n😀",
+    "Endsè![Pixel](image.png) ends the inserted text.",
+    "Composed\\\n漢",
+    "Formula\\\n字",
+    "Edge\\\n界$e$ keeps the formula.",
+    "Merged合![Pixel](image.png) joins by composing.\n",
+  ]);
 });
 
 test("the block handle of a line with a wide missing image chip stays beside the line", async () => {

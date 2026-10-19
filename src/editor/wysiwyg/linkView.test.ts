@@ -1,7 +1,8 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { Schema, type Node as ProseNode } from "@milkdown/kit/prose/model";
 import { EditorState, TextSelection, type Transaction } from "@milkdown/kit/prose/state";
-import type { Decoration } from "@milkdown/kit/prose/view";
+import { EditorView, type Decoration } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { linkUrlKey, linkUrlPlugin, middleTruncate } from "./linkView";
 
@@ -37,12 +38,12 @@ describe("middleTruncate", () => {
 const schema = new Schema({
   nodes: {
     doc: { content: "block+" },
-    paragraph: { group: "block", content: "inline*" },
-    blockquote: { group: "block", content: "block+" },
+    paragraph: { group: "block", content: "inline*", toDOM: () => ["p", 0] },
+    blockquote: { group: "block", content: "block+", toDOM: () => ["blockquote", 0] },
     text: { group: "inline" },
-    image: { group: "inline", inline: true, atom: true },
+    image: { group: "inline", inline: true, atom: true, toDOM: () => ["img"] },
   },
-  marks: { link: { attrs: { href: {} }, inclusive: false } },
+  marks: { link: { attrs: { href: {} }, inclusive: false, toDOM: (mark) => ["a", { href: mark.attrs.href as string }, 0] } },
 });
 
 const ctx = { getSettings: () => DEFAULT_SETTINGS, getFilePath: () => null };
@@ -128,6 +129,14 @@ describe("link URL suffixes", () => {
       state = state.apply(tr);
       expect(suffixes(state), `after edit ${i}`).toEqual(rebuilt(state));
     }
+  });
+
+  it("draws each suffix outside the link that comes right after it", () => {
+    const doc = schema.nodes.doc.create(null, [p(text("a", "https://a.example"), text("b", "https://b.example"), text(" c"))]);
+    const view = new EditorView(document.createElement("div"), { state: EditorState.create({ doc, plugins: [linkUrlPlugin(ctx)] }) });
+    const drawn = [...view.dom.querySelectorAll(".md-link-url")].map((suffix) => `${suffix.textContent} in ${suffix.parentElement?.nodeName}`);
+    view.destroy();
+    expect(drawn).toEqual([" (https://a.example) in P", " (https://b.example) in P"]);
   });
 
   it("keeps the key of a suffix that only moved", () => {

@@ -2,11 +2,15 @@
 // plain `link` mark; this plugin adds the "text-and-url" presentation — the URL
 // shown in a muted suffix after the link text, middle-truncated, full URL on
 // hover — and Ctrl/Cmd-click to open in the browser. In "text-only" mode no
-// suffix is drawn (traditional rendering); Ctrl-click still opens. A click on
-// an inline image opens the image's own link, never the next one.
+// suffix is drawn (traditional rendering); Ctrl-click still opens. A click
+// opens the link of the image or the text under the pointer, never the next
+// one.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
-// so it never becomes part of the document or the serialized markdown.
+// so it never becomes part of the document or the serialized markdown. It is
+// drawn outside every mark. ProseMirror otherwise draws a widget inside the
+// marks of the text after it, so a link's suffix landed inside a link right
+// after it, and a Ctrl/Cmd-click on the suffix opened that other link.
 //
 // Double-clicking a link to a local markdown file (a relative/absolute `.md`
 // path) opens that file in a tab instead of selecting a word (spec §5.6); the
@@ -52,7 +56,7 @@ function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): v
     if (runHref !== null) {
       // Keyed by the href alone, so an edit that only moves a link keeps its
       // widget instead of drawing it again.
-      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, ignoreSelection: true, key: `md-link-url:${runHref}` }));
+      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, marks: [], ignoreSelection: true, key: `md-link-url:${runHref}` }));
     }
     runHref = null;
   };
@@ -141,15 +145,18 @@ function hrefAt(doc: ProseNode, pos: number): string | null {
   return node ? linkMarkHref(node) : null;
 }
 
-/** The href of the link a click at `pos` lands on. A click on an inline node
- *  such as an image, or a missing image's chip, lands on that node's own link,
- *  or on none. ProseMirror gives the position after an image for a click on its
- *  right half, where the node after it, with another link, starts. */
-function clickedHref(view: EditorView, pos: number, event: MouseEvent): string | null {
+/** The href of the link a click lands on. A click on an inline node such as
+ *  an image, or a missing image's chip, lands on that node's own link, or on
+ *  none. A click elsewhere lands on the link element the browser found under
+ *  the pointer, or on none. For a click on the right half of an image or a
+ *  character, ProseMirror gives the position after it, where plain text or
+ *  another link can start, so that position cannot name the clicked link. */
+function clickedHref(view: EditorView, event: MouseEvent): string | null {
   const inside = view.posAtCoords({ left: event.clientX, top: event.clientY })?.inside ?? -1;
   const clicked = inside >= 0 ? view.state.doc.nodeAt(inside) : null;
   if (clicked?.isInline) return linkMarkHref(clicked);
-  return hrefAt(view.state.doc, pos);
+  const link = event.target instanceof Element ? event.target.closest("a") : null;
+  return link && view.dom.contains(link) ? hrefAt(view.state.doc, view.posAtDOM(link, 0)) : null;
 }
 
 function openExternally(href: string): void {
@@ -187,19 +194,19 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
       decorations(state) {
         return linkUrlKey.getState(state)?.decorations;
       },
-      handleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
+      handleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
         if (!(event.ctrlKey || event.metaKey)) return false;
-        const href = clickedHref(view, pos, event);
+        const href = clickedHref(view, event);
         if (!href) return false;
         event.preventDefault();
         openExternally(href);
         return true;
       },
-      handleDoubleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
+      handleDoubleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
         // Double-click a link to a local .md file → open it in a tab (§5.6),
         // rather than selecting a word. Other links fall through to default.
         if (!ctx.openMarkdownFile) return false;
-        const href = clickedHref(view, pos, event);
+        const href = clickedHref(view, event);
         if (!href) return false;
         const target = resolveMarkdownLinkTarget(href, ctx.getFilePath());
         if (!target) return false;
