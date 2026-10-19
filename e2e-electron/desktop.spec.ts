@@ -1749,6 +1749,21 @@ async function dropBelow(line: Locator, files: string[]): Promise<void> {
   await dropFiles(line, files, { x: box.width / 2, y: box.height - 2 });
 }
 
+/** Open a new document with the tab strip's New document button and return
+ *  its empty line once its pane is in front. Call it once the document the
+ *  app launched with is shown. The button opens no menu, which that document
+ *  closes when it takes focus as startup ends. The document shown before
+ *  stays in front until the new document's editor is built. A click on a
+ *  line of the shown pane could take that document's line and keep waiting
+ *  on it after it is hidden, because Playwright looks a locator up again only
+ *  for an element that left the page. */
+async function newDocumentLine(): Promise<Locator> {
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  const line = page.locator(".editor-pane:not([hidden]) .ProseMirror p");
+  await expect(line).toHaveText([""]);
+  return line;
+}
+
 test("typing right after a file dropped on the document goes after it and keeps it", async () => {
   const file = path.join(directory, "type-after-drop.md");
   await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
@@ -1885,9 +1900,8 @@ test("a file dropped on a document goes into it once it is in front again after 
   const other = path.join(directory, "other.md");
   await writeFile(other, "Other line.\n");
   await launch(other);
-  await page.getByRole("button", { name: "Open options" }).click();
-  await page.getByRole("menuitem", { name: "New document" }).click();
-  const line = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(page.locator(".ProseMirror p")).toHaveText("Other line.");
+  const line = await newDocumentLine();
   await line.click();
   await page.keyboard.type("Alpha line.");
   // The untitled document asks where to save before its attachments folder
@@ -1920,9 +1934,8 @@ test("an image dropped on an untitled document asks where to save it once that d
   const other = path.join(directory, "other.md");
   await writeFile(other, "Other line.\n");
   await launch(other);
-  await page.getByRole("button", { name: "Open options" }).click();
-  await page.getByRole("menuitem", { name: "New document" }).click();
-  const line = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(page.locator(".ProseMirror p")).toHaveText("Other line.");
+  const line = await newDocumentLine();
   await line.click();
   await page.keyboard.type("Alpha line.");
   // Each image goes beside the document, which asks where to save it first.
