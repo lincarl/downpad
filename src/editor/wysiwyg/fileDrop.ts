@@ -280,10 +280,11 @@ function insideText($pos: ResolvedPos): boolean {
  * as the find card's current match. It goes in after the selected text, and
  * after a selected image or other block. Inside a line, a link joins the line
  * there, and an image goes in after the line, so the line is never split and
- * its rest never starts with a space, which Markdown would drop. At either end
- * of a line a file goes in as a block before or after it. The caret then goes
- * after the file (`placeCaret`), or with `moveCaret` off stays where it was,
- * before the file.
+ * its rest never starts with a space, which Markdown would drop. At the start
+ * of a line a file goes in before the line's block, and at its end after it,
+ * as at a drop on that edge (`placeBlocks`), so a heading is never split. The
+ * caret then goes after the file (`placeCaret`), or with `moveCaret` off
+ * stays where it was, before the file.
  */
 export function insertAtSelection(markdown: string, moveCaret = true) {
   return (ctx: Ctx): void => {
@@ -292,16 +293,14 @@ export function insertAtSelection(markdown: string, moveCaret = true) {
     if (!doc?.lastChild) return;
     const { tr } = view.state;
     const { selection } = tr;
-    if (selection instanceof TextSelection) {
-      const { $to } = selection;
-      const inside = insideText($to);
-      const joins = inside && doc.childCount === 1 && doc.firstChild?.type.name === "paragraph";
-      tr.setSelection(TextSelection.create(tr.doc, inside && !joins ? $to.end() : $to.pos));
-      // Open, the paragraph's text goes into the line. Closed, it is a block.
-      const depth = joins ? 1 : 0;
-      tr.replaceSelection(new Slice(doc.content, depth, depth));
-    } else if (!placeBlocks(tr, { pos: selection.to }, doc)) {
-      return;
+    const { $to } = selection;
+    const text = selection instanceof TextSelection;
+    if (text && insideText($to) && doc.childCount === 1 && doc.firstChild?.type.name === "paragraph") {
+      // Open, the paragraph's text goes into the line.
+      tr.setSelection(TextSelection.create(tr.doc, $to.pos)).replaceSelection(new Slice(doc.content, 1, 1));
+    } else {
+      const edge = !text ? $to.pos : $to.parentOffset === 0 ? $to.before() : $to.after();
+      if (!placeBlocks(tr, { pos: edge }, doc)) return;
     }
     if (!tr.docChanged) return;
     if (!moveCaret) view.dispatch(keepSelection(tr, selection));

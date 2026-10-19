@@ -504,6 +504,46 @@ describe("a file dropped away from the document text", () => {
     expect(opened.getMarkdown()).toBe(`First line.\n\n${LINK_A}\n\nSecond line.\n\n${LINK_B}\n\nThird line.\n`);
   });
 
+  it.each([
+    ["before a heading the caret starts", 9, `Intro.\n\n${IMAGE}\n\n# Heading\n\nBody.\n`],
+    ["after a heading the caret ends", 16, `Intro.\n\n# Heading\n\n${IMAGE}\n\nBody.\n`],
+  ])("goes in %s, which stays whole", async (_where, caret, expected) => {
+    const opened = await open("Intro.\n\n# Heading\n\nBody.\n");
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, caret)));
+
+    opened.insertMarkdown(IMAGE);
+
+    expect(opened.getMarkdown()).toBe(expected);
+  });
+
+  it("goes in below a table whose cell the caret ends, which stays whole", async () => {
+    const opened = await open("| a | b |\n| - | - |\n| cell | x |\n\nBody.\n");
+    const view = viewOf(opened);
+    let end = 0;
+    view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "cell") end = pos + 4;
+    });
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+
+    opened.insertMarkdown(IMAGE);
+
+    expect(opened.getMarkdown()).toBe(`| a    | b |\n| ---- | - |\n| cell | x |\n\n${IMAGE}\n\nBody.\n`);
+  });
+
+  it("goes in as an item of its own after a list item the caret ends, as at a drop on that edge", async () => {
+    const opened = await open("- One\n- Two\n");
+    const view = viewOf(opened);
+    // The end of "One".
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6)));
+
+    opened.insertMarkdown(LINK_A);
+    await settle();
+    type(opened, " typed");
+
+    expect(opened.getMarkdown()).toBe(`- One\n- ${LINK_A} typed\n- Two\n`);
+  });
+
   it("goes in after a selected image, not over it", async () => {
     const opened = await open(`First line.\n\n${IMAGE}\n\nSecond line.\n`);
     const view = viewOf(opened);
