@@ -31,7 +31,9 @@ Images can be pasted or dropped into a document. They may be embedded as base64 
 
 An image keeps its alt text and title when the document is saved. An image on its own line can be resized in the document view, but plain Markdown has no place for the size, so the size is not saved.
 
-Local Markdown links can open their targets in another tab. External links open in the default browser.
+When the document view cannot load an image, such as a local file that was moved or deleted, it shows the image's path in its place. An image on its own line becomes a placeholder that reads "Missing image. Click to locate it." above the path. An image inside a line of text becomes a small chip with the path, and its hover text reads the same words. A click on either opens a file dialog, and the image's path in the Markdown becomes the chosen file's path. A file chosen at the path the image already has, such as one that was put back, shows without a change to the Markdown, the undo history or the unsaved mark. Only a plain click locates the file. Ctrl or Cmd+click on a chip inside a link opens the link instead, Shift+click on a chip extends the selection to it, and other clicks with Ctrl, Cmd, Shift or Alt held open nothing. The placeholder and the chip never change the Markdown or the saved file. Print shows a missing image's alt text.
+
+Local Markdown links can open their targets in another tab. External links open in the default browser. Ctrl or Cmd+click on an image inside a line of text opens the image's own link, and a double-click opens it when it points to a Markdown file. Both halves of the image count, so a link right after the image never opens instead, and an image without a link opens nothing.
 
 ## Paste behavior
 
@@ -45,6 +47,8 @@ md-easy adapts pasted content to the document:
 ## Keyboard
 
 In the document view, Tab and Shift+Tab indent and outdent list items, move between table cells, and indent and outdent code in code blocks. In a list or table they stay in the document even where there is nothing to indent or no next cell. Elsewhere they move focus to the next or previous control outside the document, as in the Markdown view, and never type spaces. They also stay in the document while the block menu that "/" opens is showing. Esc closes that menu, and so does moving focus elsewhere in the window, such as with a click on the toolbar. Esc, then Tab or Shift+Tab within two seconds, leaves the document from anywhere in it. In a code block, Esc then Tab first moves to the block's language and Copy buttons, and Tab from the last of them leaves the document.
+
+In the document view, End moves the caret to the end of a line that starts with an image, in a paragraph, a list item, a heading or a table cell and after a line break, and Shift+End selects to there. After a line break that selection also takes in the line break, since Chromium extends any selection that starts right after a line break and before an image over the break.
 
 ## Recent files and recovery
 

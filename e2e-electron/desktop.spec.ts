@@ -228,6 +228,249 @@ test("opening a file with local images makes no failed loads", async () => {
   expect(errors).toEqual([]);
 });
 
+test("a missing inline image shows its path in a chip, which a click locates", async () => {
+  const file = path.join(directory, "inline.md");
+  const markdown = "# Inline\n\nThe chart ![Chart](charts/missing.png) and ![Pixel](image.png) in a line.\n\n![Gone](missing.png)\n";
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
+  await writeFile(path.join(directory, "found.png"), onePixelPng);
+  await writeFile(file, markdown);
+  await launch(file);
+  const chip = page.locator(".milkdown-image-inline.md-image-missing");
+  await expect(chip).toHaveAttribute("data-md-path", "charts/missing.png");
+  await expect(chip).toHaveAttribute("title", "Missing image. Click to locate it.");
+  await expect(chip).toBeVisible();
+  await expect(chip.locator("img")).toBeHidden();
+  // The working inline image and the missing image block are as they were.
+  const loaded = (name: string) => page.getByRole("img", { name, exact: true }).evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth > 0);
+  await expect.poll(() => loaded("Pixel")).toBe(true);
+  await expect(page.locator(".milkdown-image-inline.md-image-missing")).toHaveCount(1);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
+  await expect(page).toHaveTitle("inline.md — md-easy");
+
+  const found = path.join(directory, "found.png");
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedFile] });
+  }, found);
+  await chip.click();
+
+  await expect(page.locator(".milkdown-image-inline.md-image-missing")).toHaveCount(0);
+  await expect.poll(() => loaded("Chart")).toBe(true);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText(`The chart ![Chart](${found}) and`);
+  expect(await readFile(file, "utf8")).toBe(markdown);
+});
+
+test("Shift+click on a missing image chip extends the selection to it", async () => {
+  const file = path.join(directory, "chip-shift.md");
+  await writeFile(file, "Short line ![Logo](logo.png) here.\n");
+  await launch(file);
+  await app!.evaluate(({ dialog }) => {
+    Object.assign(globalThis, { dialogs: 0 });
+    dialog.showOpenDialog = async () => {
+      Object.assign(globalThis, { dialogs: Reflect.get(globalThis, "dialogs") + 1 });
+      return { canceled: true, filePaths: [] };
+    };
+  });
+  const line = page.locator(".milkdown .ProseMirror > p").first();
+  const chip = line.locator(".md-image-missing");
+  await expect(chip).toBeVisible();
+  await line.click({ position: { x: 1, y: 8 } });
+  // The right half of the chip takes the selection past it.
+  const box = (await chip.boundingBox())!;
+  await page.keyboard.down("Shift");
+  await page.mouse.click(box.x + box.width * 0.75, box.y + box.height / 2);
+  await page.keyboard.up("Shift");
+  await page.keyboard.type("X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("X here.\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "dialogs"))).toBe(0);
+});
+
+test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
+  const file = path.join(directory, "image-links.md");
+  // An image wide enough to click either half of.
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(path.join(directory, "one.md"), "# One\n");
+  await writeFile(path.join(directory, "two.md"), "# Two\n");
+  await writeFile(file, [
+    "A chip [![Logo](logo.png)](https://example.com/chip)[after](https://example.com/after).",
+    "An image [![Bar](bar.svg)](https://example.com/bar)[next](https://example.com/next).",
+    "No link ![Gone](gone.png)[later](https://example.com/later).",
+    "A file [![Bar](bar.svg)](one.md)[two](two.md).",
+    "Plain line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline");
+  await expect(images.nth(0)).toHaveClass(/md-image-missing/);
+  await expect(images.nth(2)).toHaveClass(/md-image-missing/);
+  await expect.poll(() => images.nth(1).locator("img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
+  const plain = page.locator(".milkdown .ProseMirror > p").filter({ hasText: "Plain line." });
+  /** Ctrl or Cmd+click `fraction` of the way across `target`, then click plain
+   *  text, so no link's preview covers the next target. */
+  const ctrlClick = async (target: Locator, fraction: number) => {
+    const box = (await target.boundingBox())!;
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.keyboard.up("ControlOrMeta");
+    await plain.click({ position: { x: 2, y: 8 } });
+  };
+  // ProseMirror puts a click on an image's right half after the image, where
+  // the next link starts.
+  for (const index of [0, 1, 2]) {
+    await ctrlClick(images.nth(index), 0.25);
+    await ctrlClick(images.nth(index), 0.9);
+  }
+  // The text link opens last, so every link the image clicks opened is in by then.
+  await ctrlClick(page.getByText("after", { exact: true }), 0.5);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([
+    "https://example.com/chip",
+    "https://example.com/chip",
+    "https://example.com/bar",
+    "https://example.com/bar",
+    "https://example.com/after",
+  ]);
+  // A double-click on an image inside a link to a Markdown file opens that file.
+  const box = (await images.nth(3).boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width * 0.9, box.y + box.height / 2);
+  await expect(page).toHaveTitle("one.md — md-easy");
+});
+
+test("End with the caret before images that start a line moves the caret to the end of the line", async () => {
+  const file = path.join(directory, "image-end.md");
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
+  await writeFile(file, [
+    "Ends with ![End](end/missing.png)",
+    "![Start](start/missing.png) starts here.",
+    "![Pixel](image.png)![Gone](gone.png) start here.",
+    "Break\\\n![Pixel](image.png) after a line break.",
+    "| Cells |\n| --- |\n| ![Cell](cell/missing.png) in a cell |",
+    "![Pixel](image.png)![Gone](gone.png) are selected.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  await expect(editor.locator(".md-image-missing")).toHaveCount(5);
+  const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
+  await expect.poll(loaded).toBe(3);
+  /** Click at the end of the text on `line`'s last row, go to the start of
+   *  that row with Home, press `key` and type `text`. The click is on the
+   *  text, because a click right of the text in a table cell selects the
+   *  cell's paragraph. */
+  const typeAfter = async (key: string, line: Locator, text: string) => {
+    const end = await line.evaluate((element) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
+      let last: Node | null = null;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) last = node;
+      const range = document.createRange();
+      range.selectNodeContents(last!);
+      const box = [...range.getClientRects()].at(-1)!;
+      return { x: box.right - 1, y: box.top + box.height / 2 };
+    });
+    await page.mouse.click(end.x, end.y);
+    await page.keyboard.press("Home");
+    await page.keyboard.press(key);
+    await page.keyboard.type(text);
+  };
+  const paragraph = (text: string) => editor.locator("p").filter({ hasText: text });
+  await typeAfter("End", paragraph("starts here."), "1");
+  await typeAfter("End", paragraph("start here."), "2");
+  await typeAfter("End", paragraph("after a line break."), "3");
+  await typeAfter("End", editor.locator("td"), "4");
+  // Shift+End selects the whole line, which the typing replaces.
+  await typeAfter("Shift+End", paragraph("are selected."), "5");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page).toHaveTitle("image-end.md — md-easy");
+  const blocks = (await readFile(file, "utf8")).split("\n\n");
+  expect(blocks.slice(0, 4)).toEqual([
+    "Ends with ![End](end/missing.png)",
+    "![Start](start/missing.png) starts here.1",
+    "![Pixel](image.png)![Gone](gone.png) start here.2",
+    "Break\\\n![Pixel](image.png) after a line break.3",
+  ]);
+  expect(blocks[4]).toMatch(/^\| !\[Cell\]\(cell\/missing\.png\) in a cell4 *\|$/m);
+  expect(blocks[5]).toBe("5\n");
+});
+
+test("the block handle of a line with a wide missing image chip stays beside the line", async () => {
+  const file = path.join(directory, "chip-handle.md");
+  const chipImage = "![Q3](charts/quarterly/q3-sales-by-region.png)";
+  const markdown = `Sales are in the ${chipImage} chart and they look good.\n\n- [ ] Sales are in the ${chipImage} chart now.\n- [ ] Plain task.\n`;
+  await writeFile(file, markdown);
+  await launch(file);
+  const line = page.locator(".milkdown .ProseMirror > p").first();
+  const chip = line.locator(".md-image-missing");
+  await expect(chip).toBeVisible();
+  // Crepe looks for the block under the pointer in the middle of the page,
+  // which the chips cross.
+  const middle = await page.locator(".milkdown .ProseMirror").evaluate((editor) => {
+    const { left, width } = editor.getBoundingClientRect();
+    return left + width / 2;
+  });
+  for (const crossing of [chip, page.locator(".milkdown .ProseMirror li .md-image-missing")]) {
+    const box = (await crossing.boundingBox())!;
+    expect(box.x).toBeLessThan(middle);
+    expect(box.x + box.width).toBeGreaterThan(middle);
+  }
+  const handle = page.locator(".milkdown-block-handle");
+  /** Rest the pointer on `block`'s first line, wait for the handle to show
+   *  beside that block, and return the handle's left edge. */
+  const handleLeft = async (block: Locator): Promise<number> => {
+    const box = (await block.boundingBox())!;
+    await page.mouse.move(box.x + 10, box.y + 12);
+    let left = Number.NaN;
+    await expect.poll(async () => {
+      const handleBox = await handle.boundingBox();
+      if (!handleBox) return false;
+      left = handleBox.x;
+      const middleY = handleBox.y + handleBox.height / 2;
+      return middleY > box.y && middleY < box.y + box.height && handleBox.x + handleBox.width <= box.x;
+    }).toBe(true);
+    return left;
+  };
+  await handleLeft(line);
+  // The handle of a task with a chip is where it is for a task without one, not
+  // over its checkbox.
+  const tasks = page.locator(".milkdown .ProseMirror li");
+  const plain = await handleLeft(tasks.nth(1));
+  expect(await handleLeft(tasks.nth(0))).toBe(plain);
+  await handleLeft(line);
+  const chipBox = (await chip.boundingBox())!;
+  // A click on the word before the chip puts the caret in it.
+  await page.mouse.click(chipBox.x - 12, chipBox.y + chipBox.height / 2);
+  await page.keyboard.type("X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page).toHaveTitle("chip-handle.md — md-easy");
+  const saved = await readFile(file, "utf8");
+  // X went into "the", the word before the chip, and nothing else changed.
+  const typed = saved.indexOf("X");
+  expect(typed).toBeGreaterThanOrEqual(markdown.indexOf("the ![Q3]"));
+  expect(typed).toBeLessThanOrEqual(markdown.indexOf(" ![Q3]"));
+  expect(saved.slice(0, typed) + saved.slice(typed + 1)).toBe(markdown);
+});
+
+test("a missing image chip inside a text selection shows as selected", async () => {
+  const file = path.join(directory, "chip-selection.md");
+  await writeFile(file, "The chart ![Chart](charts/missing.png) shows the trend.\n");
+  await launch(file);
+  const line = page.locator(".milkdown .ProseMirror > p").first();
+  const chip = line.locator(".md-image-missing");
+  await expect(chip).toBeVisible();
+  const fill = await chip.evaluate((element) => getComputedStyle(element).backgroundColor);
+  const selected = await line.evaluate((element) => getComputedStyle(element, "::selection").backgroundColor);
+  expect(selected).not.toBe(fill);
+  await line.click({ position: { x: 1, y: 8 } });
+  await page.keyboard.press("Shift+End");
+  await expect(chip).toHaveCSS("background-color", selected);
+  await page.keyboard.press("ArrowRight");
+  await expect(chip).toHaveCSS("background-color", fill);
+});
+
 test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");

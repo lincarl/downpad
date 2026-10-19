@@ -5,23 +5,29 @@
 //      data:/http: pass through; a relative/absolute file path is resolved
 //      against the document dir and turned into an Electron asset URL so linked
 //      images render inline. A local image that cannot be loaded gets an empty
-//      data: URL, which fails at once, so an image block shows the missing-image
-//      placeholder and an inline image its broken-image icon. Answers are kept
-//      for the window, so an image asked about before (see preloadImages.ts)
-//      shows its URL from its first render.
-//   2. onImageLoadError — when an image fails to load, mark its block as a
-//      missing-image placeholder (broken icon + path) and make it click-to-
-//      relocate via a file dialog (updates the node's src). The placeholder
-//      goes once an image loads in the block.
+//      data: URL, which fails at once, so the image shows as missing. Answers
+//      are kept for the window, so an image asked about before (see
+//      preloadImages.ts) shows its URL from its first render.
+//   2. onImageLoadError — when an image fails to load, show it as missing: an
+//      image block as a placeholder with the broken icon and its path, an inline
+//      image as a chip in its line with the icon and its path. A click on either
+//      relocates it via a file dialog (updates the node's src, or looks the
+//      file up again when the picked file is at the path it has). missingImages
+//      reports the errors of inline images, which Crepe does not, and keeps both
+//      in step with the document. They show the node's current path, and go
+//      once an image loads there or the path is cleared. A chip inside a text
+//      selection is tinted as selected.
 //   3. Node helpers (isImageNode / imageAttrs / setImageAttrs / lookups) reused
 //      by the image context menu (imageContextMenu.ts).
 
 import { convertFileSrc } from "../../ipc/bridge";
 import { openDialog } from "../../ipc/dialogs";
-import type { EditorView } from "@milkdown/kit/prose/view";
+import { $prose } from "@milkdown/kit/utils";
+import { NodeSelection, Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
+import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
-import { isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
+import { collapseDotSegments, isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
 import { resolveImageSrc } from "../../images/imageStore";
 import type { WysiwygContext } from "./context";
 
@@ -95,52 +101,191 @@ export async function pickImageFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+/** missingImages' state: the position of an image whose view looks its file up
+ *  again in this transaction (see showAgain), or null. */
+const showAgainKey = new PluginKey<number | null>("md-easy-show-image-again");
+
+/** Look the file of the image at `pos` up again and show it, without a change
+ *  to the document, its undo history or its unsaved mark. An image's view looks
+ *  its file up when ProseMirror passes it the node again, which ProseMirror does
+ *  only when the node or its decorations change. missingImages gives the image
+ *  a node decoration for one transaction, and the next takes it off again, so
+ *  the image can be shown again the same way later. */
+function showAgain(view: EditorView, pos: number): void {
+  view.dispatch(view.state.tr.setMeta(showAgainKey, pos));
+  view.dispatch(view.state.tr.setMeta(showAgainKey, null));
+}
+
+/** How missing images look their files up: `forget` drops the answer about a
+ *  src, and `names` tells whether a picked path is the file a src names. */
+interface FileLookup {
+  forget: (src: string) => void;
+  names: (src: string, path: string) => boolean;
+}
+
 /** Point a missing image at a file the user picks. The main process is asked
- *  about that file again, since it may be the one it could not find before. */
-async function relocate(viewRef: ViewRef, dom: Node, forget: (src: string) => void): Promise<void> {
+ *  about that file again, since it may be the one it could not find before.
+ *  The file the image already names, such as one put back, leaves the node as
+ *  it is, so the image is shown again instead. */
+async function relocate(viewRef: ViewRef, dom: Node, files: FileLookup): Promise<void> {
   const view = viewRef.current;
   if (!view) return;
   const found = imageNodeAtDom(view, dom);
   if (!found) return;
   const path = await pickImageFile();
   if (!path) return;
-  forget(path);
-  setImageAttrs(view, found.pos, found.node, { src: path });
+  files.forget(path);
+  const { src } = imageAttrs(found.node);
+  if (files.names(src, path)) {
+    files.forget(src);
+    showAgain(view, found.pos);
+  } else {
+    setImageAttrs(view, found.pos, found.node, { src: path });
+  }
 }
 
-/** Show an image block that failed to load as the missing-image placeholder,
- *  which a click relocates. The placeholder goes once an image loads there. */
-function markMissing(event: Event, viewRef: ViewRef, forget: (src: string) => void): void {
+/** The hover text of a missing inline image, whose chip shows only its path.
+ *  An image block's placeholder shows these words as its text. */
+const LOCATE_HINT = "Missing image. Click to locate it.";
+
+/** Show an image that failed to load as missing, which a click relocates: an
+ *  image block as the missing-image placeholder, an inline image as a chip with
+ *  its path. missingImages shows it as an image again. */
+function markMissing(event: Event, viewRef: ViewRef, files: FileLookup): void {
   const img = event.target as HTMLElement | null;
   if (!img) return;
-  const host = (img.closest?.(".milkdown-image-block") as HTMLElement | null) ?? img;
+  const host = (img.closest?.(".milkdown-image-block, .milkdown-image-inline") as HTMLElement | null) ?? img;
   const view = viewRef.current;
   const info = view ? imageNodeAtDom(view, img) : null;
   const src = info ? imageAttrs(info.node).src : (img.getAttribute?.("src") ?? "");
   host.classList.add("md-image-missing");
   host.dataset.mdPath = src;
-  host.title = `Missing image: ${src} — click to relocate`;
+  if (host.classList.contains("milkdown-image-inline")) host.title = LOCATE_HINT;
   if (!host.dataset.mdRelocateBound) {
     host.dataset.mdRelocateBound = "1";
+    // Crepe draws a new <img> after the path is cleared, so find the node from
+    // the element that stays. Only a plain click locates the file. A click with
+    // Ctrl or Cmd follows a link around the image, as it does on an image, and
+    // one with Shift extends the selection (see missingImages). The second
+    // click of a double-click opens no second dialog.
     host.addEventListener("click", (e) => {
       if (!host.classList.contains("md-image-missing")) return;
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.detail > 1) return;
       e.preventDefault();
       e.stopPropagation();
-      void relocate(viewRef, img, forget);
-    });
-    img.addEventListener("load", () => {
-      host.classList.remove("md-image-missing");
-      delete host.dataset.mdPath;
-      host.removeAttribute("title");
+      void relocate(viewRef, host, files);
     });
   }
 }
 
+/** Show a missing image as an image again. */
+function unmarkMissing(host: HTMLElement): void {
+  host.classList.remove("md-image-missing");
+  delete host.dataset.mdPath;
+  host.removeAttribute("title");
+}
+
+/** The class of an inline image inside a text selection, which tints a
+ *  missing image's chip as selected. */
+const IN_SELECTION = "md-in-selection";
+
+/** Shows missing inline images as missing too, and keeps the images shown as
+ *  missing in step with the document. `onError` is the onImageLoadError Crepe
+ *  calls for image blocks. Crepe reports no load errors of inline images, so the
+ *  plugin passes those to it. An image that loads shows again, also in an <img>
+ *  Crepe draws anew. After each change to the document a missing image shows its
+ *  node's current path, since another path md-easy cannot load keeps the same
+ *  empty URL and gives no new error. One whose path was cleared shows Crepe's
+ *  input for a path instead. Load and error events do not bubble, so the plugin
+ *  catches them on their way down to the image. Inline images inside a text
+ *  selection get the IN_SELECTION class, and Shift+click on a chip extends the
+ *  selection to it. The plugin also draws the decoration of showAgain. */
+export function missingImages(onError: (event: Event) => void) {
+  return $prose(
+    () =>
+      new Plugin({
+        view: (editorView) => {
+          const onLoad = (event: Event): void => {
+            if (!(event.target instanceof HTMLImageElement)) return;
+            const host = event.target.closest<HTMLElement>(".md-image-missing");
+            if (host) unmarkMissing(host);
+          };
+          const onInlineError = (event: Event): void => {
+            const img = event.target;
+            if (img instanceof HTMLImageElement && img.parentElement?.classList.contains("milkdown-image-inline")) onError(event);
+          };
+          editorView.dom.addEventListener("load", onLoad, true);
+          editorView.dom.addEventListener("error", onInlineError, true);
+          return {
+            update: (view, prevState) => {
+              if (view.state.doc === prevState.doc) return;
+              for (const host of view.dom.querySelectorAll<HTMLElement>(".md-image-missing")) {
+                const found = imageNodeAtDom(view, host);
+                if (!found) continue;
+                const { src } = imageAttrs(found.node);
+                if (src) host.dataset.mdPath = src;
+                else unmarkMissing(host);
+              }
+            },
+            destroy: () => {
+              editorView.dom.removeEventListener("load", onLoad, true);
+              editorView.dom.removeEventListener("error", onInlineError, true);
+            },
+          };
+        },
+        key: showAgainKey,
+        state: {
+          init: () => null,
+          apply: (tr) => (tr.getMeta(showAgainKey) as number | null | undefined) ?? null,
+        },
+        props: {
+          decorations: (state) => {
+            const marks: Decoration[] = [];
+            // The image showAgain shows again gets a decoration without attributes.
+            const again = showAgainKey.getState(state);
+            const image = again == null ? null : state.doc.nodeAt(again);
+            if (again != null && image) marks.push(Decoration.node(again, again + image.nodeSize, {}));
+            // Chromium paints no selection over a chip, whose icon and path CSS
+            // draws, so mark the inline images a text selection covers.
+            const { selection } = state;
+            if (!selection.empty && !(selection instanceof NodeSelection)) {
+              for (const { $from, $to } of selection.ranges) {
+                state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+                  if (node.isInline && isImageNode(node)) {
+                    marks.push(Decoration.node(pos, pos + node.nodeSize, { class: IN_SELECTION }));
+                  }
+                });
+              }
+            }
+            return marks.length ? DecorationSet.create(state.doc, marks) : null;
+          },
+          handleDOMEvents: {
+            // Chromium finds no place in a chip to extend the selection to, so
+            // Shift+click there moved the caret instead. Extend it to the side
+            // of the chip clicked, as on text.
+            mousedown: (view, event) => {
+              if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element)) return false;
+              const host = event.target.closest<HTMLElement>(".milkdown-image-inline.md-image-missing");
+              const found = host ? imageNodeAtDom(view, host) : null;
+              if (!host || !found) return false;
+              const { left, width } = host.getBoundingClientRect();
+              const head = event.clientX < left + width / 2 ? found.pos : found.pos + found.node.nodeSize;
+              event.preventDefault();
+              view.focus();
+              const { doc, selection } = view.state;
+              view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, selection.anchor, head)));
+              return true;
+            },
+          },
+        },
+      }),
+  );
+}
+
 /** The src shown for a local image md-easy cannot load. It fails at once without a
- *  request or a console message, so an image block shows the missing-image
- *  placeholder and an inline image its broken-image icon. The raw path would be
- *  looked up next to md-easy's own page, again by every copy of the document such
- *  as the print preview. */
+ *  request or a console message, so the image shows as missing. The raw path would
+ *  be looked up next to md-easy's own page, again by every copy of the document
+ *  such as the print preview. */
 const UNAVAILABLE_IMAGE = "data:,";
 
 /** The longest the first render of a document waits for the main process to
@@ -197,6 +342,12 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
   const forget = (src: string): void => {
     const path = localPath(src);
     if (path) answers.delete(path);
+  };
+  /** Whether a picked path is the file an image src names, as a relative src
+   *  such as `charts/q3.png` names a file beside the document. */
+  const names = (src: string, path: string): boolean => {
+    const named = localPath(src);
+    return src === path || (named !== null && collapseDotSegments(named) === collapseDotSegments(path));
   };
   /** The local paths the open document shows, kept per document and file path. */
   let shown: { doc: ProseNode; filePath: string | null; paths: Set<string> } | null = null;
@@ -278,6 +429,6 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
         timers.forEach(clearTimeout);
       }
     },
-    onImageLoadError: (event: Event): void => markMissing(event, viewRef, forget),
+    onImageLoadError: (event: Event): void => markMissing(event, viewRef, { forget, names }),
   };
 }

@@ -64,6 +64,8 @@ const EDITOR_CHROME = [
 const FOCUS_CLASSES = [
   "ProseMirror-focused",
   "ProseMirror-selectednode",
+  // An inline image inside the text selection (imageView.ts).
+  "md-in-selection",
   "cm-activeLine",
   "cm-activeLineGutter",
 ];
@@ -78,6 +80,8 @@ export function sanitize(el: Element): Element {
   for (const cls of FOCUS_CLASSES) {
     el.querySelectorAll(`.${cls}`).forEach((n) => n.classList.remove(cls));
   }
+  // A missing inline image's hover text asks for a click, which does nothing here.
+  el.querySelectorAll(".md-image-missing").forEach((n) => n.removeAttribute("title"));
   dropTrailingEmptyLines(el);
   return el;
 }

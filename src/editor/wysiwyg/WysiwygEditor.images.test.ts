@@ -6,6 +6,9 @@
 // shows the file it is pointed at.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Crepe } from "@milkdown/crepe";
+import { editorViewCtx } from "@milkdown/kit/core";
+import { undoDepth } from "@milkdown/kit/prose/history";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 
@@ -59,11 +62,11 @@ afterEach(async () => {
 });
 
 /** Start mounting the document editor on `markdown`, saved at /docs/a.md. */
-function start(markdown: string): { root: HTMLElement; mounting: Promise<void> } {
+function start(markdown: string, onChange: (markdown: string) => void = () => {}): { root: HTMLElement; mounting: Promise<void> } {
   const root = document.createElement("div");
   document.body.append(root);
   editor = new WysiwygEditor();
-  const mounting = editor.mount(root, markdown, { onChange: () => {} }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  const mounting = editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => "/docs/a.md",
     requestSave: async () => false,
@@ -72,11 +75,15 @@ function start(markdown: string): { root: HTMLElement; mounting: Promise<void> }
 }
 
 /** Mount the document editor on `markdown`, saved at /docs/a.md. */
-async function open(markdown: string): Promise<HTMLElement> {
-  const { root, mounting } = start(markdown);
+async function open(markdown: string, onChange?: (markdown: string) => void): Promise<HTMLElement> {
+  const { root, mounting } = start(markdown, onChange);
   await mounting;
   return root;
 }
+
+/** The editor's ProseMirror view, for undo checks the public API cannot make. */
+const viewOf = (opened: WysiwygEditor) =>
+  (opened as unknown as { crepe: Crepe }).crepe.editor.ctx.get(editorViewCtx);
 
 /** The src each image in the editor has now. */
 const sources = (root: HTMLElement) => [...root.querySelectorAll("img")].map((image) => image.getAttribute("src"));
@@ -156,6 +163,154 @@ describe("a relocated image", () => {
     expect(block.classList).not.toContain("md-image-missing");
     // A click on the found image leaves it alone.
     block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(native.openDialog).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a missing image located at the path it has", () => {
+  // The document is /docs/a.md, and the dialog returns absolute paths.
+  it.each([
+    ["on its own line", ".milkdown-image-block", "/docs/block.png", "/docs/block.png"],
+    ["in a line of text", ".milkdown-image-inline", "/docs/inline.png", "/docs/inline.png"],
+    ["on its own line, by a relative path", ".milkdown-image-block", "img/block.png", "/docs/img/block.png"],
+    ["in a line of text, by a relative path", ".milkdown-image-inline", "./img/inline.png", "/docs/img/inline.png"],
+  ])("shows the file put back there %s, and leaves the document as it was", { timeout: 60_000 }, async (_where, selector, src, picked) => {
+    const markdown = selector === ".milkdown-image-block" ? `![Block](${src})\n\nText.\n` : `Inline ![Inline](${src}) here.\n`;
+    native.convertFileSrc.mockResolvedValue(null);
+    const onChange = vi.fn();
+    const root = await open(markdown, onChange);
+    // jsdom loads no images, so tell each view its empty source failed.
+    for (const image of root.querySelectorAll("img")) image.dispatchEvent(new Event("error"));
+    const host = root.querySelector<HTMLElement>(selector)!;
+    const image = host.querySelector("img")!;
+    expect(host.classList).toContain("md-image-missing");
+    const view = viewOf(editor!);
+    const depth = undoDepth(view.state);
+
+    // The file is put back, and the user picks it at the path the Markdown has.
+    native.convertFileSrc.mockResolvedValue("md-easy-file://found");
+    native.openDialog.mockResolvedValue(picked);
+    host.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://found"));
+    image.dispatchEvent(new Event("load"));
+    expect(host.classList).not.toContain("md-image-missing");
+    // Past the 200 ms change report.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(editor!.getMarkdown()).toBe(markdown);
+    expect(undoDepth(view.state)).toBe(depth);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("a missing image", () => {
+  /** Open `markdown` with no image found, and fail the block's first load. */
+  async function openMissing(markdown: string): Promise<HTMLElement> {
+    native.convertFileSrc.mockResolvedValue(null);
+    const root = await open(markdown);
+    // jsdom loads no images, so tell the view the empty source failed.
+    root.querySelector(".milkdown-image-block img")!.dispatchEvent(new Event("error"));
+    return root;
+  }
+
+  it("shows the path its Markdown has now", { timeout: 60_000 }, async () => {
+    const root = await openMissing("![Missing](gone.png)\n");
+    const block = root.querySelector<HTMLElement>(".milkdown-image-block")!;
+    expect(block.dataset.mdPath).toBe("gone.png");
+
+    // The Markdown pane changes the path to another one md-easy cannot load.
+    editor!.setMarkdown("![Missing](lost.png)\n");
+
+    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/lost.png"));
+    expect(block.classList).toContain("md-image-missing");
+    expect(block.dataset.mdPath).toBe("lost.png");
+  });
+
+  it("shows the input for a path once its path is cleared", { timeout: 60_000 }, async () => {
+    const root = await openMissing("![Missing](gone.png)\n");
+
+    editor!.setMarkdown("![Missing]()\n");
+
+    const block = root.querySelector(".milkdown-image-block")!;
+    expect(block.classList).not.toContain("md-image-missing");
+    await vi.waitFor(() => expect(block.querySelector("img")).toBeNull());
+  });
+
+  it("can be located after Crepe draws its image anew", { timeout: 60_000 }, async () => {
+    const root = await openMissing("![Missing](gone.png)\n");
+    const block = root.querySelector(".milkdown-image-block")!;
+    // A path typed again after the old one was cleared gets a new <img>.
+    const old = block.querySelector("img");
+    editor!.setMarkdown("![Missing]()\n");
+    editor!.setMarkdown("![Missing](lost.png)\n");
+    const image = await vi.waitFor(() => {
+      const shown = block.querySelector("img");
+      expect(shown).not.toBe(old);
+      expect(shown?.getAttribute("src")).toBe("data:,");
+      return shown!;
+    });
+    image.dispatchEvent(new Event("error"));
+    expect(block.classList).toContain("md-image-missing");
+
+    native.convertFileSrc.mockResolvedValue("md-easy-file://pic");
+    native.openDialog.mockResolvedValue("/docs/pic.png");
+    block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    expect(editor!.getMarkdown()).toBe("![Missing](/docs/pic.png)\n");
+    image.dispatchEvent(new Event("load"));
+    expect(block.classList).not.toContain("md-image-missing");
+  });
+});
+
+describe("a missing inline image", () => {
+  it("shows its path in a chip, which a click locates", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
+    const root = await open("![Lost](lost.png)\n\nInline ![inline](pic.png) and ![gone](gone.png).\n");
+    // jsdom loads no images, so tell each view how its image fared.
+    for (const image of root.querySelectorAll("img")) {
+      image.dispatchEvent(new Event(image.getAttribute("src") === "data:," ? "error" : "load"));
+    }
+    const block = root.querySelector<HTMLElement>(".milkdown-image-block")!;
+    const [working, chip] = root.querySelectorAll<HTMLElement>(".milkdown-image-inline");
+    expect(chip.classList).toContain("md-image-missing");
+    expect(chip.dataset.mdPath).toBe("gone.png");
+    expect(chip.title).toBe("Missing image. Click to locate it.");
+    expect(working.classList).not.toContain("md-image-missing");
+    // The block's placeholder shows those words, so it has no hover text.
+    expect(block.classList).toContain("md-image-missing");
+    expect(block.dataset.mdPath).toBe("lost.png");
+    expect(block.hasAttribute("title")).toBe(false);
+
+    native.openDialog.mockResolvedValue("/docs/pic.png");
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const image = chip.querySelector("img")!;
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    expect(editor!.getMarkdown()).toBe("![Lost](lost.png)\n\nInline ![inline](pic.png) and ![gone](/docs/pic.png).\n");
+    image.dispatchEvent(new Event("load"));
+    expect(chip.classList).not.toContain("md-image-missing");
+    expect(chip.hasAttribute("title")).toBe(false);
+    expect(native.openDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it("is located by a plain click only", { timeout: 60_000 }, async () => {
+    native.convertFileSrc.mockResolvedValue(null);
+    const root = await open("See [the ![gone](gone.png) chart](https://example.com).\n");
+    root.querySelector("img")!.dispatchEvent(new Event("error"));
+    const chip = root.querySelector(".milkdown-image-inline")!;
+    expect(chip.classList).toContain("md-image-missing");
+
+    // Ctrl or Cmd+click follows the link and Shift+click extends the selection,
+    // so neither locates the file. The second click of a double-click opens no
+    // second dialog.
+    for (const modifier of ["ctrlKey", "metaKey", "shiftKey", "altKey"]) {
+      chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1, [modifier]: true }));
+    }
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    expect(native.openDialog).not.toHaveBeenCalled();
+
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
     expect(native.openDialog).toHaveBeenCalledTimes(1);
   });
 });

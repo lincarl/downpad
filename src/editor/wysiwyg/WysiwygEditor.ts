@@ -14,6 +14,7 @@
 
 import { Crepe } from "@milkdown/crepe";
 import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { $prose, insert } from "@milkdown/kit/utils";
 import { Slice } from "@milkdown/kit/prose/model";
@@ -32,8 +33,9 @@ import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
-import { imageBlockFeatureConfig, type ViewRef } from "./imageView";
+import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
+import { endPastImages } from "./lineEnd";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
@@ -213,6 +215,17 @@ export class WysiwygEditor {
     this.crepe.editor.config((ctx) => {
       ctx.update(remarkStringifyOptionsCtx, (prev) => stringifyOptions(prev, style));
     });
+    // Crepe's block handle shows for the block under the pointer in the middle of
+    // the page. An inline image there, such as a missing image's chip, counted
+    // as that block, and the handle covered the words before it. Look past
+    // inline nodes to the block their text would give. Over text, the lookup
+    // goes on from a line that starts a list item to the item, so do that too.
+    this.crepe.editor.config((ctx) => {
+      ctx.update(blockConfig.key, ({ filterNodes }) => ({
+        filterNodes: (pos, node) =>
+          !node?.isInline && !(node?.isTextblock && pos.depth > 0 && pos.index() === 0) && filterNodes(pos, node),
+      }));
+    });
     // Tell screen readers whether each task is done.
     this.crepe.editor.config(labelTaskBoxes);
     // Keep standalone images' alt text, which Crepe overwrites with its resize
@@ -232,6 +245,11 @@ export class WysiwygEditor {
     this.crepe.editor.use(linkViewPlugin(context));
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
+    // Show missing inline images as missing too, and keep missing images in
+    // step with their paths and images (§5.5).
+    this.crepe.editor.use(missingImages(imageConfig.onImageLoadError));
+    // End before an image that starts a line goes to the end of the line.
+    this.crepe.editor.use(endPastImages);
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);

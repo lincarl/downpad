@@ -57,7 +57,7 @@ const MARKDOWN_LINK_EXT = /\.(?:md|markdown|mdown|mkd)$/i;
  * drive/root. UNC paths (`\\server\share\…`) are left exactly as-is: they are
  * rare here and reshaping their prefix risks breaking share resolution.
  */
-function collapseDotSegments(joined: string): string {
+export function collapseDotSegments(joined: string): string {
   if (/^[\\/]{2}/.test(joined)) return joined; // UNC — leave untouched
   const unified = joined.replace(/\\/g, "/");
   const leadingSlash = unified.startsWith("/");
