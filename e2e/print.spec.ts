@@ -20,6 +20,56 @@ async function openWorkspace(page: import("@playwright/test").Page): Promise<voi
   await expect(page.locator(".print-page").first()).toBeVisible();
 }
 
+/** Replace the welcome document with `markdown`, typed into the split view's Markdown pane. */
+async function typeDocument(page: import("@playwright/test").Page, markdown: string): Promise<void> {
+  await page.goto("/");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await page.click(".toolbar-view button:has-text('Split')");
+  await page.locator(".editor-pane-raw .cm-content").click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(markdown);
+}
+
+/**
+ * How far anything on the printed sheets reaches past its page body, in page
+ * px: a block, a block shrunk to fit inside its frame, or a line of text. Also
+ * the sheets' visible text, without whitespace, leaving out what `leaveOut`
+ * matches.
+ */
+function printedSheets(
+  page: import("@playwright/test").Page,
+  leaveOut = "",
+): Promise<{ overflow: number; texts: string[] }> {
+  return page.evaluate((leaveOut) => {
+    let overflow = -Infinity;
+    const texts: string[] = [];
+    const range = document.createRange();
+    for (const sheet of Array.from(document.querySelectorAll<HTMLElement>(".print-workspace .print-page"))) {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      const box = body.getBoundingClientRect();
+      const scale = box.height / body.offsetHeight;
+      const past = (rect: DOMRect): number => (rect.bottom - box.top) / scale - body.clientHeight;
+      const flow = sheet.querySelector<HTMLElement>(".print-flow")!;
+      for (const block of Array.from(flow.querySelectorAll(":scope > *, .print-fit > *"))) {
+        overflow = Math.max(overflow, past(block.getBoundingClientRect()));
+      }
+      const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        // KaTeX keeps a copy of each formula for screen readers, clipped away.
+        if (getComputedStyle(text.parentElement!).visibility === "hidden" || text.parentElement!.closest(".katex-mathml")) continue;
+        range.selectNodeContents(text);
+        for (const rect of Array.from(range.getClientRects())) {
+          if (rect.width || rect.height) overflow = Math.max(overflow, past(rect));
+        }
+      }
+      const visible = flow.cloneNode(true) as HTMLElement;
+      visible.querySelectorAll(['[style*="visibility: hidden"]', leaveOut].filter(Boolean).join(", ")).forEach((hidden) => hidden.remove());
+      texts.push(visible.textContent!.replace(/\s+/g, ""));
+    }
+    return { overflow, texts };
+  }, leaveOut);
+}
+
 test("the Print button opens the workspace with a paginated preview", async ({ page }) => {
   await openWorkspace(page);
 
@@ -258,4 +308,422 @@ test("an over-tall code block and list split too, keeping line numbers and item 
   expect(result.sourceLines).toEqual(code);
   // Every list item printed exactly once, in order.
   expect(result.listItems).toEqual(Array.from({ length: 40 }, (_, i) => `item ${i + 1}`));
+});
+
+test("a paragraph, quote and list item taller than a page continue on the next sheets", async ({
+  page,
+}) => {
+  // The Document version broke pages only between blocks, so a paragraph, a
+  // quote or a list item taller than a page got a sheet to itself and the page
+  // body cut it off. Real layout decides where lines wrap, so only a browser can
+  // show that every break falls between lines and every sheet fits.
+  const words = (label: string, count: number): string =>
+    Array.from({ length: count }, (_, i) => `${label}${i + 1}`).join(" ");
+  const paragraph =
+    `${words("w", 300)} **${words("bold", 600)}** *${words("em", 50)}* ` +
+    `[${words("link", 30)}](https://example.com/long) \`code\` $x^2$ ${words("v", 800)} END_PARA`;
+  const markdown = [
+    "# Long blocks",
+    "",
+    "Intro.",
+    "",
+    paragraph,
+    "",
+    "> Quote start.",
+    ">",
+    ...Array.from({ length: 60 }, (_, i) => `> > nested ${i + 1}\n> >`),
+    "> " + words("q", 900) + " END_QUOTE",
+    "",
+    "- Short item",
+    "- " + words("item", 1200) + " END_ITEM",
+    "- Last item",
+    "",
+    "The end.",
+  ].join("\n");
+
+  await typeDocument(page, markdown);
+  await expect(page.locator(`${wysiwyg} blockquote blockquote p`)).toHaveCount(60);
+  await expect(page.locator(`${wysiwyg} li`).last()).toContainText("Last item");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  const boldText = await page.locator(`${wysiwyg} strong`).textContent();
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  const result = await page.evaluate(() => {
+    let overflow = 0;
+    const texts: string[] = [];
+    const bold: string[] = [];
+    let boldSheets = 0;
+    let shownLabels = 0;
+    let hiddenLabels = 0;
+    for (const sheet of Array.from(document.querySelectorAll<HTMLElement>(".print-page"))) {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      const box = body.getBoundingClientRect();
+      const scale = box.height / body.offsetHeight;
+      const flow = sheet.querySelector<HTMLElement>(".print-flow")!;
+      for (const block of Array.from(flow.children)) {
+        overflow = Math.max(overflow, (block.getBoundingClientRect().bottom - box.top) / scale - body.clientHeight);
+      }
+      const visible = flow.cloneNode(true) as HTMLElement;
+      visible.querySelectorAll('[style*="visibility: hidden"]').forEach((hidden) => hidden.remove());
+      texts.push(visible.textContent!.replace(/\s+/g, ""));
+      const strong = Array.from(flow.querySelectorAll("strong"), (part) => part.textContent!);
+      bold.push(...strong);
+      if (strong.length) boldSheets++;
+      for (const label of Array.from(flow.querySelectorAll<HTMLElement>(".label-wrapper"))) {
+        if (label.style.visibility === "hidden") hiddenLabels++;
+        else shownLabels++;
+      }
+    }
+    return { overflow, text: texts.join(""), bold: bold.join(""), boldSheets, shownLabels, hiddenLabels };
+  });
+
+  // No block reaches past its page body, so the page clips nothing.
+  expect(result.overflow).toBeLessThanOrEqual(0.5);
+  // Every character prints once, in order.
+  expect(result.text).toBe(documentText);
+  // The bold text continues as bold on the next sheet.
+  expect(result.boldSheets).toBeGreaterThan(1);
+  expect(result.bold).toBe(boldText);
+  // The long item continues beside its bullet's place, showing the bullet once.
+  expect(result.shownLabels).toBe(3);
+  expect(result.hiddenLabels).toBeGreaterThan(0);
+});
+
+test("a Hebrew or Arabic paragraph taller than a page continues on the next sheets", async ({
+  page,
+}) => {
+  // md-easy sets no text direction, so Chromium lays a Hebrew or Arabic
+  // paragraph out left to right with each line one right-to-left run, and a
+  // line starts at the right end of the run. The splitter looked for a line
+  // start back at the left, found none and shrank each paragraph onto one sheet.
+  const hebrew = ["שלום", "עולם", "ספר", "מילה", "בית", "ילד", "מים", "אור", "דרך", "לב"];
+  const arabic = ["مرحبا", "عالم", "كتاب", "كلمة", "بيت", "ولد", "ماء", "نور", "طريق", "قلب"];
+  const words = (list: string[], count: number): string =>
+    Array.from({ length: count }, (_, i) => list[i % list.length]).join(" ");
+  const markdown = [
+    "# RTL",
+    "",
+    `${words(hebrew, 1200)} **${words(hebrew, 300)}** \`קוד\` ${words(hebrew, 1500)} סוף`,
+    "",
+    `${words(arabic, 2000)} نهاية`,
+    "",
+    "The end.",
+  ].join("\n");
+
+  await typeDocument(page, markdown);
+  await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  const result = await page.evaluate(() => {
+    let overflow = 0;
+    const texts: string[] = [];
+    const sheets = Array.from(document.querySelectorAll<HTMLElement>(".print-page"));
+    for (const sheet of sheets) {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      const box = body.getBoundingClientRect();
+      const scale = box.height / body.offsetHeight;
+      const flow = sheet.querySelector<HTMLElement>(".print-flow")!;
+      for (const block of Array.from(flow.children)) {
+        overflow = Math.max(overflow, (block.getBoundingClientRect().bottom - box.top) / scale - body.clientHeight);
+      }
+      texts.push(flow.textContent!.replace(/\s+/g, ""));
+    }
+    const sheetsWith = (word: string): number => texts.filter((text) => text.includes(word)).length;
+    return {
+      overflow,
+      text: texts.join(""),
+      shrunk: document.querySelectorAll(".print-page .print-fit").length,
+      hebrewSheets: sheetsWith("עולם"),
+      arabicSheets: sheetsWith("عالم"),
+    };
+  });
+
+  // Each paragraph continues over several sheets at its own size.
+  expect(result.shrunk).toBe(0);
+  expect(result.hebrewSheets).toBeGreaterThan(2);
+  expect(result.arabicSheets).toBeGreaterThan(1);
+  // No block reaches past its page body, and every character prints once, in order.
+  expect(result.overflow).toBeLessThanOrEqual(0.5);
+  expect(result.text).toBe(documentText);
+});
+
+test("a sheet of nothing but bold text fits its page where bold text is wider", async ({ page }) => {
+  // The splitter confirms each piece of a paragraph in a trial copy. The copy
+  // of a piece wholly inside bold text left the bold out and was measured in
+  // plain text, so where the bold face is wider than the regular one, as in
+  // DejaVu Sans, the piece ran up to 75 px past the page. Wide letter spacing
+  // on bold text stands in for such a font.
+  const words = (label: string, count: number): string =>
+    Array.from({ length: count }, (_, i) => `${label}${i + 1}`).join(" ");
+  await typeDocument(page, ["# Bold", "", `${words("w", 100)} **${words("bold", 1500)}**`, "", "The end."].join("\n"));
+  await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  await page.addStyleTag({ content: ".print-doc strong { letter-spacing: 0.15em; }" });
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  const { overflow, texts } = await printedSheets(page);
+  // Several sheets hold bold text only, between the plain text and the end.
+  const boldOnly = await page.locator(".print-page .print-flow").evaluateAll((flows) =>
+    flows.filter((flow) => flow.children.length === 1 && flow.firstElementChild!.childNodes.length === 1 && flow.querySelector(":scope > p > strong")).length,
+  );
+  expect(boldOnly).toBeGreaterThan(1);
+  expect(overflow).toBeLessThanOrEqual(0.5);
+  expect(texts.join("")).toBe(documentText);
+});
+
+test("a heading taller than a page fits each sheet when printed below 100%", async ({ page }) => {
+  // Below 100% the page's flow is scaled down, and the top margin of the
+  // first block on a sheet collapsed through the flow at full size. The
+  // paginator had made room for it at the smaller size, so each piece of a
+  // long heading ran 5.7 px past its page body at 50%.
+  const words = Array.from({ length: 500 }, (_, i) => `w${i + 1}`).join(" ");
+  await typeDocument(page, [`# ${words}`, "", "The end."].join("\n"));
+  await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+  const workspace = page.locator(".print-workspace");
+  await workspace.getByLabel("Document title in header").check();
+  const scale = workspace.getByLabel("Scale", { exact: true });
+  await scale.fill("50");
+  await scale.press("Enter");
+  await expect(page.locator(".print-page .print-flow").first()).toHaveCSS("transform", "matrix(0.5, 0, 0, 0.5, 0, 0)");
+  await expect(page.locator(".print-page").first().locator(".print-page-header")).toBeVisible();
+  expect(await page.locator(".print-page .print-flow > h1").count()).toBeGreaterThan(1);
+
+  const { overflow, texts } = await printedSheets(page);
+  expect(overflow).toBeLessThanOrEqual(0.5);
+  expect(texts.join("")).toBe(documentText);
+});
+
+test("every printed sheet holds its blocks inside the page and the document's text once, at 50%, 100% and 200%", async ({ page }) => {
+  // The paginator splits, packs and shrinks blocks by measuring them, and a
+  // few pixels left out anywhere put content past the page body, which cuts it
+  // off. This prints documents of every kind of block that splits or shrinks,
+  // with a running header and page numbers, at three scales. Wide letter
+  // spacing on bold text stands in for a font with a wide bold face.
+  test.setTimeout(180_000);
+  const words = (label: string, count: number, from = 1): string =>
+    Array.from({ length: count }, (_, i) => `${label}${from + i}`).join(" ");
+  const tallImage = `data:image/svg+xml;base64,${Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60000"><rect width="100" height="60000" fill="#4a7"/></svg>',
+  ).toString("base64")}`;
+  const code = Array.from({ length: 150 }, (_, i) => `export const step${i + 1} = ${i + 1};`);
+  const documents = {
+    prose: [
+      "# Print check",
+      "",
+      `${words("w", 100)} **${words("bold", 1200)}** [${words("link", 40)}](https://example.com/long) ` +
+        `*${words("em", 60)}* \`code\` ${words("v", 400)} END_PARA`,
+      "",
+      // Headings near a page tall at one scale or another: the 79-word one
+      // is 884 px at 100%, in a 903 px page body.
+      `## ${words("a", 38, 0)}`,
+      "",
+      `## ${words("b", 79, 0)}`,
+      "",
+      `## ${words("c", 165, 0)}`,
+      "",
+      `# ${words("d", 500)}`,
+      "",
+      "The end.",
+    ],
+    blocks: [
+      "# Blocks",
+      "",
+      "> Quote start.",
+      ">",
+      ...Array.from({ length: 60 }, (_, i) => `> > nested ${i + 1}\n> >`),
+      `> ${words("q", 900)} END_QUOTE`,
+      "",
+      "- Short item",
+      `- ${words("item", 1200)} END_ITEM`,
+      ...Array.from({ length: 40 }, (_, i) => `- item ${i + 1}`),
+      "",
+      "Notes[^short] and[^long].",
+      "",
+      // 28 paragraphs fill a page by themselves at 100%, but not below the label.
+      `[^short]: ${Array.from({ length: 28 }, (_, i) => `Note paragraph ${i + 1}.`).join("\n\n    ")}`,
+      "",
+      `[^long]: ${words("n", 1500)}`,
+      "",
+      "| Feature | Behaviour |",
+      "| --- | --- |",
+      ...Array.from({ length: 80 }, (_, i) => `| row${i} | value ${i} |`),
+      "",
+      "```ts",
+      ...code,
+      "```",
+      "",
+      `![tall](${tallImage})`,
+      "",
+      "The end.",
+    ],
+  };
+  // Code blocks print their lines and line numbers, and a split table repeats
+  // its header, so both are compared on their own.
+  const leaveOut = ".milkdown-code-block, tr[data-is-header]";
+
+  for (const [name, lines] of Object.entries(documents)) {
+    await test.step(name, async () => {
+      await typeDocument(page, lines.join("\n"));
+      await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+      await expect
+        .poll(() => page.locator(`${wysiwyg} img`).evaluateAll((images) => images.every((image) => (image as HTMLImageElement).naturalHeight > 0)))
+        .toBe(true);
+      const documentText = await page.locator(wysiwyg).evaluate((node, leaveOut) => {
+        const copy = node.cloneNode(true) as HTMLElement;
+        copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
+        return copy.textContent!.replace(/\s+/g, "");
+      }, leaveOut);
+      await page.addStyleTag({ content: ".print-doc strong { letter-spacing: 0.15em; }" });
+      await page.click('button[aria-label="Print"]');
+      const workspace = page.locator(".print-workspace");
+      await expect(page.locator(".print-page").first()).toBeVisible();
+      await workspace.getByLabel("Document title in header").check();
+      await expect(page.locator(".print-page").first().locator(".print-page-header")).toBeVisible();
+
+      for (const [percent, transform] of [
+        [100, "none"],
+        [50, "matrix(0.5, 0, 0, 0.5, 0, 0)"],
+        [200, "matrix(2, 0, 0, 2, 0, 0)"],
+      ] as const) {
+        const field = workspace.getByLabel("Scale", { exact: true });
+        await field.fill(String(percent));
+        await field.press("Enter");
+        await expect(page.locator(".print-page .print-flow").first()).toHaveCSS("transform", transform);
+
+        const { overflow, texts } = await printedSheets(page, leaveOut);
+        const pieces = await page.locator(".print-page .print-flow").evaluateAll((flows) => ({
+          code: flows.flatMap((flow) => Array.from(flow.querySelectorAll(".cm-line, .print-code-line"), (line) => line.textContent)),
+          headerless: flows.flatMap((flow) => Array.from(flow.querySelectorAll("table"))).filter((table) => table.querySelectorAll("tr[data-is-header]").length !== 1).length,
+          lonelyLabels: flows.flatMap((flow) => Array.from(flow.querySelectorAll("dt"))).filter((term) => !term.nextElementSibling?.textContent?.trim()).length,
+        }));
+        const at = `${name} at ${percent}%`;
+        expect.soft(overflow, `${at}: nothing reaches past its page body`).toBeLessThanOrEqual(0.5);
+        expect.soft(texts.join(""), `${at}: every character prints once, in order`).toBe(documentText);
+        if (name === "blocks") {
+          expect.soft(pieces.code, `${at}: every line of code prints once, in order`).toEqual(code);
+          expect.soft(pieces.headerless, `${at}: every piece of the table has its header`).toBe(0);
+          expect.soft(pieces.lonelyLabels, `${at}: each footnote label prints with its note`).toBe(0);
+        }
+      }
+      await page.keyboard.press("Escape");
+      await expect(workspace).toBeHidden();
+    });
+  }
+});
+
+test("quotes and list items that begin with a heading, and quotes around a table or code, fit their sheets from 50% to 200% on A4 and A5", async ({ page }) => {
+  // A heading's top margin collapses with the margin of a quote that begins
+  // with it, into one margin above the quote, and a table or code block in a
+  // quote shares its margin with the quote's the same way. The paginator left
+  // room for the quote's own 4 px above a quote that started a sheet rather
+  // than the heading's 28 px, so the page body cut off the end of a sheet that
+  // the quote filled, 33 px past the body at 200% on A4. This prints such
+  // quotes, quotes around a table and a code block, and lists whose items
+  // begin with headings, with a running header and page numbers, at four
+  // scales on three kinds of sheet.
+  test.setTimeout(240_000);
+  const words = (label: string, count: number): string =>
+    Array.from({ length: count }, (_, i) => `${label}${i}`).join(" ");
+  // Notes and paragraphs of many lengths, so some note starts a sheet and
+  // fills it at every setup.
+  const notes = Array.from({ length: 48 }, (_, k) => [
+    `> ## Note ${k}`,
+    ">",
+    `> ${words(`n${k}x`, 15 + ((13 * k) % 80))}`,
+    "",
+    ...Array.from({ length: k % 3 }, (_, j) => [words(`p${k}y${j}z`, 15 + ((29 * k + 41 * j) % 80)), ""]).flat(),
+  ]).flat();
+  const items = Array.from({ length: 24 }, (_, k) => [
+    `- ## Item ${k}`,
+    "",
+    `  ${words(`i${k}x`, 10 + ((17 * k) % 90))}`,
+    "",
+  ]).flat();
+  const code = Array.from({ length: 150 }, (_, i) => `export const step${i + 1} = ${i + 1};`);
+  const markdown = [
+    "# Notes",
+    "",
+    ...notes,
+    `> ## Long note`,
+    ">",
+    `> ${words("long", 1500)}`,
+    "",
+    "> | A | B |",
+    "> | --- | --- |",
+    ...Array.from({ length: 70 }, (_, i) => `> | qa${i} | qb ${i} |`),
+    "",
+    "> ```ts",
+    ...code.map((line) => `> ${line}`),
+    "> ```",
+    "",
+    ...items,
+    `- ## Long item`,
+    "",
+    `  ${words("li", 1500)}`,
+    "",
+    "The end.",
+  ].join("\n");
+  // Code blocks print their lines and line numbers, and a split table repeats
+  // its header, so both are compared on their own.
+  const leaveOut = ".milkdown-code-block, tr[data-is-header]";
+
+  await typeDocument(page, markdown);
+  await expect(page.locator(`${wysiwyg} > p`).last()).toHaveText("The end.");
+  await expect(page.locator(`${wysiwyg} blockquote h2`)).toHaveCount(49);
+  await expect(page.locator(`${wysiwyg} li h2`)).toHaveCount(25);
+  const documentText = await page.locator(wysiwyg).evaluate((node, leaveOut) => {
+    const copy = node.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
+    return copy.textContent!.replace(/\s+/g, "");
+  }, leaveOut);
+
+  await page.click('button[aria-label="Print"]');
+  const workspace = page.locator(".print-workspace");
+  await expect(page.locator(".print-page").first()).toBeVisible();
+  await workspace.getByLabel("Document title in header").check();
+  await workspace.getByLabel("Page numbers in footer").check();
+  await expect(page.locator(".print-page").first().locator(".print-page-header")).toBeVisible();
+
+  for (const [paper, orientation, margins, line] of [
+    ["a4", "Portrait", "normal", "A4 · Portrait"],
+    ["a4", "Landscape", "normal", "A4 · Landscape"],
+    ["a5", "Landscape", "wide", "A5 · Landscape"],
+  ] as const) {
+    await workspace.getByLabel("Paper size").selectOption(paper);
+    await workspace.getByRole("radio", { name: orientation, exact: true }).check();
+    await workspace.getByLabel("Margins").selectOption(margins);
+    await expect(workspace.locator(".print-ws-paper")).toContainText(line);
+
+    for (const [percent, transform] of [
+      [50, "matrix(0.5, 0, 0, 0.5, 0, 0)"],
+      [100, "none"],
+      [150, "matrix(1.5, 0, 0, 1.5, 0, 0)"],
+      [200, "matrix(2, 0, 0, 2, 0, 0)"],
+    ] as const) {
+      const field = workspace.getByLabel("Scale", { exact: true });
+      await field.fill(String(percent));
+      await field.press("Enter");
+      await expect(page.locator(".print-page .print-flow").first()).toHaveCSS("transform", transform);
+
+      const { overflow, texts } = await printedSheets(page, leaveOut);
+      const printedCode = await page
+        .locator(".print-page .print-flow")
+        .evaluateAll((flows) => flows.flatMap((flow) => Array.from(flow.querySelectorAll(".cm-line, .print-code-line"), (part) => part.textContent)));
+      const at = `${line}, ${margins} margins, at ${percent}%`;
+      expect.soft(overflow, `${at}: nothing reaches past its page body`).toBeLessThanOrEqual(0.5);
+      expect.soft(texts.join(""), `${at}: every character prints once, in order`).toBe(documentText);
+      expect.soft(printedCode, `${at}: every line of code prints once, in order`).toEqual(code);
+    }
+  }
 });
