@@ -32,7 +32,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Store } from "@/state/store";
-import { shownLayout, type BannerState, type EditorLayout, type Tab } from "@/state/types";
+import { hasUnsavedChanges, shownLayout, type BannerState, type EditorLayout, type Tab } from "@/state/types";
 import { StoreProvider, useAppState } from "@/app/StoreProvider";
 import { AppRuntime, RETRY_DOCUMENT_VIEW } from "@/app/AppRuntime";
 import { AppRuntimeProvider, useAppRuntime } from "@/app/AppRuntimeContext";
@@ -104,7 +104,8 @@ function AppContent({ store }: { store: Store }) {
     setEditorHost((current) => (current === host ? null : current));
   }, []);
   const runtime = useOwnedAppRuntime(store, editorHost, runtimeRefs, setRecentSummary);
-  useDocumentTitle(state.activeTabId, state.doc.filePath, state.doc.isDirty);
+  const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
+  useDocumentTitle(state.activeTabId, state.doc.filePath, activeTab ? hasUnsavedChanges(activeTab) : false);
 
   const editorVisible = state.view !== "recent";
   const editorLayout = editorVisible ? shownLayout(state) : "document";
@@ -802,7 +803,7 @@ function DocumentTab({
         {...SMALL_ICON}
       />
       <span className="tab-select flex min-w-0 flex-auto items-center gap-1.5">
-        {tab.doc.isDirty && (
+        {hasUnsavedChanges(tab) && (
           <span aria-hidden="true" className="tab-dot size-[7px] shrink-0 rounded-full bg-accent" />
         )}
         <span className="tab-label overflow-hidden text-ellipsis">

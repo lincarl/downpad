@@ -92,6 +92,15 @@ export class Store {
     });
   }
 
+  /** Record whether files dropped on a tab's document are still on their way
+   *  into it (§5.4). No-op for an unknown id. */
+  setFilesPending(tabId: string, pending: boolean): void {
+    this.set((s) => {
+      if (!s.tabs.some((t) => t.id === tabId)) return {};
+      return { tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, filesPending: pending } : t)) };
+    });
+  }
+
   /**
    * Remove a tab. If it was active, the neighbour to the right (or left) becomes
    * active; when none remain, `doc` falls back to a blank buffer and activeTabId

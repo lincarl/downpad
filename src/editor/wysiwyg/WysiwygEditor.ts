@@ -15,13 +15,13 @@
 //     in Milkdown's form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, parserCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
-import { $prose, insert } from "@milkdown/kit/utils";
-import { Slice } from "@milkdown/kit/prose/model";
+import { $prose } from "@milkdown/kit/utils";
 import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { dropIndicatorState } from "@milkdown/kit/plugin/cursor";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -62,6 +62,16 @@ import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibilit
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
+import {
+  droppedLinkTyping,
+  dropPosition,
+  insertAtSelection,
+  insertBlocksAt,
+  mirrorMarkdown,
+  sourceEditBetween,
+  type DropTarget,
+  type SourceEdit,
+} from "./fileDrop";
 
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 /** How long typing must pause before an edit is reported (`onChange`). */
@@ -119,7 +129,8 @@ export class WysiwygEditor {
   /** Whether a frontmatter table should be shown (the showFrontmatterPanel
    *  setting, captured at mount). */
   private showFmPanel = false;
-  /** The body Crepe last parsed (at mount or `setMarkdown`). `getMarkdown`
+  /** The body Crepe last parsed (at mount or `setMarkdown`), or the source a
+   *  split drop changed it to (`insertMarkdownWithSource`). `getMarkdown`
    *  writes each top-level block the user has not changed since as its exact
    *  source, and Milkdown's form only for the blocks they changed. It takes
    *  the baseline of the body the document came from from the editor state,
@@ -168,6 +179,12 @@ export class WysiwygEditor {
     panel: () => this.fmPanel,
     changed: () => this.onFindChange?.(),
   });
+  /** The targets of drops on this document whose files are not all in yet.
+   *  Every transaction maps their positions, so each stays at its edge, after
+   *  the files of its drop already inserted. */
+  private readonly dropTargets = new Set<DropTarget>();
+  /** Counts split drops, for the id of each one's undo step. */
+  private dropRuns = 0;
 
   async mount(
     root: HTMLElement,
@@ -288,10 +305,13 @@ export class WysiwygEditor {
     // Keep which body the document came from in the editor state, so undo of
     // a split mirror sync writes the body from before it with its own text.
     this.crepe.editor.use(baselineState(this.opened));
+    // Typing right after a dropped link stays out of the link.
+    this.crepe.editor.use($prose(() => droppedLinkTyping()));
     // Report document edits once typing pauses. md-easy keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
-    // to that document would never be reported.
+    // to that document would never be reported. The same plugin keeps the drop
+    // targets' positions in step with each edit.
     this.crepe.editor.use(
       $prose(
         () =>
@@ -299,6 +319,8 @@ export class WysiwygEditor {
             state: {
               init: () => null,
               apply: (tr) => {
+                // An insert at a target maps it past the inserted blocks.
+                if (tr.docChanged) for (const target of this.dropTargets) target.pos = tr.mapping.map(target.pos);
                 // Skip the changes undo history leaves out, by the rule it uses.
                 // That is a change kept out of history (heading ids, list labels,
                 // the empty last line) or a plugin's follow-up to one, which
@@ -406,24 +428,111 @@ export class WysiwygEditor {
     this.emitChange();
   }
 
-  /** Insert markdown at the current selection (used by drag-and-drop, §5.4). */
-  insertMarkdown(markdown: string): void {
-    if (!this.crepe || !markdown) return;
+  /** Aim a file drop at a viewport point (§5.4). The files go in at the block
+   *  edge nearest the point, which Crepe's drop indicator marked during the
+   *  drag, or at the start or end for a point above or below the document.
+   *  Returns the target for `insertMarkdown`, or null without an editor. The
+   *  editor keeps the target in step with edits until `releaseDropTarget`. */
+  dropTargetAt(x: number, y: number): DropTarget | null {
+    const pos = this.withView((view) => dropPosition(view, x, y), null);
+    if (pos === null) return null;
+    const target: DropTarget = { pos };
+    this.dropTargets.add(target);
+    return target;
+  }
+
+  /** Stop keeping a drop target in step, once the files of its drop are in. */
+  releaseDropTarget(target: DropTarget): void {
+    this.dropTargets.delete(target);
+  }
+
+  /** Hide Crepe's drop indicator. The app takes file drops before Crepe sees
+   *  them, so Crepe never hides it itself. */
+  hideDropIndicator(): void {
     try {
-      this.crepe.editor.action(insert(markdown));
+      this.crepe?.editor.action((ctx) => ctx.set(dropIndicatorState.key, null));
+    } catch {
+      // Editor not ready or torn down; it has no indicator to hide.
+    }
+  }
+
+  /** Insert markdown for a dropped file (§5.4). With the target of a drop on
+   *  this editor, its blocks go in at that edge, after any file of the same
+   *  drop. Otherwise they go in at the caret, after any selection, which they
+   *  never replace. Either way the caret ends up after them, unless
+   *  `moveCaret` is off, for a user who has moved on since the drop. Returns
+   *  the target for the drop's next file, right after this one, which the
+   *  editor keeps in step with edits until `releaseDropTarget`. For a file
+   *  that went in at the caret it is a new target, so the next file follows
+   *  this one even while the caret stays before it. Null if nothing went in
+   *  and the drop has no target here. With `undoGroup`, later changes that
+   *  carry it join the insert's undo step. */
+  insertMarkdown(markdown: string, target: DropTarget | null = null, moveCaret = true, undoGroup?: string): DropTarget | null {
+    if (!this.crepe || !markdown) return null;
+    const aimed = target && this.dropTargets.has(target) ? target : null;
+    const next = aimed ?? { pos: 0 };
+    // Kept in step from the insert on, which moves it to the file's end.
+    this.dropTargets.add(next);
+    try {
+      const atEdge = aimed && !aimed.inLine;
+      const insert = atEdge ? insertBlocksAt(markdown, aimed, moveCaret, undoGroup) : insertAtSelection(markdown, next, moveCaret, undoGroup);
+      if (this.crepe.editor.action(insert)) {
+        return next;
+      }
     } catch {
       // Editor not ready / torn down mid-drop; ignore.
+    }
+    if (!aimed) this.dropTargets.delete(next);
+    return aimed;
+  }
+
+  /**
+   * Insert a dropped file at the target of a drop on this pane, as
+   * `insertMarkdown` does but leaving the caret, and return the change to
+   * `source`, the Markdown this pane shows, that puts the file in the same
+   * place (§5.4). The split's Markdown pane makes that change while the user
+   * types there. This pane's own report would write the block the file joins
+   * in its own form under their caret. Null when the pane cannot tell where
+   * the file goes in the source, or nothing went in.
+   *
+   * The changed source becomes the source of this pane's body, in the
+   * insert's undo step. So the split's mirror of the Markdown pane's change
+   * changes nothing here (`replaceBody`), and one undo takes back the file
+   * and writes the body with the source from before the drop.
+   */
+  insertMarkdownWithSource(markdown: string, target: DropTarget, source: string): SourceEdit | null {
+    const before = this.withView((view) => view.state.doc, null);
+    const undoGroup = `drop-${++this.dropRuns}`;
+    this.insertMarkdown(markdown, target, false, undoGroup);
+    const after = this.withView((view) => view.state.doc, null);
+    if (!this.crepe || !before || !after || before === after) return null;
+    const { body } = splitFrontmatter(source);
+    const offset = source.length - body.length;
+    try {
+      const edit = this.crepe.editor.action((ctx) => sourceEditBetween(ctx, before, after, body));
+      if (!edit) return null;
+      const slot: BaselineSlot = { baseline: null };
+      this.withView((view) => view.dispatch(setBaseline(view.state, view.state.tr, slot).setMeta("composition", undoGroup)), undefined);
+      this.rememberSource(body.slice(0, edit.from) + edit.insert + body.slice(edit.to), slot);
+      return { ...edit, from: edit.from + offset, to: edit.to + offset };
+    } catch {
+      return null;
     }
   }
 
   /**
-   * Replace the whole document to mirror an edit made in the other split pane
-   * (§6.1). The frontmatter block is re-split (and its table re-rendered, added,
-   * or removed as the source gains/loses a `---` block) and Crepe's body is
-   * replaced. Both changes are one transaction, so an undo here takes back the
-   * block and the body together. This pane is the unfocused mirror, so the
-   * reset selection/scroll is acceptable. The table keeps its cells unless one
-   * still shows text the block no longer has.
+   * Mirror an edit made in the other split pane into the document (§6.1). The
+   * frontmatter block is re-split (and its table re-rendered, added, or
+   * removed as the source gains/loses a `---` block) and the blocks of Crepe's
+   * body that differ are replaced (`mirrorMarkdown`). Both changes are one
+   * transaction, so an undo here takes back the block and the body together.
+   * Positions outside the changed blocks keep their place, such as the caret
+   * and the targets of drops, through the sync and its undo and redo. The user
+   * can be typing here while a file dropped on the Markdown pane goes in
+   * there. Then a block the sync leaves alone keeps what only this pane
+   * holds, such as a space typed at the end of a line. The table keeps its
+   * cells unless one still shows text the block no longer has, and is not
+   * drawn again while its block stays the same.
    *
    * The replacement is reported like an edit after a ~200ms pause
    * (`scheduleChange`). That report carries `markdown` itself, because every
@@ -437,42 +546,60 @@ export class WysiwygEditor {
   setMarkdown(markdown: string): void {
     if (!this.crepe) return;
     const split = splitFrontmatter(markdown);
+    // The table shows the block it has already. Drawing it again would put
+    // the caret of a cell being typed in at the cell's start, since React
+    // writes the cell's text again when it differs from what React drew.
+    const blockChanged = split.frontmatter !== this.frontmatterBlock;
     this.frontmatterBlock = split.frontmatter;
     this.frontmatterSeparator = split.separator;
-    // Draw the table at once, so the check below sees it.
-    flushSync(() => this.syncFrontmatterPanel());
-    // A cell whose typed text the Markdown pane took back can still show that
-    // text (`showsBlock`), and the next keystroke there would write it back.
-    // Then draw a new table. Otherwise React patches the cells it has, so a
-    // click that brought this pane up to date (EditorHost's catch-up on
-    // pointerdown) still lands in its cell.
-    if (this.fmPanel && this.frontmatterBlock != null && !showsBlock(this.fmPanel, this.frontmatterBlock)) {
-      this.fmTableKey += 1;
-      flushSync(() => this.renderFrontmatter());
+    if (blockChanged) {
+      // Draw the table at once, so the check below sees it.
+      flushSync(() => this.syncFrontmatterPanel());
+      // A cell whose typed text the Markdown pane took back can still show
+      // that text (`showsBlock`), and the next keystroke there would write it
+      // back. Then draw a new table. Otherwise React patches the cells it has,
+      // so a click that brought this pane up to date (EditorHost's catch-up
+      // on pointerdown) still lands in its cell.
+      if (this.fmPanel && this.frontmatterBlock != null && !showsBlock(this.fmPanel, this.frontmatterBlock)) {
+        this.fmTableKey += 1;
+        flushSync(() => this.renderFrontmatter());
+      }
+      // Find again in a table this added; redraws of a shown table refresh on their own.
+      this.find.refresh();
     }
-    // Find again in a table this added; redraws of a shown table refresh on their own.
-    this.find.refresh();
     if (this.createPromise) this.pendingBody = split.body;
     else this.replaceBody(split.body);
   }
 
-  /** Replace Crepe's body and remember its source (see `setMarkdown`). */
+  /** Replace the blocks of Crepe's body that differ from `body` and remember
+   *  its source (see `setMarkdown`). A body this pane's document already
+   *  came from, with nothing to change, as after a split drop
+   *  (`insertMarkdownWithSource`), leaves the editor as it is, so it adds no
+   *  undo step that changes nothing. */
   private replaceBody(body: string): void {
     if (!this.crepe) return;
     try {
-      // Milkdown's replaceAll, with the frontmatter block and the blank lines
-      // after it, which setMarkdown has just stored, and the new body's
-      // baseline in the same transaction.
+      // The frontmatter block and the blank lines after it, which setMarkdown
+      // has just stored, and the new body's baseline go in the same
+      // transaction. A file dropped on this pane while the other one was
+      // edited still goes in where it was dropped, since the drop targets map
+      // through it. While the user types here, what only the editor holds
+      // stays.
+      const typedIn = this.withView((view) => view.hasFocus(), false);
       const slot: BaselineSlot = { baseline: null };
-      this.crepe.editor.action((ctx) => {
-        const view = ctx.get(editorViewCtx);
-        const doc = ctx.get(parserCtx)(body);
-        const tr = view.state.tr.replace(0, view.state.doc.content.size, new Slice(doc.content, 0, 0));
-        setFrontmatter(view.state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator });
-        view.dispatch(setBaseline(view.state, tr, slot));
-      });
+      let newSource = true;
+      this.crepe.editor.action(
+        mirrorMarkdown(body, typedIn, (state, tr) => {
+          setFrontmatter(state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator });
+          // While the user types here, a block can hold what its source does
+          // not, such as a space at the end of a line, so it takes this body
+          // as its source either way.
+          newSource = typedIn || tr.steps.length > 0 || (baselineOf(state) ?? this.baseline)?.source !== body;
+          return newSource ? setBaseline(state, tr, slot) : tr;
+        }),
+      );
       // The doc updates synchronously with the dispatch.
-      this.rememberSource(body, slot);
+      if (newSource) this.rememberSource(body, slot);
     } catch {
       // Editor torn down mid-sync; ignore.
     }
@@ -558,6 +685,12 @@ export class WysiwygEditor {
    *  frontmatter cell, focus that cell with the match selected instead. */
   focus(): void {
     if (this.find.focusCurrent()) return;
+    this.focusText();
+  }
+
+  /** Focus the document text at its caret, even while the find card's current
+   *  match is in a frontmatter cell, as after a file dropped on the text. */
+  focusText(): void {
     this.withView((v) => v.focus(), undefined);
   }
 
@@ -615,6 +748,7 @@ export class WysiwygEditor {
     this.opened = { baseline: null };
     this.parsed = null;
     this.pendingBody = null;
+    this.dropTargets.clear();
     const crepe = this.crepe;
     const creating = this.createPromise;
     // Null this synchronously: all public operations become no-ops immediately,

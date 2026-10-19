@@ -82,6 +82,19 @@ describe("saving document snapshots", () => {
     expect(store.get().doc.isDirty).toBe(false);
   });
 
+  it("keeps a document unsaved after its save while a file dropped on it is on its way in", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    store.setFilesPending(tabId, true);
+
+    await files.save();
+
+    expect(store.get().doc.isDirty).toBe(false);
+    expect(files.anyDirty()).toBe(true);
+    store.setFilesPending(tabId, false);
+    expect(files.anyDirty()).toBe(false);
+  });
+
   it("keeps an edit back to the old saved text unsaved while the save is written", async () => {
     const { store, files } = setup();
     const tabId = store.get().activeTabId!;
@@ -322,5 +335,25 @@ describe("reloading an open file", () => {
     expect(native.readFile).not.toHaveBeenCalled();
     expect(native.ask).not.toHaveBeenCalled();
     expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
+  });
+});
+
+describe("opening a file", () => {
+  it("reuses an empty untitled tab, unless a file dropped on it is on its way in", async () => {
+    for (const filesPending of [false, true]) {
+      const store = createAppStore();
+      const untitled = store.addTab(blankDoc());
+      store.setFilesPending(untitled, filesPending);
+      const files = new FileService(store, { flush: vi.fn(), showActiveDoc: vi.fn(async () => {}), reloadActiveDoc: vi.fn(async () => {}) });
+
+      const count = store.get().tabs.length;
+
+      await files.openPath(filePath);
+
+      const { tabs, doc } = store.get();
+      expect(tabs).toHaveLength(filesPending ? count + 1 : count);
+      expect(doc).toMatchObject({ filePath, markdown: onDisk.content });
+      if (filesPending) expect(tabs.find((tab) => tab.id === untitled)).toEqual({ id: untitled, doc: blankDoc(), filesPending: true });
+    }
   });
 });

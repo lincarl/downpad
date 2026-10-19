@@ -322,14 +322,19 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(images.nth(2)).toHaveClass(/md-image-missing/);
   await expect.poll(() => images.nth(1).locator("img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
   const plain = page.locator(".milkdown .ProseMirror > p").filter({ hasText: "Plain line." });
+  const preview = page.locator(".milkdown-link-preview");
   /** Ctrl or Cmd+click `fraction` of the way across `target`, then click plain
-   *  text, so no link's preview covers the next target. */
+   *  text and wait for the link preview to go, so it cannot cover the next
+   *  target. Crepe shows or hides the preview only once the pointer has
+   *  rested for 50 ms, so it can still be up after the click. It sits over
+   *  the line above its link, and a click on it opens its own link. */
   const ctrlClick = async (target: Locator, fraction: number) => {
     const box = (await target.boundingBox())!;
     await page.keyboard.down("ControlOrMeta");
     await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
     await page.keyboard.up("ControlOrMeta");
     await plain.click({ position: { x: 2, y: 8 } });
+    await expect(preview).toBeHidden();
   };
   // ProseMirror puts a click on an image's right half after the image, where
   // the next link starts.
@@ -377,6 +382,7 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator("a")).toHaveCount(6);
   const plain = editor.locator("p").filter({ hasText: "Plain line." });
+  const preview = page.locator(".milkdown-link-preview");
   /** The point `fraction` of the way across the character at `index` of the
    *  text node that reads `text`. A negative `index` counts from the end. */
   const pointOn = (text: string, index: number, fraction: number) =>
@@ -391,13 +397,15 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
       return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
     }, [text, index, fraction] as const);
   /** Ctrl or Cmd+click `fraction` of the way across a character, then click
-   *  plain text, so no link's preview covers the next target. */
+   *  plain text and wait for the link preview to go, so it cannot cover the
+   *  next target, as in the inline image test above. */
   const ctrlClick = async (text: string, index: number, fraction: number) => {
     const point = await pointOn(text, index, fraction);
     await page.keyboard.down("ControlOrMeta");
     await page.mouse.click(point.x, point.y);
     await page.keyboard.up("ControlOrMeta");
     await plain.click({ position: { x: 2, y: 8 } });
+    await expect(preview).toBeHidden();
   };
   // ProseMirror puts a click on a character's right half after the character,
   // where the plain text or the link after it starts.
@@ -1612,17 +1620,80 @@ test("a reload from disk while settings rebuild the split's document view leaves
   await expect(markdownLine).toHaveText("New text from disk. Typed after.");
 });
 
-/** Drop files from the desktop onto the middle of an element, through
- *  Chromium's drag emulation, so the app gets their real paths. */
-async function dropFiles(target: Locator, files: string[]): Promise<void> {
+/** Drop files from the desktop onto an element, at `position` in its box or
+ *  in its middle, through Chromium's drag emulation, so the app gets their
+ *  real paths. */
+async function dropFiles(target: Locator, files: string[], position?: { x: number; y: number }): Promise<void> {
   const box = (await target.boundingBox())!;
+  const x = box.x + (position?.x ?? box.width / 2);
+  const y = box.y + (position?.y ?? box.height / 2);
   const cdp = await page.context().newCDPSession(page);
   const data = { items: [], files, dragOperationsMask: 1 };
   for (const type of ["dragEnter", "dragOver", "drop"] as const) {
-    await cdp.send("Input.dispatchDragEvent", { type, x: box.x + box.width / 2, y: box.y + box.height / 2, data });
+    await cdp.send("Input.dispatchDragEvent", { type, x, y, data });
   }
   await cdp.detach();
 }
+
+/** Write a small CSV file to drop, returning its path. */
+async function csvFile(name: string): Promise<string> {
+  const file = path.join(directory, name);
+  await writeFile(file, "a,b\n");
+  return file;
+}
+
+test("files dropped on the document go in where they were dropped", async () => {
+  const file = path.join(directory, "drop-on-document.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await launch(file);
+  const secondLine = page.locator(".ProseMirror p", { hasText: "Second line." });
+  const box = (await secondLine.boundingBox())!;
+  // Low on the line, where Crepe's drop indicator marks the edge below it.
+  await dropFiles(secondLine, [await csvFile("a.csv"), await csvFile("b.csv")], { x: box.width / 2, y: box.height - 2 });
+  await expect(page.locator(".ProseMirror p").nth(3)).toHaveText(/b\.csv/);
+  // The indicator goes once the files are in.
+  await expect(page.locator(".milkdown-drop-indicator")).toBeHidden();
+  // On the empty page below the text.
+  const pageBox = (await page.locator(".editor-column").boundingBox())!;
+  await dropFiles(page.locator(".editor-column"), [await csvFile("c.csv")], { x: pageBox.width / 2, y: pageBox.height - 40 });
+  await expect(page.locator(".ProseMirror p").last()).toHaveText(/c\.csv/);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "First line.\n\nSecond line.\n\n[a.csv](attachments/a.csv)\n\n[b.csv](attachments/b.csv)\n\nThird line.\n\n[c.csv](attachments/c.csv)\n",
+  );
+});
+
+test("a Markdown file dropped on the document opens without leaving the drop indicator behind", async () => {
+  const file = path.join(directory, "drop-markdown.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await writeFile(other, "# Other\n");
+  await launch(file);
+  await dropFiles(page.locator(".ProseMirror p", { hasText: "Second line." }), [other]);
+  await expect(page.locator(heading)).toHaveText("Other");
+  await page.getByRole("tab", { name: /drop-markdown\.md/ }).click();
+  await expect(page.locator(".ProseMirror p").first()).toHaveText("First line.");
+  await expect(page.locator(".milkdown-drop-indicator").first()).toBeHidden();
+});
+
+test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
+  // The document view would write this heading and these bullets another way.
+  const text = "First line.\n\nSecond line.\n\nTitle\n=====\n\n* Alpha\n* Beta\n";
+  const { file } = await openSplit("drop-on-document-pane.md", text);
+  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await dropBelow(page.locator(".editor-pane-wysiwyg .ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  const link = "[notes.csv](attachments/notes.csv)";
+  await expect(page.locator(".editor-pane-wysiwyg .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await expect(page.locator(".editor-pane-raw .cm-line", { hasText: "notes.csv" })).toHaveText(link);
+  // Focus and the caret stay in the Markdown pane.
+  await page.keyboard.type(" Typed.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    text.replace("First line.\n", `First line.\n\n${link}\n`).replace("Second line.", "Second line. Typed."),
+  );
+});
 
 test("a file dropped while typing in the split's Markdown pane lands at the caret and keeps the rest as written", async () => {
   // The document view would write this heading and these bullets another way.
@@ -1662,6 +1733,241 @@ test("a formula typed last in the document pane is kept by the split's Markdown 
   await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. a $x$ raw b $y$\n");
+});
+
+/** A one-pixel PNG to drop, written as `name`, returning its path. */
+async function pngFile(name: string): Promise<string> {
+  const file = path.join(directory, name);
+  await writeFile(file, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
+  return file;
+}
+
+/** Drop files a pixel above the bottom edge of `line`, where Crepe's drop
+ *  indicator marks the edge below it. */
+async function dropBelow(line: Locator, files: string[]): Promise<void> {
+  const box = (await line.boundingBox())!;
+  await dropFiles(line, files, { x: box.width / 2, y: box.height - 2 });
+}
+
+/** Open a new document with the tab strip's New document button and return
+ *  its empty line once its pane is in front. Call it once the document the
+ *  app launched with is shown. The button opens no menu, which that document
+ *  closes when it takes focus as startup ends. The document shown before
+ *  stays in front until the new document's editor is built. A click on a
+ *  line of the shown pane could take that document's line and keep waiting
+ *  on it after it is hidden, because Playwright looks a locator up again only
+ *  for an element that left the page. */
+async function newDocumentLine(): Promise<Locator> {
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  const line = page.locator(".editor-pane:not([hidden]) .ProseMirror p");
+  await expect(line).toHaveText([""]);
+  return line;
+}
+
+test("typing right after a file dropped on the document goes after it and keeps it", async () => {
+  const file = path.join(directory, "type-after-drop.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await launch(file);
+  const images = page.locator(".ProseMirror .milkdown-image-block");
+  // An image between lines, then typing.
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "Second line." }), [await pngFile("middle.png")]);
+  await expect(images).toHaveCount(1);
+  await page.keyboard.type("x");
+  // A link, then typing, which stays out of the link.
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.type(" typed");
+  // An image below the text, which ends the document, then typing.
+  const pageBox = (await page.locator(".editor-column").boundingBox())!;
+  await dropFiles(page.locator(".editor-column"), [await pngFile("last.png")], { x: pageBox.width / 2, y: pageBox.height - 40 });
+  await expect(images).toHaveCount(2);
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  const image = /!\[\]\(data:image\/png;base64,[^)]+\)/.source;
+  await expect.poll(() => readFile(file, "utf8")).toMatch(new RegExp(
+    `^First line\\.\\n\\n\\[notes\\.csv\\]\\(attachments/notes\\.csv\\) typed\\n\\nSecond line\\.\\n\\n${image}\\n\\nxThird line\\.\\n\\n${image}\\n\\ny\\n$`,
+  ));
+});
+
+test("typing right after a link dropped as a list item stays out of the link", async () => {
+  const file = path.join(directory, "type-after-list-drop.md");
+  await writeFile(file, "Intro.\n\n- Item 1\n- Item 2\n\n1. One\n2. Two\n");
+  await launch(file);
+  await dropBelow(page.locator(".ProseMirror li p", { hasText: "Item 1" }), [await csvFile("a.csv")]);
+  await expect(page.locator(".ProseMirror li p").nth(1)).toHaveText(/a\.csv/);
+  await page.keyboard.type(" typed");
+  await dropBelow(page.locator(".ProseMirror li p", { hasText: "One" }), [await csvFile("b.csv")]);
+  await expect(page.locator(".ProseMirror ol li p").nth(1)).toHaveText(/b\.csv/);
+  await page.keyboard.type(" typed");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "Intro.\n\n- Item 1\n- [a.csv](attachments/a.csv) typed\n- Item 2\n\n1. One\n2. [b.csv](attachments/b.csv) typed\n3. Two\n",
+  );
+});
+
+test("a file dropped on a collapsed base64 image in the Markdown view goes in after the image", async () => {
+  const file = path.join(directory, "drop-on-image-data.md");
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=".repeat(4);
+  const image = `![pic](data:image/png;base64,${data})`;
+  await writeFile(file, `First line.\n\n${image}\n\nLast line.\n`);
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const chip = page.locator(".cm-base64-collapsed");
+  // Near the chip's start, where the drop finds the start of the data.
+  await dropFiles(chip, [await csvFile("a.csv")], { x: 2, y: 5 });
+  const link = "[a.csv](attachments/a.csv)";
+  await expect(page.locator(".cm-line", { hasText: "a.csv" })).toContainText(link);
+  await page.keyboard.type("!");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(`First line.\n\n${image}${link}!\n\nLast line.\n`);
+});
+
+test("a file dropped while the find card's match is in the frontmatter table leaves the table alone", async () => {
+  const file = path.join(directory, "drop-find-frontmatter.md");
+  await writeFile(file, "---\ntitle: Review notes\n---\n\nFirst line.\n\nSecond line.\n");
+  await launch(file);
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await page.locator(".ProseMirror p", { hasText: "Second line." }).click();
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("Review");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Caption");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "---\ntitle: Review notes\n---\n\nFirst line.\n\n[notes.csv](attachments/notes.csv)\n\nCaption\n\nSecond line.\n",
+  );
+});
+
+test("typing in the split's Markdown pane across a drop on the document pane stays in the Markdown pane as typed", async () => {
+  // The document view would write this heading and these bullets another way.
+  const text = "First line.\n\nSecond line.\n\nTitle\n=====\n\n* Gamma\n";
+  const { file } = await openSplit("type-across-drop.md", text);
+  const markdownLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  // Ends in a space, which the document view would not keep at the end of a line.
+  const typing = page.keyboard.type(" Typed during the drop ", { delay: 40 });
+  await expect(markdownLine).toContainText("Second line. Ty");
+  await dropBelow(page.locator(".editor-pane-wysiwyg .ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
+  await typing;
+  const link = "[notes.csv](attachments/notes.csv)";
+  await expect(page.locator(".editor-pane-raw .cm-line", { hasText: "notes.csv" })).toHaveText(link);
+  // A pause, then more typing, which goes on where it was.
+  await page.waitForTimeout(1500);
+  await page.keyboard.type("and after.");
+  await expect(markdownLine).toHaveText("Second line. Typed during the drop and after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    text.replace("First line.\n", `First line.\n\n${link}\n`).replace("Second line.", "Second line. Typed during the drop and after."),
+  );
+});
+
+test("a file dropped on the find card goes in after the current match instead of over it", async () => {
+  const file = path.join(directory, "drop-on-find.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await launch(file);
+  await page.locator(".ProseMirror p", { hasText: "Second line." }).click();
+  await page.keyboard.press("ControlOrMeta+f");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  await find.fill("line.");
+  await expect(page.locator(".find-count")).toHaveText("1 of 2");
+  await dropFiles(find, [await csvFile("notes.csv")]);
+  await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[notes.csv](attachments/notes.csv)\n\nSecond line.\n");
+});
+
+test("a file dropped on the split's Markdown pane goes in there, where it was dropped, while the document pane has focus", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("drop-on-markdown-pane.md", "First line.\n\nSecond line.\n");
+  // The Markdown pane's caret at the end of its first line, then focus in the document pane.
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await documentLine.click();
+  // Past the end of the second line, where CodeMirror's drop cursor shows at its end.
+  const secondLine = page.locator(".editor-pane-raw .cm-line", { hasText: "Second line." });
+  await dropFiles(secondLine, [await csvFile("notes.csv")]);
+  await expect(secondLine).toHaveText("Second line.[notes.csv](attachments/notes.csv)");
+  // The Markdown pane takes focus, with the caret after the file.
+  await page.keyboard.type(" Typed.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\nSecond line.[notes.csv](attachments/notes.csv) Typed.\n");
+});
+
+test("a file dropped on a document goes into it once it is in front again after another tab came to the front", async () => {
+  const other = path.join(directory, "other.md");
+  await writeFile(other, "Other line.\n");
+  await launch(other);
+  await expect(page.locator(".ProseMirror p")).toHaveText("Other line.");
+  const line = await newDocumentLine();
+  await line.click();
+  await page.keyboard.type("Alpha line.");
+  // The untitled document asks where to save before its attachments folder
+  // exists. Hold that answer back until the other tab is in front.
+  const saved = path.join(directory, "sub", "saved.md");
+  await mkdir(path.dirname(saved));
+  await app!.evaluate(({ dialog }, filePath) => {
+    dialog.showSaveDialog = () => new Promise((resolve) => {
+      Reflect.set(globalThis, "answerSave", () => resolve({ canceled: false, filePath }));
+    });
+  }, saved);
+  await dropBelow(line, [await csvFile("notes.csv")]);
+  await expect.poll(() => app!.evaluate(() => typeof Reflect.get(globalThis, "answerSave"))).toBe("function");
+  await page.getByRole("tab", { name: /other\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first()).toHaveText("Other line.");
+  await app!.evaluate(() => (Reflect.get(globalThis, "answerSave") as () => void)());
+  await expect.poll(() => stat(path.join(directory, "sub", "attachments", "notes.csv")).then(() => true, () => false)).toBe(true);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toHaveText("Other line.");
+  // The file waits for its document, which shows as unsaved meanwhile.
+  await expect(page.getByRole("tab", { name: /saved\.md/ }).locator(".tab-dot")).toBeVisible();
+  await page.getByRole("tab", { name: /saved\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toBe("Alpha line.\n\n[notes.csv](attachments/notes.csv)\n");
+  expect(await readFile(other, "utf8")).toBe("Other line.\n");
+});
+
+test("an image dropped on an untitled document asks where to save it once that document is in front again", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const other = path.join(directory, "other.md");
+  await writeFile(other, "Other line.\n");
+  await launch(other);
+  await expect(page.locator(".ProseMirror p")).toHaveText("Other line.");
+  const line = await newDocumentLine();
+  await line.click();
+  await page.keyboard.type("Alpha line.");
+  // Each image goes beside the document, which asks where to save it first.
+  // Hold the answers back.
+  await app!.evaluate(({ dialog }) => {
+    const answers: Array<(path: string | null) => void> = [];
+    Reflect.set(globalThis, "saveAnswers", answers);
+    dialog.showSaveDialog = () => new Promise((resolve) => {
+      answers.push((filePath) => resolve(filePath ? { canceled: false, filePath } : { canceled: true, filePath: "" }));
+    });
+  });
+  const asked = () => app!.evaluate(() => (Reflect.get(globalThis, "saveAnswers") as unknown[]).length);
+  const answer = (index: number, filePath: string | null) =>
+    app!.evaluate((_electron, [at, chosen]) => (Reflect.get(globalThis, "saveAnswers") as Array<(path: string | null) => void>)[at]!(chosen), [index, filePath] as const);
+  await dropBelow(line, [await pngFile("first.png"), await pngFile("second.png")]);
+  await expect.poll(asked).toBe(1);
+  // The other tab comes to the front before the first prompt is answered, so
+  // the second image is read while its document is behind.
+  await page.getByRole("tab", { name: /other\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toHaveText("Other line.");
+  await answer(0, null);
+  // No prompt over the other document.
+  await page.waitForTimeout(1000);
+  expect(await asked()).toBe(1);
+  await page.getByRole("tab", { name: /Untitled/ }).click();
+  await expect.poll(asked).toBe(2);
+  const saved = path.join(directory, "saved.md");
+  await answer(1, saved);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror img")).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^Alpha line\.\n\n!\[\]\(attachments\/[^)]+\.png\)\n$/);
+  expect(await readFile(other, "utf8")).toBe("Other line.\n");
 });
 
 test("Print keeps a saved Markdown edit as typed", async () => {

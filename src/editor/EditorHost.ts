@@ -29,6 +29,7 @@ import type { DocumentViewFailure, EditorLayout } from "../state/types";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { forgetImageAnswers } from "./wysiwyg/imageView";
+import type { DropTarget } from "./wysiwyg/fileDrop";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
 import { applySpellcheck } from "./wysiwyg/spellcheck";
@@ -38,6 +39,17 @@ import type { FindCounts, FindOptions } from "./wysiwyg/findEngine";
 import { releaseFindRoom } from "./wysiwyg/findReveal";
 
 type View = "wysiwyg" | "raw";
+
+/** Where a file was dropped: the viewport point and the element under it. */
+export type DropPoint = Pick<MouseEvent, "clientX" | "clientY" | "target">;
+
+/** The files of one drop (§5.4) and the document they were dropped on. Get it
+ *  from `aimDrop` while the drop event is handled, insert each file with
+ *  `insertDropped`, and end it with `releaseDrop` once the files are in. */
+export interface FileDrop {
+  /** The tab of the document the files were dropped on. */
+  readonly tabId: string;
+}
 
 interface Pane {
   tabId: string;
@@ -52,8 +64,31 @@ interface Pane {
   raw: RawEditor | null;
 }
 
+/** Where the files of a drop go in. */
+interface AimedDrop {
+  /** The pane that takes the files. */
+  pane: Pane;
+  /** The place in the pane the files were dropped on, which moves past each
+   *  file that goes in there. Once a file went in at a caret, it is the
+   *  place after that file, in the pane that took it. Without one, files go
+   *  in at the caret of the pane being edited. */
+  target: DropTarget | null;
+  /** Whether the files were dropped on the pane, which then takes focus. */
+  onPane: boolean;
+  /** The element that had focus when the files were dropped, or the one in
+   *  the pane that took focus with an earlier file of the drop. */
+  focus: Element | null;
+  /** Whether that pane took focus from md-easy, not the user, so the user
+   *  was not typing there. */
+  focusMoved: boolean;
+  /** When the drop happened (`performance.now()`). */
+  at: number;
+}
+
 const NO_MATCHES: FindCounts = { total: 0, current: 0 };
 const paneKey = (tabId: string, view: View): string => `${tabId} ${view}`;
+/** How long after a key the user still counts as typing (`typingIn`). */
+const TYPING_PAUSE_MS = 1000;
 
 /** Debounce for mirroring an edit into the other split pane (§6.1). Coalesces a
  *  burst of keystrokes so the (heavier) WYSIWYG re-parse doesn't run per key. */
@@ -143,11 +178,43 @@ export class EditorHost implements FindController {
   /** Set by AppRuntime; shows the new count on the find card after an edit
    *  changes the matches in the pane it searches (§5.13). */
   private findChangeHandler: (() => void) | null = null;
+  /** The drops whose files are not all in yet, by the handle `aimDrop` gave. */
+  private readonly drops = new Map<FileDrop, AimedDrop>();
+  /** Callers waiting for the next document to be shown, or a tab to close. */
+  private readonly presentWaiters = new Set<() => void>();
+  /** When the user last pressed a key (`performance.now()`). */
+  private lastKeyAt = -Infinity;
+  /** When the user last typed text, which a key that moves the caret does not. */
+  private lastTypedAt = -Infinity;
+  /** When the user last pressed a mouse button, pen or finger down. */
+  private lastPointerAt = -Infinity;
+  /** Removes the window listeners that record when the user last pressed a
+   *  key, typed and pressed a pointer. */
+  private readonly stopWatchingInput: () => void;
 
   constructor(
     private readonly root: HTMLElement,
     private readonly store: Store,
-  ) {}
+  ) {
+    // Captured on the whole window, so typing in the find card counts too.
+    const onKey = (): void => {
+      this.lastKeyAt = performance.now();
+    };
+    const onTyped = (): void => {
+      this.lastTypedAt = performance.now();
+    };
+    const onPointer = (): void => {
+      this.lastPointerAt = performance.now();
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("beforeinput", onTyped, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    this.stopWatchingInput = () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("beforeinput", onTyped, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+    };
+  }
 
   /** Wire the prompt-and-save action (FileService.save) used by image storage. */
   setSaveHandler(handler: () => Promise<boolean>): void {
@@ -174,18 +241,218 @@ export class EditorHost implements FindController {
     this.windowLayout = layout;
   }
 
-  /** Insert markdown at the caret of the pane being edited (§5.4): the split's
-   *  Markdown pane while it holds focus, otherwise the document editor, or the
-   *  Markdown source in the Markdown-only view. A file drop lands here with no
-   *  click or focus on a pane, so the split catches up first and the target
-   *  pane holds the other pane's latest edit. The Markdown pane reports the
-   *  insert at once, like typing, and keeps the rest of its text as written. */
-  insertMarkdown(markdown: string): void {
-    if (this.disposed) return;
+  /**
+   * Aim the files of a drop (§5.4) at the pane under the drop point. On the
+   * document pane, or on the page around it in the Document view, they go in
+   * at the block edge nearest the drop point, which Crepe's drop indicator
+   * marked during the drag, or at the start or end for a drop above or below
+   * the text. On a Markdown pane they go in at the text position nearest the
+   * drop point. A drop anywhere else, or a call without a drop point, goes in
+   * at the caret of the pane being edited when the first file goes in, which
+   * is the split's Markdown pane while it has focus and the document
+   * otherwise, and each later file goes in after the one before. The
+   * drop also notes where focus is, for `insertDropped`. Returns null when no
+   * document is shown. Call it while handling the drop event, before the drop
+   * point's text can move.
+   */
+  aimDrop(drop?: DropPoint): FileDrop | null {
+    if (this.disposed || this.activeTabId === null) return null;
+    const under = drop ? this.paneUnder(drop.target) : null;
+    const pane = under ?? this.focusedSplitRaw() ?? this.active();
+    if (!pane) return null;
+    let target: DropTarget | null = null;
+    if (drop && under?.wysiwyg) {
+      // The split catches up first, so the target is a place in the latest text.
+      this.flush();
+      target = under.wysiwyg.dropTargetAt(drop.clientX, drop.clientY);
+    } else if (drop && under?.raw) {
+      target = under.raw.dropTargetAt(drop.clientX, drop.clientY);
+    }
+    const handle: FileDrop = { tabId: pane.tabId };
+    this.drops.set(handle, { pane, target, onPane: under !== null, focus: document.activeElement, focusMoved: false, at: performance.now() });
+    // Until the files are in, the tab keeps this document, so opening a file
+    // never puts another document in it (FileService.openPath), and it counts
+    // as unsaved, so closing it or the window asks first, even after a save.
+    this.store.setFilesPending(pane.tabId, true);
+    return handle;
+  }
+
+  /**
+   * Insert markdown for a file of a drop (§5.4) into the document it was
+   * dropped on, in the pane `aimDrop` chose, at the drop's target after the
+   * drop's earlier files, or at the caret of the pane being edited. A file
+   * after one that went in at the caret goes in right after that one, so
+   * the files keep their order even while the caret stays before them. A file
+   * only goes into a document that is in front. One dropped on a document
+   * that is behind another tab by now waits until that document is shown
+   * again, and the document counts as unsaved until the drop ends. If by
+   * then the pane it was dropped on is gone, hidden or behind the document's
+   * latest edit, as after a reload from disk, a layout switch, an edit in
+   * the other view, or after the editor was dropped from memory, it goes in
+   * at the caret of the pane being edited. Resolves false, inserting
+   * nothing, once the document is closed.
+   *
+   * The visible panes catch up before and after, so the split's other pane
+   * holds the insert at once. A pane the files were dropped on takes focus,
+   * with the caret after the file, as after Crepe's own drops, unless the
+   * user has moved on since the drop (`movedOn`), or types in that Markdown
+   * pane. Then focus and the caret stay where the user is, such as typing in
+   * the find card. Focus that the pane took for an earlier file of the drop
+   * is not the user moving on, so the caret ends after the drop's last file.
+   *
+   * While the split's Markdown pane has focus, a file dropped on the
+   * document pane goes into the Markdown pane too, at the place in the source
+   * that matches the drop point, and focus stays there. The document pane
+   * then mirrors it as it mirrors typing. An insert reported by the document
+   * pane would write the block the file joins in its own form under the
+   * user's caret.
+   */
+  async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
+    let place = this.dropPlace(drop);
+    while (!place) {
+      if (!(await this.waitWhileBehind(drop))) return false;
+      place = this.dropPlace(drop);
+    }
+    const aimed = this.drops.get(drop)!;
+    const { pane, target } = place;
+    const typedIn = this.focusedSplitRaw()?.raw;
+    if (pane.wysiwyg && target && typedIn) {
+      // If the source edit cannot be found, the document pane's own report
+      // goes to the Markdown pane, as for any edit there.
+      const edit = pane.wysiwyg.insertMarkdownWithSource(markdown, target, typedIn.getText());
+      if (edit) typedIn.applyDropEdit(edit);
+      this.flush();
+      return true;
+    }
+    // The file's text goes into a Markdown pane's line, often the one the user
+    // types in, where their next keys would land after the file.
+    const stay = !this.movedOn(aimed) && !(pane.raw && !aimed.focusMoved && this.typingIn(pane));
+    const next = pane.wysiwyg ? pane.wysiwyg.insertMarkdown(markdown, target, stay) : (pane.raw?.insertText(markdown, target, stay) ?? null);
+    this.followFile(aimed, pane, next);
     this.flush();
+    if (aimed.onPane && stay) {
+      if (pane.wysiwyg) pane.wysiwyg.focusText();
+      else pane.raw?.focus();
+      // The drop's next file follows this one there, with the caret.
+      if (document.activeElement !== aimed.focus) {
+        aimed.focus = document.activeElement;
+        aimed.focusMoved = true;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Resolve true once the document a drop belongs to is in front, as it must
+   * be before it can be saved for a file read for it, such as an image that
+   * needs an attachments folder beside an untitled document (§5.5). While it
+   * is behind another tab, the file waits. Resolves false once the document
+   * is closed.
+   */
+  async untilInFront(drop: FileDrop): Promise<boolean> {
+    while (this.store.get().activeTabId !== drop.tabId) {
+      if (!(await this.waitWhileBehind(drop))) return false;
+    }
+    return this.dropOpen(drop);
+  }
+
+  /** Whether a drop's document is still open and the drop has not ended. */
+  private dropOpen(drop: FileDrop): boolean {
+    return !this.disposed && this.drops.has(drop) && this.hasTab(drop.tabId);
+  }
+
+  /** Wait until the next document is shown, for a file of a drop whose
+   *  document is behind another tab. Resolves false at once if the document
+   *  is closed. */
+  private async waitWhileBehind(drop: FileDrop): Promise<boolean> {
+    if (!this.dropOpen(drop)) return false;
+    await this.nextPresent();
+    return true;
+  }
+
+  /** Aim the next file of a drop at `next` in `pane`, right after the file
+   *  that just went in there. That is the drop's own target moved past the
+   *  file, or for a file that went in at the caret, a new target after it,
+   *  which replaces the one the pane before held. */
+  private followFile(aimed: AimedDrop, pane: Pane, next: DropTarget | null): void {
+    if (!next || next === aimed.target) return;
+    if (aimed.target) this.releaseTarget(aimed.pane, aimed.target);
+    aimed.pane = pane;
+    aimed.target = next;
+  }
+
+  /** Stop a pane keeping a drop target in step. */
+  private releaseTarget(pane: Pane, target: DropTarget): void {
+    pane.wysiwyg?.releaseDropTarget(target);
+    pane.raw?.releaseDropTarget(target);
+  }
+
+  /** Whether the user has moved on since a drop, so a file that goes in now
+   *  leaves focus and the caret where they are. That is when focus has left
+   *  the element the drop left it on (`AimedDrop.focus`), or they clicked or
+   *  pressed a key since. */
+  private movedOn(aimed: AimedDrop): boolean {
+    return document.activeElement !== aimed.focus || this.lastKeyAt > aimed.at || this.lastPointerAt > aimed.at;
+  }
+
+  /** Whether the user is typing in a pane: it has focus and took text within
+   *  `TYPING_PAUSE_MS`. */
+  private typingIn(pane: Pane): boolean {
+    return pane.el.contains(document.activeElement) && performance.now() - this.lastTypedAt < TYPING_PAUSE_MS;
+  }
+
+  /**
+   * Where the next file of a drop goes in now, after the split catches up.
+   * That is the drop's target, in the pane it was dropped on or the one that
+   * took its last file, while that pane is shown and holds its document's
+   * latest edit. Otherwise, as for the first file of a drop away from the
+   * text, it is the caret of the pane being edited now. Null
+   * while the drop's document is not in front, or its editor is still being
+   * built.
+   */
+  private dropPlace(drop: FileDrop): { pane: Pane; target: DropTarget | null } | null {
+    const aimed = this.drops.get(drop);
+    if (this.disposed || !aimed || drop.tabId !== this.activeTabId) return null;
+    this.flush();
+    if (aimed.target && this.usable(aimed.pane)) return { pane: aimed.pane, target: aimed.target };
     const pane = this.focusedSplitRaw() ?? this.active();
-    if (pane?.wysiwyg) pane.wysiwyg.insertMarkdown(markdown);
-    else if (pane?.raw) pane.raw.insertText(markdown);
+    return pane && this.usable(pane) ? { pane, target: null } : null;
+  }
+
+  /** Whether a pane can take an insert: it is live, shown, and holds its
+   *  tab's latest edit. An edit in a hidden pane would leave the shown one
+   *  behind, and one in a pane that lags its tab would write older text over
+   *  the tab. */
+  private usable(pane: Pane): boolean {
+    return this.isLive(pane) && !pane.el.hidden && pane.syncedRev === this.revOf(pane.tabId);
+  }
+
+  /** Resolve once a document is next shown, or a tab is closed. */
+  private nextPresent(): Promise<void> {
+    return new Promise((resolve) => this.presentWaiters.add(resolve));
+  }
+
+  /** Let every `nextPresent` caller check again. */
+  private wakePresentWaiters(): void {
+    const waiters = [...this.presentWaiters];
+    this.presentWaiters.clear();
+    for (const wake of waiters) wake();
+  }
+
+  /** End a drop once its files are in, or it failed. */
+  releaseDrop(drop: FileDrop): void {
+    const aimed = this.drops.get(drop);
+    this.drops.delete(drop);
+    const pending = [...this.drops.keys()].some((other) => other.tabId === drop.tabId);
+    this.store.setFilesPending(drop.tabId, pending);
+    if (aimed?.target) this.releaseTarget(aimed.pane, aimed.target);
+  }
+
+  /** Hide the drop indicator the document pane drew while files were dragged
+   *  over it. The app takes file drops before the editor sees them (§5.4). */
+  hideDropIndicator(): void {
+    if (this.disposed) return;
+    this.active()?.wysiwyg?.hideDropIndicator();
   }
 
   /** (Re)apply the spell-check setting to every editor under the host (§5.14). */
@@ -421,6 +688,8 @@ export class EditorHost implements FindController {
     this.replacedTabs.delete(tabId);
     this.tabMru = this.tabMru.filter((t) => t !== tabId);
     if (this.activeTabId === tabId) this.activeTabId = null;
+    // A file waiting for this document now goes nowhere.
+    this.wakePresentWaiters();
   }
 
   /** Tear every editor down — used when the last tab closes (§5.19). */
@@ -441,7 +710,7 @@ export class EditorHost implements FindController {
       this.root.style.removeProperty("--split-left");
       this.activeTabId = null;
       this.currentView = null;
-    });
+    }).finally(() => this.wakePresentWaiters());
   }
 
   /** Evict retained panes beyond the configured limit — used when the user lowers
@@ -470,9 +739,12 @@ export class EditorHost implements FindController {
     if (this.disposePromise) return this.disposePromise;
 
     this.disposed = true;
+    this.stopWatchingInput();
     this.saveHandler = null;
     this.openLinkHandler = null;
     this.findChangeHandler = null;
+    this.drops.clear();
+    this.wakePresentWaiters();
     this.cancelSync();
     this.scrollSync.disconnect();
     this.endDrag();
@@ -579,6 +851,23 @@ export class EditorHost implements FindController {
     return this.active()?.raw ?? null;
   }
 
+  /** The visible pane of the active tab under a drop target element. That is
+   *  a pane that contains it, or the active pane for the page around the
+   *  panes. Null for anything else, such as the toolbar or the find card. */
+  private paneUnder(element: EventTarget | null): Pane | null {
+    if (!(element instanceof Node) || this.activeTabId === null) return null;
+    for (const view of ["raw", "wysiwyg"] as View[]) {
+      const pane = this.panes.get(paneKey(this.activeTabId, view));
+      if (pane && !pane.el.hidden && pane.el.contains(element)) return pane;
+    }
+    return element.contains(this.root) ? this.active() : null;
+  }
+
+  /** Whether a pane still has the editor it was built with. */
+  private isLive(pane: Pane): boolean {
+    return this.panes.get(paneKey(pane.tabId, pane.view)) === pane && (pane.wysiwyg ?? pane.raw) !== null;
+  }
+
   /** The split's Markdown pane when it holds focus, else null. */
   private focusedSplitRaw(): Pane | null {
     if (this.layout !== "split" || this.activeTabId === null) return null;
@@ -670,6 +959,8 @@ export class EditorHost implements FindController {
     // current pair on every reveal, and disconnects whenever it isn't the split.
     this.syncScroll(wysiwygPane, rawPane);
     record();
+    // A file dropped on this document while it was behind goes in now.
+    this.wakePresentWaiters();
 
     await this.enforceLru();
   }

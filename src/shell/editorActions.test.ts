@@ -45,6 +45,8 @@ describe("Undo and Redo from a native menu", () => {
     clock.mockReturnValue(start + 1000);
     raw.insertText(" two");
     expect(raw.getText()).toBe("one two");
+    // The menu acts on the editor with the focus. insertText leaves focus alone.
+    raw.focus();
 
     undoOrRedo("undo");
     expect(raw.getText()).toBe("one");

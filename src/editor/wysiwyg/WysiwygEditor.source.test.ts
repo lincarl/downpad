@@ -116,6 +116,18 @@ describe("the document view's Markdown", () => {
     expect(lastReport(onChange)).toBe("Title\n=====\n\nFirst line\\\nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n");
   });
 
+  it("keeps a table in one piece when the split mirror adds a short row to it", { timeout: 60_000 }, async () => {
+    const { editor } = await open("Intro.\n\n| x | y |\n| - | - |\n| 1 | 2 |\n");
+    // A row with fewer cells than the header. Replacing only the text that
+    // changed would cut the table in two there.
+    editor.setMarkdown("Intro.\n\n| x | y |\n| - | - |\n| 3 |\n| 1 | 2 |\n");
+    expect(editor.getMarkdown()).toBe("Intro.\n\n| x | y |\n| - | - |\n| 3 |\n| 1 | 2 |\n");
+    // The document's own form of it, as an edit in the table writes it. The
+    // short row is a row of the same table.
+    replace(editor, "3", "4");
+    expect(editor.getMarkdown()).toBe("Intro.\n\n| x | y |\n| - | - |\n| 4 |   |\n| 1 | 2 |\n");
+  });
+
   it("is the exact text the split mirror set while the editor was opening", { timeout: 60_000 }, async () => {
     const { editor, root, mounting } = start("Start.\n");
     let mounted = false;

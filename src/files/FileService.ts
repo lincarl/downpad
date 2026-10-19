@@ -1,15 +1,15 @@
 // File lifecycle: new / open / save / save-as (spec §5.1) with multi-document
 // tabs (§5.19). Reads and writes go through Electron IPC (UTF-8, no BOM,
 // EOL preserved, atomic); dialogs use Electron native dialogs. Opening reuses an
-// empty untitled tab or focuses an already-open file; otherwise a new tab is
-// added. The active tab's document is the canonical markdown string; after it
+// empty untitled tab that no dropped file is on its way into, or focuses an
+// already-open file; otherwise a new tab is added. The active tab's document is the canonical markdown string; after it
 // changes the EditorPresenter re-shows it in the editor.
 
 import { openDialog, saveDialog, ask } from "../ipc/dialogs";
 import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
-import { blankDoc, type DocumentState } from "../state/types";
+import { blankDoc, hasUnsavedChanges, type DocumentState } from "../state/types";
 import type { Store } from "../state/store";
 
 const MD_FILTERS = [
@@ -105,11 +105,13 @@ export class FileService {
     this.recordOpened(path);
   }
 
-  /** True if the active tab is a pristine untitled buffer that open can reuse. */
+  /** True if the active tab is a pristine untitled buffer that open can reuse.
+   *  One that a dropped file is on its way into keeps its document, so the
+   *  file never goes into the one opened (§5.4). */
   private activeIsReusable(): boolean {
     const { tabs, activeTabId } = this.store.get();
     const active = tabs.find((t) => t.id === activeTabId);
-    return !!active && !active.doc.filePath && !active.doc.isDirty && active.doc.markdown.trim() === "";
+    return !!active && !hasUnsavedChanges(active) && !active.doc.filePath && active.doc.markdown.trim() === "";
   }
 
   /** Point the single backend watcher at the active document's file, or clear
@@ -234,9 +236,10 @@ export class FileService {
     this.store.patchDocById(tabId, { savedMarkdown: previous, isDirty: current.markdown !== previous });
   }
 
-  /** Whether any open tab has unsaved changes (window-close guard, §5.19). */
+  /** Whether any open tab has unsaved changes (window-close guard, §5.19),
+   *  counting files dropped on a document that are not in yet. */
   anyDirty(): boolean {
-    return this.store.get().tabs.some((t) => t.doc.isDirty);
+    return this.store.get().tabs.some(hasUnsavedChanges);
   }
 
   /** Confirm discarding a single named tab before closing it (§5.19). */
@@ -246,7 +249,7 @@ export class FileService {
 
   /** Confirm discarding all unsaved tabs on window close (§5.19). */
   async confirmDiscardAll(): Promise<boolean> {
-    const n = this.store.get().tabs.filter((t) => t.doc.isDirty).length;
+    const n = this.store.get().tabs.filter(hasUnsavedChanges).length;
     const what = n === 1 ? "1 document has" : `${n} documents have`;
     return this.confirmDiscard(`${what} unsaved changes. Discard them and close?`);
   }

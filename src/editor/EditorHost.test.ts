@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import { Store } from "../state/store";
-import type { AppState } from "../state/types";
+import { hasUnsavedChanges, type AppState } from "../state/types";
 
 interface Deferred {
   promise: Promise<void>;
@@ -50,6 +50,25 @@ const fakeEditors = vi.hoisted(() => ({
   /** When each document pane build starts and ends, and when the host forgets
    *  the image answers, in order. */
   events: [] as string[],
+  /** The viewport point the document pane last aimed a drop at. */
+  droppedAt: null as [number, number] | null,
+  /** The drop target the document pane's last insert went to, if any. */
+  insertedAt: null as { pos: number } | null,
+  /** The element of the document pane that took the last insert. */
+  insertedInto: null as HTMLElement | null,
+  /** The drop targets the document panes keep in step with edits. */
+  heldTargets: new Set<{ pos: number }>(),
+  /** The viewport point the Markdown pane last aimed a drop at. */
+  rawDroppedAt: null as [number, number] | null,
+  /** The drop target the Markdown pane's last insert went to, if any. */
+  rawInsertedAt: null as { pos: number } | null,
+  /** Whether the last insert in either pane moved the caret after the file. */
+  movedCaret: null as boolean | null,
+  /** Whether the document pane finds where a dropped file goes in the source. */
+  findsSource: true,
+  /** The source change the Markdown pane last made for a file dropped on the
+   *  document pane. */
+  rawEdit: null as { from: number; to: number; insert: string } | null,
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -59,9 +78,10 @@ const MARKDOWN_COUNTS = { current: 0, total: 4 };
 vi.mock("./wysiwyg/WysiwygEditor", () => ({
   WysiwygEditor: class {
     private onChange: ((markdown: string) => void) | null = null;
+    private root: HTMLElement | null = null;
 
     async mount(
-      _root: HTMLElement,
+      root: HTMLElement,
       markdown: string,
       cb: { onChange(markdown: string): void; onFindChange?(): void },
       style: { bullet: string },
@@ -70,6 +90,7 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       fakeEditors.mounted.push({ markdown, bullet: style.bullet });
       fakeEditors.events.push(`build ${markdown}`);
       fakeEditors.duringMount?.();
+      this.root = root;
       this.onChange = cb.onChange;
       fakeEditors.wysiwygChange = cb.onChange;
       fakeEditors.wysiwygFindChange = cb.onFindChange ?? null;
@@ -90,10 +111,53 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       this.onChange?.(fakeEditors.markdown);
     }
 
-    /** Like the real editor, hold the insert back until typing pauses. */
-    insertMarkdown(markdown: string): void {
+    /** Like the real editor, aim a drop at a viewport point. */
+    dropTargetAt(x: number, y: number): { pos: number } {
+      fakeEditors.droppedAt = [x, y];
+      const target = { pos: 7 };
+      fakeEditors.heldTargets.add(target);
+      return target;
+    }
+
+    releaseDropTarget(target: { pos: number }): void {
+      fakeEditors.heldTargets.delete(target);
+    }
+
+    /** Like the real editor with the find card's current match in the
+     *  frontmatter table, focus that table's cell. */
+    focus(): void {
+      if (!this.root) return;
+      const cell = this.root.querySelector("input") ?? this.root.appendChild(document.createElement("input"));
+      cell.focus();
+    }
+
+    /** Take focus with a caret in the document text. */
+    focusText(): void {
+      if (!this.root) return;
+      const caret = this.root.querySelector("textarea") ?? this.root.appendChild(document.createElement("textarea"));
+      caret.focus();
+    }
+
+    /** Like the real editor, hold the insert back until typing pauses, and
+     *  give the target for the drop's next file, a new one after a file that
+     *  went in at the caret. */
+    insertMarkdown(markdown: string, target: { pos: number } | null = null, moveCaret = true): { pos: number } {
       fakeEditors.markdown = `${fakeEditors.markdown}\n\n${markdown}`;
       fakeEditors.pending = true;
+      fakeEditors.insertedAt = target;
+      fakeEditors.insertedInto = this.root;
+      fakeEditors.movedCaret = moveCaret;
+      const next = target ?? { pos: 11 };
+      fakeEditors.heldTargets.add(next);
+      return next;
+    }
+
+    /** Like the real editor, insert the file and give the change to the
+     *  source that puts it in the same place, here at the end. */
+    insertMarkdownWithSource(markdown: string, target: { pos: number }, source: string) {
+      this.insertMarkdown(markdown, target, false);
+      const end = source.length;
+      return fakeEditors.findsSource ? { from: end, to: end, insert: `\n\n${markdown}`, assoc: -1 as const } : null;
     }
 
     /** The pane now shows the mirrored text, dropping anything it held. */
@@ -117,7 +181,12 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
 vi.mock("./raw/RawEditor", () => ({
   RawEditor: class {
-    mount(_root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }): void {
+    private root: HTMLElement | null = null;
+    private onChange: ((text: string) => void) | null = null;
+
+    mount(root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }): void {
+      this.root = root;
+      this.onChange = cb.onChange;
       fakeEditors.rawText = text;
       fakeEditors.rawChange = cb.onChange;
       fakeEditors.rawFindChange = cb.onFindChange ?? null;
@@ -135,11 +204,38 @@ vi.mock("./raw/RawEditor", () => ({
       return MARKDOWN_COUNTS;
     }
 
-    /** Like the real editor, add the text at the caret, here the end, and
-     *  report the edit at once. */
-    insertText(text: string): void {
+    /** Like the real editor, aim a drop at a viewport point. */
+    dropTargetAt(x: number, y: number): { pos: number } {
+      fakeEditors.rawDroppedAt = [x, y];
+      return { pos: 3 };
+    }
+
+    releaseDropTarget(): void {}
+
+    /** Like the real editor, add the text at the target or the caret, here
+     *  the end either way, report the edit at once, and give the target for
+     *  the drop's next file. */
+    insertText(text: string, target: { pos: number } | null = null, moveCaret = true): { pos: number } {
       fakeEditors.rawText = `${fakeEditors.rawText ?? ""}${text}`;
-      fakeEditors.rawChange?.(fakeEditors.rawText);
+      fakeEditors.rawInsertedAt = target;
+      fakeEditors.movedCaret = moveCaret;
+      this.onChange?.(fakeEditors.rawText);
+      return target ?? { pos: fakeEditors.rawText.length };
+    }
+
+    /** Like the real editor, make a change to the text and report it. */
+    applyDropEdit(edit: { from: number; to: number; insert: string }): void {
+      const text = fakeEditors.rawText ?? "";
+      fakeEditors.rawText = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
+      fakeEditors.rawEdit = edit;
+      this.onChange?.(fakeEditors.rawText);
+    }
+
+    /** Take focus with a caret in the pane. */
+    focus(): void {
+      if (!this.root) return;
+      const caret = this.root.querySelector("textarea") ?? this.root.appendChild(document.createElement("textarea"));
+      caret.focus();
     }
 
     destroy(): void {}
@@ -219,6 +315,15 @@ beforeEach(() => {
   fakeEditors.wysiwygFindChange = null;
   fakeEditors.rawFindChange = null;
   fakeEditors.events = [];
+  fakeEditors.droppedAt = null;
+  fakeEditors.insertedAt = null;
+  fakeEditors.insertedInto = null;
+  fakeEditors.heldTargets.clear();
+  fakeEditors.rawDroppedAt = null;
+  fakeEditors.rawInsertedAt = null;
+  fakeEditors.movedCaret = null;
+  fakeEditors.findsSource = true;
+  fakeEditors.rawEdit = null;
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -950,6 +1055,452 @@ describe("EditorHost changes while a document pane builds", () => {
   });
 });
 
+describe("EditorHost file drops", () => {
+  it("aims a drop on the page around the document, and puts one elsewhere in the window at the caret", async () => {
+    const page = document.createElement("div");
+    const root = document.createElement("div");
+    const toolbar = document.createElement("div");
+    page.append(root);
+    document.body.append(toolbar, page);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+
+    const onToolbar = host.aimDrop({ clientX: 300, clientY: 20, target: toolbar })!;
+    expect(fakeEditors.droppedAt).toBeNull();
+    await host.insertDropped(onToolbar, "[a.csv](attachments/a.csv)");
+    expect(fakeEditors.insertedAt).toBeNull();
+    host.releaseDrop(onToolbar);
+
+    const onPage = host.aimDrop({ clientX: 300, clientY: 600, target: page })!;
+    expect(fakeEditors.droppedAt).toEqual([300, 600]);
+    await host.insertDropped(onPage, "[b.csv](attachments/b.csv)");
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    // The editor stops keeping the target once the drop ends.
+    host.releaseDrop(onPage);
+    expect(fakeEditors.heldTargets.size).toBe(0);
+    page.remove();
+    toolbar.remove();
+    await host.dispose();
+  });
+
+  it.each([
+    ["document", "document"],
+    ["Markdown view", "markdown"],
+  ] as const)("puts each later file of a drop away from the text in the %s after the one before, for a user who has moved on", async (_view, layout) => {
+    const root = document.createElement("div");
+    const toolbar = document.createElement("div");
+    document.body.append(toolbar, root);
+    const host = new EditorHost(root, makeStore());
+    host.initLayout(layout);
+    await host.reloadActiveDoc();
+    const inserted = () => (layout === "document" ? fakeEditors.insertedAt : fakeEditors.rawInsertedAt);
+
+    const drop = host.aimDrop({ clientX: 300, clientY: 20, target: toolbar })!;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // A key while the first file is read, so the caret stays before the files.
+    toolbar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Shift" }));
+    await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(inserted()).toBeNull();
+    expect(fakeEditors.movedCaret).toBe(false);
+    const afterFirst = layout === "document" ? [...fakeEditors.heldTargets][0] : { pos: fakeEditors.rawText!.length };
+    await host.insertDropped(drop, "[b.csv](attachments/b.csv)");
+
+    // At the caret, the second file would go in before the first.
+    expect(inserted()).toEqual(afterFirst);
+    host.releaseDrop(drop);
+    expect(fakeEditors.heldTargets.size).toBe(0);
+    root.remove();
+    toolbar.remove();
+    await host.dispose();
+  });
+
+  it("focuses the document text for a drop on it, not the find card's match in the frontmatter table", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    expect(document.activeElement).not.toBeInstanceOf(HTMLTextAreaElement);
+    await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    root.remove();
+    await host.dispose();
+  });
+
+  /** Show the first tab again, as a click on it does. */
+  async function showFirstTab(store: Store, host: EditorHost): Promise<void> {
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+  }
+
+  /** Open a second document in its own tab, which comes to the front. */
+  async function openSecondTab(store: Store, host: EditorHost): Promise<void> {
+    store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
+    await host.reloadActiveDoc();
+  }
+
+  /** Whether a promise has settled, after pending callbacks ran. */
+  async function settled(promise: Promise<unknown>): Promise<boolean> {
+    let done = false;
+    void promise.then(() => (done = true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return done;
+  }
+
+  it("leaves focus and the caret where the user went while the file was read", async () => {
+    const root = document.createElement("div");
+    const find = document.createElement("input");
+    document.body.append(root, find);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    // Such as the find card, where the next keys would go into the document.
+    find.focus();
+    await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+
+    expect(document.activeElement).toBe(find);
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    expect(fakeEditors.movedCaret).toBe(false);
+    root.remove();
+    find.remove();
+    await host.dispose();
+  });
+
+  it("puts the caret after the last of the files dropped on the document while focus was in the find card", async () => {
+    const root = document.createElement("div");
+    const find = document.createElement("input");
+    document.body.append(root, find);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    find.focus();
+
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await host.insertDropped(drop, "![](a.png)");
+    // The document took focus with the first file, not the user.
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    await host.insertDropped(drop, "[b.csv](attachments/b.csv)");
+
+    expect(fakeEditors.movedCaret).toBe(true);
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    root.remove();
+    find.remove();
+    await host.dispose();
+  });
+
+  it("leaves focus and the caret alone when the user pressed a key or clicked since the drop", async () => {
+    const root = document.createElement("div");
+    const find = document.createElement("input");
+    document.body.append(root, find);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    find.focus();
+
+    for (const input of [new KeyboardEvent("keydown", { key: "S" }), new Event("pointerdown")]) {
+      const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      find.dispatchEvent(input);
+      await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+      host.releaseDrop(drop);
+
+      expect(document.activeElement).toBe(find);
+      expect(fakeEditors.movedCaret).toBe(false);
+    }
+    root.remove();
+    find.remove();
+    await host.dispose();
+  });
+
+  it("puts the caret after a file dropped on the document right after typing there, but leaves a Markdown pane's caret", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const typeIn = (element: HTMLElement) => {
+      element.focus();
+      element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "x" }));
+      element.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "x" }));
+    };
+
+    // The document pane puts the file at a block edge, away from the typing.
+    const text = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("textarea"));
+    typeIn(text);
+    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 120, target: text })!, "[a.csv](attachments/a.csv)");
+    expect(fakeEditors.movedCaret).toBe(true);
+
+    // A Markdown pane puts it into a line, where typing would go on after it.
+    await host.setLayout("markdown");
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
+    typeIn(line);
+    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 20, target: line })!, "[b.csv](attachments/b.csv)");
+    expect(fakeEditors.movedCaret).toBe(false);
+    expect(document.activeElement).toBe(line);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts the caret after a file dropped on a Markdown pane right after a key there that typed nothing", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const host = new EditorHost(root, makeStore());
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
+    line.focus();
+    // Such as Shift+End, which selects to the end of the line.
+    line.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End", shiftKey: true }));
+
+    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 20, target: line })!, "[a.csv](attachments/a.csv)");
+
+    expect(fakeEditors.movedCaret).toBe(true);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a document now behind another tab where it was dropped once that document is shown", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const first = root.querySelector<HTMLElement>(".editor-pane-wysiwyg")!;
+    const line = first.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    expect(fakeEditors.insertedInto).toBeNull();
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    expect(fakeEditors.insertedInto).toBe(first);
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    await host.dispose();
+  });
+
+  it("records that files are on their way into a document from its first drop until its last drop ends", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const pending = () => store.get().tabs.find((tab) => tab.id === "tab-1")?.filesPending ?? false;
+    expect(pending()).toBe(false);
+
+    const first = host.aimDrop()!;
+    const second = host.aimDrop()!;
+    // Opening a file must not put another document in this tab meanwhile.
+    expect(pending()).toBe(true);
+    host.releaseDrop(first);
+    expect(pending()).toBe(true);
+    host.releaseDrop(second);
+    expect(pending()).toBe(false);
+    await host.dispose();
+  });
+
+  it("counts a background document a file waits for as unsaved, even after a save of it completes", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await openSecondTab(store, host);
+    const tab = (id: string) => store.get().tabs.find((t) => t.id === id)!;
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    // A save that started before the drop marks the text saved.
+    store.patchDocById("tab-1", { isDirty: false });
+
+    // Closing the document or the window right now asks before the file is lost.
+    expect(hasUnsavedChanges(tab("tab-1"))).toBe(true);
+    expect(hasUnsavedChanges(tab(store.get().activeTabId!))).toBe(false);
+    await showFirstTab(store, host);
+    expect(await inserted).toBe(true);
+    host.releaseDrop(drop);
+    expect(tab("tab-1").filesPending).toBe(false);
+    await host.dispose();
+  });
+
+  it("keeps a background document's newer edit when a file dropped on its stale Markdown pane is read", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("div"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 20, target: line })!;
+    // While the file is read, the document view edits the same document,
+    // which leaves the hidden Markdown pane behind, and another tab opens.
+    await host.setLayout("document");
+    fakeEditors.wysiwygChange!("typed in the document");
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    expect(store.get().tabs[0]!.doc.markdown).toBe("typed in the document");
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    // At the caret of the document view, the pane being edited.
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg:not([hidden])"));
+    expect(fakeEditors.insertedAt).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a background document's stale document pane into the pane shown later", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    // The Markdown view edits the document, which leaves the hidden document
+    // pane behind, and another tab opens.
+    await host.setLayout("markdown");
+    fakeEditors.rawChange!("typed in Markdown");
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    // The stale pane's report would be dropped, and the file lost with it.
+    expect(fakeEditors.insertedInto).toBeNull();
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    // At the caret of the Markdown view, the pane being edited.
+    expect(fakeEditors.insertedInto).toBeNull();
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a document whose editor was dropped from memory at its caret once it is shown", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    store.set({ settings: { ...DEFAULT_SETTINGS, maxRetainedTabEditors: 1 } });
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await openSecondTab(store, host);
+
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+    await showFirstTab(store, host);
+
+    expect(await inserted).toBe(true);
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg:not([hidden])"));
+    expect(fakeEditors.insertedAt).toBeNull();
+    await host.dispose();
+  });
+
+  it("holds a file that its untitled document must be saved for until that document is in front, as unsaved", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const drop = host.aimDrop()!;
+    await openSecondTab(store, host);
+
+    const inFront = host.untilInFront(drop);
+    expect(await settled(inFront)).toBe(false);
+    expect(hasUnsavedChanges(store.get().tabs[0]!)).toBe(true);
+    await showFirstTab(store, host);
+    expect(await inFront).toBe(true);
+    // A save the user cancels then ends the drop, which leaves the untouched
+    // document clean.
+    host.releaseDrop(drop);
+    expect(hasUnsavedChanges(store.get().tabs[0]!)).toBe(false);
+
+    // Once the document is closed, it is never in front.
+    const later = host.aimDrop()!;
+    await openSecondTab(store, host);
+    const closed = host.untilInFront(later);
+    expect(await settled(closed)).toBe(false);
+    store.closeTab("tab-1");
+    await host.discardTab("tab-1");
+    expect(await closed).toBe(false);
+    await host.dispose();
+  });
+
+  it("puts nothing anywhere when the document a file waits for is closed", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const drop = host.aimDrop()!;
+    await openSecondTab(store, host);
+    const inserted = host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(await settled(inserted)).toBe(false);
+
+    store.closeTab("tab-1");
+    await host.discardTab("tab-1");
+
+    expect(await inserted).toBe(false);
+    expect(fakeEditors.insertedInto).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a pane that a layout switch hid into the pane shown now", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await host.setLayout("markdown");
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+
+    // The hidden document pane would leave the Markdown pane, and its edits, behind.
+    expect(fakeEditors.insertedInto).toBeNull();
+    expect(store.get().doc.markdown).toBe("original markdown[a.csv](attachments/a.csv)");
+    await host.dispose();
+  });
+
+  it("puts nothing in another document once the one a file was dropped on is closed", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const drop = host.aimDrop()!;
+    store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
+    await host.reloadActiveDoc();
+    store.closeTab("tab-1");
+    await host.discardTab("tab-1");
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(false);
+
+    expect(fakeEditors.insertedInto).toBeNull();
+    await host.dispose();
+  });
+
+  it("puts a file at the caret of the document it was dropped on once that document is reloaded", async () => {
+    const root = document.createElement("div");
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    // Reload from disk builds a new editor, which has no place for the old target.
+    await host.reloadActiveDoc();
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg"));
+    expect(fakeEditors.insertedAt).toBeNull();
+    await host.dispose();
+  });
+});
+
 describe("EditorHost flush", () => {
   it("reports typing the visible document pane has not announced yet", async () => {
     const store = makeStore();
@@ -1087,7 +1638,7 @@ describe("EditorHost split catch-up", () => {
     await host.dispose();
   });
 
-  it("puts a file dropped while the Markdown pane has focus at its caret, as written", async () => {
+  it("puts a file dropped on the Markdown pane while it has focus at the drop point, as written", async () => {
     const { root, store, host } = await openSplit();
     document.body.append(root);
     const caret = document.createElement("textarea");
@@ -1096,12 +1647,103 @@ describe("EditorHost split catch-up", () => {
     fakeEditors.rawText = "Markdown text, typed";
     fakeEditors.rawChange!(fakeEditors.rawText);
 
-    host.insertMarkdown("[notes.csv](attachments/notes.csv)");
+    const drop = host.aimDrop({ clientX: 600, clientY: 40, target: caret })!;
+    await host.insertDropped(drop, "[notes.csv](attachments/notes.csv)");
 
     // The document pane would report its own form of the whole text.
     expect(store.get().doc.markdown).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
-    host.flush();
     expect(fakeEditors.mirrored).toBe("Markdown text, typed[notes.csv](attachments/notes.csv)");
+    expect(fakeEditors.droppedAt).toBeNull();
+    expect(fakeEditors.rawDroppedAt).toEqual([600, 40]);
+    expect(fakeEditors.rawInsertedAt).toEqual({ pos: 3 });
+    expect(document.activeElement).toBe(caret);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on the document pane into the Markdown pane as written, at once, while that has focus", async () => {
+    const { root, store, host } = await openSplit();
+    document.body.append(root);
+    const caret = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
+    caret.focus();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    caret.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
+    fakeEditors.rawText = "* Typed as written ";
+    fakeEditors.rawChange!(fakeEditors.rawText);
+
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await host.insertDropped(drop, "[notes.csv](attachments/notes.csv)");
+
+    expect(fakeEditors.droppedAt).toEqual([40, 120]);
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    // The document pane's form of the whole text would rewrite what the user typed.
+    expect(fakeEditors.rawEdit).toEqual({ from: 19, to: 19, insert: "\n\n[notes.csv](attachments/notes.csv)", assoc: -1 });
+    expect(store.get().doc.markdown).toBe("* Typed as written \n\n[notes.csv](attachments/notes.csv)");
+    expect(fakeEditors.mirrored).toBe("* Typed as written \n\n[notes.csv](attachments/notes.csv)");
+    expect(document.activeElement).toBe(caret);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("keeps focus in the Markdown pane when a file dropped on the document pane goes in there", async () => {
+    const { root, host } = await openSplit();
+    document.body.append(root);
+    const caret = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("textarea"));
+    caret.focus();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+
+    // Without typing first, and when the source edit cannot be found.
+    fakeEditors.findsSource = false;
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await host.insertDropped(drop, "[notes.csv](attachments/notes.csv)");
+
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    // The document pane's own report then brings the Markdown pane up to date.
+    expect(fakeEditors.rawText).toBe("document pane's form\n\n[notes.csv](attachments/notes.csv)");
+    expect(document.activeElement).toBe(caret);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts a file dropped on the Markdown pane there while the document pane has focus", async () => {
+    const { root, store, host } = await openSplit();
+    document.body.append(root);
+    root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("textarea")).focus();
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("div"));
+
+    const drop = host.aimDrop({ clientX: 600, clientY: 40, target: line })!;
+    await host.insertDropped(drop, "[notes.csv](attachments/notes.csv)");
+
+    expect(fakeEditors.insertedInto).toBeNull();
+    expect(fakeEditors.rawInsertedAt).toEqual({ pos: 3 });
+    expect(store.get().doc.markdown).toBe("original markdown[notes.csv](attachments/notes.csv)");
+    // The Markdown pane takes focus, as after a drop on the document pane.
+    expect(root.querySelector(".editor-pane-raw")!.contains(document.activeElement)).toBe(true);
+    root.remove();
+    await host.dispose();
+  });
+
+  it.each([
+    ["", false],
+    [", right after typing there", true],
+  ])("puts the caret after the last of the files dropped on the Markdown pane while the document pane has focus%s", async (_when, typed) => {
+    const { root, host } = await openSplit();
+    document.body.append(root);
+    const text = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("textarea"));
+    text.focus();
+    if (typed) {
+      text.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "x" }));
+      text.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "x" }));
+    }
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("div"));
+
+    const drop = host.aimDrop({ clientX: 600, clientY: 40, target: line })!;
+    await host.insertDropped(drop, "![](a.png)");
+    await host.insertDropped(drop, "[b.csv](attachments/b.csv)");
+
+    // The Markdown pane took focus with the first file, not the user.
+    expect(fakeEditors.movedCaret).toBe(true);
+    expect(root.querySelector(".editor-pane-raw")!.contains(document.activeElement)).toBe(true);
     root.remove();
     await host.dispose();
   });
@@ -1110,8 +1752,7 @@ describe("EditorHost split catch-up", () => {
     const { store, host } = await openSplit();
     fakeEditors.rawChange!("newer Markdown text");
 
-    host.insertMarkdown("![](image.png)");
-    host.flush();
+    await host.insertDropped(host.aimDrop()!, "![](image.png)");
 
     expect(store.get().doc.markdown).toBe("newer Markdown text\n\n![](image.png)");
     expect(fakeEditors.rawText).toBe("newer Markdown text\n\n![](image.png)");
