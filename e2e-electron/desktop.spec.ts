@@ -366,13 +366,14 @@ test("End with the caret before images or formulas that start a line moves the c
     "$x^2$ starts with a formula.",
     "![Pixel](image.png)$y$ start with an image.",
     "Break\\\n$z$ after a line break.",
+    "Kept\\\n![Pixel](image.png)$k$ are selected past a line break.",
   ].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
-  await expect.poll(loaded).toBe(4);
-  await expect(editor.locator("[data-type=math_inline]")).toHaveCount(4);
+  await expect.poll(loaded).toBe(5);
+  await expect(editor.locator("[data-type=math_inline]")).toHaveCount(5);
   /** Click at the end of the text on `line`'s last row, go to the start of
    *  that row with Home, press `key` and type `text`. The click is on the
    *  text, because a click right of the text in a table cell selects the
@@ -403,6 +404,9 @@ test("End with the caret before images or formulas that start a line moves the c
   await typeAfter("End", paragraph("start with an image."), "7");
   await typeAfter("End", paragraph("after a line break.").last(), "8");
   await typeAfter("End", editor.locator("td").filter({ hasText: "in a formula cell" }), "9");
+  // After a line break, Shift+End selects the line without the break, which
+  // Chromium's own Shift+End takes in too.
+  await typeAfter("Shift+End", paragraph("are selected past a line break."), "0");
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — md-easy");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
@@ -418,7 +422,8 @@ test("End with the caret before images or formulas that start a line moves the c
     "5",
     "$x^2$ starts with a formula.6",
     "![Pixel](image.png)$y$ start with an image.7",
-    "Break\\\n$z$ after a line break.8\n",
+    "Break\\\n$z$ after a line break.8",
+    "Kept\\\n0\n",
   ]);
 });
 

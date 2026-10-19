@@ -8,9 +8,14 @@
 // moves the caret past the inline atoms at the start of the line, and
 // Chromium's End goes on from the text after them.
 //
-// Chromium extends a selection that starts right after a line break and before
-// an image or a formula back over the line break, as Shift+ArrowRight there
-// shows, so Shift+End there also selects the line break.
+// Chromium cannot start a selection right after a line break and before an
+// inline atom. It starts the selection before the line break instead, so its
+// Shift+End there also selected the line break, and typing replaced the break
+// along with the line. The plugin therefore handles Shift+End there itself. It
+// finds the end of the line as Chromium's End does from after the atoms and
+// selects from the anchor to there. ProseMirror leaves typing over a selection
+// in one text block to Chromium, so the plugin types over such a selection
+// itself.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
@@ -29,7 +34,8 @@ function isInlineAtom(node: ProseNode): boolean {
 
 /** Moves the caret past the inline atoms that start its line when End or
  *  Shift+End is pressed there, so the key reaches the end of the line.
- *  Shift+End keeps the selection's anchor. */
+ *  Shift+End keeps the selection's anchor and leaves out a line break before
+ *  the atoms, also when the selection is typed over. */
 export const endPastAtoms = $prose(
   () =>
     new Plugin({
@@ -52,10 +58,30 @@ export const endPastAtoms = $prose(
             end += child.nodeSize;
           }
           if (end === $head.pos) return false;
-          const anchor = event.shiftKey ? selection.anchor : end;
-          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, anchor, end)));
-          // Leave the key to Chromium, which goes on from the new caret.
-          return false;
+          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+          // Leave End to Chromium, which goes on from the new caret.
+          if (!event.shiftKey) return false;
+          // Move the caret as Chromium's End would, and select from the anchor
+          // to where it lands.
+          const dom = view.dom.ownerDocument.getSelection();
+          if (!dom?.focusNode) return false;
+          dom.modify("move", "forward", "lineboundary");
+          const lineEnd = view.posAtDOM(dom.focusNode, dom.focusOffset);
+          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, selection.anchor, lineEnd)));
+          return true;
+        },
+        handleKeyPress: (view, event) => {
+          // A selection that starts right after a line break and before an
+          // inline atom, which Chromium would type over from before the break.
+          const { selection } = view.state;
+          const { $from } = selection;
+          if (!(selection instanceof TextSelection) || selection.empty || $from.nodeBefore?.type.name !== "hardbreak" || !$from.nodeAfter || !isInlineAtom($from.nodeAfter)) return false;
+          // Type as ProseMirror does over a selection it handles itself.
+          const text = String.fromCharCode(event.charCode);
+          if (/[\r\n]/.test(text)) return false;
+          const typed = () => view.state.tr.insertText(text).scrollIntoView();
+          if (!view.someProp("handleTextInput", (handle) => handle(view, selection.from, selection.to, text, typed))) view.dispatch(typed());
+          return true;
         },
       },
     }),
