@@ -127,6 +127,38 @@ describe("RawEditor.applyDropEdit", () => {
     expect(editor.getText()).toBe(insert.replace("<br />", "X<br />"));
   });
 
+  // The document view writes the list another way, such as with escapes,
+  // without trailing spaces or with an entity decoded, also in the lines next
+  // to the file.
+  it.each([
+    ["at the start of an item's text that gets an escape", "- One\n- ", "price * qty\n- Three", `- One\n- ${LINK}\n- Xprice \\* qty\n- Three`],
+    ["in an item's text without its trailing space", "1. One\n2. Tw", "o \n3. Three", `1. One\n2. ${LINK}\n3. TwXo\n4. Three`],
+    ["between escapes", "1. One\n2. a * ", "b * c\n3. Three", `1. One\n2. ${LINK}\n3. a \\* Xb \\* c\n4. Three`],
+    ["before an escape", "1. One\n2. a ", "* b * c\n3. Three", `1. One\n2. ${LINK}\n3. a X\\* b \\* c\n4. Three`],
+    ["at the start of an item's text that gets escapes", "1. One\n2. ", "a * b * c\n3. Three", `1. One\n2. ${LINK}\n3. Xa \\* b \\* c\n4. Three`],
+    ["in the item before the file", "- One * t", "wo \n- Three", `- One \\* tXwo\n- ${LINK}\n- Three`],
+    ["at the start of an item's text whose entity the document view decodes", "- One\n- ", "&amp; more\n- Three", `- One\n- ${LINK}\n- X& more\n- Three`],
+  ])("keeps a caret %s, next to the file, before the same character", (_where, before, after, expected) => {
+    const editor = mountWithCaret(before, after);
+
+    editor.applyDropEdit({ from: 0, to: before.length + after.length, insert: expected.replace("X", ""), assoc: -1 });
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe(expected);
+  });
+
+  it("keeps a caret in a long list whose every item the document view writes with an escape", () => {
+    const items = Array.from({ length: 80 }, (_item, index) => `item_${index}`);
+    const escaped = items.map((item) => item.replace("_", "\\_"));
+    const editor = mountWithCaret(`- ${items.slice(0, 41).join("\n- ")}`, `\n- ${items.slice(41).join("\n- ")}`);
+    const insert = `- ${[...escaped.slice(0, 40), LINK, ...escaped.slice(40)].join("\n- ")}`;
+
+    editor.applyDropEdit({ from: 0, to: editor.getText().length, insert, assoc: -1 });
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe(insert.replace("item\\_40", "item\\_40X"));
+  });
+
   /** Put `text` in the pane with the caret at `caret`, make a drop's `edit`,
    *  and type X. */
   function typeAfterDrop(editor: RawEditor, text: string, caret: number, edit: SourceEdit): string {
@@ -180,11 +212,13 @@ describe("dropEditChanges", () => {
   }
 
   // Item texts that share characters with the links that go in, some that
-  // start like a marker, and one that is empty.
+  // start like a marker, some that the document view writes another way, and
+  // one that is empty.
   const TEXTS = [
     "notes", "notes.csv", "Two", "two", "attachments", "attach ments", "csv", "a", "t", "tea", "apples", "report",
     "data", "see [this](that)", "(paren)", "[bracket]", "1. not a marker", "2) not one either", "- dash", "+ plus",
     "10 apples", "", "trailing ", "\u{1F600} smile", "back\\slash", "under_score", "*stars*", "x](y",
+    "price * qty", "a * b * c", "snake_case_name", "two spaces  ", "*", "_", "a_b ", "fish &amp; chips",
   ];
   const FILES = ["notes.csv", "report.pdf", "Two.csv", "data.csv", "a", "my notes (1).txt", "1. list.md", "\u{1F600}.txt", "attachments.zip", "apples"];
 
@@ -226,6 +260,23 @@ describe("dropEditChanges", () => {
       widths[depth] = indent + marker.length + 1;
       return { indent, prefix: `${" ".repeat(indent)}${marker} ${task ? `[${task}] ` : ""}`, text, content: widths[depth] };
     });
+  }
+
+  /** The document view's form of an item's text, with "*" and "_" escaped,
+   *  "&amp;" written as "&" and trailing spaces dropped, and where each column
+   *  of the text goes: before the same character, with its escape, or after
+   *  the "&" of the entity it is in. */
+  function rewrite(text: string): { text: string; columns: number[] } {
+    const kept = text.replace(/[ \t]+$/, "").length;
+    let written = "";
+    const columns = [0];
+    for (let index = 0; index < text.length; index += 1) {
+      const entity = text.lastIndexOf("&amp;", index);
+      if (entity >= 0 && index < entity + 5) written += index === entity ? "&" : "";
+      else if (index < kept) written += "*_".includes(text[index]) ? `\\${text[index]}` : text[index];
+      columns.push(written.length);
+    }
+    return { text: written, columns };
   }
 
   /** Whether a line is an empty item, which the document view writes as "<br />". */
@@ -293,6 +344,16 @@ describe("dropEditChanges", () => {
         newLines.splice(holder + 1, 0, blank, { indent: content, prefix: " ".repeat(content), text: `![](attachments/${encodeURI(file)})`, content });
         moved = moved.map((line) => (line > holder ? line + 2 : line));
       }
+      // The document view writes some items another way, mostly those next
+      // to the file. Where each column of their text goes.
+      const columns = lines.map((_line, index) => {
+        const newLine = newLines[moved[index]];
+        const next = index === at - 1 || index === at;
+        if (index === other || isEmpty(newLine) || random() >= (next ? 0.7 : 0.1)) return null;
+        const written = rewrite(newLine.text);
+        newLines[moved[index]] = { ...newLine, text: written.text };
+        return written.columns;
+      });
       const write = (list: Line[]): string => list.map((line) => line.prefix + line.text).join("\n");
       const intro = "Intro text.\n\n";
       const source = `${intro}${write(lines)}\n\nEnd text.\n`;
@@ -332,7 +393,7 @@ describe("dropEditChanges", () => {
         if (/[\uDC00-\uDFFF]/.test(line.text.charAt(middle))) middle -= 1;
         for (const column of [0, middle, line.text.length]) {
           if (isEmpty(line) && isEmpty(newLine)) check(text + column, newText, newText + newLine.text.length);
-          else check(text + column, newText + column);
+          else check(text + column, newText + (columns[index]?.[column] ?? column));
         }
       });
       // Around the list.
