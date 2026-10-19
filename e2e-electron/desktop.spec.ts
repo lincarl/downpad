@@ -358,14 +358,19 @@ test("End with the caret before images that start a line moves the caret to the 
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
   await expect.poll(loaded).toBe(3);
-  /** Click at the end of `line`'s last row, go to the start of that row with
-   *  Home, press `key` and type `text`. */
+  /** Click at the end of the text on `line`'s last row, go to the start of
+   *  that row with Home, press `key` and type `text`. The click is on the
+   *  text, because a click right of the text in a table cell selects the
+   *  cell's paragraph. */
   const typeAfter = async (key: string, line: Locator, text: string) => {
     const end = await line.evaluate((element) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
+      let last: Node | null = null;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) last = node;
       const range = document.createRange();
-      range.selectNodeContents(element);
-      const last = [...range.getClientRects()].at(-1)!;
-      return { x: last.right - 1, y: last.top + last.height / 2 };
+      range.selectNodeContents(last!);
+      const box = [...range.getClientRects()].at(-1)!;
+      return { x: box.right - 1, y: box.top + box.height / 2 };
     });
     await page.mouse.click(end.x, end.y);
     await page.keyboard.press("Home");
