@@ -697,7 +697,7 @@ export class WysiwygEditor {
     this.frontmatterSeparator = separator;
     if (block === before) {
       // Only the blank lines changed, which the table does not show.
-      this.reportPendingChange();
+      this.reportPendingChange({ keepTypedMark: true });
       return;
     }
     const inTable = !!this.fmPanel?.contains(document.activeElement);
@@ -706,7 +706,10 @@ export class WysiwygEditor {
     this.fmTableKey += 1;
     flushSync(() => this.syncFrontmatterPanel());
     this.find.refresh();
-    this.reportPendingChange();
+    // The typed-mark guard decides whether a typed closing mark still waits
+    // after this change, so the report leaves it be. It already writes such a
+    // mark as Save would (getMarkdown).
+    this.reportPendingChange({ keepTypedMark: true });
 
     const panel = this.fmPanel;
     if (!panel || !inEditor || view.state.doc !== prev.doc) return;

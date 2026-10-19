@@ -12,6 +12,7 @@ import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { callCommand } from "@milkdown/kit/utils";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
+import { setFrontmatter } from "./frontmatterHistory";
 import { serializerStyleFromSettings } from "../../state/types";
 import { mathDelimiters } from "./mathDelimiters";
 import { WysiwygEditor } from "./WysiwygEditor";
@@ -679,6 +680,26 @@ describe("math and strikethrough delimiters", () => {
     leave();
     type(view, "X");
     expect(crepe.getMarkdown()).toBe("One. see ~~ol**X**d~~\n\nTwo. a $xy$**X**\n");
+  });
+
+  it("keeps a closing mark waiting through a frontmatter change while the cursor is between its marks", { timeout: 60_000 }, async () => {
+    const onChange = vi.fn();
+    const { editor, root } = await open("---\ntitle: a\n---\n\nOne.\n", onChange);
+    const view = viewOf(editor);
+    // The editor reports changes from the tick after it opens.
+    await new Promise((resolve) => setTimeout(resolve));
+    moveToEnd(view, "One.");
+    type(view, " $x$");
+    moveTo(view, view.state.selection.from - 1);
+    // A frontmatter change is an edit, but the cursor between the marks keeps
+    // the mark waiting. The editor reports the change from the plugin view that
+    // sees it, as Save would write it.
+    view.dispatch(setFrontmatter(view.state, view.state.tr, { block: "---\ntitle: b\n---" }));
+    expect(formulas(root)).toEqual([]);
+    expect(onChange).toHaveBeenLastCalledWith("---\ntitle: b\n---\n\nOne. $x$\n");
+    // The cursor leaving the span decides it.
+    moveTo(view, view.state.selection.from + 1);
+    expect(formulas(root)).toEqual(["x"]);
   });
 
   it("reports a waiting closing mark as Save writes it, and decides it before Save", { timeout: 60_000 }, async () => {
