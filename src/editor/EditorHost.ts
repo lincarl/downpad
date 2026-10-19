@@ -304,7 +304,8 @@ export class EditorHost implements FindController {
    * document pane goes into the Markdown pane too, at the place in the source
    * that matches the drop point, and focus stays there. The document pane
    * then mirrors it as it mirrors typing. An insert reported by the document
-   * pane would write the whole text in its own form under the user's caret.
+   * pane would write the block the file joins in its own form under the
+   * user's caret.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
     let place = this.dropPlace(drop);
@@ -317,7 +318,7 @@ export class EditorHost implements FindController {
     const typedIn = this.focusedSplitRaw()?.raw;
     if (pane.wysiwyg && target && typedIn) {
       // If the source edit cannot be found, the document pane's own report
-      // rewrites the Markdown pane, as for any edit there.
+      // goes to the Markdown pane, as for any edit there.
       const edit = pane.wysiwyg.insertMarkdownWithSource(markdown, target, typedIn.getText());
       if (edit) typedIn.applyDropEdit(edit);
       this.flush();

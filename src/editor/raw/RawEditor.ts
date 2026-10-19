@@ -399,8 +399,8 @@ export class RawEditor {
    *  the lines that differ are replaced, each run of them on its own, so the
    *  caret, the selection, the lines in view and the targets of drops keep
    *  their place outside them. The document pane's report can change several
-   *  places at once, such as Replace all or its first edit, which writes the
-   *  source in its own form. This pane can have focus meanwhile, for example
+   *  places at once, such as after Replace all, or when it writes the whole
+   *  body in its own form. This pane can have focus meanwhile, for example
    *  when focus moves into it and the split catches it up first. The change is
    *  dispatched with `applying` set so it doesn't re-emit onChange. No-op when
    *  the text already matches. */

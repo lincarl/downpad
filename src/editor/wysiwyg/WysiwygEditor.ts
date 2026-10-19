@@ -491,9 +491,9 @@ export class WysiwygEditor {
    * `insertMarkdown` does but leaving the caret, and return the change to
    * `source`, the Markdown this pane shows, that puts the file in the same
    * place (§5.4). The split's Markdown pane makes that change while the user
-   * types there. This pane's own report would write the whole text in its own
-   * form under their caret. Null when the pane cannot tell where the file
-   * goes in the source, or nothing went in.
+   * types there. This pane's own report would write the block the file joins
+   * in its own form under their caret. Null when the pane cannot tell where
+   * the file goes in the source, or nothing went in.
    *
    * The changed source becomes the source of this pane's body, in the
    * insert's undo step. So the split's mirror of the Markdown pane's change
