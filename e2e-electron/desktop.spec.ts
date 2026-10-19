@@ -1169,6 +1169,32 @@ test("a Reload clicked while a layout switch builds the document view shows the 
   await expect(documentLine).toHaveText("New text from disk. Typed after.");
 });
 
+test("Split chosen while a reload from disk builds shows both panes with the file's new text", async () => {
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const file = path.join(directory, "split-during-reload.md");
+  await writeFile(file, "Old text.\n\n![pixel](pixel.png)\n");
+  await launch(file);
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  await expect(documentLine).toHaveText("Old text.");
+  await holdImageAnswers();
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  // Choose Split while the document pane for the reload waits for its image.
+  await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
+  const split = page.getByRole("radio", { name: "Split", exact: true });
+  await split.click();
+  await expect(split).toHaveAttribute("aria-checked", "true");
+  // The window switches to the split once the reload's document pane shows.
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(2);
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("New text from disk. Typed after.");
+});
+
 /** Drop files from the desktop onto the middle of an element, through
  *  Chromium's drag emulation, so the app gets their real paths. */
 async function dropFiles(target: Locator, files: string[]): Promise<void> {
