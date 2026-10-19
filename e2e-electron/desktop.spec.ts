@@ -9,6 +9,9 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 const heading = ".milkdown .ProseMirror h1";
 /** A synthetic one-pixel PNG, to exercise the local image protocol. */
 const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
+/** MD_EASY_CPU_THROTTLING_RATE, such as 4, runs every test with the
+ *  renderer's CPU that many times slower, as on a slower machine. */
+const cpuThrottlingRate = Number(process.env.MD_EASY_CPU_THROTTLING_RATE) || undefined;
 let directory: string;
 let app: ElectronApplication | undefined;
 let page: Page;
@@ -55,6 +58,13 @@ async function launch(file?: string, developmentOverride?: string): Promise<void
   });
   page = await app.firstWindow();
   await expect(page.getByTestId("app-shell")).toBeVisible();
+  if (cpuThrottlingRate) await throttleCpu(cpuThrottlingRate);
+}
+
+/** Make the renderer's CPU `rate` times slower, as on a slower machine. */
+async function throttleCpu(rate: number): Promise<void> {
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setCPUThrottlingRate", { rate });
 }
 
 async function chooseOpen(file: string): Promise<void> {
@@ -773,7 +783,8 @@ test("a typed closing mark is decided in a heading, by Tab in a list and by a pa
   await launch(file);
   // Milkdown gives a heading a new id after each key, which is no edit.
   await typeAtEnd(page.locator(heading), " $x$ and ~~old~~ end");
-  // Tab redraws the list item, which then puts the cursor back where it was.
+  // Tab redraws the list item, which puts back the cursor it saw then once
+  // the next frame comes, unless a key came first.
   await typeAtEnd(page.locator(".milkdown .ProseMirror li p").nth(1), " $y$");
   await page.keyboard.press("Tab");
   await page.keyboard.type(" more");
@@ -823,6 +834,70 @@ test("undo and redo keep pasted dollars as text and let a mark that a paste or T
     .toBe("Start. Let \\$x\\$ be the input\n\nOne. Let $y$ here\n\n- one\n- two ~~old~~ new\n");
   await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
   await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+});
+
+/** Run `act` while the page's animation frames wait, then run them, as on a
+ *  busy machine whose next frame comes only after the keys typed meanwhile. */
+async function lateFrame(act: () => Promise<void>): Promise<void> {
+  await page.evaluate(() => {
+    const request = window.requestAnimationFrame.bind(window);
+    const late: FrameRequestCallback[] = [];
+    let holding = true;
+    window.requestAnimationFrame = (callback) => request((time) => (holding ? late.push(callback) : callback(time)));
+    Object.assign(globalThis, {
+      releaseFrames: () => {
+        holding = false;
+        window.requestAnimationFrame = request;
+        for (const callback of late) request(callback);
+      },
+    });
+  });
+  await act();
+  await page.evaluate(() => {
+    const release: () => void = Reflect.get(globalThis, "releaseFrames");
+    release();
+  });
+  await twoFrames();
+}
+
+test("keys typed fast right after Tab, Shift+Tab, undo, redo or Enter in a list stay where they were typed", async () => {
+  const file = path.join(directory, "late-frame.md");
+  await writeFile(file, "- one\n- two\n  - three\n- four\n- five\n");
+  await launch(file);
+  await throttleCpu(cpuThrottlingRate ?? 4);
+  const items = page.locator(".milkdown .ProseMirror li p");
+  // Each of these redraws a list item, which puts back the cursor it saw
+  // then once the next frame comes. On a busy machine the keys typed before
+  // that frame came first, and the text typed after it landed among them.
+  /** Press `key`, type `fast` before the next frame and `then` after it. */
+  const typeAround = async (key: string, fast: string, then: string) => {
+    await lateFrame(async () => {
+      await page.keyboard.press(key);
+      await page.keyboard.type(fast);
+    });
+    await page.keyboard.type(then);
+  };
+  await typeAtEnd(items.nth(1), " $a$");
+  await typeAround("Tab", " b", "c");
+  await typeAtEnd(items.nth(2), " ~d~");
+  await typeAround("Shift+Tab", " e", "f");
+  // A pause makes Tab its own undo step, which undo and redo redraw.
+  await typeAtEnd(items.nth(3), " ~g~");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Tab");
+  await typeAround("ControlOrMeta+z", " hi", "j");
+  await typeAtEnd(items.nth(4), " $k$");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("ControlOrMeta+z");
+  await typeAround("ControlOrMeta+y", " l", "m");
+  await typeAround("Enter", "new", " item");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("- one\n  - two $a$ bc\n  - three ~~d~~ ef\n- four ~~g~~ hij\n  - five $k$ lm\n  - new item\n");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText(["d", "g"]);
 });
 
 test("autosave in a pause writes a typed closing mark as Save would and leaves it waiting", async () => {
