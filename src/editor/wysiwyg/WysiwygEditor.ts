@@ -250,7 +250,8 @@ export class WysiwygEditor {
     // step with their paths and images (§5.5).
     this.crepe.editor.use(missingImages(imageConfig.onImageLoadError));
     // End before an image or a formula that starts a line goes to the end of
-    // the line.
+    // the line, and a selection from right after a line break keeps its
+    // anchor there.
     this.crepe.editor.use(endPastAtoms);
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.

@@ -437,18 +437,22 @@ test("End with the caret before images or formulas that start a line moves the c
     "![Pixel](image.png)$y$ start with an image.",
     "Break\\\n$z$ after a line break.",
     "Kept\\\n![Pixel](image.png)$k$ are selected past a line break.",
+    "Twice\\\n![Pixel](image.png) is selected twice.",
+    "Less\\\n$s$ is selected less.",
+    "Home\\\n![Pixel](image.png) goes back home.",
   ].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
-  await expect.poll(loaded).toBe(5);
-  await expect(editor.locator("[data-type=math_inline]")).toHaveCount(5);
+  await expect.poll(loaded).toBe(7);
+  await expect(editor.locator("[data-type=math_inline]")).toHaveCount(6);
   /** Click at the end of the text on `line`'s last row, go to the start of
-   *  that row with Home, press `key` and type `text`. The click is on the
+   *  that row with Home, press `keys` and type `text`. The click is on the
    *  text, because a click right of the text in a table cell selects the
    *  cell's paragraph. */
-  const typeAfter = async (key: string, line: Locator, text: string) => {
+  const typeAfter = async (keys: string | string[], line: Locator, text: string) => {
+    await line.scrollIntoViewIfNeeded();
     const end = await line.evaluate((element) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
       let last: Node | null = null;
@@ -460,7 +464,7 @@ test("End with the caret before images or formulas that start a line moves the c
     });
     await page.mouse.click(end.x, end.y);
     await page.keyboard.press("Home");
-    await page.keyboard.press(key);
+    for (const key of [keys].flat()) await page.keyboard.press(key);
     await page.keyboard.type(text);
   };
   const paragraph = (text: string) => editor.locator("p").filter({ hasText: text });
@@ -477,6 +481,11 @@ test("End with the caret before images or formulas that start a line moves the c
   // After a line break, Shift+End selects the line without the break, which
   // Chromium's own Shift+End takes in too.
   await typeAfter("Shift+End", paragraph("are selected past a line break."), "0");
+  // Chromium moves the anchor before the break when it extends the selection
+  // again, and the selection keeps it after the break.
+  await typeAfter(["Shift+End", "Shift+End"], paragraph("is selected twice."), "a");
+  await typeAfter(["Shift+End", "Shift+ArrowLeft"], paragraph("is selected less."), "b");
+  await typeAfter(["Shift+End", "Shift+Home"], paragraph("goes back home."), "c");
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — md-easy");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
@@ -493,7 +502,10 @@ test("End with the caret before images or formulas that start a line moves the c
     "$x^2$ starts with a formula.6",
     "![Pixel](image.png)$y$ start with an image.7",
     "Break\\\n$z$ after a line break.8",
-    "Kept\\\n0\n",
+    "Kept\\\n0",
+    "Twice\\\na",
+    "Less\\\nb.",
+    "Home\\\nc![Pixel](image.png) goes back home.\n",
   ]);
 });
 
