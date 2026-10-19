@@ -57,6 +57,43 @@ describe("packByHeight", () => {
     // it needs a new page instead of being clipped by the footer boundary.
     expect(labels(packByHeight(blocks, 200))).toEqual([["a"], ["heading"]]);
   });
+
+  /**
+   * A 175 px quote on the second page, with a heading inside that has a 28 px
+   * top margin, and a 10 px block after it. `css` styles the quote, and
+   * `before` is put in it ahead of the heading.
+   */
+  function quoteOnSecondPage(css = "", before?: Node): HTMLElement[] {
+    const quote = block(218, 175, "quote", 4);
+    quote.style.cssText += css;
+    const heading = document.createElement("h2");
+    heading.style.marginTop = "28px";
+    if (before) quote.append(before);
+    quote.append(heading);
+    return [block(0, 190, "a"), quote, block(393, 10, "b")];
+  }
+
+  it("reserves the margin of a heading that begins a quote, which collapses with the quote's", () => {
+    // The heading's 28 px margin and the quote's 4 px collapse into one 28 px
+    // margin above the quote, so a page that starts with the quote holds 28 px
+    // above it. Leaving room for only the quote's 4 px put "b" on its page, and
+    // the page body cut off the end of it.
+    expect(labels(packByHeight(quoteOnSecondPage(), 200))).toEqual([["a"], ["quote"], ["b"]]);
+  });
+
+  it.each([
+    ["top padding", "padding-top: 1px", undefined],
+    ["a top border", "border-top: 1px solid", undefined],
+    ["a flex layout", "display: flex", undefined],
+    ["a flow-root", "display: flow-root", undefined],
+    ["clipped overflow", "overflow-y: hidden", undefined],
+    ["text before the heading", "", () => document.createTextNode("Note")],
+    ["an inline box before the heading", "", () => document.createElement("span")],
+  ])("keeps the heading's margin inside a quote with %s, and reserves only the quote's", (_kind, css, before) => {
+    // The margins do not collapse, so the heading's margin is part of the
+    // quote's height and the page holds only the quote's own above it.
+    expect(labels(packByHeight(quoteOnSecondPage(css, before?.()), 200))).toEqual([["a"], ["quote", "b"]]);
+  });
 });
 
 type HeaderShape = "crepe" | "thead" | "attribute-only" | "none";
@@ -1021,6 +1058,47 @@ describe("splitIntoPages, splitting a quote", () => {
     for (const piece of pieces) expect(piece.tagName).toBe("BLOCKQUOTE");
     expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
   });
+
+  it("splits a quote that fits a page only without the margin of the heading it begins with", () => {
+    // The heading's 28 px margin collapses with the quote's 4 px into one
+    // above the quote. The check for a block taller than a page counted only
+    // the quote's, so the quote was left whole and the page body cut off its end.
+    const heading = sized("h2", 300, "Heading.");
+    heading.style.marginTop = "28px";
+    const quote = stack("blockquote", heading, sized("p", 180, "Last."));
+    quote.style.marginTop = "4px";
+    const flow = flowWith(quote);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.map((piece) => piece.textContent)).toEqual(["Heading.", "Last."]);
+    for (const piece of pieces) expect(piece.tagName).toBe("BLOCKQUOTE");
+  });
+
+  it("leaves whole a block in a quote that fits a page with the margin it shares with the quote", () => {
+    // The image block's 4 px margin and the quote's collapse into one. Counting
+    // both made the image look too tall for a page, so it was shrunk.
+    const image = sized("div", 494, "IMAGE");
+    image.className = "milkdown-image-block";
+    image.style.marginTop = "4px";
+    const quote = stack("blockquote", ...paragraphs(10, "a"), image, ...paragraphs(10, "b"));
+    quote.style.marginTop = "4px";
+    const text = quote.textContent;
+    const flow = flowWith(quote);
+
+    splitIntoPages(flow, 500);
+
+    expect(flow.querySelector(".print-fit")).toBeNull();
+    expect(image.style.transform).toBe("");
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces.map((piece) => piece.textContent)).toEqual([
+      paragraphs(10, "a").map((p) => p.textContent).join(""),
+      "IMAGE",
+      paragraphs(10, "b").map((p) => p.textContent).join(""),
+    ]);
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+  });
 });
 
 describe("splitIntoPages, splitting a footnote", () => {
@@ -1331,5 +1409,52 @@ describe("splitIntoPages, fitting each piece of a block with its top margin and 
       expect(part.className).toBe("milkdown-code-block");
       expect(part.offsetHeight + 4).toBeLessThanOrEqual(500);
     }
+  });
+
+  // In a quote, the block's 4 px margin and the quote's collapse into one
+  // above each piece. Counting both left each piece of a table a row short
+  // and each piece of a code block a line short of what fits the page.
+
+  it("fits each piece of a table in a quote with the margin it shares with the quote, once", () => {
+    const table = measuredTable(6, { border: 1 });
+    const block = wrappedTable(table);
+    block.style.marginTop = "4px";
+    // Measure the pieces too: the wrappers' 12 px and the rows each holds.
+    for (const level of [block, block.firstElementChild as HTMLElement, table, table.querySelector("tbody")!]) {
+      level.dataset.stack = "";
+    }
+    (block.firstElementChild as HTMLElement).style.paddingTop = "12px";
+    const quote = stack("blockquote", block);
+    quote.style.marginTop = "4px";
+    const flow = flowWith(quote);
+
+    // The margin, the wrappers (12), the header (40), two rows and the border take 257 px.
+    splitIntoPages(flow, 258);
+
+    const parts = Array.from(flow.children) as HTMLElement[];
+    for (const part of parts) expect(part.tagName).toBe("BLOCKQUOTE");
+    expect(parts.map((part) => pieces(part).map(bodyLabels))).toEqual([[["r0", "r1"]], [["r2", "r3"]], [["r4", "r5"]]]);
+  });
+
+  it("fits each piece of a code block in a quote with the margin it shares with the quote, once", () => {
+    const block = codeBlock(60);
+    block.style.marginTop = "4px";
+    // Measure the pieces too: the block's 28 px of chrome and the lines each holds.
+    block.style.padding = "8px 0 20px";
+    for (const level of [block, ...Array.from(block.querySelectorAll<HTMLElement>(".codemirror-host, .cm-editor, .cm-content"))]) {
+      level.dataset.stack = "";
+    }
+    block.querySelector<HTMLElement>(".cm-scroller")!.dataset.row = "";
+    const quote = stack("blockquote", block);
+    quote.style.marginTop = "4px";
+    const flow = flowWith(quote);
+
+    // The margin, the block's chrome (28), the content's padding (8) and 23 lines take 454 px.
+    splitIntoPages(flow, 454);
+
+    const parts = Array.from(flow.children) as HTMLElement[];
+    for (const part of parts) expect(part.tagName).toBe("BLOCKQUOTE");
+    expect(parts.map((part) => codeLinesOf(part).length)).toEqual([23, 23, 14]);
+    expect(parts.flatMap(codeLinesOf)).toEqual(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`));
   });
 });

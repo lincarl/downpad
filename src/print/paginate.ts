@@ -15,6 +15,10 @@
 // blocks it holds, each split the same way. What cannot be split, such as an
 // image taller than a page, is shrunk to fit the page rather than cut off at
 // its edge.
+//
+// Wherever a block or a piece of one has to fit a page, the margin it takes at
+// the top of the page counts: its own top margin collapsed with those of the
+// first blocks inside it and of the containers around it (leadingMargin).
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -38,18 +42,20 @@ export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Elem
 /**
  * Pack laid-out siblings into groups no taller than `maxHeightPx`.
  *
- * Heights come from `offsetTop`/`offsetHeight`, i.e. border boxes. The first
- * block's top margin must be added back for each page: the page's flow is a
- * block formatting context (`display: flow-root`, app.css), so that margin is
- * contained by (and consumes space in) the page rather than collapsing outside
- * it, and it scales with the flow. An element taller than the limit gets a
- * group to itself rather than an empty page before it.
+ * Heights come from `offsetTop`/`offsetHeight`, i.e. border boxes. The margin
+ * the first block takes at the top of a page must be added back for each page
+ * (leadingMargin): the page's flow is a block formatting context (`display:
+ * flow-root`, app.css), so that margin is contained by (and consumes space in)
+ * the page rather than collapsing outside it, and it scales with the flow.
+ * `outer` holds the margins of the containers around the items that collapse
+ * with the first item's, as leadingMargin describes. An element taller than
+ * the limit gets a group to itself rather than an empty page before it.
  */
-export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: number): T[][] {
+export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: number, outer: number[] = []): T[][] {
   const boxes = items.map((el) => ({
     top: el.offsetTop,
     height: el.offsetHeight,
-    marginTop: marginTopOf(el),
+    marginTop: leadingMargin(el, outer),
   }));
   return packBoxes(boxes, maxHeightPx).map((group) => group.map((i) => items[i]));
 }
@@ -58,7 +64,10 @@ export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: num
 interface Box {
   top: number;
   height: number;
-  /** Only ordinary flow blocks need this; derived line boxes have no margin. */
+  /**
+   * The margin above the item when it starts a page (leadingMargin). Only
+   * ordinary flow blocks need this; derived line boxes have no margin.
+   */
   marginTop?: number;
 }
 
@@ -93,15 +102,16 @@ function packBoxes(boxes: Box[], maxHeightPx: number): number[][] {
 
 /**
  * Replace any child taller than a page with a sequence of page-sized pieces.
- * A child's top margin counts: a page makes room for it above the child
- * (packByHeight), so a heading that fit only without its margin was left
- * whole and the page body cut off its last line.
+ * The margin a child takes at the top of a page counts (leadingMargin): a
+ * page makes room for it above the child (packByHeight), so a heading that
+ * fit only without its margin was left whole and the page body cut off its
+ * last line.
  */
 function splitOversized(flow: HTMLElement, contentHeightPx: number): void {
   // Snapshot first: the list is mutated while splitting.
   for (const child of Array.from(flow.children)) {
     const el = child as HTMLElement;
-    if (el.offsetHeight + marginTopOf(el) <= contentHeightPx) continue;
+    if (leadingMargin(el) + el.offsetHeight <= contentHeightPx) continue;
     fitBlock(el, contentHeightPx);
   }
 }
@@ -110,16 +120,20 @@ function splitOversized(flow: HTMLElement, contentHeightPx: number): void {
  * Make a laid-out block taller than `maxHeightPx` fit: split it into pieces in
  * its place, then shrink whatever cannot be split (scaleToFit), the whole block
  * or a piece holding one line taller than a page, rather than let the page cut it.
+ *
+ * Each piece fits the page with the margin it takes at the top of one, which
+ * includes the margins in `outer` (leadingMargin). Every function below that
+ * splits or shrinks a block keeps to the same rule.
  */
-function fitBlock(el: HTMLElement, maxHeightPx: number): void {
-  const pieces = splitBlock(el, maxHeightPx);
+function fitBlock(el: HTMLElement, maxHeightPx: number, outer: number[] = []): void {
+  const pieces = splitBlock(el, maxHeightPx, outer);
   if (!pieces.length) {
-    scaleToFit(el, maxHeightPx);
+    scaleToFit(el, maxHeightPx, outer);
     return;
   }
   el.replaceWith(...pieces);
   for (const piece of pieces) {
-    if (oversized.has(piece)) scaleToFit(piece, maxHeightPx);
+    if (oversized.has(piece)) scaleToFit(piece, maxHeightPx, outer);
   }
 }
 
@@ -147,11 +161,10 @@ const FIT_CLASS = "print-fit";
  * past the page. A block that already fits, for instance once a child of it was
  * shrunk, is left alone.
  */
-function scaleToFit(el: HTMLElement, maxHeightPx: number): void {
+function scaleToFit(el: HTMLElement, maxHeightPx: number, outer: number[] = []): void {
   const style = getComputedStyle(el);
-  const room = Math.max(1, maxHeightPx - marginTopOf(el));
   const height = Math.max(el.offsetHeight, el.getBoundingClientRect().height);
-  if (height <= room) return;
+  if (leadingMargin(el, outer) + height <= maxHeightPx) return;
   const frame = document.createElement("div");
   frame.className = FIT_CLASS;
   frame.style.display = "flow-root";
@@ -161,6 +174,8 @@ function scaleToFit(el: HTMLElement, maxHeightPx: number): void {
   el.style.marginBottom = "0px";
   el.replaceWith(frame);
   frame.appendChild(el);
+  // The frame takes only the block's own top margin above it.
+  const room = Math.max(1, maxHeightPx - leadingMargin(frame, outer));
   // The children's margins now sit inside the frame, around the block, and
   // keep their size; only the block itself shrinks.
   const margins = Math.max(0, frame.getBoundingClientRect().height - height);
@@ -185,22 +200,32 @@ function scaleToFit(el: HTMLElement, maxHeightPx: number): void {
  * that holds more than that splits between its children instead. A Mermaid
  * code block is one: its diagram sits below the code, and splitting only the
  * code left the diagram out of every piece.
+ *
+ * Each piece fits `maxHeightPx` with the margin it takes at the top of a page,
+ * `outer` included (leadingMargin). A quote or a list splits between its
+ * children, and works that margin out for each piece from the child it starts
+ * with.
  */
-function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
+function splitBlock(el: HTMLElement, maxHeightPx: number, outer: number[]): HTMLElement[] {
+  if (CONTAINER_TAGS.has(el.tagName)) return splitContainer(el, maxHeightPx, outer);
+  if (LIST_TAGS.has(el.tagName)) return splitList(el, maxHeightPx, outer);
   const inner = splittableIn(el);
   if (!inner) return [];
   const beside = Array.from(el.children).some(
     (child) => !child.contains(inner) && (child as HTMLElement).offsetHeight > 0,
   );
-  if (inner !== el && beside && holdsBlocks(el)) return splitContainer(el, maxHeightPx);
-  if (inner === el) return splitElement(el, maxHeightPx);
-  // The wrappers occupy height of their own (padding, borders, sibling chrome),
-  // and every rebuilt piece repeats the block's top margin, which the page
-  // makes room for above it. Leave room for both so a piece still fits on the
+  if (inner !== el && beside && holdsBlocks(el)) return splitContainer(el, maxHeightPx, outer);
+  // Every piece takes the block's margin at the top of a page, and the
+  // wrappers around the split element repeat their own height (padding,
+  // borders, sibling chrome). Leave room for both so a piece still fits on the
   // page. Without the margin, pieces of a table or code block reached 4 px past
   // the page.
-  const overhead = Math.max(0, el.offsetHeight - inner.offsetHeight) + marginTopOf(el);
-  const pieces = splitElement(inner, Math.max(1, maxHeightPx - overhead));
+  const room = Math.max(
+    1,
+    maxHeightPx - leadingMargin(el, outer) - Math.max(0, el.offsetHeight - inner.offsetHeight),
+  );
+  const pieces = splitElement(inner, room);
+  if (inner === el) return pieces;
   return pieces.map((piece) => {
     const wrapped = rewrap(el, inner, piece);
     if (oversized.has(piece)) oversized.add(wrapped);
@@ -208,18 +233,20 @@ function splitBlock(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   });
 }
 
-/** Dispatch to the splitter for one element's own kind. */
+/**
+ * Dispatch to the splitter for one element's own kind. The pieces' border
+ * boxes fit `maxHeightPx`; the caller leaves room for the margin above them.
+ */
 function splitElement(el: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (el.classList.contains("cm-scroller")) return splitCodeMirror(el, maxHeightPx);
   if (el.classList.contains(SOURCE_LINE_CLASS)) return splitSourceLine(el, maxHeightPx);
   if (TEXT_TAGS.has(el.tagName)) return splitText(el, maxHeightPx);
-  if (CONTAINER_TAGS.has(el.tagName)) return splitContainer(el, maxHeightPx);
   switch (el.tagName) {
     case "TABLE":
       return splitTable(el as HTMLTableElement, maxHeightPx);
     case "UL":
     case "OL":
-      return splitList(el, maxHeightPx);
+      return splitList(el, maxHeightPx, []);
     case "PRE":
       return splitPre(el, maxHeightPx);
     default:
@@ -266,6 +293,9 @@ const TEXT_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
  * scale.
  */
 const CONTAINER_TAGS = new Set(["BLOCKQUOTE", "DL", "DD"]);
+
+/** Lists, split between their items (splitList). */
+const LIST_TAGS = new Set(["UL", "OL"]);
 
 /** `.cm-scroller` is Crepe's code block: CodeMirror, not a `<pre>` (splitCodeMirror). */
 const SPLITTABLE_SELECTOR = "table, ul, ol, pre, .cm-scroller";
@@ -423,34 +453,47 @@ function applyFrozenColumns(table: HTMLTableElement, frozen: FrozenColumns | nul
  * so the label printed alone at the foot of the page before, and so did the
  * label of a description that fit a page only by itself.
  */
-function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElement[] {
+function splitContainer(container: HTMLElement, maxHeightPx: number, outer: number[]): HTMLElement[] {
   if (!holdsBlocks(container)) return [];
-  const style = getComputedStyle(container);
-  // Every piece repeats the container's top margin, padding and borders.
-  const chrome =
-    marginTopOf(container) +
-    (Number.parseFloat(style.paddingTop) || 0) +
-    (Number.parseFloat(style.paddingBottom) || 0) +
-    (Number.parseFloat(style.borderTopWidth) || 0) +
-    (Number.parseFloat(style.borderBottomWidth) || 0);
-  const room = Math.max(1, maxHeightPx - chrome);
+  const inside = insideOf(container, maxHeightPx, outer);
   for (const child of Array.from(container.children) as HTMLElement[]) {
     const term = child.previousElementSibling as HTMLElement | null;
-    // From the term's top margin to the description's.
+    // From the margin above the term to the margin above the description.
     const kept =
-      term?.tagName === "DT" ? child.offsetTop - term.offsetTop + marginTopOf(term) - marginTopOf(child) : 0;
-    if (child.offsetHeight + marginTopOf(child) <= room - kept) continue;
-    fitBlock(child, Math.max(1, room - kept));
+      term?.tagName === "DT"
+        ? leadingMargin(term, inside.outer) + child.offsetTop - term.offsetTop - leadingMargin(child, inside.outer)
+        : 0;
+    const room = Math.max(1, inside.room - kept);
+    if (leadingMargin(child, inside.outer) + child.offsetHeight <= room) continue;
+    fitBlock(child, room, inside.outer);
   }
   const children = Array.from(container.children) as HTMLElement[];
   if (children.length < 2) return [];
-  const groups = packByHeight(children, room);
+  const groups = packByHeight(children, inside.room, inside.outer);
   if (groups.length < 2) return [];
   return groups.map((group) => {
     const piece = container.cloneNode(false) as HTMLElement;
     piece.append(...group);
     return piece;
   });
+}
+
+/**
+ * The room the children of a container that splits between them have on a
+ * page, and the margins above them that collapse with the margin of the child
+ * a piece starts with (leadingMargin), when a piece of the container starts a
+ * page. Every piece repeats the container's padding and borders. A container
+ * with no top padding or border shares its top margin with its first child, as
+ * a quote does with a heading or a table it begins with, so the margin counts
+ * once, the larger of the two.
+ */
+function insideOf(container: HTMLElement, maxHeightPx: number, outer: number[]): { room: number; outer: number[] } {
+  const style = getComputedStyle(container);
+  const margins = [...outer, topMarginOf(style)];
+  const bottom = px(style.paddingBottom) + px(style.borderBottomWidth);
+  if (opensAtTop(style)) return { room: Math.max(1, maxHeightPx - bottom), outer: margins };
+  const top = collapse(margins) + px(style.paddingTop) + px(style.borderTopWidth);
+  return { room: Math.max(1, maxHeightPx - top - bottom), outer: [] };
 }
 
 /**
@@ -473,18 +516,20 @@ function holdsBlocks(el: HTMLElement): boolean {
  * travels with the items; `start` still carries it for plain HTML lists.
  *
  * An item taller than a page is split between its own blocks first
- * (splitListItem), and its pieces are packed like items.
+ * (splitListItem), and its pieces are packed like items. Items sit in the list
+ * as a quote's blocks sit in the quote (insideOf).
  */
-function splitList(list: HTMLElement, maxHeightPx: number): HTMLElement[] {
+function splitList(list: HTMLElement, maxHeightPx: number, outer: number[]): HTMLElement[] {
+  const inside = insideOf(list, maxHeightPx, outer);
   for (const item of listItems(list)) {
-    if (item.offsetHeight + marginTopOf(item) <= maxHeightPx) continue;
-    const pieces = splitListItem(item, maxHeightPx);
+    if (leadingMargin(item, inside.outer) + item.offsetHeight <= inside.room) continue;
+    const pieces = splitListItem(item, inside.room, inside.outer);
     if (pieces.length) item.replaceWith(...pieces);
-    else scaleToFit(item, maxHeightPx);
+    else scaleToFit(item, inside.room, inside.outer);
   }
   const items = listItems(list);
   if (items.length < 2) return [];
-  const groups = packByHeight(items, maxHeightPx);
+  const groups = packByHeight(items, inside.room, inside.outer);
   if (groups.length < 2) return [];
   // An item's number, which the piece of it that continues on a later page keeps.
   const numbers = new Map<Element, number>();
@@ -523,14 +568,25 @@ const continued = new WeakSet<Element>();
  * every piece so the text keeps its indent, but only the first piece shows it:
  * the rest continue the item rather than start new ones. A plain `<li>` that
  * holds blocks splits the same way and hides its marker on later pieces.
+ *
+ * Crepe's content sits in a flex item, which holds the margin above the
+ * content's first block inside the item. Each piece of the content brings its
+ * own such margin, from the block the piece starts with (splitContainer), so
+ * only the rest of the item's height around the content counts as what every
+ * piece repeats.
  */
-function splitListItem(item: HTMLElement, maxHeightPx: number): HTMLElement[] {
+function splitListItem(item: HTMLElement, maxHeightPx: number, outer: number[]): HTMLElement[] {
   const content =
     item.querySelector<HTMLElement>(":scope > li > .children > .content-dom") ??
     (item.tagName === "LI" ? item : null);
   if (!content) return [];
-  const overhead = Math.max(0, item.offsetHeight - content.offsetHeight);
-  const pieces = splitContainer(content, Math.max(1, maxHeightPx - overhead));
+  let pieces: HTMLElement[];
+  if (content === item) {
+    pieces = splitContainer(item, maxHeightPx, outer);
+  } else {
+    const around = Math.max(0, item.offsetHeight - content.offsetHeight - leadingMargin(content));
+    pieces = splitContainer(content, Math.max(1, maxHeightPx - leadingMargin(item, outer) - around), []);
+  }
   return pieces.map((piece, index) => {
     const later = index > 0;
     let wrapped = piece;
@@ -786,7 +842,8 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
   const run = inlineRun(block);
   const end = run.length;
   if (end < 2) return [];
-  const budget = Math.max(1, maxHeightPx - marginTopOf(block));
+  // The caller has left room for the margin above the block (splitBlock).
+  const budget = maxHeightPx;
   const range = document.createRange();
 
   /** The text node or element holding unit `index`, and the unit's offset in it. */
@@ -1087,7 +1144,88 @@ function heightBeyond(el: Element, units: Element[]): number {
   return Math.max(0, el.getBoundingClientRect().height - run);
 }
 
-/** An element's top margin, which a page has to make room for above it. */
-function marginTopOf(el: Element): number {
-  return Number.parseFloat(getComputedStyle(el).marginTop) || 0;
+/**
+ * The margin above `el` when it starts a page: its top margin collapsed with
+ * the top margins of the first blocks inside it that adjoin it, and with
+ * `outer`, the margins of the containers around it that share its top edge on
+ * the page (insideOf).
+ *
+ * A page's flow holds that margin (`flow-root`, app.css), and every place that
+ * leaves room for the margin above a block or a piece of one uses this. A
+ * quote that begins with a heading takes the heading's 28 px margin, not its
+ * own 4 px, since the two collapse into one above the quote. Leaving room for
+ * 4 px let a quote that filled a page run up to 24 px past it. A table block
+ * in a quote shares its 4 px margin with the quote's, and counting both left
+ * each piece of the table a row short.
+ */
+function leadingMargin(el: Element, outer: number[] = []): number {
+  const margins = [...outer];
+  for (let box: Element | null = el; box; box = firstInFlowChild(box)) {
+    const style = getComputedStyle(box);
+    margins.push(topMarginOf(style));
+    if (!opensAtTop(style)) break;
+  }
+  return collapse(margins);
+}
+
+/** Adjoining margins as the one they collapse into: the largest plus the most negative. */
+function collapse(margins: number[]): number {
+  return Math.max(0, ...margins) + Math.min(0, ...margins);
+}
+
+/** A box's top margin. Table rows, cells and the like have none. */
+function topMarginOf(style: CSSStyleDeclaration): number {
+  return style.display.startsWith("table-") && style.display !== "table-caption" ? 0 : px(style.marginTop);
+}
+
+/**
+ * Whether a box's top margin adjoins the top margin of its first child, so
+ * the two collapse. It does for a box of ordinary block layout with no top
+ * padding or border that starts no formatting context of its own. A flex
+ * container such as Crepe's list item, a table, a `flow-root` or a box that
+ * clips its overflow holds its children's margins inside it.
+ */
+function opensAtTop(style: CSSStyleDeclaration): boolean {
+  return (
+    FLOW_LAYOUTS.has(style.display) &&
+    !px(style.paddingTop) &&
+    !px(style.borderTopWidth) &&
+    UNCLIPPED.has(style.overflowX) &&
+    UNCLIPPED.has(style.overflowY) &&
+    (!style.float || style.float === "none") &&
+    !OUT_OF_FLOW.has(style.position) &&
+    !/layout|paint|content|strict/.test(style.contain)
+  );
+}
+
+const FLOW_LAYOUTS = new Set(["block", "list-item"]);
+
+/** Overflow values that start no formatting context. */
+const UNCLIPPED = new Set(["visible", "clip"]);
+
+/**
+ * The first child laid out in the flow of `box`, when it is a block. Text or
+ * an inline box before any block starts a line, which keeps the margins
+ * apart. Hidden, floated and positioned children take no part.
+ */
+function firstInFlowChild(box: Element): Element | null {
+  for (let node = box.firstChild; node; node = node.nextSibling) {
+    if (node instanceof Text) {
+      if (node.data.trim()) return null;
+      continue;
+    }
+    if (!(node instanceof Element)) continue;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || OUT_OF_FLOW.has(style.position)) continue;
+    if (style.float && style.float !== "none") continue;
+    return BLOCK_LEVEL.has(style.display) ? node : null;
+  }
+  return null;
+}
+
+const BLOCK_LEVEL = new Set(["block", "list-item", "flow-root", "flex", "grid", "table"]);
+
+/** A computed length in px; 0 for one that is not a number, such as `medium`. */
+function px(value: string): number {
+  return Number.parseFloat(value) || 0;
 }
