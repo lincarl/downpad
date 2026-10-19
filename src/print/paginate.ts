@@ -411,9 +411,10 @@ function applyFrozenColumns(table: HTMLTableElement, frozen: FrozenColumns | nul
  * cannot be split, such as a tall image, is shrunk to fit.
  *
  * A term (`dt`), such as a footnote's label, stays on the page with the start of
- * the description after it: the description is split to leave room for it. Its
- * first piece filled a page, so the label printed alone at the foot of the page
- * before.
+ * the description after it: a description that does not fit a page with the
+ * term above it is split to leave room for it. Its first piece filled a page,
+ * so the label printed alone at the foot of the page before, and so did the
+ * label of a description that fit a page only by itself.
  */
 function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (!holdsBlocks(container)) return [];
@@ -427,11 +428,11 @@ function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElemen
     (Number.parseFloat(style.borderBottomWidth) || 0);
   const room = Math.max(1, maxHeightPx - chrome);
   for (const child of Array.from(container.children) as HTMLElement[]) {
-    if (child.offsetHeight + marginTopOf(child) <= room) continue;
     const term = child.previousElementSibling as HTMLElement | null;
     // From the term's top margin to the description's.
     const kept =
       term?.tagName === "DT" ? child.offsetTop - term.offsetTop + marginTopOf(term) - marginTopOf(child) : 0;
+    if (child.offsetHeight + marginTopOf(child) <= room - kept) continue;
     fitBlock(child, Math.max(1, room - kept));
   }
   const children = Array.from(container.children) as HTMLElement[];

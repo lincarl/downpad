@@ -1024,8 +1024,11 @@ describe("splitIntoPages, splitting a footnote", () => {
   it.each([
     ["a long paragraph", () => [longParagraph(400, "w")]],
     ["many paragraphs", () => paragraphs(40, "p")],
+    // 480 px of paragraphs fit the page by themselves, but not below the
+    // 24 px label, so they were not split and the label printed alone.
+    ["paragraphs that fill a page by themselves", () => paragraphs(16, "p")],
   ])(
-    "splits a footnote of %s taller than a page between its blocks, its label with the first",
+    "splits a footnote taller than a page, of %s, between its blocks, its label with the first",
     (_kind, blocks) => {
       // The note was neither a quote nor a list, so nothing split it, and it was
       // shrunk onto one page.
