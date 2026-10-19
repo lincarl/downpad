@@ -23,6 +23,18 @@
 // holds for a character outside the Basic Multilingual Plane, such as an
 // emoji, and for text an input method or the emoji panel inserts without
 // composing.
+//
+// An input method's composition replaces Chromium's own selection too, and
+// it cannot be cancelled. Over a selection that started after the break, a
+// composition removed the break and its text came in twice, and over one
+// that ended there it kept the break. So when a composition starts over such
+// a selection, the plugin first removes the selection with ProseMirror, and
+// the composition goes on from the caret that leaves. It does that before
+// ProseMirror and Milkdown handle the start of the composition. Milkdown
+// types a composition itself when the caret sits between two inline nodes,
+// such as a line break and a formula, but only if the caret is there when
+// the composition starts, so a selection removed later made the text come
+// in twice.
 
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, TextSelection, type Selection } from "@milkdown/kit/prose/state";
@@ -77,13 +89,23 @@ function moveEndPastAtoms(view: EditorView, extend: boolean): void {
 /** Moves the caret past the inline atoms that start its line when End or
  *  Shift+End is pressed there, so the key reaches the end of the line. Keeps
  *  the anchor of a selection that Shift and a key that moves the caret extend
- *  from right after a line break and before an inline atom, and types over a
- *  selection that starts or ends there. */
+ *  from right after a line break and before an inline atom, types over a
+ *  selection that starts or ends there, and removes such a selection before
+ *  a composition replaces it. */
 export const endPastAtoms = $prose(() => {
   /** The anchor of the selection that a Shift key is extending from right
    *  after a line break, until ProseMirror reads the extended selection. */
   let keptAnchor: number | null = null;
   return new Plugin({
+    view: (view) => {
+      /** Removes a selection that a composition is about to replace. */
+      const removeSelection = () => {
+        if (crossesBreakEdge(view.state.selection)) view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+      };
+      // Listen in the capture phase, before ProseMirror and Milkdown.
+      view.dom.addEventListener("compositionstart", removeSelection, true);
+      return { destroy: () => view.dom.removeEventListener("compositionstart", removeSelection, true) };
+    },
     props: {
       handleKeyDown: (view, event) => {
         if (event.isComposing) return false;
