@@ -99,4 +99,25 @@ describe("md-easy's table view", () => {
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
     expect(menu.dataset.show).toBe("false");
   });
+
+  it("closes a column menu when a change to the table's content ends the column selection", { timeout: 60_000 }, async () => {
+    const view = await open();
+    const cells = cellPositions(view.state.doc);
+    const menu = document.querySelector<HTMLElement>('[data-role="col-drag-handle"] .button-group');
+    if (!menu) throw new Error("no column menu");
+    view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[0]!))));
+    menu.dataset.show = "true";
+    // Aligning the column, as the menu's own buttons do, changes the table and
+    // keeps the column selected, so the menu stays open.
+    const align = view.state.tr;
+    for (const cell of [cells[0]!, cells[2]!, cells[4]!]) align.setNodeAttribute(cell, "alignment", "center");
+    view.dispatch(align);
+    expect(view.state.selection instanceof CellSelection && view.state.selection.isColSelection()).toBe(true);
+    expect(menu.dataset.show).toBe("true");
+    // The split's sync after a Markdown edit of a cell replaces the document
+    // with the edited text, which ends the column selection.
+    editor!.setMarkdown(markdown.replace("| a2 |", "| a2x |"));
+    expect(document.querySelector("td p")?.closest(".milkdown-table-block")?.contains(menu)).toBe(true);
+    expect(menu.dataset.show).toBe("false");
+  });
 });

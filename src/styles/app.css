@@ -766,6 +766,19 @@ body {
   max-width: 100%;
 }
 
+/* Crepe fades a table's row, column and line handles with opacity once the
+   pointer leaves the table or nears a cell border. A faded handle, and a row or
+   column menu left open in it, stays where it was and shows again under the
+   pointer, so a click on the paragraph above the table or on blank space where
+   nothing showed could land on it. That deleted or selected a column, and
+   typing then replaced the column's text. The handles are positioned against
+   the whole document, so one can also sit where the table no longer is. A faded
+   handle now takes the pointer only from the table's cells, the way it is
+   reached across the border, and keeps it while the pointer is on it. */
+.editor-host .milkdown .milkdown-table-block:not(:has(.content-dom:hover)) .handle[data-show="false"]:not(:hover) {
+  pointer-events: none;
+}
+
 /* Dark document surface for the WYSIWYG (Crepe) editor (§6.2). Crepe pins a full
    LIGHT palette directly on `.milkdown` (white background, black text — see its
    reset.css `--crepe-color-*` vars), so merely darkening the page left light text

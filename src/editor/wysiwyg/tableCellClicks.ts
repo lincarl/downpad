@@ -17,7 +17,10 @@
 // right after a Markdown edit first brings that pane up to date, which ends its
 // cell selection. The cell the press landed on was then gone, so the click
 // placed no caret and the focus left both panes. This view updates a table
-// whose content is unchanged in place.
+// whose content is unchanged in place. After every update it closes a row or
+// column menu whose selection is gone, which Crepe's view did not do when the
+// content changed. app.css keeps a faded handle, and a menu left open in it,
+// from taking a click unless the pointer reaches it from the table's cells.
 
 import { TableNodeView } from "@milkdown/kit/component/table-block";
 import type { Node } from "@milkdown/kit/prose/model";
@@ -40,18 +43,25 @@ class CaretTableView extends TableNodeView {
 
   /** Update the table in place when its content is unchanged, where Crepe's
    *  view returns false and so has ProseMirror draw it again. ProseMirror then
-   *  redraws only the selection and highlights inside it. */
+   *  redraws only the selection and highlights inside it. After any update,
+   *  close a menu whose selection is gone. */
   override update(node: Node): boolean {
-    if (!node.eq(this.node)) return super.update(node);
-    this.node = node;
-    this.nodeRef.value = node;
+    if (node.eq(this.node)) {
+      this.node = node;
+      this.nodeRef.value = node;
+    } else if (!super.update(node)) {
+      return false;
+    }
     this.closeStaleMenus(node);
     return true;
   }
 
-  /** Close the row or column menu once its selection is gone, as drawing the
-   *  table again did. Its buttons act on the current selection, and its
-   *  Delete removes rows for any cell selection that is not a column. */
+  /** Close the row or column menu once its selection is gone. Drawing the
+   *  table again did that when only the selection changed, but Crepe's view
+   *  left the menu open when the content changed too, such as after a
+   *  Markdown edit of a cell in the split. Its buttons act on the current
+   *  selection, and its Delete removes rows for any cell selection that is
+   *  not a column. */
   private closeStaleMenus(table: Node): void {
     const { selection } = this.view.state;
     const here = selection instanceof CellSelection && findTable(selection.$anchorCell)?.node === table;
