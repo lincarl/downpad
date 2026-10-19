@@ -7,9 +7,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
-import { editorViewCtx } from "@milkdown/kit/core";
+import { editorViewCtx, parserCtx } from "@milkdown/kit/core";
 import type { Node } from "@milkdown/kit/prose/model";
 import { TextSelection } from "@milkdown/kit/prose/state";
+import type { EditorView } from "@milkdown/kit/prose/view";
 import { CellSelection } from "@milkdown/kit/prose/tables";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -69,6 +70,14 @@ function cellParagraph(text: string): HTMLParagraphElement {
   return paragraph;
 }
 
+/** Replace the whole document with a fresh parse of the same text, as
+ *  Milkdown's replaceAll does. The table that comes back says the same but is
+ *  made of new nodes, and the replace ends a cell selection. */
+function replaceWithSame(view: EditorView): void {
+  const doc = (editor as unknown as { crepe: Crepe }).crepe.editor.ctx.get(parserCtx)(markdown);
+  view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, doc.content));
+}
+
 /** The open state of the row or column menu, `role` being its handle's. */
 function menuShows(role: "col-drag-handle" | "row-drag-handle"): string | undefined {
   return document.querySelector<HTMLElement>(`[data-role="${role}"] .button-group`)?.dataset.show;
@@ -82,21 +91,21 @@ describe("md-easy's table view", () => {
     view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[4]!)));
     expect(document.querySelectorAll(".selectedCell")).toHaveLength(2);
     let paragraph = cellParagraph("short text");
-    // The split's catch-up replaces the whole document with the same text, as
-    // after a Markdown edit outside the table, which ends the cell selection.
-    editor!.setMarkdown(markdown);
+    // A change that replaces the whole document with the same text ends the
+    // cell selection.
+    replaceWithSame(view);
     expect(document.querySelectorAll(".selectedCell")).toHaveLength(0);
     expect(paragraph.isConnected).toBe(true);
     // Changing only the selection keeps the cells too.
     view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[4]!)));
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
     expect(paragraph.isConnected).toBe(true);
-    // Selecting both body rows draws the table again, and the catch-up that
-    // ends that selection keeps the new cells.
+    // Selecting both body rows draws the table again, and a replace that ends
+    // that selection keeps the new cells.
     view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[5]!)));
     expect(document.querySelectorAll(".selectedCell")).toHaveLength(4);
     paragraph = cellParagraph("short text");
-    editor!.setMarkdown(markdown);
+    replaceWithSame(view);
     expect(paragraph.isConnected).toBe(true);
     expect(editor!.getMarkdown()).toBe(markdown);
   });
