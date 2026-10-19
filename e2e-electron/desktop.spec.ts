@@ -382,6 +382,7 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator("a")).toHaveCount(6);
   const plain = editor.locator("p").filter({ hasText: "Plain line." });
+  const preview = page.locator(".milkdown-link-preview");
   /** The point `fraction` of the way across the character at `index` of the
    *  text node that reads `text`. A negative `index` counts from the end. */
   const pointOn = (text: string, index: number, fraction: number) =>
@@ -396,13 +397,15 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
       return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
     }, [text, index, fraction] as const);
   /** Ctrl or Cmd+click `fraction` of the way across a character, then click
-   *  plain text, so no link's preview covers the next target. */
+   *  plain text and wait for the link preview to go, so it cannot cover the
+   *  next target, as in the inline image test above. */
   const ctrlClick = async (text: string, index: number, fraction: number) => {
     const point = await pointOn(text, index, fraction);
     await page.keyboard.down("ControlOrMeta");
     await page.mouse.click(point.x, point.y);
     await page.keyboard.up("ControlOrMeta");
     await plain.click({ position: { x: 2, y: 8 } });
+    await expect(preview).toBeHidden();
   };
   // ProseMirror puts a click on a character's right half after the character,
   // where the plain text or the link after it starts.
