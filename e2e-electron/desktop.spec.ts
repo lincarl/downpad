@@ -2507,6 +2507,80 @@ test("a rule typed under a list item's text saves with a blank line before it", 
   await expect.poll(() => readFile(file, "utf8")).toBe("Start.\n\n- A\n\n  ---\n");
 });
 
+test("a click right of the text in a table cell puts the caret after it, and a row handle still moves its row", async () => {
+  const file = path.join(directory, "table-click.md");
+  // The wider value leaves room right of the text in the cells above it.
+  await writeFile(file, "Intro.\n\n| Name | Notes |\n| --- | --- |\n| short text | a longer note |\n| a much wider value |  |\n");
+  await launch(file);
+  const intro = page.locator(".milkdown .ProseMirror > p").first();
+  const table = page.locator(".milkdown .ProseMirror table.children");
+  /** Put the caret in the intro, click inside `cell`'s paragraph halfway
+   *  between the end of its text and the paragraph's right edge, and type
+   *  `text`. Crepe's table selected the whole paragraph a frame after such a
+   *  click, so typing replaced the cell's text. */
+  const typeRightOfText = async (cell: Locator, text: string): Promise<void> => {
+    await intro.click();
+    const room = await cell.locator("p").evaluate((paragraph) => {
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const textBox = range.getBoundingClientRect();
+      const box = paragraph.getBoundingClientRect();
+      // An empty paragraph's range has no box.
+      const textEnd = textBox.width > 0 ? textBox.right : box.left;
+      return { textEnd, right: box.right, y: box.top + box.height / 2 };
+    });
+    expect(room.right - room.textEnd).toBeGreaterThan(20);
+    await page.mouse.click((room.textEnd + room.right) / 2, room.y);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(table.locator(".ProseMirror-selectednode")).toHaveCount(0);
+    await page.keyboard.type(text);
+  };
+  await typeRightOfText(table.locator("th").first(), "s");
+  await typeRightOfText(table.locator("td").filter({ hasText: "short text" }), " here");
+  await typeRightOfText(table.locator("tr").last().locator("td").last(), "y");
+
+  // Crepe shows a row's drag handle while the pointer is over the row, and
+  // hides the handles 200 ms after the pointer leaves the table, as it did for
+  // each click in the intro. Let the last of those timers pass first.
+  await page.waitForTimeout(300);
+  const lastRow = table.locator("tr").last();
+  await lastRow.locator("td").first().hover();
+  const handle = page.locator('[data-role="row-drag-handle"]');
+  await expect(handle).toHaveAttribute("data-show", "true");
+  const rowBox = await lastRow.boundingBox();
+  if (!rowBox) throw new Error("The last row is not shown.");
+  // The handle moves to the row once floating-ui has placed it.
+  await expect.poll(async () => {
+    const box = await handle.boundingBox();
+    return !!box && Math.abs(box.y + box.height / 2 - (rowBox.y + rowBox.height / 2)) < 2;
+  }).toBe(true);
+  const from = await handle.boundingBox();
+  const to = await table.locator("tr").nth(1).boundingBox();
+  if (!from || !to) throw new Error("The handle or the target row is not shown.");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 4);
+  // Crepe shows the dragged row's preview a frame after the drag starts.
+  await expect(page.locator(".milkdown-table-block .drag-preview")).toHaveAttribute("data-show", "true");
+  await page.mouse.move(to.x + 30, to.y + to.height / 2, { steps: 8 });
+  // Crepe reads the row under the pointer at most every 20 ms, so move once
+  // more after a pause for it to read the target row before the drop.
+  await page.waitForTimeout(100);
+  await page.mouse.move(to.x + 32, to.y + to.height / 2);
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Intro.",
+    "",
+    "| Names              | Notes         |",
+    "| ------------------ | ------------- |",
+    "| a much wider value | y             |",
+    "| short text here    | a longer note |",
+    "",
+  ].join("\n"));
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
