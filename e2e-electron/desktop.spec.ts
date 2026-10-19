@@ -352,7 +352,7 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(page).toHaveTitle("one.md — md-easy");
 });
 
-test("End with the caret before images that start a line moves the caret to the end of the line", async () => {
+test("End with the caret before images or formulas that start a line moves the caret to the end of the line", async () => {
   const file = path.join(directory, "image-end.md");
   await writeFile(path.join(directory, "image.png"), onePixelPng);
   await writeFile(file, [
@@ -361,13 +361,18 @@ test("End with the caret before images that start a line moves the caret to the 
     "![Pixel](image.png)![Gone](gone.png) start here.",
     "Break\\\n![Pixel](image.png) after a line break.",
     "| Cells |\n| --- |\n| ![Cell](cell/missing.png) in a cell |",
+    "| Formulas |\n| --- |\n| $v$ in a formula cell |",
     "![Pixel](image.png)![Gone](gone.png) are selected.",
+    "$x^2$ starts with a formula.",
+    "![Pixel](image.png)$y$ start with an image.",
+    "Break\\\n$z$ after a line break.",
   ].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
-  await expect.poll(loaded).toBe(3);
+  await expect.poll(loaded).toBe(4);
+  await expect(editor.locator("[data-type=math_inline]")).toHaveCount(4);
   /** Click at the end of the text on `line`'s last row, go to the start of
    *  that row with Home, press `key` and type `text`. The click is on the
    *  text, because a click right of the text in a table cell selects the
@@ -390,10 +395,14 @@ test("End with the caret before images that start a line moves the caret to the 
   const paragraph = (text: string) => editor.locator("p").filter({ hasText: text });
   await typeAfter("End", paragraph("starts here."), "1");
   await typeAfter("End", paragraph("start here."), "2");
-  await typeAfter("End", paragraph("after a line break."), "3");
-  await typeAfter("End", editor.locator("td"), "4");
+  await typeAfter("End", paragraph("after a line break.").first(), "3");
+  await typeAfter("End", editor.locator("td").filter({ hasText: "in a cell" }), "4");
   // Shift+End selects the whole line, which the typing replaces.
   await typeAfter("Shift+End", paragraph("are selected."), "5");
+  await typeAfter("End", paragraph("starts with a formula."), "6");
+  await typeAfter("End", paragraph("start with an image."), "7");
+  await typeAfter("End", paragraph("after a line break.").last(), "8");
+  await typeAfter("End", editor.locator("td").filter({ hasText: "in a formula cell" }), "9");
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — md-easy");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
@@ -404,7 +413,13 @@ test("End with the caret before images that start a line moves the caret to the 
     "Break\\\n![Pixel](image.png) after a line break.3",
   ]);
   expect(blocks[4]).toMatch(/^\| !\[Cell\]\(cell\/missing\.png\) in a cell4 *\|$/m);
-  expect(blocks[5]).toBe("5\n");
+  expect(blocks[5]).toMatch(/^\| \$v\$ in a formula cell9 *\|$/m);
+  expect(blocks.slice(6)).toEqual([
+    "5",
+    "$x^2$ starts with a formula.6",
+    "![Pixel](image.png)$y$ start with an image.7",
+    "Break\\\n$z$ after a line break.8\n",
+  ]);
 });
 
 test("the block handle of a line with a wide missing image chip stays beside the line", async () => {
