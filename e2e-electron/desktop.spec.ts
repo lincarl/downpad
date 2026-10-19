@@ -2618,61 +2618,180 @@ test("a click in a table cell in the split's document pane while cells are selec
   ].join("\n"));
 });
 
-test("a faded table handle, and a column menu left open in it, take no click above or beside the table", async () => {
-  const file = path.join(directory, "table-faded-handles.md");
+/** The center of the box of the element `locator` finds. */
+async function centerOf(locator: Locator): Promise<{ x: number; y: number }> {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("The element is not shown.");
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/** Wait until floating-ui has placed Crepe's row or column `handle` beside
+ *  the table cell `cell`, and return the handle's center. */
+async function handleBeside(handle: Locator, cell: Locator, axis: "row" | "col"): Promise<{ x: number; y: number }> {
+  const middle = await centerOf(cell);
+  let at = { x: 0, y: 0 };
+  await expect.poll(async () => {
+    at = await centerOf(handle);
+    return axis === "col" ? Math.abs(at.x - middle.x) < 2 : Math.abs(at.y - middle.y) < 2;
+  }).toBe(true);
+  return at;
+}
+
+/** Point at the middle of the table cell `cell` until Crepe shows its row or
+ *  column `handle` beside it, and return the handle's center. Crepe hides the
+ *  handles 200 ms after the pointer leaves the table, even when the pointer
+ *  has come back, so the pointer moves again until the handle shows. */
+async function hoverCell(cell: Locator, handle: Locator, axis: "row" | "col"): Promise<{ x: number; y: number }> {
+  const middle = await centerOf(cell);
+  let shift = 0;
+  await expect.poll(async () => {
+    shift = 1 - shift;
+    await page.mouse.move(middle.x + shift, middle.y);
+    return handle.getAttribute("data-show");
+  }).toBe("true");
+  return handleBeside(handle, cell, axis);
+}
+
+/** Hover the header cell `header`, click the column handle Crepe shows above
+ *  it, and return the centers of the handle and of its menu's buttons. */
+async function openColumnMenu(header: Locator, colHandle: Locator): Promise<{ handle: { x: number; y: number }; buttons: { x: number; y: number }[] }> {
+  const handle = await hoverCell(header, colHandle, "col");
+  await page.mouse.click(handle.x, handle.y);
+  const menu = colHandle.locator(".button-group");
+  await expect(menu).toBeVisible();
+  // The menu can show before the handle is back over its column.
+  await handleBeside(colHandle, header, "col");
+  const buttons = await Promise.all([0, 1, 2, 3].map((index) => centerOf(menu.locator("button").nth(index))));
+  return { handle, buttons };
+}
+
+/** Whether a click at `point` goes to Crepe's table handle `control`, or a
+ *  button in it, while the handle shows. */
+async function showsUnderPointer(control: Locator, point: { x: number; y: number }): Promise<boolean> {
+  return control.evaluate((element, { x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    return target !== null && element.contains(target) && getComputedStyle(element).opacity === "1";
+  }, point);
+}
+
+test("a column menu closes when a Markdown edit in the split changes its table, so a click where it was reaches the paragraph above", async () => {
+  const { file } = await openSplit("table-menu-split.md", "Intro paragraph above the table.\n\n| Name | Notes |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n");
+  const pane = page.locator(".editor-pane-wysiwyg");
+  const table = pane.locator("table.children");
+  const colHandle = pane.locator('[data-role="col-drag-handle"]');
+  const { buttons } = await openColumnMenu(table.locator("th").filter({ hasText: "Notes" }), colHandle);
+  const remove = buttons[3]!;
+
+  // Type in a1 in the Markdown pane. The pointer leaves the table above the
+  // menu, where Crepe does not close it.
+  await page.mouse.move(remove.x, remove.y - 60, { steps: 3 });
+  await page.locator(".editor-pane-raw .cm-line").filter({ hasText: "| a1 |" }).click();
+  await page.keyboard.press("Home");
+  for (let step = 0; step < 4; step += 1) await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("x");
+  // The document pane takes the edit once typing pauses, which ends the column
+  // selection. Crepe left the menu open in the faded handle, and a click where
+  // its Delete button was showed it there and selected the column.
+  await expect(table.locator("td").first()).toHaveText("a1x");
+  await expect(colHandle.locator(".button-group")).toHaveAttribute("data-show", "false");
+  await page.mouse.move(remove.x, remove.y, { steps: 3 });
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest(".milkdown-table-block") ?? null, remove)).toBeNull();
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.keyboard.type("Z");
+  await expect(table.locator(".selectedCell")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+s");
+  // Z goes into the paragraph, wherever the click put the caret there.
+  await expect.poll(async () => {
+    const saved = await readFile(file, "utf8");
+    return saved.indexOf("Z") < saved.indexOf("|") && saved.replace("Z", "");
+  }).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1x  | b1    |\n| a2   | b2    |\n");
+});
+
+test("a faded column handle or menu shows again under the pointer coming back from above the table, and takes the click", async () => {
+  const file = path.join(directory, "table-column-fade.md");
   await writeFile(file, "Intro paragraph above the table.\n\n| Name | Notes |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n");
   await launch(file);
   const table = page.locator(".milkdown .ProseMirror table.children");
-  const notes = table.locator("th").filter({ hasText: "Notes" });
   const colHandle = page.locator('[data-role="col-drag-handle"]');
-  const columnMenu = colHandle.locator(".button-group");
-  /** Hover `header`, click the column handle Crepe shows above it, and return
-   *  the centers of the handle and of its menu's Delete button. */
-  const openColumnMenu = async (header: Locator): Promise<{ handle: { x: number; y: number }; remove: { x: number; y: number } }> => {
-    const cell = (await header.boundingBox())!;
-    await page.mouse.move(cell.x + cell.width / 2, cell.y + cell.height / 2);
-    // floating-ui moves the handle over the column a moment after it shows.
-    let handle = { x: 0, y: 0 };
-    await expect.poll(async () => {
-      const box = await colHandle.boundingBox();
-      if (!box || (await colHandle.getAttribute("data-show")) !== "true") return false;
-      handle = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-      return Math.abs(handle.x - (cell.x + cell.width / 2)) < 2;
-    }).toBe(true);
-    await page.mouse.click(handle.x, handle.y);
-    await expect(columnMenu).toHaveAttribute("data-show", "true");
-    const remove = (await columnMenu.locator("button").nth(3).boundingBox())!;
-    return { handle, remove: { x: remove.x + remove.width / 2, y: remove.y + remove.height / 2 } };
-  };
-  /** Move the pointer from `from` up and off to the right of the table,
-   *  without crossing its cells, and wait for Crepe to fade the handle. */
-  const leaveTable = async (from: { x: number; y: number }): Promise<void> => {
-    await page.mouse.move(from.x, from.y - 30, { steps: 3 });
-    await page.mouse.move(from.x + 400, from.y - 30, { steps: 5 });
-    await expect(colHandle).toHaveAttribute("data-show", "false");
-  };
 
-  // Crepe leaves a menu open, unseen, in a faded handle. It sits over the
-  // paragraph above the table, and a click there on its Delete deleted the
-  // column the menu was opened for.
-  const first = await openColumnMenu(notes);
-  await leaveTable(first.handle);
-  await page.mouse.click(first.remove.x, first.remove.y);
-  await expect(table.locator("th")).toHaveCount(2);
-  await expect(table.locator(".selectedCell")).toHaveCount(0);
+  // Open the Notes column's menu, slip off it onto the paragraph above for
+  // longer than Crepe takes to fade the handle, and come back to Align center.
+  const { buttons } = await openColumnMenu(table.locator("th").filter({ hasText: "Notes" }), colHandle);
+  const center = buttons[1]!;
+  await page.mouse.move(center.x, center.y, { steps: 4 });
+  await page.mouse.move(center.x, center.y - 45, { steps: 4 });
+  await expect(colHandle).toHaveCSS("opacity", "0");
+  await page.mouse.move(center.x, center.y, { steps: 4 });
+  await expect.poll(() => showsUnderPointer(colHandle, center)).toBe(true);
+  await page.mouse.down();
+  await page.mouse.up();
 
-  // A faded handle stays where its column was once the column is deleted,
-  // over blank space right of the narrower table. A click there opened a menu.
-  const second = await openColumnMenu(notes);
-  await page.mouse.click(second.remove.x, second.remove.y);
-  await expect(table.locator("th")).toHaveCount(1);
-  await leaveTable(second.remove);
-  await expect(columnMenu).toHaveAttribute("data-show", "false");
-  await page.mouse.click(second.handle.x, second.handle.y);
-  await expect(columnMenu).toHaveAttribute("data-show", "false");
-  await expect(table.locator(".selectedCell")).toHaveCount(0);
+  // Leave the table upward beside the Name column's handle, then come down
+  // from above onto the handle's upper half, which lies above the table.
+  const name = table.locator("th").filter({ hasText: "Name" });
+  const handle = await hoverCell(name, colHandle, "col");
+  const nameBox = (await name.boundingBox())!;
+  await page.mouse.move(handle.x + 30, nameBox.y + nameBox.height / 2, { steps: 3 });
+  await page.mouse.move(handle.x + 30, handle.y - 40, { steps: 8 });
+  await expect(colHandle).toHaveCSS("opacity", "0");
+  await page.mouse.move(handle.x, handle.y - 40, { steps: 6 });
+  const upperHalf = { x: handle.x, y: handle.y - 4 };
+  await page.mouse.move(upperHalf.x, upperHalf.y, { steps: 8 });
+  await expect.poll(() => showsUnderPointer(colHandle, upperHalf)).toBe(true);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(table.locator("th").first()).toHaveClass(/selectedCell/);
+  await expect(table.locator(".selectedCell")).toHaveCount(3);
+  await expect(colHandle.locator(".button-group")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name |\n| ---- |\n| a1   |\n| a2   |\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | :---: |\n| a1   |   b1  |\n| a2   |   b2  |\n");
+});
+
+test("a faded row handle, row menu or add-row button shows under a pointer that comes back fast from left of the table before it takes the click", async () => {
+  const file = path.join(directory, "table-row-fade.md");
+  await writeFile(file, "Intro paragraph above the table.\n\n| Name | Notes |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |\n\nAfter.\n");
+  await launch(file);
+  const table = page.locator(".milkdown .ProseMirror table.children");
+  const rowHandle = page.locator('[data-role="row-drag-handle"]');
+  const addRow = page.locator('[data-role="x-line-drag-handle"]');
+  const cell = (text: string): Locator => table.locator("td").filter({ hasText: text });
+  const left = (await table.boundingBox())!.x;
+  /** Leave the table to the left at the pointer's height `y`, wait for Crepe
+   *  to fade `control`, come back to `point` in one move, as a fast pointer
+   *  does, and click once `control` shows there. */
+  const comeBackAndClick = async (control: Locator, y: number, point: { x: number; y: number }): Promise<void> => {
+    await page.mouse.move(left - 200, y, { steps: 8 });
+    await expect(control).toHaveCSS("opacity", "0");
+    await page.mouse.move(point.x, point.y);
+    await expect.poll(() => showsUnderPointer(control, point)).toBe(true);
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+
+  // A row handle sits across the table's left edge, by the row it was last
+  // shown for.
+  const handle = await hoverCell(cell("a2"), rowHandle, "row");
+  await comeBackAndClick(rowHandle, handle.y, { x: left + 4, y: handle.y });
+  await expect(table.locator("tr").nth(2).locator(".selectedCell")).toHaveCount(2);
+  const menu = rowHandle.locator(".button-group");
+  await expect(menu).toBeVisible();
+
+  // The row menu's Delete button reaches out left of the table, over a1.
+  const remove = await centerOf(menu.locator("button"));
+  await comeBackAndClick(rowHandle, handle.y, { x: left + 6, y: remove.y });
+  await expect(table.locator("tr")).toHaveCount(3);
+
+  // The add-row button sits on the table's left edge, on the border Crepe
+  // last showed it on, here below a1.
+  const a1 = (await cell("a1").boundingBox())!;
+  await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
+  await expect(addRow).toHaveAttribute("data-show", "true");
+  const plus = await centerOf(addRow.locator(".add-button"));
+  await comeBackAndClick(addRow, plus.y, { x: left + 4, y: plus.y - 4 });
+  await expect(table.locator("tr")).toHaveCount(4);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1   | b1    |\n|      |       |\n| a3   | b3    |\n\nAfter.\n");
 });
 
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {

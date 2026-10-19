@@ -19,8 +19,10 @@
 // placed no caret and the focus left both panes. This view updates a table
 // whose content is unchanged in place. After every update it closes a row or
 // column menu whose selection is gone, which Crepe's view did not do when the
-// content changed. app.css keeps a faded handle, and a menu left open in it,
-// from taking a click unless the pointer reaches it from the table's cells.
+// content changed. Crepe fades the handles once the pointer leaves the table
+// and leaves them, with any menu open in them, where they were. A faded handle
+// shows again under the pointer before it takes a click, so a menu left open
+// after its selection was gone could select a column from the paragraph above.
 
 import { TableNodeView } from "@milkdown/kit/component/table-block";
 import type { Node } from "@milkdown/kit/prose/model";
