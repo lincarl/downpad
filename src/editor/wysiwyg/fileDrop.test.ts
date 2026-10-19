@@ -242,6 +242,25 @@ describe("a file dropped between list items", () => {
     expect(opened.getMarkdown()).toContain(expected);
   });
 
+  it.each([
+    ["dropped on the top edge of its text", true],
+    ["put in at a caret at its start", false],
+  ])("puts an image %s before an item that is not the first, splitting the list there", async (_how, onText) => {
+    const opened = await openList();
+    const view = viewOf(opened);
+    let start = 0;
+    view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "Item 2") start = pos;
+    });
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, start)));
+
+    opened.insertMarkdown(IMAGE, onText ? opened.dropTargetAt(300, 141) : null);
+    type(opened, "x");
+
+    // At the start of the item, the image would take an empty line before it, saved as "<br />".
+    expect(opened.getMarkdown()).toBe(`Intro.\n\n- Item 1\n\n${IMAGE}\n\n- xItem 2\n- Item 3\n\nOutro.\n`);
+  });
+
   it("in a nested list, goes in as a nested item there and keeps the outer list tight", async () => {
     const opened = await open("Intro.\n\n- Parent\n  - N1\n  - N2\n- Next\n\nOutro.\n");
     place(opened, block("list_item", "N1"), 140, 170, 40);

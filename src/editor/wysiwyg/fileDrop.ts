@@ -102,7 +102,8 @@ function inTable($pos: ResolvedPos): boolean {
  * list that is not inside another, Crepe splits the list and the content goes
  * between the two halves, which stay tight, so that is left to it, unless an
  * earlier file of the drop became an item. An image cannot start a list item,
- * so it always goes in as Crepe puts it.
+ * so it goes in as Crepe puts it, apart from at the start of an item
+ * (`beforeListItem`).
  */
 function listItemAt($pos: ResolvedPos, content: Fragment, listItems: boolean): { pos: number; item: Node } | null {
   const { parent, depth } = $pos;
@@ -136,13 +137,28 @@ function listItemAt($pos: ResolvedPos, content: Fragment, listItems: boolean): {
 }
 
 /**
+ * Where content that cannot start a list item, such as an image, goes in
+ * instead of at `$pos`, the start of an item: before the item, which splits
+ * the list there as a block dropped between its items does, or before the
+ * whole list at its first item. Put in at the start, it would get an empty
+ * line before it to start the item, which is saved as `<br />`. Null where
+ * `$pos` is not the start of an item, or the content can start one.
+ */
+function beforeListItem($pos: ResolvedPos, content: Fragment): number | null {
+  const { parent, depth } = $pos;
+  if (parent.type.name !== "list_item" || $pos.index() !== 0 || parent.canReplace(0, 0, content)) return null;
+  return $pos.index(depth - 1) === 0 ? $pos.before(depth - 1) : $pos.before();
+}
+
+/**
  * Put `doc`'s blocks in at a drop target, where Crepe puts a block dropped at
  * that edge. They go in beside the blocks there, never splitting one. A table
  * cannot hold them, so a drop on a table puts them above or below it. An empty
  * line at the edge takes them, as typing on it would, so Crepe's empty last
  * line never ends up mid-document, where it would be saved as `<br />`. In a
  * list, a link becomes a list item of its own where Crepe would make the list
- * loose (`listItemAt`). Returns whether the document changed.
+ * loose (`listItemAt`), and an image at the start of an item goes in before
+ * the item (`beforeListItem`). Returns whether the document changed.
  */
 function placeBlocks(tr: Transaction, target: DropTarget, doc: Node): boolean {
   const { content } = doc;
@@ -160,10 +176,10 @@ function placeBlocks(tr: Transaction, target: DropTarget, doc: Node): boolean {
   } else if (listItem) {
     tr.insert(listItem.pos, listItem.item);
     target.listItems = true;
-  } else if (content.childCount === 1 && content.firstChild) {
-    tr.replaceRangeWith(pos, pos, content.firstChild);
   } else {
-    tr.replaceRange(pos, pos, slice);
+    const at = beforeListItem($pos, content) ?? pos;
+    if (content.childCount === 1 && content.firstChild) tr.replaceRangeWith(at, at, content.firstChild);
+    else tr.replaceRange(at, at, slice);
   }
   return tr.docChanged;
 }
