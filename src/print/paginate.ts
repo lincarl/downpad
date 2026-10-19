@@ -91,12 +91,17 @@ function packBoxes(boxes: Box[], maxHeightPx: number): number[][] {
   return pages.length ? pages : [[]];
 }
 
-/** Replace any child taller than a page with a sequence of page-sized pieces. */
+/**
+ * Replace any child taller than a page with a sequence of page-sized pieces.
+ * A child's top margin counts: a page makes room for it above the child
+ * (packByHeight), so a heading that fit only without its margin was left
+ * whole and the page body cut off its last line.
+ */
 function splitOversized(flow: HTMLElement, contentHeightPx: number): void {
   // Snapshot first: the list is mutated while splitting.
   for (const child of Array.from(flow.children)) {
     const el = child as HTMLElement;
-    if (el.offsetHeight <= contentHeightPx) continue;
+    if (el.offsetHeight + marginTopOf(el) <= contentHeightPx) continue;
     fitBlock(el, contentHeightPx);
   }
 }
@@ -464,7 +469,7 @@ function holdsBlocks(el: HTMLElement): boolean {
  */
 function splitList(list: HTMLElement, maxHeightPx: number): HTMLElement[] {
   for (const item of listItems(list)) {
-    if (item.offsetHeight <= maxHeightPx) continue;
+    if (item.offsetHeight + marginTopOf(item) <= maxHeightPx) continue;
     const pieces = splitListItem(item, maxHeightPx);
     if (pieces.length) item.replaceWith(...pieces);
     else scaleToFit(item, maxHeightPx);

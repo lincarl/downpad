@@ -863,6 +863,31 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
     },
   );
 
+  it("splits a heading that fits a page only without its top margin", () => {
+    // The check for a block taller than a page left out the block's top
+    // margin, which the page makes room for above it, so such a heading was
+    // left whole and the page body cut off its last line.
+    const heading = document.createElement("h2");
+    heading.dataset.textLayout = "";
+    heading.style.marginTop = "28px";
+    // 27 lines of 8 words.
+    heading.textContent = Array.from({ length: 216 }, (_, i) => `w${String(i).padStart(3, "0")}`).join(" ");
+    const text = heading.textContent;
+    expect(heading.offsetHeight).toBeLessThanOrEqual(500);
+    expect(heading.offsetHeight + 28).toBeGreaterThan(500);
+    const flow = flowWith(heading);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    expect(pieces).toHaveLength(2);
+    for (const piece of pieces) {
+      expect(piece.tagName).toBe("H2");
+      expect(piece.offsetHeight + 28).toBeLessThanOrEqual(500);
+    }
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+  });
+
   it("measures a piece that lies wholly inside bold text in bold", () => {
     // The trial copy of such a piece left out the bold element around it, so
     // it was measured in plain text, and with bold text wider than plain text
