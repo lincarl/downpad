@@ -2,7 +2,7 @@
 // canonical markdown string; raw edits are written back verbatim (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
-import { EditorSelection, EditorState, type ChangeSet, type Text } from "@codemirror/state";
+import { ChangeSet, EditorSelection, EditorState, type Text } from "@codemirror/state";
 import {
   SearchQuery,
   findNext as findNextMatch,
@@ -110,41 +110,107 @@ function changedLines(before: string, after: string): Array<{ from: number; to: 
   });
 }
 
-/** The changes that turn `before` into `after`, one for each run of
- *  characters that differ, as Myers' diff finds them, so text that stays
- *  keeps its offsets. A diff too long to find gives one change from the
- *  first difference to the last (`differingRuns`). */
-function changedChars(before: string, after: string): Array<{ from: number; to: number; insert: string }> {
-  return differingRuns(before.length, after.length, (i, j) => before.charCodeAt(i) === after.charCodeAt(j)).map((run) => ({
-    from: run.fromA,
-    to: run.toA,
-    insert: after.slice(run.fromB, run.toB),
-  }));
+/** The part of a Markdown line before its text: its indentation, then quote
+ *  markers and a list marker with its task box. An empty item's marker can
+ *  end the line. */
+const LINE_PREFIX = /^([ \t]*)(?:>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])(?:[ \t]+(?:\[[ xX]\][ \t]+)?|$))?/;
+
+/** A Markdown line split up by `LINE_PREFIX`: the part before its text, how
+ *  much of that is indentation, and the text. */
+interface SourceLine {
+  prefix: string;
+  indent: number;
+  text: string;
 }
 
-/** The part of a Markdown line before its text: indentation, quote markers,
- *  and a list marker with its task box. */
-const LINE_PREFIX = /^[ \t]*(?:>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/;
+/** Split a Markdown line up by `LINE_PREFIX`. */
+function splitLine(line: string): SourceLine {
+  const match = LINE_PREFIX.exec(line);
+  const prefix = match?.[0] ?? "";
+  return { prefix, indent: match?.[1].length ?? 0, text: line.slice(prefix.length) };
+}
+
+/** Where a caret at `column` of the line `from` goes in the line `to`, which
+ *  has the same text. In the text it stays before the same character. In the
+ *  part before the text, it stays at the line's start, before the quote or
+ *  list marker, or as far from the text as it was, within the marker. */
+function columnIn(from: SourceLine, to: SourceLine, column: number): number {
+  if (column >= from.prefix.length) return to.prefix.length + column - from.prefix.length;
+  if (column < from.indent) return Math.min(column, to.indent);
+  if (column === from.indent) return to.indent;
+  return Math.max(to.indent, to.prefix.length - (from.prefix.length - column));
+}
 
 /**
- * Where a caret at `pos` in `before` goes through `changes`, a rewrite of a
- * list or other block from `from` to `to`. A caret before the text of a line
- * there, at its start or in its list marker, stays with that text, which a
- * rewrite can move to another line under a new number, as when a file goes
- * in as a list item before it. At the start of the text it stays right
- * before the text, and in the line's marker it stays as far into the line
- * as it was. Any other caret maps with `assoc`, the side of text put in
- * right at it that it stays on.
+ * The changes that make `edit` to `doc`, a drop's rewrite of a list or other
+ * block, and where a position in `doc` goes through them. The lines the edit
+ * touches are matched up by their text after the indentation and markers
+ * (`LINE_PREFIX`), with Myers' diff (`differingRuns`). Each run of lines put
+ * in is a change of its own, and so is the part before the text of each line
+ * whose text stays, where that part changes, as for a list item that only
+ * gets a new number. Each run of other lines that differ is one change too.
+ * A position in a line whose text stays goes to the same place in that line
+ * (`columnIn`). Any other position maps with the edit's `assoc`.
  */
-function mapCaret(pos: number, before: Text, changes: ChangeSet, from: number, to: number, assoc: -1 | 1): number {
-  if (pos < from || pos > to) return changes.mapPos(pos, assoc);
-  const line = before.lineAt(pos);
-  const start = line.from + (LINE_PREFIX.exec(line.text)?.[0].length ?? 0);
-  if (pos > start || !before.sliceString(start, line.to).trim()) return changes.mapPos(pos, assoc);
-  const text = changes.mapPos(start, 1);
-  if (pos === start) return text;
-  const lineFrom = changes.apply(before).lineAt(text).from;
-  return lineFrom + Math.min(pos - line.from, text - lineFrom);
+export function dropEditChanges(doc: Text, { from, to, insert, assoc }: SourceEdit): { changes: ChangeSet; mapPos: (pos: number) => number } {
+  const first = doc.lineAt(from);
+  const end = doc.lineAt(to).to;
+  const before = doc.sliceString(first.from, end).split("\n").map(splitLine);
+  const after = (doc.sliceString(first.from, from) + insert + doc.sliceString(to, end)).split("\n").map(splitLine);
+  // Where each line starts, in `doc` and in the changed text, and one more
+  // past the end. Nothing before the first line changes.
+  const starts = (lines: SourceLine[]): number[] => {
+    const result = [first.from];
+    for (const line of lines) result.push(result[result.length - 1] + line.prefix.length + line.text.length + 1);
+    return result;
+  };
+  const startsA = starts(before);
+  const startsB = starts(after);
+  const linesB = (fromB: number, toB: number): string =>
+    after
+      .slice(fromB, toB)
+      .map((line) => line.prefix + line.text)
+      .join("\n");
+  // The line of `after` each line of `before` became, or -1 for one that
+  // changed otherwise.
+  const kept = before.map(() => -1);
+  const specs: Array<{ from: number; to: number; insert: string }> = [];
+  let a = 0;
+  let b = 0;
+  // Match the lines of `before` up to `until` with the next lines of
+  // `after`, and change the part before their text where it differs.
+  const keep = (until: number): void => {
+    for (; a < until; a += 1, b += 1) {
+      kept[a] = b;
+      const { prefix } = before[a];
+      if (prefix !== after[b].prefix) specs.push({ from: startsA[a], to: startsA[a] + prefix.length, insert: after[b].prefix });
+    }
+  };
+  for (const run of differingRuns(before.length, after.length, (i, j) => before[i].text === after[j].text)) {
+    keep(run.fromA);
+    // The lines with the line break before them, or at the start with the
+    // one after them, so lines put in or taken out take a line break along.
+    const lines = linesB(run.fromB, run.toB);
+    const [changeFrom, changeTo, text] =
+      run.fromA > 0
+        ? [startsA[run.fromA] - 1, startsA[run.toA] - 1, run.toB > run.fromB ? `\n${lines}` : ""]
+        : run.toA < before.length
+          ? [first.from, startsA[run.toA], run.toB > run.fromB ? `${lines}\n` : ""]
+          : [first.from, end, lines];
+    const part = changedRange(doc.sliceString(changeFrom, changeTo), text);
+    specs.push({ from: changeFrom + part.from, to: changeFrom + part.to, insert: part.insert });
+    a = run.toA;
+    b = run.toB;
+  }
+  keep(before.length);
+  const changes = ChangeSet.of(specs, doc.length);
+  const mapPos = (pos: number): number => {
+    const index = pos < first.from || pos > end ? -1 : doc.lineAt(pos).number - first.number;
+    const line = index < 0 ? -1 : kept[index];
+    if (line < 0) return changes.mapPos(pos, assoc);
+    return startsB[line] + columnIn(before[index], after[line], pos - startsA[index]);
+  };
+  return { changes, mapPos };
 }
 
 export class RawEditor {
@@ -271,20 +337,17 @@ export class RawEditor {
 
   /** Make the change that puts a file dropped on the split's document pane
    *  into this pane's text while the user types here (§5.4). It is reported,
-   *  mirrored and undone like typing. Only the characters that differ from
-   *  the text are replaced, each run of them on its own, so a caret in text
-   *  that stays keeps its place, such as in a list item after the file that
-   *  only gets a new number. A caret before the text of a line stays with
-   *  that text, such as at the start of the list item the file goes in
-   *  before (`mapCaret`). Any other caret right where text goes in stays on
+   *  mirrored and undone like typing. The change is made line by line
+   *  (`dropEditChanges`), so a caret in a line whose text stays keeps its
+   *  place in that text, such as in a list item that only gets a new number,
+   *  and follows it to its new line, such as at the start of the item the
+   *  file goes in before. Any other caret right where text goes in stays on
    *  the side the change gives. */
-  applyDropEdit({ from, to, insert, assoc }: SourceEdit): void {
+  applyDropEdit(edit: SourceEdit): void {
     if (!this.view) return;
     const { state } = this.view;
-    const parts = changedChars(state.sliceDoc(from, to), insert);
-    const changes = state.changes(parts.map((part) => ({ from: from + part.from, to: from + part.to, insert: part.insert })));
-    const map = (pos: number): number => mapCaret(pos, state.doc, changes, from, to, assoc);
-    const ranges = state.selection.ranges.map((range) => EditorSelection.range(map(range.anchor), map(range.head)));
+    const { changes, mapPos } = dropEditChanges(state.doc, edit);
+    const ranges = state.selection.ranges.map((range) => EditorSelection.range(mapPos(range.anchor), mapPos(range.head)));
     this.view.dispatch({ changes, selection: EditorSelection.create(ranges, state.selection.mainIndex) });
   }
 

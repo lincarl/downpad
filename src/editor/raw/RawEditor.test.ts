@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { RawEditor } from "./RawEditor";
+import { RawEditor, dropEditChanges } from "./RawEditor";
+import type { SourceEdit } from "../wysiwyg/fileDrop";
 
 const editors: RawEditor[] = [];
 
@@ -106,6 +108,188 @@ describe("RawEditor.applyDropEdit", () => {
     editor.insertText("X");
 
     expect(editor.getText()).toBe(`1. One\n2. ${LINK}\n3. Two\n4. ThXree\n5. Four\n`);
+  });
+
+  /** Put `text` in the pane with the caret at `caret`, make a drop's `edit`,
+   *  and type X. */
+  function typeAfterDrop(editor: RawEditor, text: string, caret: number, edit: SourceEdit): string {
+    const { view } = editor as unknown as { view: EditorView };
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: caret } });
+    editor.applyDropEdit(edit);
+    editor.insertText("X");
+    return editor.getText();
+  }
+
+  // Item texts and file names whose characters the link and the item share,
+  // which a diff of characters matched up across them.
+  const ITEMS = ["two", "Two", "apples", "call mom", "eggs", "tea", "notes", "see this", "milk", "task", "next step"];
+  const FILES = ["notes.csv", "report.pdf", "Two.csv", "data.csv"];
+
+  it.each(ITEMS.flatMap((item) => FILES.map((file) => [item, file])))(
+    "keeps a caret in the item %j, numbered or bulleted, in its place when %s goes in before it",
+    (item, file) => {
+      const editor = mountWithCaret("");
+      const link = `[${file}](attachments/${file})`;
+      for (const marker of [(n: number) => `${n}. `, () => "- "]) {
+        const list = (texts: string[]): string => texts.map((text, index) => marker(index + 1) + text).join("\n");
+        const before = list(["One", item, "later item"]);
+        const after = list(["One", link, item, "later item"]);
+        // Where column `column` of the text of line `line` is, or the line's start for null.
+        const offset = (text: string, line: number, column: number | null): number =>
+          text.split("\n").slice(0, line).join("\n").length + (line > 0 ? 1 : 0) + (column === null ? 0 : marker(line + 1).length + column);
+        // The item and the one after it, at the start of the line and of the
+        // text, in the middle of the text and at its end.
+        for (const [line, column] of [[1, null], [1, 0], [1, 2], [1, item.length], [2, null], [2, 0], [2, 5]] as const) {
+          const typed = typeAfterDrop(editor, before, offset(before, line, column), { from: 0, to: before.length, insert: after, assoc: -1 });
+          const at = offset(after, line + 1, column);
+          expect(typed, `${marker(1)}line ${line}, column ${column}`).toBe(after.slice(0, at) + "X" + after.slice(at));
+        }
+      }
+    },
+  );
+});
+
+describe("dropEditChanges", () => {
+  /** A generator of numbers from 0 up to 1 with a fixed seed (mulberry32), so
+   *  a failing list comes back the same. */
+  function seeded(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let mixed = Math.imul(state ^ (state >>> 15), state | 1);
+      mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+      return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Item texts that share characters with the links that go in, some that
+  // start like a marker, and one that is empty.
+  const TEXTS = [
+    "notes", "notes.csv", "Two", "two", "attachments", "attach ments", "csv", "a", "t", "tea", "apples", "report",
+    "data", "see [this](that)", "(paren)", "[bracket]", "1. not a marker", "2) not one either", "- dash", "+ plus",
+    "10 apples", "", "trailing ", "\u{1F600} smile", "back\\slash", "under_score", "*stars*", "x](y",
+  ];
+  const FILES = ["notes.csv", "report.pdf", "Two.csv", "data.csv", "a", "my notes (1).txt", "1. list.md", "\u{1F600}.txt", "attachments.zip", "apples"];
+
+  interface Item {
+    depth: number;
+    text: string;
+    /** The mark in a task item's box. */
+    task?: string;
+  }
+
+  /** How the list at a depth is written: with `bullet`, or numbered from
+   *  `start` with `delimiter`. */
+  interface Style {
+    bullet?: string;
+    delimiter: string;
+    start: number;
+  }
+
+  /** The lines of a list, each as its indentation, the part before its text
+   *  and the text. Each nested list is indented to its parent's text. */
+  function writeList(items: Item[], styles: Style[]): Array<{ indent: number; prefix: string; text: string }> {
+    const numbers: number[] = [];
+    const widths: number[] = [];
+    return items.map(({ depth, text, task }) => {
+      numbers.length = depth + 1;
+      widths.length = depth;
+      const style = styles[depth];
+      numbers[depth] = (numbers[depth] ?? style.start - 1) + 1;
+      const indent = depth === 0 ? 0 : widths[depth - 1];
+      const marker = style.bullet ?? `${numbers[depth]}${style.delimiter}`;
+      widths[depth] = indent + marker.length + 1;
+      return { indent, prefix: `${" ".repeat(indent)}${marker} ${task ? `[${task}] ` : ""}`, text };
+    });
+  }
+
+  it("keeps every caret in a line whose text stays before the same character of that text", () => {
+    const failures: string[] = [];
+    for (let seed = 1; seed <= 3000; seed += 1) {
+      const random = seeded(seed);
+      const pick = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)];
+      const styles: Style[] = [0, 1, 2].map(() =>
+        random() < 0.5 ? { bullet: pick(["-", "*", "+"]), delimiter: ".", start: 1 } : { delimiter: pick([".", ")"]), start: pick([1, 0, 3, 8, 9, 98, 99]) },
+      );
+      // The document view can write the markers another way.
+      const newStyles = styles.map((style) =>
+        random() < 0.3 ? (style.bullet ? { ...style, bullet: pick(["-", "*", "+"]) } : { ...style, delimiter: pick([".", ")"]) }) : style,
+      );
+      // Unless another line changes too, items can share a text. Otherwise
+      // they are drawn from the texts shuffled.
+      const variant = pick(["insert", "insert", "insert", "change", "remove"]);
+      const texts = variant === "insert" ? [] : [...TEXTS];
+      for (let index = texts.length - 1; index > 0; index -= 1) {
+        const other = Math.floor(random() * (index + 1));
+        [texts[index], texts[other]] = [texts[other], texts[index]];
+      }
+      const items: Item[] = [];
+      for (let index = 0, count = 1 + Math.floor(random() * 7); index < count; index += 1) {
+        const depth = index === 0 ? 0 : Math.min(2, Math.floor(random() * (items[index - 1].depth + 2)));
+        items.push({ depth, text: texts.pop() ?? pick(TEXTS), ...(random() < 0.15 ? { task: pick([" ", "x"]) } : {}) });
+      }
+      // The file goes in as an item at a depth that fits between its neighbors.
+      const at = Math.floor(random() * (items.length + 1));
+      const lowest = at < items.length ? Math.max(0, items[at].depth - 1) : 0;
+      const highest = at > 0 ? Math.min(2, items[at - 1].depth + 1) : 0;
+      const file = pick(FILES);
+      const link: Item = { depth: lowest + Math.floor(random() * (highest - lowest + 1)), text: `[${file}](attachments/${encodeURI(file)})` };
+      const newItems = [...items.slice(0, at), link, ...items.slice(at)];
+      // Where each item went, and the item that also changes or goes, if any.
+      const moved = items.map((_item, index) => (index < at ? index : index + 1));
+      const other = variant === "insert" ? -1 : Math.floor(random() * items.length);
+      if (variant === "change") newItems[moved[other]] = { ...items[other], text: `${items[other].text}!` };
+      if (variant === "remove") {
+        newItems.splice(moved[other], 1);
+        for (let index = other + 1; index < moved.length; index += 1) moved[index] -= 1;
+        // Items nested under the one that went join the list around it.
+        newItems.forEach((item, index) => {
+          newItems[index] = { ...item, depth: Math.min(item.depth, index === 0 ? 0 : newItems[index - 1].depth + 1) };
+        });
+      }
+
+      const lines = writeList(items, styles);
+      const newLines = writeList(newItems, newStyles);
+      const write = (list: typeof lines): string => list.map((line) => line.prefix + line.text).join("\n");
+      const intro = "Intro text.\n\n";
+      const source = `${intro}${write(lines)}\n\nEnd text.\n`;
+      const changed = `${intro}${write(newLines)}\n\nEnd text.\n`;
+      const doc = Text.of(source.split("\n"));
+      const edit: SourceEdit = { from: intro.length, to: intro.length + write(lines).length, insert: write(newLines), assoc: -1 };
+      const { changes, mapPos } = dropEditChanges(doc, edit);
+      const result = changes.apply(doc).toString();
+      if (result !== changed) failures.push(`seed ${seed}: text ${JSON.stringify(result)}, not ${JSON.stringify(changed)}`);
+
+      // Where each line starts, before and after.
+      const startOf = (list: typeof lines, index: number): number =>
+        intro.length + list.slice(0, index).reduce((sum, line) => sum + line.prefix.length + line.text.length + 1, 0);
+      const check = (pos: number, expected: number): void => {
+        const got = mapPos(pos);
+        if (got !== expected) {
+          const show = (text: string, at: number) => JSON.stringify(`${text.slice(text.lastIndexOf("\n", at - 1) + 1, at)}|${text.slice(at, text.indexOf("\n", at))}`);
+          failures.push(`seed ${seed}: ${show(source, pos)} went to ${show(result, got)}, not ${show(result, expected)}`);
+        }
+      };
+      lines.forEach((line, index) => {
+        if (index === other) return;
+        const newLine = newLines[moved[index]];
+        const start = startOf(lines, index);
+        const newStart = startOf(newLines, moved[index]);
+        // The start of the line, before its marker, and before the space
+        // after the marker, which stays as far from the text.
+        check(start, newStart);
+        check(start + line.indent, newStart + newLine.indent);
+        check(start + line.prefix.length - 1, newStart + newLine.prefix.length - 1);
+        // The start of the text, its middle (between whole characters), and its end.
+        let middle = Math.floor(line.text.length / 2);
+        if (/[\uDC00-\uDFFF]/.test(line.text.charAt(middle))) middle -= 1;
+        for (const column of [0, middle, line.text.length]) check(start + line.prefix.length + column, newStart + newLine.prefix.length + column);
+      });
+      // Around the list.
+      check(3, 3);
+      check(source.length - 4, result.length - 4);
+    }
+    expect(failures.slice(0, 5)).toEqual([]);
   });
 });
 
