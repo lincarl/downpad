@@ -372,6 +372,28 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(page).toHaveTitle("one.md — md-easy");
 });
 
+/** The point `fraction` of the way across the character at `index` of the
+ *  first text node in the document view that reads `text`. A negative
+ *  `index` counts from the end. */
+function pointOn(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
+  return page.locator(".milkdown .ProseMirror").evaluate((element, [text, index, fraction]) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent === text ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
+    const node = walker.nextNode()!;
+    const start = index < 0 ? text.length + index : index;
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+  }, [text, index, fraction] as const);
+}
+
+/** Click `fraction` of the way across a character, as `pointOn` finds it. */
+async function clickOn(text: string, index: number, fraction: number): Promise<void> {
+  const point = await pointOn(text, index, fraction);
+  await page.mouse.click(point.x, point.y);
+}
+
 test("Ctrl or Cmd+click and double-click on either half of a character follow only that character's link", async () => {
   const file = path.join(directory, "text-links.md");
   await writeFile(path.join(directory, "two.md"), "# Two\n");
@@ -398,19 +420,6 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   await expect(editor.locator("a")).toHaveCount(6);
   const plain = editor.locator("p").filter({ hasText: "Plain line." });
   const preview = page.locator(".milkdown-link-preview");
-  /** The point `fraction` of the way across the character at `index` of the
-   *  text node that reads `text`. A negative `index` counts from the end. */
-  const pointOn = (text: string, index: number, fraction: number) =>
-    editor.evaluate((element, [text, index, fraction]) => {
-      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent === text ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
-      const node = walker.nextNode()!;
-      const start = index < 0 ? text.length + index : index;
-      const range = document.createRange();
-      range.setStart(node, start);
-      range.setEnd(node, start + 1);
-      const box = range.getBoundingClientRect();
-      return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
-    }, [text, index, fraction] as const);
   /** Ctrl or Cmd+click `fraction` of the way across a character, then click
    *  plain text and wait for the link preview to go, so it cannot cover the
    *  next target, as in the inline image test above. */
@@ -443,6 +452,156 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   const point = await pointOn("two", -1, 0.75);
   await page.mouse.dblclick(point.x, point.y);
   await expect(page).toHaveTitle("two.md — md-easy");
+});
+
+test("text typed, composed or pasted right after a link goes after it", async () => {
+  const file = path.join(directory, "after-link.md");
+  await writeFile(file, [
+    "End [one](https://example.com/1)",
+    "Click [two](https://example.com/2)",
+    "Arrow [three](https://example.com/3)",
+    "- item [four](https://example.com/4)\n- second",
+    "| Cell |\n| --- |\n| in [five](https://example.com/5) |",
+    "Composed [six](https://example.com/6)",
+    "Pasted [seven](https://example.com/7)",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(7);
+  /** Click the text before a link, then press End. */
+  const endOf = async (text: string) => {
+    await clickOn(text, 0, 0.5);
+    await page.keyboard.press("End");
+  };
+  await endOf("End ");
+  await page.keyboard.type("a");
+  // A click on the right half of the link's last character.
+  await clickOn("two", -1, 0.75);
+  await page.keyboard.type("b");
+  // Right from inside the link, which Crepe's virtual cursor handles.
+  await clickOn("three", -1, 0.25);
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.type("c");
+  // Crepe's list item views put the selection back a frame after they are
+  // drawn, which clears the marks set for the caret.
+  await endOf("item ");
+  await page.waitForTimeout(300);
+  await page.keyboard.type("d");
+  await endOf("in ");
+  await page.keyboard.type("e");
+  await endOf("Composed ");
+  const session = await page.context().newCDPSession(page);
+  await session.send("Input.imeSetComposition", { text: "か", selectionStart: 1, selectionEnd: 1 });
+  await session.send("Input.insertText", { text: "か" });
+  await endOf("Pasted ");
+  await app!.evaluate(({ clipboard }) => clipboard.writeText("f"));
+  await page.keyboard.press("ControlOrMeta+v");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page).toHaveTitle("after-link.md — md-easy");
+  const blocks = (await readFile(file, "utf8")).split("\n\n");
+  expect.soft(blocks.slice(0, 4)).toEqual([
+    "End [one](https://example.com/1)a",
+    "Click [two](https://example.com/2)b",
+    "Arrow [three](https://example.com/3)c",
+    "- item [four](https://example.com/4)d\n- second",
+  ]);
+  expect.soft(blocks[4]).toMatch(/^\| in \[five\]\(https:\/\/example\.com\/5\)e *\|$/m);
+  expect(blocks.slice(5)).toEqual(["Composed [six](https://example.com/6)か", "Pasted [seven](https://example.com/7)f\n"]);
+});
+
+test("typing over a link's selected text keeps the link", async () => {
+  const file = path.join(directory, "over-link.md");
+  await writeFile(file, "A [word](https://example.com/a) b.\n\nIntro [link](https://example.com/b)\n\nC [text](https://example.com/c) d.\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(3);
+  const word = await pointOn("word", 1, 0.5);
+  await page.mouse.dblclick(word.x, word.y);
+  await page.keyboard.type("new");
+  // The last character, selected from the link's end. With the URL drawn
+  // before the selection's end, Chromium typed it outside the link.
+  await clickOn("Intro ", 0, 0.5);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.type("ks");
+  const text = await pointOn("text", 1, 0.5);
+  await page.mouse.dblclick(text.x, text.y);
+  await app!.evaluate(({ clipboard }) => clipboard.writeText("pasted"));
+  await page.keyboard.press("ControlOrMeta+v");
+  await page.keyboard.type("xy");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "A [new](https://example.com/a) b.\n\nIntro [links](https://example.com/b)\n\nC [pastedxy](https://example.com/c) d.\n",
+  );
+});
+
+test("Left at a link's end where text follows types into the link", async () => {
+  const file = path.join(directory, "link-side.md");
+  await writeFile(file, "A [link](https://example.com/b)s and more.\n");
+  await launch(file);
+  // Left first moves to the link's end, then keeps the caret there on the
+  // link's side.
+  await clickOn("s and more.", 0, 0.75);
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.type("xyz");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("A [linkxyz](https://example.com/b)s and more.\n");
+});
+
+test("the caret at a link's end is drawn after its URL, and before it on the link's side", async () => {
+  const file = path.join(directory, "link-caret.md");
+  await writeFile(file, "Intro [link](https://example.com/a)\n\nA [link](https://example.com/b)s and more.\n");
+  await launch(file);
+  /** Where the virtual cursor draws the caret, and the edges of the URL
+   *  shown after the link of paragraph `index`, in pixels. */
+  const measure = (index: number) =>
+    page.evaluate((index) => {
+      const editor = document.querySelector(".milkdown .ProseMirror")!;
+      const cursor = editor.querySelector<HTMLElement>(".prosemirror-virtual-cursor")!;
+      const url = editor.querySelectorAll("p")[index]!.querySelector(".md-link-url")!.getBoundingClientRect();
+      return { caret: editor.getBoundingClientRect().left + parseFloat(cursor.style.left), left: url.left, right: url.right };
+    }, index);
+  await clickOn("Intro ", 0, 0.5);
+  await page.keyboard.press("End");
+  await expect.poll(async () => {
+    const { caret, right } = await measure(0);
+    return Math.abs(caret - right);
+  }).toBeLessThanOrEqual(2);
+  const before = (await measure(0)).caret;
+  await page.keyboard.type("x");
+  // The typed character shows where the caret was.
+  await expect.poll(async () => (await measure(0)).caret).toBeGreaterThan(before);
+  expect((await measure(0)).caret - before).toBeLessThan(20);
+  await clickOn("s and more.", 0, 0.75);
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(async () => {
+    const { caret, right } = await measure(1);
+    return Math.abs(caret - right);
+  }).toBeLessThanOrEqual(2);
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(async () => {
+    const { caret, left } = await measure(1);
+    return caret - left;
+  }).toBeLessThanOrEqual(0);
+});
+
+test("a change the browser makes inside a link while the caret rests at its end keeps the link", async () => {
+  const file = path.join(directory, "link-text-service.md");
+  await writeFile(file, "Intro [lnk](https://example.com/a)\n\nFix [teh](https://example.com/b)\n");
+  await launch(file);
+  /** Click the end of the link that reads `text`, then replace `count`
+   *  characters of its text from `offset` with `data` in the page, as a text
+   *  suggestion or a spelling fix does, away from the caret. */
+  const change = async (text: string, offset: number, count: number, data: string) => {
+    await clickOn(text, -1, 0.75);
+    await page.locator(".milkdown .ProseMirror a", { hasText: text }).evaluate((link, [offset, count, data]) => {
+      const node = [...link.childNodes].find((child): child is Text => child instanceof Text)!;
+      node.replaceData(offset, count, data);
+    }, [offset, count, data] as const);
+  };
+  await change("lnk", 1, 0, "i");
+  await change("teh", 1, 2, "he");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro [link](https://example.com/a)\n\nFix [the](https://example.com/b)\n");
 });
 
 test("End with the caret before images or formulas that start a line moves the caret to the end of the line", async () => {
