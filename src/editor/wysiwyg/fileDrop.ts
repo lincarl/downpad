@@ -8,7 +8,7 @@ import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/ki
 import type { Ctx } from "@milkdown/kit/ctx";
 import { GapCursor } from "@milkdown/kit/prose/gapcursor";
 import { Slice, type Fragment, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
-import { Selection, TextSelection, type EditorState, type Transaction, Plugin, PluginKey } from "@milkdown/kit/prose/state";
+import { Selection, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { Transform, dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { differingRuns } from "../differingRuns";
@@ -193,60 +193,21 @@ function changeEnd(tr: Transaction): number {
   return end;
 }
 
-/** The end of the text of a file just dropped, while the caret stays there. */
-const droppedTextEnd = new PluginKey<number | null>("md-easy-dropped-text-end");
-
-/**
- * A plugin that keeps text typed right after a dropped link out of the link
- * (§5.4). A link takes in text typed at its end. Stored marks cannot stop
- * that for long, because Crepe's list views update a list's items right
- * after a link goes in as an item, which clears them. So while the caret
- * stays at the end of a dropped file's text, typed text goes in without the
- * link.
- */
-export function droppedLinkTyping(): Plugin<number | null> {
-  return new Plugin<number | null>({
-    key: droppedTextEnd,
-    state: {
-      init: () => null,
-      apply(tr, end, _before, state) {
-        const placed = tr.getMeta(droppedTextEnd) as number | undefined;
-        if (placed !== undefined) return placed;
-        if (end === null) return null;
-        // Follow the caret while it types on from there.
-        const mapped = tr.mapping.map(end);
-        return state.selection.empty && state.selection.head === mapped ? mapped : null;
-      },
-    },
-    props: {
-      handleTextInput(view, from, to, text) {
-        const { state } = view;
-        const link = state.schema.marks.link;
-        if (from !== to || droppedTextEnd.getState(state) !== from || !link) return false;
-        const marks = state.storedMarks ?? state.doc.resolve(from).marks();
-        if (!marks.some((mark) => mark.type === link)) return false;
-        const plain = state.schema.text(text, marks.filter((mark) => mark.type !== link));
-        view.dispatch(state.tr.replaceWith(from, to, plain).scrollIntoView());
-        return true;
-      },
-    },
-  });
-}
-
 /**
  * Put a text caret after content just inserted, which ends at `end`, so typing
  * goes on after it. Inserted text keeps the caret right after it, where
- * typing stays out of a dropped link (`droppedLinkTyping`). After an image
- * the caret goes to the start of the next text. With no text after it, it goes
- * in the gap after the image, where typing starts a new line, and where Crepe
- * adds an empty last line at the end of the document. The image is never left
- * selected, where the next key would replace it.
+ * typing at the end of a dropped link starts plain text outside the link
+ * (linkEdges.ts). After an image the caret goes to the start of the next
+ * text. With no text after it, it goes in the gap after the image, where
+ * typing starts a new line, and where Crepe adds an empty last line at the
+ * end of the document. The image is never left selected, where the next key
+ * would replace it.
  */
 function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transaction {
   const $end = tr.doc.resolve(end);
-  if ($end.parent.inlineContent) return tr.setSelection(TextSelection.create(tr.doc, end)).setMeta(droppedTextEnd, end);
+  if ($end.parent.inlineContent) return tr.setSelection(TextSelection.create(tr.doc, end));
   const before = Selection.findFrom($end, -1, true);
-  if (endsInText && before) return tr.setSelection(before).setMeta(droppedTextEnd, before.head);
+  if (endsInText && before) return tr.setSelection(before);
   const after = Selection.findFrom($end, 1, true);
   if (after) return tr.setSelection(after);
   const gap = $end.parent.contentMatchAt($end.index()).defaultType?.isTextblock;

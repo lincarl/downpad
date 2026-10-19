@@ -50,12 +50,15 @@ function autolinkAround(doc: ProseNode, from: number, to: number): Autolink | nu
 }
 
 /**
- * Replace `from`..`to` with `text` in `tr`, as `insertText` does. When the
- * range is inside an autolink, the link's target changes along with its text.
+ * Replace `from`..`to` with `text` in `tr`, as `insertText` does, with the
+ * marks of the replaced text. Marks stored for text put in at the caret, as
+ * at a link's edge (linkEdges.ts), never reach it. When the range is inside
+ * an autolink, the link's target changes along with its text.
  */
 export function replaceText(tr: Transaction, from: number, to: number, text: string): Transaction {
   const link = autolinkAround(tr.doc, from, to);
   const steps = tr.steps.length;
+  if (tr.storedMarks) tr.setStoredMarks(null);
   tr.insertText(text, from, to);
   if (!link) return tr;
   const mapping = tr.mapping.slice(steps);

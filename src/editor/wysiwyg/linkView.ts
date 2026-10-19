@@ -12,12 +12,19 @@
 // marks of the text after it, so a link's suffix landed inside a link right
 // after it, and a Ctrl/Cmd-click on the suffix opened that other link.
 //
+// A plain caret at a link's end, where typed text goes outside the link
+// (linkEdges.ts), is drawn after the suffix, where that text shows. A caret
+// there on the link's side, where typed text joins the link, and a selection
+// that ends there stay before the suffix. Drawing the suffix before a
+// selection's end made Chromium type over the selection outside the <a>,
+// which ProseMirror read as taking the link off the retyped text.
+//
 // Double-clicking a link to a local markdown file (a relative/absolute `.md`
 // path) opens that file in a tab instead of selecting a word (spec §5.6); the
 // open itself is delegated to the app via ctx.openMarkdownFile.
 
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
+import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { AddMarkStep, RemoveMarkStep } from "@milkdown/kit/prose/transform";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -26,6 +33,7 @@ import { isElectron } from "../../ipc/env";
 import { desktopBridge } from "../../ipc/bridge";
 import { resolveMarkdownLinkTarget } from "../../images/pathResolve";
 import type { WysiwygContext } from "./context";
+import { linkSideCaret } from "./linkEdges";
 
 export const linkUrlKey = new PluginKey<LinkUrlState>("md-easy-link-url");
 
@@ -47,6 +55,9 @@ function linkMarkHref(node: ProseNode): string | null {
   return mark ? ((mark.attrs.href as string | undefined) ?? null) : null;
 }
 
+/** What the key of each URL suffix starts with, before the link's href. */
+const SUFFIX_KEY = "md-link-url:";
+
 /** Add a URL suffix after each run of text in `block` (at `pos`) that links
  *  to one href. A run never crosses a text block, so each block is independent. */
 function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): void {
@@ -56,7 +67,7 @@ function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): v
     if (runHref !== null) {
       // Keyed by the href alone, so an edit that only moves a link keeps its
       // widget instead of drawing it again.
-      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, marks: [], ignoreSelection: true, key: `md-link-url:${runHref}` }));
+      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, marks: [], ignoreSelection: true, key: `${SUFFIX_KEY}${runHref}`, href: runHref }));
     }
     runHref = null;
   };
@@ -130,6 +141,20 @@ interface LinkUrlState {
   decorations: DecorationSet;
 }
 
+/** The suffixes of `state`, with the suffix at a plain caret at a link's end
+ *  drawn after the caret, where text typed there goes (see the header). */
+function suffixesFor(state: EditorState): DecorationSet | undefined {
+  const set = linkUrlKey.getState(state)?.decorations;
+  const { selection } = state;
+  const caret = selection instanceof TextSelection && selection.empty ? selection.head : null;
+  if (!set || caret === null || linkSideCaret(state) === caret) return set;
+  const [suffix] = set.find(caret, caret, (spec: { key?: string }) => !!spec.key?.startsWith(SUFFIX_KEY));
+  if (!suffix) return set;
+  const spec = suffix.spec as { key: string; href: string };
+  const after = Decoration.widget(caret, makeSuffix(spec.href), { ...spec, side: -1, key: `${spec.key}:after` });
+  return set.remove([suffix]).add(state.doc, [after]);
+}
+
 function makeSuffix(href: string): () => HTMLElement {
   return () => {
     const span = document.createElement("span");
@@ -191,9 +216,7 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
       },
     },
     props: {
-      decorations(state) {
-        return linkUrlKey.getState(state)?.decorations;
-      },
+      decorations: suffixesFor,
       handleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
         if (!(event.ctrlKey || event.metaKey)) return false;
         const href = clickedHref(view, event);
