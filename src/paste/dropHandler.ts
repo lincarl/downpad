@@ -4,8 +4,8 @@
 //   - image    → embed (base64 or attachment, per imageStore)
 //   - other    → copy into the attachments folder and link
 //
-// The actual handling lives in AppRuntime (it needs the editor + file service);
-// this module is just the pure extension-based decision.
+// The actual handling lives in FileDropCoordinator (it needs the editor and
+// the file service); this module is just the pure extension-based decision.
 
 export type DropKind = "md" | "image" | "other";
 

@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { WebPreferences } from "electron";
@@ -78,6 +78,21 @@ async function chooseSave(file: string): Promise<void> {
   await app!.evaluate(({ dialog }, selectedFile) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: selectedFile });
   }, file);
+}
+
+/** Make the next Save As dialog wait until the returned function is called,
+ *  then choose `file`, as a user who takes a while to pick a folder. The
+ *  dialog sets `saveAsked` once it opens. */
+async function holdSaveDialog(file: string): Promise<() => Promise<void>> {
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    const answer = new Promise((resolve) => Reflect.set(globalThis, "answerSave", resolve));
+    dialog.showSaveDialog = async () => {
+      Reflect.set(globalThis, "saveAsked", true);
+      await answer;
+      return { canceled: false, filePath: selectedFile };
+    };
+  }, file);
+  return () => app!.evaluate(() => (Reflect.get(globalThis, "answerSave") as () => void)());
 }
 
 /** The clipboard's text with line endings as "\n". Windows puts "\r\n" there. */
@@ -1642,6 +1657,47 @@ async function csvFile(name: string): Promise<string> {
   return file;
 }
 
+/** Hold each request for a main process command, such as `read_image_bytes`,
+ *  until `releaseHeld`, as for a large file or one on a slow share. Electron
+ *  keeps the handlers of ipcMain.handle in `_invokeHandlers`, and a handler
+ *  on the window's own `ipc` runs in their place. */
+async function holdCommand(command: string): Promise<void> {
+  await app!.evaluate(({ BrowserWindow, ipcMain }, held) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
+    const release = new Promise((resolve) => Reflect.set(globalThis, "releaseHeld", resolve));
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, name, ...args) => {
+      if (name !== held) return invoke(event, name, ...args);
+      Reflect.set(globalThis, "heldAsked", true);
+      await release;
+      const answer = await invoke(event, name, ...args);
+      Reflect.set(globalThis, "heldAnswered", true);
+      return answer;
+    });
+  }, command);
+}
+
+/** Resolve once the main process has sent the app its answer to the
+ *  request that `holdCommand` held. */
+async function untilHeldAnswered(): Promise<void> {
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "heldAnswered") === true)).toBe(true);
+}
+
+/** Resolve once the app has asked for the command that `holdCommand` holds. */
+async function untilHeld(): Promise<void> {
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "heldAsked") === true)).toBe(true);
+}
+
+/** Let the requests that `holdCommand` holds go on. */
+async function releaseHeld(): Promise<void> {
+  await app!.evaluate(() => (Reflect.get(globalThis, "releaseHeld") as () => void)());
+}
+
+/** Whether a file or folder exists. */
+async function exists(file: string): Promise<boolean> {
+  return stat(file).then(() => true, () => false);
+}
+
 test("files dropped on the document go in where they were dropped", async () => {
   const file = path.join(directory, "drop-on-document.md");
   await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
@@ -1674,6 +1730,179 @@ test("a Markdown file dropped on the document opens without leaving the drop ind
   await page.getByRole("tab", { name: /drop-markdown\.md/ }).click();
   await expect(page.locator(".ProseMirror p").first()).toHaveText("First line.");
   await expect(page.locator(".milkdown-drop-indicator").first()).toBeHidden();
+});
+
+test("a Markdown file dropped with other files opens in its own tab once the other files are in where they were dropped", async () => {
+  const file = path.join(directory, "drop-mixed.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await writeFile(other, "# Other\n");
+  await launch(file);
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "Second line." }), [await pngFile("pixel.png"), other, await csvFile("notes.csv")]);
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Other");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  // The image and the link were in the document they were dropped on before
+  // the new tab put it behind, so they did not wait for it to come back.
+  const dropped = page.locator(".editor-pane[hidden] .ProseMirror", { hasText: "Second line." });
+  await expect(dropped.locator(".milkdown-image-block")).toHaveCount(1);
+  await expect(dropped.locator("p", { hasText: "notes.csv" })).toHaveCount(1);
+  await page.getByRole("tab", { name: /drop-mixed\.md/ }).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(
+    /^First line\.\n\nSecond line\.\n\n!\[\]\(data:image\/png;base64,[^)]+\)\n\n\[notes\.csv\]\(attachments\/notes\.csv\)\n\nThird line\.\n$/,
+  );
+});
+
+test("a Markdown file dropped with other files opens at once when the user shows another tab while those are read", async () => {
+  const file = path.join(directory, "drop-switch.md");
+  const shown = path.join(directory, "shown.md");
+  const dropped = path.join(directory, "dropped.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await writeFile(shown, "# Shown\n");
+  await writeFile(dropped, "# Dropped\n");
+  await launch(file);
+  const tab = (name: RegExp) => page.getByRole("tab", { name });
+  const shownHeading = page.locator(`.editor-pane:not([hidden]) ${heading}`);
+  await chooseOpen(shown);
+  await expect(shownHeading).toHaveText("Shown");
+  await tab(/drop-switch\.md/).click();
+  const secondLine = page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "Second line." });
+  await expect(secondLine).toBeVisible();
+  await holdCommand("read_image_bytes");
+  await dropBelow(secondLine, [await pngFile("pixel.png"), dropped]);
+  await untilHeld();
+  // While the image is read, the user shows another tab. The Markdown file
+  // opens then, as it would alone, rather than wait with the image.
+  await tab(/shown\.md/).click();
+  await expect(shownHeading).toHaveText("Dropped");
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await releaseHeld();
+  // The image waits for its document. Back there, it goes in where it was
+  // dropped, and that document stays in front.
+  await tab(/drop-switch\.md/).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block")).toHaveCount(1);
+  await page.waitForTimeout(500);
+  await expect(tab(/drop-switch\.md/)).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first()).toHaveText("First line.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(
+    /^First line\.\n\nSecond line\.\n\n!\[\]\(data:image\/png;base64,[^)]+\)\n\nThird line\.\n$/,
+  );
+});
+
+test("two Markdown files dropped together each open in a tab of their own", async () => {
+  const file = path.join(directory, "drop-two.md");
+  const first = path.join(directory, "first.md");
+  const second = path.join(directory, "second.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await writeFile(first, "# First\n");
+  await writeFile(second, "# Second\n");
+  await launch(file);
+  await dropFiles(page.locator(".ProseMirror p", { hasText: "Second line." }), [first, second]);
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Second");
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await page.getByRole("tab", { name: /first\.md/ }).click();
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("First");
+  // The document they were dropped on is as it was.
+  await page.getByRole("tab", { name: /drop-two\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", "Second line."]);
+  await expect(page.getByRole("tab", { name: /drop-two\.md/ }).locator(".tab-dot")).toBeHidden();
+});
+
+test("the files of a drop after one that cannot be read go in, and the drop's Markdown file opens", async () => {
+  const file = path.join(directory, "drop-gone.md");
+  const dropped = path.join(directory, "dropped.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await writeFile(dropped, "# Dropped\n");
+  await launch(file);
+  const errors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  const gone = await pngFile("gone.png");
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [gone, await csvFile("good.csv"), dropped]);
+  await untilHeld();
+  // The image is deleted before it is read.
+  await unlink(gone);
+  await releaseHeld();
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Dropped");
+  await page.getByRole("tab", { name: /drop-gone\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", /good\.csv/, "Second line."]);
+  expect(errors).toContainEqual(expect.stringContaining("md-easy: could not insert gone.png"));
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[good.csv](attachments/good.csv)\n\nSecond line.\n");
+  expect(await readFile(path.join(directory, "attachments", "good.csv"), "utf8")).toBe("a,b\n");
+  await expect(page.getByRole("tab", { name: /drop-gone\.md/ }).locator(".tab-dot")).toBeHidden();
+});
+
+test("a file dropped on a document that is saved in another folder while the file is read goes in beside it there", async () => {
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("data.csv")]);
+  await untilHeld();
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await releaseHeld();
+  await expect(page.locator(".ProseMirror p", { hasText: "data.csv" })).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toBe("First line.\n\n[data.csv](attachments/data.csv)\n\nSecond line.\n");
+  expect(await readFile(path.join(directory, "moved", "attachments", "data.csv"), "utf8")).toBe("a,b\n");
+  expect(await exists(path.join(directory, "original", "attachments"))).toBe(false);
+});
+
+test("a file dropped on a document whose Save As dialog is open once the file is read goes in beside it where it is saved", async () => {
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("data.csv")]);
+  await untilHeld();
+  // The user starts Save As during the read and is still in its dialog when
+  // the read ends.
+  const answerSave = await holdSaveDialog(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "saveAsked") === true)).toBe(true);
+  await releaseHeld();
+  await untilHeldAnswered();
+  await answerSave();
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await expect(page.locator(".ProseMirror p", { hasText: "data.csv" })).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toBe("First line.\n\n[data.csv](attachments/data.csv)\n\nSecond line.\n");
+  expect(await readFile(path.join(directory, "moved", "attachments", "data.csv"), "utf8")).toBe("a,b\n");
+  expect(await exists(path.join(directory, "original", "attachments"))).toBe(false);
+});
+
+test("an image dropped on a document that is saved in another folder while the image is written is written again beside it there", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("write_attachment");
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await pngFile("pixel.png")]);
+  await untilHeld();
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await releaseHeld();
+  const image = page.locator(".ProseMirror .milkdown-image-block img");
+  await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0)).toBe(true);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\n$/);
+  const link = /\]\(([^)]+)\)/.exec(await readFile(saved, "utf8"))![1]!;
+  expect(await readFile(path.join(path.dirname(saved), link))).toEqual(await readFile(path.join(directory, "pixel.png")));
 });
 
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {

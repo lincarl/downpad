@@ -88,6 +88,9 @@ export async function storeImage(
 /** What `resolveImageSrc` needs from the app, without coupling to the Store. */
 export interface ImageStoreContext {
   getSettings(): Settings;
+  /** The document's saved path. Read right before each try to store the
+   *  image, so an image written to the attachments folder goes beside the
+   *  path it gave last. */
   getFilePath(): string | null;
   /** Prompt-and-save an untitled buffer; resolves true once it has a path. */
   requestSave(): Promise<boolean>;

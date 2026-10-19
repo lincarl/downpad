@@ -3,15 +3,12 @@
 // actions consumed by React components.
 
 import type { Store } from "../state/store";
-import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
+import type { EditorHost } from "../editor/EditorHost";
 import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
-import { readImageBytes, writeAttachment } from "../ipc/commands";
 import { isElectron } from "../ipc/env";
-import { classifyDrop, baseName } from "../paste/dropHandler";
-import { mdLink, mdImage } from "../paste/mdLink";
-import { resolveImageSrc, type ImageStoreContext } from "../images/imageStore";
+import type { ImageStoreContext } from "../images/imageStore";
 import { FindBar } from "../editor/wysiwyg/findBar";
 import { RecentView } from "../home/RecentView";
 import { createIpcRecentDataSource } from "../home/recentData";
@@ -26,6 +23,7 @@ import { PrintWorkspace } from "../print/PrintWorkspace";
 import { installAppShortcuts } from "./installAppShortcuts";
 import { StartupCoordinator } from "./StartupCoordinator";
 import { DesktopEventBindings } from "./DesktopEventBindings";
+import { FileDropCoordinator } from "./FileDropCoordinator";
 
 export interface AppRuntimeHosts {
   editorArea: HTMLElement;
@@ -50,6 +48,7 @@ export class AppRuntime {
   private readonly printWorkspace: PrintWorkspace;
   private readonly startup: StartupCoordinator;
   private readonly desktopEvents: DesktopEventBindings;
+  private readonly fileDrops: FileDropCoordinator;
   /** Set while a layout switch, Try again or a tab switch of this runtime
    *  runs, also while the switch waits for EditorHost to finish another change
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
@@ -113,13 +112,19 @@ export class AppRuntime {
       settings: this.settingsModel,
       isDisposed: () => this.disposed,
     });
+    this.fileDrops = new FileDropCoordinator({
+      store,
+      files: this.files,
+      editorHost: this.editorHost,
+      showActiveDoc: () => this.showActiveDoc(),
+    });
     this.desktopEvents = new DesktopEventBindings({
       store,
       files: this.files,
       editorHost: this.editorHost,
       scheduler: this.scheduler,
       run: (action) => this.run(action),
-      handleDrop: (paths, drop) => this.handleDrop(paths, drop),
+      handleDrop: (paths, drop) => this.fileDrops.handle(paths, drop),
     });
 
     // Recent view (§5.8). Opening a file from it shows the editor first, then
@@ -517,68 +522,6 @@ export class AppRuntime {
     }
   }
 
-  /**
-   * Explorer drag-drop (spec §5.4): a markdown file opens (honoring the unsaved
-   * guard); image files embed where they were dropped on the document, or at
-   * the cursor; other files are copied into the attachments folder and linked
-   * the same way. The files go into the document they were dropped on. If
-   * another tab is in front by the time a file is read, the file waits until
-   * that document is shown again.
-   */
-  private async handleDrop(paths: string[], point: DropPoint): Promise<void> {
-    // A dropped markdown file opens in its own tab (§5.19).
-    const md = paths.find((p) => classifyDrop(p) === "md");
-    if (md) {
-      await this.files.openPath(md);
-      return;
-    }
-    // Aim now, during the drop event, while the drop point is over the text the
-    // file was dropped on. Reading the file comes after. With no document open,
-    // create one first so the drop has somewhere to go, and from the Recent
-    // view show the document. The files then go in at its caret.
-    const { activeTabId, view } = this.store.get();
-    let drop: FileDrop | null = null;
-    if (!activeTabId) await this.files.newDocument();
-    else if (view === "recent") await this.showActiveDoc();
-    else drop = this.editorHost.aimDrop(point);
-    drop ??= this.editorHost.aimDrop();
-    if (!drop) return;
-    try {
-      for (const path of paths) {
-        if (classifyDrop(path) === "image") await this.embedDroppedImage(path, drop);
-        else await this.attachDroppedFile(path, drop);
-      }
-    } finally {
-      this.editorHost.releaseDrop(drop);
-    }
-  }
-
-  /** The saved path of an open tab's document, or null if it is untitled or closed. */
-  private tabFilePath(tabId: string): string | null {
-    return this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
-  }
-
-  /** Save the document a drop went to, if it is untitled, which asks where.
-   *  Only the document in front can be saved, so for a drop on a document
-   *  that is behind another tab by now, this waits until that document is
-   *  shown again. Resolves true once the document has a path, or false if the
-   *  user cancels or the document is closed first. */
-  private async saveDropDocument(drop: FileDrop): Promise<boolean> {
-    if (this.tabFilePath(drop.tabId)) return true;
-    if (!(await this.editorHost.untilInFront(drop))) return false;
-    return this.tabFilePath(drop.tabId) !== null || (await this.files.save());
-  }
-
-  /** Log that a dropped file went nowhere because its document was closed. */
-  private warnNotInserted(path: string): void {
-    console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on was closed`);
-  }
-
-  /** Whether a tab is still open. */
-  private hasTab(tabId: string): boolean {
-    return this.store.get().tabs.some((tab) => tab.id === tabId);
-  }
-
   /** Context for image storage: settings, current path, and prompt-to-save. */
   private imageStoreContext(): ImageStoreContext {
     return {
@@ -586,53 +529,6 @@ export class AppRuntime {
       getFilePath: () => this.store.get().doc.filePath,
       requestSave: () => this.files.save(),
     };
-  }
-
-  /** Context for storing a dropped image, with the path of the document it
-   *  was dropped on. */
-  private dropImageContext(drop: FileDrop): ImageStoreContext {
-    return {
-      getSettings: () => this.store.get().settings,
-      getFilePath: () => this.tabFilePath(drop.tabId),
-      requestSave: () => this.saveDropDocument(drop),
-    };
-  }
-
-  /** Embed a dropped image where its drop goes in. */
-  private async embedDroppedImage(path: string, drop: FileDrop): Promise<void> {
-    const { bytes, mime } = await readImageBytes(path);
-    const src = await resolveImageSrc(bytes, mime, this.dropImageContext(drop));
-    if (src) await this.insertDropped(drop, mdImage("", src), path);
-    else if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
-  }
-
-  /** Copy a dropped file into the attachments folder beside the document it
-   *  was dropped on, and link it where its drop goes in. */
-  private async attachDroppedFile(path: string, drop: FileDrop): Promise<void> {
-    // Non-image files always go to attachments (§5.7), which needs a saved doc.
-    if (!(await this.saveDropDocument(drop))) {
-      if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
-      return;
-    }
-    const filePath = this.tabFilePath(drop.tabId);
-    if (!filePath) return;
-    const { bytes } = await readImageBytes(path);
-    const name = baseName(path);
-    const rel = await writeAttachment(
-      filePath,
-      this.store.get().settings.attachmentsFolderName,
-      name,
-      bytes,
-    );
-    await this.insertDropped(drop, mdLink(name, rel), path);
-  }
-
-  /** Insert a dropped file's Markdown into the document it was dropped on,
-   *  once that document is in front. If the document is closed first, it gets
-   *  nothing and no other document gets it instead. A copy in the attachments
-   *  folder stays there. */
-  private async insertDropped(drop: FileDrop, markdown: string, path: string): Promise<void> {
-    if (!(await this.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(path);
   }
 
   /** Run a file action, surfacing failures without crashing the shell. */

@@ -158,6 +158,16 @@ export class FileService {
     return this.queueSave(true);
   }
 
+  /** Resolve once no save that can give a tab's document a new path is under
+   *  way, with its dialog open or its file being written. That is a Save As,
+   *  or a save that asks where to save an untitled document. A file dropped
+   *  on the document waits for this before it is written beside it (§5.4). */
+  async untilPathSettled(tabId: string): Promise<void> {
+    const moves = (request: SaveRequest): boolean =>
+      request.tabId === tabId && (request.saveAs || request.expectedPath === null);
+    while ([...this.pendingSaves].some(moves)) await this.saveQueue;
+  }
+
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
   private queueSave(saveAs: boolean, options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
