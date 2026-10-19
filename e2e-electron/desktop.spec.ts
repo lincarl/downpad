@@ -322,14 +322,19 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(images.nth(2)).toHaveClass(/md-image-missing/);
   await expect.poll(() => images.nth(1).locator("img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
   const plain = page.locator(".milkdown .ProseMirror > p").filter({ hasText: "Plain line." });
+  const preview = page.locator(".milkdown-link-preview");
   /** Ctrl or Cmd+click `fraction` of the way across `target`, then click plain
-   *  text, so no link's preview covers the next target. */
+   *  text and wait for the link preview to go, so it cannot cover the next
+   *  target. Crepe shows or hides the preview only once the pointer has
+   *  rested for 50 ms, so it can still be up after the click. It sits over
+   *  the line above its link, and a click on it opens its own link. */
   const ctrlClick = async (target: Locator, fraction: number) => {
     const box = (await target.boundingBox())!;
     await page.keyboard.down("ControlOrMeta");
     await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
     await page.keyboard.up("ControlOrMeta");
     await plain.click({ position: { x: 2, y: 8 } });
+    await expect(preview).toBeHidden();
   };
   // ProseMirror puts a click on an image's right half after the image, where
   // the next link starts.
