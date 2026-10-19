@@ -482,3 +482,29 @@ test("a sheet of nothing but bold text fits its page where bold text is wider", 
   expect(overflow).toBeLessThanOrEqual(0.5);
   expect(texts.join("")).toBe(documentText);
 });
+
+test("a heading taller than a page fits each sheet when printed below 100%", async ({ page }) => {
+  // Below 100% the page's flow is scaled down, and the top margin of the
+  // first block on a sheet collapsed through the flow at full size. The
+  // paginator had made room for it at the smaller size, so each piece of a
+  // long heading ran 5.7 px past its page body at 50%.
+  const words = Array.from({ length: 500 }, (_, i) => `w${i + 1}`).join(" ");
+  await typeDocument(page, [`# ${words}`, "", "The end."].join("\n"));
+  await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+  const workspace = page.locator(".print-workspace");
+  await workspace.getByLabel("Document title in header").check();
+  const scale = workspace.getByLabel("Scale", { exact: true });
+  await scale.fill("50");
+  await scale.press("Enter");
+  await expect(page.locator(".print-page .print-flow").first()).toHaveCSS("transform", "matrix(0.5, 0, 0, 0.5, 0, 0)");
+  await expect(page.locator(".print-page").first().locator(".print-page-header")).toBeVisible();
+  expect(await page.locator(".print-page .print-flow > h1").count()).toBeGreaterThan(1);
+
+  const { overflow, texts } = await printedSheets(page);
+  expect(overflow).toBeLessThanOrEqual(0.5);
+  expect(texts.join("")).toBe(documentText);
+});

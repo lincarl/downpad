@@ -39,11 +39,11 @@ export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Elem
  * Pack laid-out siblings into groups no taller than `maxHeightPx`.
  *
  * Heights come from `offsetTop`/`offsetHeight`, i.e. border boxes. The first
- * block's top margin must be added back for each page: `.print-page-body` creates
- * a block formatting context with `overflow: hidden`, so that margin is contained
- * by (and consumes space in) the page rather than collapsing outside it. An
- * element taller than the limit gets a group to itself rather than an empty page
- * before it.
+ * block's top margin must be added back for each page: the page's flow is a
+ * block formatting context (`display: flow-root`, app.css), so that margin is
+ * contained by (and consumes space in) the page rather than collapsing outside
+ * it, and it scales with the flow. An element taller than the limit gets a
+ * group to itself rather than an empty page before it.
  */
 export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: number): T[][] {
   const boxes = items.map((el) => ({

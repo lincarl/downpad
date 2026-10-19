@@ -1385,8 +1385,14 @@ body {
 /* The flow is measured at an explicit width and then placed on the page at that
    same width, so nothing may add padding or margins around it. Crepe styles the
    editor body with `.milkdown .ProseMirror { padding: … }` at the same
-   specificity, hence `!important` rather than a selector arms race. */
+   specificity, hence `!important` rather than a selector arms race.
+
+   `flow-root` keeps the top margin of a page's first block inside the flow.
+   Below 100% the flow is scaled down on the page (printRender.ts), and a margin
+   that collapsed through it stayed full size, so a block that filled the page
+   ran past it by the difference. */
 .print-doc .print-flow {
+  display: flow-root;
   color: #000;
   padding: 0 !important;
   margin: 0 !important;

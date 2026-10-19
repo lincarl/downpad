@@ -214,6 +214,8 @@ function buildPage(
   const surface = printSurface(req.version);
   const pageFlow = flow.cloneNode(false) as HTMLElement;
   pageFlow.style.width = `${geometry.layoutWidthPx}px`;
+  // The flow holds its first block's top margin (`flow-root`, app.css), so
+  // the margin scales with the blocks, as the paginator measured them.
   if (geometry.scale !== 1) {
     pageFlow.style.transform = `scale(${geometry.scale})`;
     pageFlow.style.transformOrigin = "top left";
