@@ -440,12 +440,13 @@ test("End with the caret before images or formulas that start a line moves the c
     "Twice\\\n![Pixel](image.png) is selected twice.",
     "Less\\\n$s$ is selected less.",
     "Home\\\n![Pixel](image.png) goes back home.",
+    "Join\\\n![Pixel](image.png) joins the line above.",
   ].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
-  await expect.poll(loaded).toBe(7);
+  await expect.poll(loaded).toBe(8);
   await expect(editor.locator("[data-type=math_inline]")).toHaveCount(6);
   /** Click at the end of the text on `line`'s last row, go to the start of
    *  that row with Home, press `keys` and type `text`. The click is on the
@@ -486,6 +487,8 @@ test("End with the caret before images or formulas that start a line moves the c
   await typeAfter(["Shift+End", "Shift+End"], paragraph("is selected twice."), "a");
   await typeAfter(["Shift+End", "Shift+ArrowLeft"], paragraph("is selected less."), "b");
   await typeAfter(["Shift+End", "Shift+Home"], paragraph("goes back home."), "c");
+  // Typing over a selection that ends right after the break replaces it.
+  await typeAfter("Shift+ArrowLeft", paragraph("joins the line above."), "d");
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — md-easy");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
@@ -505,7 +508,8 @@ test("End with the caret before images or formulas that start a line moves the c
     "Kept\\\n0",
     "Twice\\\na",
     "Less\\\nb.",
-    "Home\\\nc![Pixel](image.png) goes back home.\n",
+    "Home\\\nc![Pixel](image.png) goes back home.",
+    "Joind![Pixel](image.png) joins the line above.\n",
   ]);
 });
 

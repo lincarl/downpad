@@ -16,8 +16,9 @@
 // The plugin puts the anchor back when ProseMirror reads the extended
 // selection, which it has ProseMirror do before the next frame is drawn.
 // ProseMirror leaves typing over a selection in one text block to Chromium,
-// which still types over its own selection from before the break, so the
-// plugin types over such a selection itself.
+// whose own selection starts or ends before the break instead. Its typing
+// replaced the break with a selection that started there and kept it with one
+// that ended there, so the plugin types over such selections itself.
 
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
@@ -65,8 +66,8 @@ function moveEndPastAtoms(view: EditorView, extend: boolean): void {
 /** Moves the caret past the inline atoms that start its line when End or
  *  Shift+End is pressed there, so the key reaches the end of the line. Keeps
  *  the anchor of a selection that Shift and a key that moves the caret extend
- *  from right after a line break and before an inline atom, and types over
- *  such a selection without the line break. */
+ *  from right after a line break and before an inline atom, and types over a
+ *  selection that starts or ends there. */
 export const endPastAtoms = $prose(() => {
   /** The anchor of the selection that a Shift key is extending from right
    *  after a line break, until ProseMirror reads the extended selection. */
@@ -98,10 +99,11 @@ export const endPastAtoms = $prose(() => {
         return false;
       },
       handleKeyPress: (view, event) => {
-        // A selection that starts right after a line break and before an
-        // inline atom, which Chromium would type over from before the break.
+        // A selection that starts or ends right after a line break and before
+        // an inline atom, where Chromium's own selection starts or ends before
+        // the break.
         const { selection } = view.state;
-        if (!(selection instanceof TextSelection) || selection.empty || !afterBreakBeforeAtom(selection.$from)) return false;
+        if (!(selection instanceof TextSelection) || selection.empty || !(afterBreakBeforeAtom(selection.$from) || afterBreakBeforeAtom(selection.$to))) return false;
         // Type as ProseMirror does over a selection it handles itself.
         const text = String.fromCharCode(event.charCode);
         if (/[\r\n]/.test(text)) return false;
