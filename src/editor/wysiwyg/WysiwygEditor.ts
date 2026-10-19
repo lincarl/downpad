@@ -345,12 +345,13 @@ export class WysiwygEditor {
     // asynchronous Crepe create is in flight. Never arm callbacks for that dead
     // instance; destroy() already owns/awaits its terminal cleanup.
     if (this.destroyed || this.crepe !== crepe) return;
-    // A split mirror that landed while Crepe was creating replaces the body now
-    // and records its own source. Otherwise remember the source just opened.
+    // Remember the source just opened. A split mirror that landed while Crepe
+    // was creating then replaces the body and records its own source, so
+    // undoing it writes the opened body with the opened source.
+    this.rememberSource(split.body, this.opened);
     const mirrored = this.pendingBody;
     this.pendingBody = null;
     if (mirrored !== null) this.replaceBody(mirrored);
-    else this.rememberSource(split.body, this.opened);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
     // Crepe adds an empty last line below a final list, code block, quote,
     // table, rule or image in the first transaction after create. Make that an
