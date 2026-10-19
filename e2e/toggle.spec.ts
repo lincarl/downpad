@@ -98,6 +98,39 @@ test("'Document' returns to the document-only view from the split", async ({ pag
   await expect(page.locator(documentSeg)).toHaveAttribute("aria-checked", "true");
 });
 
+test("a narrow Split pane keeps a readable text column and room for the block handle", async ({ page }) => {
+  // Crepe pads the document 120px a side, which left the Split pane of an 800px
+  // window a text column 100px wide. A 1000px window keeps that padding.
+  const editor = page.locator(wysiwyg);
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await expect(editor).toHaveCSS("padding-left", "120px");
+  await expect(editor).toHaveCSS("padding-right", "120px");
+
+  await page.setViewportSize({ width: 800, height: 720 });
+  await page.locator(splitSeg).click();
+  const textColumn = () =>
+    editor.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+  await expect.poll(textColumn).toBeGreaterThanOrEqual(220);
+
+  // The block handle shows left of the text and stays inside the pane.
+  const paragraph = editor.locator(":scope > p").first();
+  await paragraph.hover({ position: { x: 4, y: 4 } });
+  const handle = page.locator(".editor-pane-wysiwyg .milkdown-block-handle");
+  await expect(handle).toHaveAttribute("data-show", "true");
+  const pane = await page.locator(".editor-pane-wysiwyg").boundingBox();
+  const text = await paragraph.boundingBox();
+  // The handle slides into place, so wait for it to settle.
+  await expect
+    .poll(async () => {
+      const box = await handle.boundingBox();
+      return box !== null && box.x >= pane!.x && box.x + box.width <= text!.x;
+    })
+    .toBe(true);
+});
+
 test("switching Document → Markdown → Document keeps the document intact", async ({ page }) => {
   await page.locator(markdownSeg).click();
   await expect(page.locator(rawContent)).toContainText("# Welcome to md-easy");

@@ -675,6 +675,18 @@ body {
   color: var(--editor-surface-fg);
 }
 
+/* Crepe pads the document 120px on each side, which left a narrow pane, such as
+   Split in an 800px window, a text column about 100px wide. The padding gives
+   way once the column would be narrower than 400px, down to 58px. With the
+   24px the page or the Split pane adds around the editor, 58px still holds the
+   block handle (66px wide, 16px from the text). 100% is the editor's own width,
+   so the rule follows the window, the divider and the page width setting. At
+   the default page width the Document view keeps 120px in windows 1000px and
+   wider. A fixed page width below 688px narrows the padding in every window. */
+.editor-host .milkdown .ProseMirror {
+  padding-inline: clamp(58px, (100% - 400px) / 2, 120px);
+}
+
 /* Crepe's reset.css pins absolute px font-sizes on the ProseMirror headings and
    paragraphs, which shadow the scale inherited from `.milkdown` above (so A−/A+
    only ever moved code blocks + the raw view). Re-declare them at higher

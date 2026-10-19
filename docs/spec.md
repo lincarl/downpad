@@ -60,6 +60,8 @@ The app periodically stores recovery snapshots for unsaved work and offers to re
 
 The interface shares the look of Mervin PDF. Users can choose light, dark, or system themes; adjust the accent color, document width, font, and text size; select the default editor view; and configure image storage, Markdown serialization, spell checking, recovery, and autosave behavior.
 
+The document's side margins narrow in a narrow window or Split pane, and with a fixed document width below 688px in any window, so its text keeps a readable width.
+
 Settings are stored locally in `settings.toml` and can be changed from the app or by editing the settings file.
 
 If the file contains invalid TOML, the app uses defaults for the session and preserves the original file. Settings changes apply in memory, but saving them requires repairing the file's syntax first.
