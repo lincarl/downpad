@@ -164,7 +164,9 @@ function scaleToFit(el: HTMLElement, maxHeightPx: number): void {
   // The children's margins now sit inside the frame, around the block, and
   // keep their size; only the block itself shrinks.
   const margins = Math.max(0, frame.getBoundingClientRect().height - height);
-  el.style.transform = `scale(${Math.max(0.01, (room - margins) / height)})`;
+  // However small the factor: a floor of 1 percent left an image 20,000 px
+  // tall reaching past the page.
+  el.style.transform = `scale(${Math.max(0, (room - margins) / height)})`;
   el.style.transformOrigin = "top center";
   frame.style.height = `${room}px`;
 }

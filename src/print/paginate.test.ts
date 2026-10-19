@@ -1134,13 +1134,18 @@ describe("splitIntoPages, shrinking what cannot be split", () => {
   beforeEach(() => fakeLayout.install());
   afterEach(() => fakeLayout.uninstall());
 
-  it("shrinks a block with nothing splittable in it to fit rather than letting the page cut it", () => {
+  it.each([
+    [960, "scale(0.25)"],
+    // A factor below 1 percent: the shrink stopped at 1 percent, so the block
+    // still reached past the page.
+    [48_000, "scale(0.005)"],
+  ])("shrinks a block %d px tall with nothing splittable in it to %s rather than letting the page cut it", (height, scale) => {
     // Such a block was left as it was, and the page body cut off all of it below
     // the first page.
     const block = document.createElement("div");
     block.className = "milkdown-image-block";
     block.style.marginTop = "10px";
-    Object.defineProperty(block, "offsetHeight", { value: 960 });
+    Object.defineProperty(block, "offsetHeight", { value: height });
     block.innerHTML = '<div class="image-wrapper"><img alt="a tall image"></div>';
 
     const flow = flowWith(block);
@@ -1153,7 +1158,7 @@ describe("splitIntoPages, shrinking what cannot be split", () => {
     expect(frame.style.height).toBe("240px");
     expect(frame.style.marginTop).toBe("10px");
     expect(block.style.marginTop).toBe("0px");
-    expect(block.style.transform).toBe("scale(0.25)");
+    expect(block.style.transform).toBe(scale);
     expect(block.querySelector("img")).not.toBeNull();
   });
 
