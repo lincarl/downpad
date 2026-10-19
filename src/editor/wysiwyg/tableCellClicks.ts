@@ -26,6 +26,16 @@
 // and leaves them, with any menu open in them, where they were. A faded handle
 // shows again under the pointer before it takes a click, so a menu left open
 // after its selection was gone could select a column from the paragraph above.
+//
+// A menu's buttons act on pointerdown, and the click after them reaches the
+// handle, which selects the row or column at its place. After a row's Delete,
+// that is the row that moved up, and Crepe's new view opens its menu, so
+// Delete again removes that row too. The Delete itself ends the row selection,
+// so closing the menu right then hid the button under the pointer before the
+// release. The click then landed on the cell below, and no row was selected.
+// While a press that started on a row or column handle, or in its menu, lasts,
+// this view therefore closes a stale menu only once the press and its click
+// are over.
 
 import { TableNodeView } from "@milkdown/kit/component/table-block";
 import type { Node } from "@milkdown/kit/prose/model";
@@ -39,10 +49,56 @@ interface SelectedLines {
   col: boolean;
 }
 
+/** Crepe's row and column handles, each of which holds its menu. */
+const lineHandles = '[data-role="col-drag-handle"], [data-role="row-drag-handle"]';
+
 /** Crepe's table view, without its own handling of a press in a cell, and
  *  keeping the cells of a table whose content has not changed while no whole
  *  row or column is selected in it. */
 class CaretTableView extends TableNodeView {
+  /** Whether a press that started on a row or column handle, or in its menu,
+   *  has not yet ended with its click. */
+  private pressOnHandle = false;
+  /** Whether an update during that press left a stale menu to close. */
+  private closeAfterPress = false;
+  /** The timer that ends the press once its click is over. */
+  private pressEnd: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(...args: ConstructorParameters<typeof TableNodeView>) {
+    super(...args);
+    // In the capture phase, before Crepe's buttons act on the press.
+    this.dom.addEventListener("pointerdown", this.startPress, true);
+  }
+
+  override destroy(): void {
+    window.removeEventListener("pointerup", this.endPress, true);
+    window.removeEventListener("pointercancel", this.endPress, true);
+    clearTimeout(this.pressEnd);
+    super.destroy();
+  }
+
+  /** Note a press on a row or column handle, or in its menu, until it ends. */
+  private readonly startPress = (event: PointerEvent): void => {
+    if (!(event.target instanceof Element) || !event.target.closest(lineHandles)) return;
+    clearTimeout(this.pressEnd);
+    this.pressOnHandle = true;
+    window.addEventListener("pointerup", this.endPress, true);
+    window.addEventListener("pointercancel", this.endPress, true);
+  };
+
+  /** Close the menus the press left stale once its click is over. The click
+   *  comes after pointerup in the same task. */
+  private readonly endPress = (): void => {
+    window.removeEventListener("pointerup", this.endPress, true);
+    window.removeEventListener("pointercancel", this.endPress, true);
+    this.pressEnd = setTimeout(() => {
+      this.pressOnHandle = false;
+      if (!this.closeAfterPress) return;
+      this.closeAfterPress = false;
+      this.closeStaleMenus(this.selectedLines(this.node));
+    });
+  };
+
   override stopEvent(event: Event): boolean {
     const { target, type } = event;
     const press = type === "mousedown" || type === "pointerdown";
@@ -59,7 +115,8 @@ class CaretTableView extends TableNodeView {
    *  highlights inside it. While a whole row or column is selected, Crepe's
    *  view still has the table drawn again, because its new view opens the
    *  menu of that row or column. After an update that keeps this view, close
-   *  a menu whose selection is gone. */
+   *  a menu whose selection is gone, or, during a press on a row or column
+   *  handle or in its menu, once that press and its click are over. */
   override update(node: Node): boolean {
     const lines = this.selectedLines(node);
     if (!node.eq(this.node) || lines.row || lines.col) {
@@ -68,7 +125,8 @@ class CaretTableView extends TableNodeView {
       this.node = node;
       this.nodeRef.value = node;
     }
-    this.closeStaleMenus(lines);
+    if (this.pressOnHandle) this.closeAfterPress = true;
+    else this.closeStaleMenus(lines);
     return true;
   }
 

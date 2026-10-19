@@ -2843,6 +2843,41 @@ test("the add-column and add-row buttons select the new column or row and open i
   await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name |    | Notes |\n| ---- | :- | ----- |\n| a1   |    | b1    |\n|      |    |       |\n| a2   |    | b2    |\n");
 });
 
+test("Delete in a row's menu selects the row that moves into its place and opens its menu, so Delete again removes that row too", async () => {
+  const file = path.join(directory, "table-row-delete.md");
+  await writeFile(file, "Intro paragraph above the table.\n\n| Name | Notes |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |\n| a4 | b4 |\n");
+  await launch(file);
+  const table = page.locator(".milkdown .ProseMirror table.children");
+  const rows = table.locator("tr");
+  const rowHandle = page.locator('[data-role="row-drag-handle"]');
+  const menu = rowHandle.locator(".button-group");
+  const a2 = table.locator("td").filter({ hasText: "a2" });
+  const handle = await hoverCell(a2, rowHandle, "row");
+  await page.mouse.click(handle.x, handle.y);
+  await expect(menu).toBeVisible();
+  await handleBeside(rowHandle, a2, "row");
+  // The menu sits straight above the handle.
+  const remove = await centerOf(menu.locator("button"));
+  await page.mouse.move(remove.x, remove.y, { steps: 4 });
+
+  // Crepe's Delete acts on pointerdown, and the click after it reaches the
+  // handle, which selects the row now in that place and opens its menu again.
+  for (const next of ["a3", "a4"]) {
+    await expect.poll(() => showsUnderPointer(rowHandle, remove)).toBe(true);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(rows.nth(2).locator("td").first()).toHaveText(next);
+    await expect(rows.nth(2).locator(".selectedCell")).toHaveCount(2);
+    await expect(table.locator(".selectedCell")).toHaveCount(2);
+    await expect(menu).toBeVisible();
+  }
+  await expect(rows).toHaveCount(3);
+  // Typing replaces the selected row's text.
+  await page.keyboard.type("Z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1   | b1    |\n| Z    |       |\n");
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
