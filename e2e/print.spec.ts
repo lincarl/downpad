@@ -33,10 +33,14 @@ async function typeDocument(page: import("@playwright/test").Page, markdown: str
 /**
  * How far anything on the printed sheets reaches past its page body, in page
  * px: a block, a block shrunk to fit inside its frame, or a line of text. Also
- * the sheets' visible text, without whitespace.
+ * the sheets' visible text, without whitespace, leaving out what `leaveOut`
+ * matches.
  */
-function printedSheets(page: import("@playwright/test").Page): Promise<{ overflow: number; texts: string[] }> {
-  return page.evaluate(() => {
+function printedSheets(
+  page: import("@playwright/test").Page,
+  leaveOut = "",
+): Promise<{ overflow: number; texts: string[] }> {
+  return page.evaluate((leaveOut) => {
     let overflow = -Infinity;
     const texts: string[] = [];
     const range = document.createRange();
@@ -51,18 +55,19 @@ function printedSheets(page: import("@playwright/test").Page): Promise<{ overflo
       }
       const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT);
       for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-        if (getComputedStyle(text.parentElement!).visibility === "hidden") continue;
+        // KaTeX keeps a copy of each formula for screen readers, clipped away.
+        if (getComputedStyle(text.parentElement!).visibility === "hidden" || text.parentElement!.closest(".katex-mathml")) continue;
         range.selectNodeContents(text);
         for (const rect of Array.from(range.getClientRects())) {
           if (rect.width || rect.height) overflow = Math.max(overflow, past(rect));
         }
       }
       const visible = flow.cloneNode(true) as HTMLElement;
-      visible.querySelectorAll('[style*="visibility: hidden"]').forEach((hidden) => hidden.remove());
+      visible.querySelectorAll(['[style*="visibility: hidden"]', leaveOut].filter(Boolean).join(", ")).forEach((hidden) => hidden.remove());
       texts.push(visible.textContent!.replace(/\s+/g, ""));
     }
     return { overflow, texts };
-  });
+  }, leaveOut);
 }
 
 test("the Print button opens the workspace with a paginated preview", async ({ page }) => {
@@ -507,4 +512,122 @@ test("a heading taller than a page fits each sheet when printed below 100%", asy
   const { overflow, texts } = await printedSheets(page);
   expect(overflow).toBeLessThanOrEqual(0.5);
   expect(texts.join("")).toBe(documentText);
+});
+
+test("every printed sheet holds its blocks inside the page and the document's text once, at 50%, 100% and 200%", async ({ page }) => {
+  // The paginator splits, packs and shrinks blocks by measuring them, and a
+  // few pixels left out anywhere put content past the page body, which cuts it
+  // off. This prints documents of every kind of block that splits or shrinks,
+  // with a running header and page numbers, at three scales. Wide letter
+  // spacing on bold text stands in for a font with a wide bold face.
+  test.setTimeout(180_000);
+  const words = (label: string, count: number, from = 1): string =>
+    Array.from({ length: count }, (_, i) => `${label}${from + i}`).join(" ");
+  const tallImage = `data:image/svg+xml;base64,${Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60000"><rect width="100" height="60000" fill="#4a7"/></svg>',
+  ).toString("base64")}`;
+  const code = Array.from({ length: 150 }, (_, i) => `export const step${i + 1} = ${i + 1};`);
+  const documents = {
+    prose: [
+      "# Print check",
+      "",
+      `${words("w", 100)} **${words("bold", 1200)}** [${words("link", 40)}](https://example.com/long) ` +
+        `*${words("em", 60)}* \`code\` ${words("v", 400)} END_PARA`,
+      "",
+      // Headings near a page tall at one scale or another: the 79-word one
+      // is 884 px at 100%, in a 903 px page body.
+      `## ${words("a", 38, 0)}`,
+      "",
+      `## ${words("b", 79, 0)}`,
+      "",
+      `## ${words("c", 165, 0)}`,
+      "",
+      `# ${words("d", 500)}`,
+      "",
+      "The end.",
+    ],
+    blocks: [
+      "# Blocks",
+      "",
+      "> Quote start.",
+      ">",
+      ...Array.from({ length: 60 }, (_, i) => `> > nested ${i + 1}\n> >`),
+      `> ${words("q", 900)} END_QUOTE`,
+      "",
+      "- Short item",
+      `- ${words("item", 1200)} END_ITEM`,
+      ...Array.from({ length: 40 }, (_, i) => `- item ${i + 1}`),
+      "",
+      "Notes[^short] and[^long].",
+      "",
+      // 28 paragraphs fill a page by themselves at 100%, but not below the label.
+      `[^short]: ${Array.from({ length: 28 }, (_, i) => `Note paragraph ${i + 1}.`).join("\n\n    ")}`,
+      "",
+      `[^long]: ${words("n", 1500)}`,
+      "",
+      "| Feature | Behaviour |",
+      "| --- | --- |",
+      ...Array.from({ length: 80 }, (_, i) => `| row${i} | value ${i} |`),
+      "",
+      "```ts",
+      ...code,
+      "```",
+      "",
+      `![tall](${tallImage})`,
+      "",
+      "The end.",
+    ],
+  };
+  // Code blocks print their lines and line numbers, and a split table repeats
+  // its header, so both are compared on their own.
+  const leaveOut = ".milkdown-code-block, tr[data-is-header]";
+
+  for (const [name, lines] of Object.entries(documents)) {
+    await test.step(name, async () => {
+      await typeDocument(page, lines.join("\n"));
+      await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+      await expect
+        .poll(() => page.locator(`${wysiwyg} img`).evaluateAll((images) => images.every((image) => (image as HTMLImageElement).naturalHeight > 0)))
+        .toBe(true);
+      const documentText = await page.locator(wysiwyg).evaluate((node, leaveOut) => {
+        const copy = node.cloneNode(true) as HTMLElement;
+        copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
+        return copy.textContent!.replace(/\s+/g, "");
+      }, leaveOut);
+      await page.addStyleTag({ content: ".print-doc strong { letter-spacing: 0.15em; }" });
+      await page.click('button[aria-label="Print"]');
+      const workspace = page.locator(".print-workspace");
+      await expect(page.locator(".print-page").first()).toBeVisible();
+      await workspace.getByLabel("Document title in header").check();
+      await expect(page.locator(".print-page").first().locator(".print-page-header")).toBeVisible();
+
+      for (const [percent, transform] of [
+        [100, "none"],
+        [50, "matrix(0.5, 0, 0, 0.5, 0, 0)"],
+        [200, "matrix(2, 0, 0, 2, 0, 0)"],
+      ] as const) {
+        const field = workspace.getByLabel("Scale", { exact: true });
+        await field.fill(String(percent));
+        await field.press("Enter");
+        await expect(page.locator(".print-page .print-flow").first()).toHaveCSS("transform", transform);
+
+        const { overflow, texts } = await printedSheets(page, leaveOut);
+        const pieces = await page.locator(".print-page .print-flow").evaluateAll((flows) => ({
+          code: flows.flatMap((flow) => Array.from(flow.querySelectorAll(".cm-line, .print-code-line"), (line) => line.textContent)),
+          headerless: flows.flatMap((flow) => Array.from(flow.querySelectorAll("table"))).filter((table) => table.querySelectorAll("tr[data-is-header]").length !== 1).length,
+          lonelyLabels: flows.flatMap((flow) => Array.from(flow.querySelectorAll("dt"))).filter((term) => !term.nextElementSibling?.textContent?.trim()).length,
+        }));
+        const at = `${name} at ${percent}%`;
+        expect.soft(overflow, `${at}: nothing reaches past its page body`).toBeLessThanOrEqual(0.5);
+        expect.soft(texts.join(""), `${at}: every character prints once, in order`).toBe(documentText);
+        if (name === "blocks") {
+          expect.soft(pieces.code, `${at}: every line of code prints once, in order`).toEqual(code);
+          expect.soft(pieces.headerless, `${at}: every piece of the table has its header`).toBe(0);
+          expect.soft(pieces.lonelyLabels, `${at}: each footnote label prints with its note`).toBe(0);
+        }
+      }
+      await page.keyboard.press("Escape");
+      await expect(workspace).toBeHidden();
+    });
+  }
 });
