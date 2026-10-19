@@ -1171,6 +1171,28 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
+  it("puts the caret after the last of the files dropped on the document while focus was in the find card", async () => {
+    const root = document.createElement("div");
+    const find = document.createElement("input");
+    document.body.append(root, find);
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("p"));
+    find.focus();
+
+    const drop = host.aimDrop({ clientX: 40, clientY: 120, target: line })!;
+    await host.insertDropped(drop, "![](a.png)");
+    // The document took focus with the first file, not the user.
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    await host.insertDropped(drop, "[b.csv](attachments/b.csv)");
+
+    expect(fakeEditors.movedCaret).toBe(true);
+    expect(document.activeElement).toBeInstanceOf(HTMLTextAreaElement);
+    root.remove();
+    find.remove();
+    await host.dispose();
+  });
+
   it("leaves focus and the caret alone when the user pressed a key or clicked since the drop", async () => {
     const root = document.createElement("div");
     const find = document.createElement("input");
@@ -1696,6 +1718,31 @@ describe("EditorHost split catch-up", () => {
     expect(fakeEditors.rawInsertedAt).toEqual({ pos: 3 });
     expect(store.get().doc.markdown).toBe("original markdown[notes.csv](attachments/notes.csv)");
     // The Markdown pane takes focus, as after a drop on the document pane.
+    expect(root.querySelector(".editor-pane-raw")!.contains(document.activeElement)).toBe(true);
+    root.remove();
+    await host.dispose();
+  });
+
+  it.each([
+    ["", false],
+    [", right after typing there", true],
+  ])("puts the caret after the last of the files dropped on the Markdown pane while the document pane has focus%s", async (_when, typed) => {
+    const { root, host } = await openSplit();
+    document.body.append(root);
+    const text = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("textarea"));
+    text.focus();
+    if (typed) {
+      text.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "x" }));
+      text.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "x" }));
+    }
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("div"));
+
+    const drop = host.aimDrop({ clientX: 600, clientY: 40, target: line })!;
+    await host.insertDropped(drop, "![](a.png)");
+    await host.insertDropped(drop, "[b.csv](attachments/b.csv)");
+
+    // The Markdown pane took focus with the first file, not the user.
+    expect(fakeEditors.movedCaret).toBe(true);
     expect(root.querySelector(".editor-pane-raw")!.contains(document.activeElement)).toBe(true);
     root.remove();
     await host.dispose();

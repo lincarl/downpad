@@ -75,8 +75,12 @@ interface AimedDrop {
   target: DropTarget | null;
   /** Whether the files were dropped on the pane, which then takes focus. */
   onPane: boolean;
-  /** The element that had focus when the files were dropped. */
+  /** The element that had focus when the files were dropped, or the one in
+   *  the pane that took focus with an earlier file of the drop. */
   focus: Element | null;
+  /** Whether that pane took focus from md-easy, not the user, so the user
+   *  was not typing there. */
+  focusMoved: boolean;
   /** When the drop happened (`performance.now()`). */
   at: number;
 }
@@ -265,7 +269,7 @@ export class EditorHost implements FindController {
       target = under.raw.dropTargetAt(drop.clientX, drop.clientY);
     }
     const handle: FileDrop = { tabId: pane.tabId };
-    this.drops.set(handle, { pane, target, onPane: under !== null, focus: document.activeElement, at: performance.now() });
+    this.drops.set(handle, { pane, target, onPane: under !== null, focus: document.activeElement, focusMoved: false, at: performance.now() });
     // Until the files are in, the tab keeps this document, so opening a file
     // never puts another document in it (FileService.openPath), and it counts
     // as unsaved, so closing it or the window asks first, even after a save.
@@ -293,7 +297,8 @@ export class EditorHost implements FindController {
    * with the caret after the file, as after Crepe's own drops, unless the
    * user has moved on since the drop (`movedOn`), or types in that Markdown
    * pane. Then focus and the caret stay where the user is, such as typing in
-   * the find card.
+   * the find card. Focus that the pane took for an earlier file of the drop
+   * is not the user moving on, so the caret ends after the drop's last file.
    *
    * While the split's Markdown pane has focus, a file dropped on the
    * document pane goes into the Markdown pane too, at the place in the source
@@ -320,13 +325,18 @@ export class EditorHost implements FindController {
     }
     // The file's text goes into a Markdown pane's line, often the one the user
     // types in, where their next keys would land after the file.
-    const stay = !this.movedOn(aimed) && !(pane.raw && this.typingIn(pane));
+    const stay = !this.movedOn(aimed) && !(pane.raw && !aimed.focusMoved && this.typingIn(pane));
     const next = pane.wysiwyg ? pane.wysiwyg.insertMarkdown(markdown, target, stay) : (pane.raw?.insertText(markdown, target, stay) ?? null);
     this.followFile(aimed, pane, next);
     this.flush();
     if (aimed.onPane && stay) {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
       else pane.raw?.focus();
+      // The drop's next file follows this one there, with the caret.
+      if (document.activeElement !== aimed.focus) {
+        aimed.focus = document.activeElement;
+        aimed.focusMoved = true;
+      }
     }
     return true;
   }
@@ -378,7 +388,8 @@ export class EditorHost implements FindController {
 
   /** Whether the user has moved on since a drop, so a file that goes in now
    *  leaves focus and the caret where they are. That is when focus has left
-   *  the element it was on, or they clicked or pressed a key since. */
+   *  the element the drop left it on (`AimedDrop.focus`), or they clicked or
+   *  pressed a key since. */
   private movedOn(aimed: AimedDrop): boolean {
     return document.activeElement !== aimed.focus || this.lastKeyAt > aimed.at || this.lastPointerAt > aimed.at;
   }
