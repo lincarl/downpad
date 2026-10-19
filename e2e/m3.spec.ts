@@ -302,6 +302,34 @@ test("settings dialog opens, edits a value, saves, and applies it", async ({ pag
   await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
 });
 
+test("a fixed page width below 688px narrows the document's side padding in a wide window", async ({
+  page,
+}) => {
+  // The padding follows the editor's own width, so a narrow page narrows it
+  // whatever the window's size (docs/spec.md, Appearance and preferences).
+  await page.setViewportSize({ width: 1400, height: 720 });
+  const editor = page.locator(liveWysiwyg);
+  const setPageWidth = async (width: string) => {
+    await openSettings(page, "Appearance");
+    const dialog = page.locator(".dialog");
+    await dialog.locator(".dialog-row", { hasText: "Fixed width" }).locator("input").fill(width);
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveCount(0);
+  };
+
+  await setPageWidth("688");
+  await expect(editor).toHaveCSS("padding-left", "120px");
+
+  await setPageWidth("600");
+  await expect(editor).toHaveCSS("padding-left", "76px");
+  await expect(editor).toHaveCSS("padding-right", "76px");
+  const column = await editor.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  });
+  expect(column).toBe(400);
+});
+
 test("changing the bullet style re-mounts WYSIWYG without losing content", async ({ page }) => {
   await openSettings(page, "Markdown");
   const dialog = page.locator(".dialog");

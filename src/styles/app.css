@@ -682,7 +682,7 @@ body {
    block handle (66px wide, 16px from the text). 100% is the editor's own width,
    so the rule follows the window, the divider and the page width setting. At
    the default page width the Document view keeps 120px in windows 1000px and
-   wider. */
+   wider. A fixed page width below 688px narrows the padding in every window. */
 .editor-host .milkdown .ProseMirror {
   padding-inline: clamp(58px, (100% - 400px) / 2, 120px);
 }
