@@ -140,7 +140,10 @@ const EMPTY_PARAGRAPH = /^<br\s*\/?\s*>$/i;
  *  line. An item that holds only `<br />`, the document view's form of an
  *  empty item, counts as empty. */
 function lineKey({ prefix, text }: SourceLine): string {
-  const key = text.replace(/\\([!-\/:-@\[-`{-~])/g, "$1").replace(/\\?[ \t]*$/, "");
+  // A line can hold a whole image's data, so each replacement runs only
+  // where it can change something.
+  let key = text.includes("\\") ? text.replace(/\\([!-\/:-@\[-`{-~])/g, "$1") : text;
+  if (/[ \t\\]$/.test(key.slice(-1))) key = key.replace(/\\?[ \t]*$/, "");
   if (!prefix.trim()) return key;
   return key === "" || EMPTY_PARAGRAPH.test(key) ? "\n" : key;
 }
@@ -158,6 +161,7 @@ interface Change {
  *  than about `budget` comparisons gives one change from the first
  *  difference to the last. */
 function textChanges(a: string, b: string, budget?: number): Change[] {
+  if (a === b) return [];
   const runs: Run[] = [];
   for (const run of differingRuns(a.length, b.length, (i, j) => a.charCodeAt(i) === b.charCodeAt(j), budget)) {
     // The characters next to a run are the same in both texts.
