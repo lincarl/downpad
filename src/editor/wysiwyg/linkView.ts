@@ -7,7 +7,10 @@
 // one.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
-// so it never becomes part of the document or the serialized markdown.
+// so it never becomes part of the document or the serialized markdown. It is
+// drawn outside every mark. ProseMirror otherwise draws a widget inside the
+// marks of the text after it, so a link's suffix landed inside a link right
+// after it, and a Ctrl/Cmd-click on the suffix opened that other link.
 //
 // Double-clicking a link to a local markdown file (a relative/absolute `.md`
 // path) opens that file in a tab instead of selecting a word (spec §5.6); the
@@ -53,7 +56,7 @@ function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): v
     if (runHref !== null) {
       // Keyed by the href alone, so an edit that only moves a link keeps its
       // widget instead of drawing it again.
-      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, ignoreSelection: true, key: `md-link-url:${runHref}` }));
+      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, marks: [], ignoreSelection: true, key: `md-link-url:${runHref}` }));
     }
     runHref = null;
   };
