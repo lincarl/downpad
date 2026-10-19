@@ -411,8 +411,9 @@ function blankLinesAround(before: string, after: string): [string, string] {
  * split's Markdown pane makes it while the user types there, so the rest of
  * the source stays as written instead of in Milkdown's form. The top-level
  * blocks the insert changed are written in Milkdown's form, with a blank line
- * on each side. A list that would join a list next to it with the same
- * marker takes the other marker. The changed source must read back as
+ * on each side, but with empty list items left empty where they read back
+ * the same (`writtenForms`). A list that would join a list next to it with
+ * the same marker takes the other marker. The changed source must read back as
  * `after`. Null when it would not, as for text after a code fence that is not
  * closed yet, when it would take out a link reference definition, or when
  * the source's top-level blocks do not line up with the document's, as for an
@@ -459,11 +460,20 @@ export function sourceEditBetween(ctx: Ctx, before: Node, after: Node, body: str
   return null;
 }
 
+/** A list item's line that holds only `<br />`, Milkdown's form of an empty
+ *  paragraph, with the marker and the space after it. */
+const EMPTY_ITEM_LINE = /^([ \t]*(?:>[ \t]?)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)<br \/>$/gm;
+
 /**
  * The ways to write `blocks` in Milkdown's form, to try in turn. Written on
  * their own, a list takes the default marker, so it would join a list next to
  * it in the source with that marker. The second way writes a first block
- * that is a list with the other marker, as remark does after a list.
+ * that is a list with the other marker, as remark does after a list. Each
+ * way is tried first with its empty list items left empty, as they are
+ * typed, instead of written as `<br />`, which would show in the Markdown
+ * pane and stay as text before or after what the user types there. That
+ * does not read back the same where the empty paragraph holds a place, as
+ * before an image that is the item's second block.
  */
 function writtenForms(serialize: (doc: Node) => string, docType: Node["type"], blocks: Node[]): string[] {
   const write = (nodes: Node[]) => serialize(docType.create(null, nodes)).replace(/\n+$/, "");
@@ -474,7 +484,10 @@ function writtenForms(serialize: (doc: Node) => string, docType: Node["type"], b
     const led = write([blocks[0], ...blocks]);
     if (lead && led.startsWith(lead)) forms.push(led.slice(lead.length).replace(/^\n+/, ""));
   }
-  return forms;
+  return forms.flatMap((form) => {
+    const empty = form.replace(EMPTY_ITEM_LINE, "$1");
+    return empty === form ? [form] : [empty, form];
+  });
 }
 
 /** Whether two blocks hold the same content. Heading ids are left out, since

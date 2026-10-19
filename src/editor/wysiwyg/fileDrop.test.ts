@@ -339,11 +339,11 @@ describe("drops whose files are still being read", () => {
 });
 
 describe("the source change for a file dropped on the split's document pane", () => {
-  /** Drop LINK_A at a point, and return the source changed as the Markdown
-   *  pane changes it. Checks the document pane reads that source back as the
-   *  document it now holds. */
-  function dropInSource(opened: WysiwygEditor, source: string, x: number, y: number): string {
-    const edit = opened.insertMarkdownWithSource(LINK_A, opened.dropTargetAt(x, y)!, source);
+  /** Drop `markdown`, LINK_A by default, at a point, and return the source
+   *  changed as the Markdown pane changes it. Checks the document pane reads
+   *  that source back as the document it now holds. */
+  function dropInSource(opened: WysiwygEditor, source: string, x: number, y: number, markdown = LINK_A): string {
+    const edit = opened.insertMarkdownWithSource(markdown, opened.dropTargetAt(x, y)!, source);
     if (!edit) throw new Error("No source change");
     const changed = source.slice(0, edit.from) + edit.insert + source.slice(edit.to);
     const shown = viewOf(opened).state.doc;
@@ -382,6 +382,22 @@ describe("the source change for a file dropped on the split's document pane", ()
     place(opened, block("paragraph", "Item 1"), 140, 170, 60);
 
     expect(dropInSource(opened, source, 300, 169)).toBe(`Intro.\n\n- Item 1\n- ${LINK_A}\n- Item 2\n\nOutro.\n`);
+  });
+
+  // The document view writes an empty item as "<br />", which would show in
+  // the Markdown pane and stay in the line the user types in.
+  it.each([
+    ["at the end of a numbered list", "Intro.\n\n1. Item 1\n2. \n", "Item 1", LINK_A, `Intro.\n\n1. Item 1\n2. ${LINK_A}\n3. \n`],
+    ["between two items", "Intro.\n\n* Item 1\n* \n* Item 3\n", "Item 1", LINK_A, `Intro.\n\n- Item 1\n- ${LINK_A}\n- \n- Item 3\n`],
+    ["after an image that goes into the item before it", "Intro.\n\n- Item 1\n- \n", "Item 1", IMAGE, `Intro.\n\n- Item 1\n\n  ${IMAGE}\n- \n`],
+    // An empty item with an image after its empty line needs the "<br />".
+    ["before an image that goes into it", "Intro.\n\n- Item 1\n- \n- Item 3\n", "", IMAGE, `Intro.\n\n- Item 1\n- <br />\n\n  ${IMAGE}\n- Item 3\n`],
+  ])("writes an empty item as it is typed where it reads back the same, %s", async (_where, source, item, markdown, changed) => {
+    const opened = await open(source);
+    place(opened, block("list_item", item), 140, 170);
+    place(opened, (node) => node.type.name === "paragraph" && node.textContent === item, 140, 170, 60);
+
+    expect(dropInSource(opened, source, 300, 169, markdown)).toBe(changed);
   });
 
   // The source starts the next block on the line after the drop's block.
