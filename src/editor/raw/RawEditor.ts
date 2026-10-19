@@ -2,7 +2,7 @@
 // canonical markdown string; raw edits are written back verbatim (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
-import { EditorState, type Text } from "@codemirror/state";
+import { EditorSelection, EditorState, type ChangeSet, type Text } from "@codemirror/state";
 import {
   SearchQuery,
   findNext as findNextMatch,
@@ -120,6 +120,31 @@ function changedChars(before: string, after: string): Array<{ from: number; to: 
     to: run.toA,
     insert: after.slice(run.fromB, run.toB),
   }));
+}
+
+/** The part of a Markdown line before its text: indentation, quote markers,
+ *  and a list marker with its task box. */
+const LINE_PREFIX = /^[ \t]*(?:>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/;
+
+/**
+ * Where a caret at `pos` in `before` goes through `changes`, a rewrite of a
+ * list or other block from `from` to `to`. A caret before the text of a line
+ * there, at its start or in its list marker, stays with that text, which a
+ * rewrite can move to another line under a new number, as when a file goes
+ * in as a list item before it. At the start of the text it stays right
+ * before the text, and in the line's marker it stays as far into the line
+ * as it was. Any other caret maps with `assoc`, the side of text put in
+ * right at it that it stays on.
+ */
+function mapCaret(pos: number, before: Text, changes: ChangeSet, from: number, to: number, assoc: -1 | 1): number {
+  if (pos < from || pos > to) return changes.mapPos(pos, assoc);
+  const line = before.lineAt(pos);
+  const start = line.from + (LINE_PREFIX.exec(line.text)?.[0].length ?? 0);
+  if (pos > start || !before.sliceString(start, line.to).trim()) return changes.mapPos(pos, assoc);
+  const text = changes.mapPos(start, 1);
+  if (pos === start) return text;
+  const lineFrom = changes.apply(before).lineAt(text).from;
+  return lineFrom + Math.min(pos - line.from, text - lineFrom);
 }
 
 export class RawEditor {
@@ -249,14 +274,18 @@ export class RawEditor {
    *  mirrored and undone like typing. Only the characters that differ from
    *  the text are replaced, each run of them on its own, so a caret in text
    *  that stays keeps its place, such as in a list item after the file that
-   *  only gets a new number. A caret right where text goes in stays on the
-   *  side the change gives. */
+   *  only gets a new number. A caret before the text of a line stays with
+   *  that text, such as at the start of the list item the file goes in
+   *  before (`mapCaret`). Any other caret right where text goes in stays on
+   *  the side the change gives. */
   applyDropEdit({ from, to, insert, assoc }: SourceEdit): void {
     if (!this.view) return;
     const { state } = this.view;
     const parts = changedChars(state.sliceDoc(from, to), insert);
     const changes = state.changes(parts.map((part) => ({ from: from + part.from, to: from + part.to, insert: part.insert })));
-    this.view.dispatch({ changes, selection: state.selection.map(changes, assoc) });
+    const map = (pos: number): number => mapCaret(pos, state.doc, changes, from, to, assoc);
+    const ranges = state.selection.ranges.map((range) => EditorSelection.range(map(range.anchor), map(range.head)));
+    this.view.dispatch({ changes, selection: EditorSelection.create(ranges, state.selection.mainIndex) });
   }
 
   /**

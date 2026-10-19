@@ -85,6 +85,20 @@ describe("RawEditor.applyDropEdit", () => {
     expect(editor.getText()).toBe(`- ax\n- ${LINK}\n- b\n`);
   });
 
+  it.each([
+    ["at the start of its text", "1. One\n2. ", "Two\n3. Three\n", `1. One\n2. ${LINK}\n3. XTwo\n4. Three\n`],
+    ["at the start of its line", "1. One\n", "2. Two\n3. Three\n", `1. One\n2. ${LINK}\nX3. Two\n4. Three\n`],
+    ["at the start of a bulleted item's text", "- One\n- ", "Two\n- Three\n", `- One\n- ${LINK}\n- XTwo\n- Three\n`],
+  ])("keeps a caret before the text of the item the file goes in before with that text, %s", (_where, before, after, expected) => {
+    const editor = mountWithCaret(before, after);
+    const insert = expected.replace("X", "").trimEnd();
+
+    editor.applyDropEdit({ from: 0, to: before.length + after.length - 1, insert, assoc: -1 });
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe(expected);
+  });
+
   it("keeps a caret in a list item that the file only renumbers", () => {
     const editor = mountWithCaret("1. One\n2. Two\n3. Th", "ree\n4. Four\n");
 
