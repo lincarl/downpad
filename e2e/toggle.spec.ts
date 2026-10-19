@@ -172,6 +172,37 @@ test("the find card opens with Ctrl+F, follows the Markdown view and closes on E
   await expect(findBar).toBeHidden();
 });
 
+test("a mouse click on a find option keeps typing in the field it was in", async ({ page }) => {
+  const findInput = page.getByRole("textbox", { name: "Find in document" });
+  await page.locator(`${wysiwyg} h1`).click();
+  await page.keyboard.press("Control+h");
+  await expect(findInput).toBeFocused();
+  await page.keyboard.type("Wel");
+  // A click on the label's text, then on the check box itself.
+  await page.locator(".find-toggle", { hasText: "Match case" }).locator("span").click();
+  await expect(page.getByRole("checkbox", { name: "Match case" })).toBeChecked();
+  await page.keyboard.type("co");
+  await page.getByRole("checkbox", { name: "Whole word" }).click();
+  await expect(page.getByRole("checkbox", { name: "Whole word" })).toBeChecked();
+  await page.keyboard.type("me");
+  await expect(findInput).toHaveValue("Welcome");
+  await expect(findInput).toBeFocused();
+
+  const replaceInput = page.getByRole("textbox", { name: "Replace with" });
+  await replaceInput.click();
+  await page.keyboard.type("Hel");
+  await page.locator(".find-toggle", { hasText: "Match case" }).locator("span").click();
+  await page.keyboard.type("lo");
+  await expect(replaceInput).toHaveValue("Hello");
+  await expect(page.getByRole("checkbox", { name: "Match case" })).not.toBeChecked();
+
+  // The keyboard keeps focus on the check box.
+  await page.getByRole("checkbox", { name: "Whole word" }).focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("checkbox", { name: "Whole word" })).toBeFocused();
+  await expect(page.getByRole("checkbox", { name: "Whole word" })).not.toBeChecked();
+});
+
 test("an edit in the Markdown pane is mirrored live into the document (split)", async ({ page }) => {
   await page.locator(splitSeg).click();
   const raw = page.locator(rawContent);

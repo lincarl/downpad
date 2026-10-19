@@ -400,12 +400,25 @@ function FindToggle({
   active: boolean;
   onClick(): void;
 }) {
+  // The element focus was on when the pointer went down on the toggle.
+  const before = useRef<HTMLElement | null>(null);
   return (
-    // A click keeps the caret in the field, as in Mervin; the keyboard keeps
-    // focus on the check box.
+    // A click keeps the caret in the field it was in, as in Mervin; the
+    // keyboard keeps focus on the check box. A click on a label focuses its
+    // check box after the click event, so the field takes focus back then.
     <label
       className="find-toggle flex h-7 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink dark:text-ink-soft"
-      onMouseDown={(event) => event.preventDefault()}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        before.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      }}
+      onClick={(event) => {
+        const field = before.current;
+        before.current = null;
+        if (event.detail > 0 && field instanceof HTMLInputElement && field.type !== "checkbox") {
+          setTimeout(() => field.focus());
+        }
+      }}
     >
       <Checkbox checked={active} onChange={onClick} />
       <span>{label}</span>
