@@ -148,10 +148,11 @@ const blocks = (root: HTMLElement) =>
 
 const PLAIN_SEARCH = { caseSensitive: true, wholeWord: false, regex: false };
 
-/** Change "Edit." to "Edited.", so the editor writes the whole document again
- *  instead of reporting the text it opened. */
-function edit(editor: WysiwygEditor): void {
-  expect(editor.search("Edit.", PLAIN_SEARCH).total).toBe(1);
+/** Change "Edit." to "Edited." in each of the `blocks` blocks that end in it.
+ *  The editor keeps the file's text for the blocks an edit leaves alone, so a
+ *  test puts "Edit." at the end of each block it wants the editor to write. */
+function edit(editor: WysiwygEditor, blocks = 1): void {
+  expect(editor.search("Edit.", PLAIN_SEARCH).total).toBe(blocks);
   editor.replaceAll("Edited.", "Edit.", PLAIN_SEARCH);
 }
 
@@ -159,75 +160,82 @@ describe("math and strikethrough delimiters", () => {
   it("opens dollar amounts as text and formulas as math", { timeout: 60_000 }, async () => {
     const { editor, root } = await open(
       [
-        "Edit.",
-        "Tickets cost $5 for kids and $10 for adults.",
-        "Spaced $ x $ is text.",
-        "Pay $5-$10 today.",
-        "Odd $$5$ is text.",
-        "Type $USD or \\$ for dollars.",
-        "> Pay $5 for kids\n> and $10 for adults.",
-        "The formula $E = mc^2$ stays math.",
+        "Tickets cost $5 for kids and $10 for adults. Edit.",
+        "Spaced $ x $ is text. Edit.",
+        "Pay $5-$10 today. Edit.",
+        "Odd $$5$ is text. Edit.",
+        "Type $USD or \\$ for dollars. Edit.",
+        "> Pay $5 for kids\n> and $10 for adults. Edit.",
+        "The formula $E = mc^2$ stays math. Edit.",
       ].join("\n\n") + "\n",
     );
     expect(formulas(root)).toEqual(["E = mc^2"]);
-    expect([...root.querySelectorAll(".ProseMirror > p")].map((p) => p.textContent).slice(1, 6)).toEqual([
-      "Tickets cost $5 for kids and $10 for adults.",
-      "Spaced $ x $ is text.",
-      "Pay $5-$10 today.",
-      "Odd $$5$ is text.",
-      "Type $USD or $ for dollars.",
+    expect([...root.querySelectorAll(".ProseMirror > p")].map((p) => p.textContent).slice(0, 5)).toEqual([
+      "Tickets cost $5 for kids and $10 for adults. Edit.",
+      "Spaced $ x $ is text. Edit.",
+      "Pay $5-$10 today. Edit.",
+      "Odd $$5$ is text. Edit.",
+      "Type $USD or $ for dollars. Edit.",
     ]);
-    edit(editor);
+    edit(editor, 7);
     // The dollar signs are escaped once saved, which every reader shows as `$`.
     expect(editor.getMarkdown()).toBe(
       [
-        "Edited.",
-        "Tickets cost \\$5 for kids and \\$10 for adults.",
-        "Spaced \\$ x \\$ is text.",
-        "Pay \\$5-\\$10 today.",
-        "Odd \\$\\$5\\$ is text.",
-        "Type \\$USD or \\$ for dollars.",
-        "> Pay \\$5 for kids\n> and \\$10 for adults.",
-        "The formula $E = mc^2$ stays math.",
+        "Tickets cost \\$5 for kids and \\$10 for adults. Edited.",
+        "Spaced \\$ x \\$ is text. Edited.",
+        "Pay \\$5-\\$10 today. Edited.",
+        "Odd \\$\\$5\\$ is text. Edited.",
+        "Type \\$USD or \\$ for dollars. Edited.",
+        "> Pay \\$5 for kids\n> and \\$10 for adults. Edited.",
+        "The formula $E = mc^2$ stays math. Edited.",
       ].join("\n\n") + "\n",
     );
   });
 
   it("reads Markdown between two dollar amounts", { timeout: 60_000 }, async () => {
     const { editor, root } = await open(
-      "Edit.\n\nPay $5 (**kids**) [here](https://x.y), `now`, &amp;, \\*, <b>bold</b> or $10.\n\nPay $5 and  \n$10 later.\n",
+      "Pay $5 (**kids**) [here](https://x.y), `now`, &amp;, \\*, <b>bold</b> or $10. Edit.\n\nPay $5 and  \n$10 later. Edit.\n",
     );
     expect(formulas(root)).toEqual([]);
-    const paragraph = root.querySelectorAll(".ProseMirror > p")[1];
+    const paragraph = root.querySelectorAll(".ProseMirror > p")[0];
     expect(paragraph.querySelector("strong")?.textContent).toBe("kids");
     expect(paragraph.querySelector("a")?.getAttribute("href")).toBe("https://x.y");
     expect(paragraph.querySelector("code")?.textContent).toBe("now");
     expect(paragraph.textContent).toContain(", &, *, ");
-    expect(root.querySelectorAll(".ProseMirror > p")[2].querySelector("br")).not.toBeNull();
-    edit(editor);
+    expect(root.querySelectorAll(".ProseMirror > p")[1].querySelector("br")).not.toBeNull();
+    edit(editor, 2);
     expect(editor.getMarkdown()).toBe(
-      "Edited.\n\nPay \\$5 (**kids**) [here](https://x.y), `now`, &, \\*, <b>bold</b> or \\$10.\n\nPay \\$5 and\\\n\\$10 later.\n",
+      "Pay \\$5 (**kids**) [here](https://x.y), `now`, &, \\*, <b>bold</b> or \\$10. Edited.\n\nPay \\$5 and\\\n\\$10 later. Edited.\n",
     );
   });
 
   it("opens a formula after a dollar amount in the same paragraph", { timeout: 60_000 }, async () => {
-    const { editor, root } = await open("Edit.\n\nCosts $5 and $x$ here.\n");
+    const { editor, root } = await open("Costs $5 and $x$ here. Edit.\n");
     expect(formulas(root)).toEqual(["x"]);
-    expect(root.querySelectorAll(".ProseMirror > p")[1].textContent).toMatch(/^Costs \$5 and /);
+    expect(root.querySelectorAll(".ProseMirror > p")[0].textContent).toMatch(/^Costs \$5 and /);
     edit(editor);
     const saved = markdownOf(editor);
     // Whether Milkdown escapes text that ends in a space depends on its text
     // writer. Both forms open the same way.
-    expect(saved).toMatch(/^Edited\.\n\nCosts \\?\$5 and \$x\$ here\.\n$/);
+    expect(saved).toMatch(/^Costs \\?\$5 and \$x\$ here\. Edited\.\n$/);
     expect(formulas((await open(saved)).root)).toEqual(["x"]);
   });
 
   it("opens a paragraph that is only $$...$$ as a math block", { timeout: 60_000 }, async () => {
-    const { editor } = await open("Edit.\n\n$$E = mc^2$$\n\nInline $$x$$ math.\n\n- $$y$$\n");
+    const { editor } = await open("$$E = mc^2$$\n\nInline $$x$$ math. Edit.\n\n- $$y$$\n");
     edit(editor);
+    // The editor writes only the blocks an edit changes, so change the
+    // formula of the math block and of the list item too.
+    const view = viewOf(editor);
+    const tr = view.state.tr;
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name === "code_block") tr.insertText("E = mc^3", tr.mapping.map(pos + 1), tr.mapping.map(pos + 1 + node.content.size));
+      if (node.type.name === "math_inline" && node.attrs.value === "y") tr.setNodeMarkup(tr.mapping.map(pos), undefined, { ...node.attrs, value: "z" });
+    });
+    view.dispatch(tr);
     // Inside other text, and as a list item's first line, which must stay a
     // paragraph, it stays inline math.
-    expect(editor.getMarkdown()).toBe("Edited.\n\n$$\nE = mc^2\n$$\n\nInline $x$ math.\n\n- $y$\n");
+    expect(editor.getMarkdown()).toBe("$$\nE = mc^3\n$$\n\nInline $x$ math. Edited.\n\n- $z$\n");
   });
 
   it("reads single-dollar math by Pandoc's rules and saves it so it opens the same way", { timeout: 60_000 }, async () => {
@@ -349,8 +357,8 @@ describe("math and strikethrough delimiters", () => {
   });
 
   it("keeps the backslash of an escaped dollar before a character Markdown escapes", { timeout: 60_000 }, async () => {
-    const markdown = "Read \\$_GET['a'].\\$_POST['b'], \\$[a]\\$[b] and \\$~5,\\$~6.\n";
-    const { editor, root } = await open(`Edit.\n\n${markdown}`);
+    const markdown = "Read \\$_GET['a'].\\$_POST['b'], \\$[a]\\$[b] and \\$~5,\\$~6. Edit.\n";
+    const { editor, root } = await open(markdown);
     expect(formulas(root)).toEqual([]);
     edit(editor);
     const saved = markdownOf(editor);
@@ -366,12 +374,12 @@ describe("math and strikethrough delimiters", () => {
     "$x\\$$$x_1$ q",
     "$x\\$$$\\{x\\}$ q",
   ])("saves the side-by-side formulas in %j with single dollars", { timeout: 60_000 }, async (paragraph) => {
-    const { editor, root } = await open(`Edit.\n\n${paragraph}\n`);
+    const { editor, root } = await open(`${paragraph} Edit.\n`);
     const math = formulas(root);
     expect(math).toHaveLength(2);
     edit(editor);
     // Right after a formula, a run of dollars reads as text.
-    expect(editor.getMarkdown()).toBe(`Edited.\n\n${paragraph}\n`);
+    expect(editor.getMarkdown()).toBe(`${paragraph} Edited.\n`);
     expect(formulas((await open(markdownOf(editor))).root)).toEqual(math);
   });
 
@@ -381,19 +389,19 @@ describe("math and strikethrough delimiters", () => {
     ["$\\$ % c\n+5$$y$ q", "$\\$ +5$$y$ q", ["$+5", "y"]],
     ["$\\$ \\url{a%20b}\n+c$$y$ q", "$\\$ \\url{a%20b} +c$$y$ q", ["$\\url+c", "y"]],
   ])("saves %j next to another formula on one line so it shows the same", { timeout: 60_000 }, async (paragraph, saved, math) => {
-    const { editor, root } = await open(`Edit.\n\n${paragraph}\n`);
+    const { editor, root } = await open(`${paragraph} Edit.\n`);
     const before = shown(root);
     expect(before).toEqual(math);
     edit(editor);
-    expect(editor.getMarkdown()).toBe(`Edited.\n\n${saved}\n`);
+    expect(editor.getMarkdown()).toBe(`${saved} Edited.\n`);
     expect(shown((await open(markdownOf(editor))).root)).toEqual(before);
   });
 
   it("keeps a whole Windows line ending after a backslash at the end of a formula", { timeout: 60_000 }, async () => {
-    const { editor, root } = await open("Edit.\n\n$a\\\r\n$ b\n");
+    const { editor, root } = await open("$a\\\r\n$ b Edit.\n");
     expect(formulas(root)).toEqual(["a\\\r\n"]);
     edit(editor);
-    expect(editor.getMarkdown()).toBe("Edited.\n\n$a\\\r\n$ b\n");
+    expect(editor.getMarkdown()).toBe("$a\\\r\n$ b Edited.\n");
     expect(formulas((await open(markdownOf(editor))).root)).toEqual(["a\\\r\n"]);
   });
 
