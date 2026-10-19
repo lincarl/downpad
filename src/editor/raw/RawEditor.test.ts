@@ -118,6 +118,8 @@ describe("RawEditor.applyDropEdit", () => {
     ["into the item before it, mid-list", "- Alpha\n- ", "\n- Gamma", "- Alpha\n\n  ![](a.png)\n- <br />\n- Gamma"],
     ["into it", "- Alpha\n- ", "\n- Gamma", "- Alpha\n- <br />\n\n  ![](a.png)\n- Gamma"],
     ["as an item before it", "- Alpha\n- ", "\n- Gamma", `- Alpha\n- ${LINK}\n- <br />\n- Gamma`],
+    ["into the item before it, at the end of a list in a quote", "> - Alpha\n> - Beta\n> - ", "", "> - Alpha\n> - Beta\n>\n>   ![](a.png)\n> - <br />"],
+    ["into the item before it, mid-list in a quote", "> - Alpha\n> - ", "\n> - Gamma", "> - Alpha\n>\n>   ![](a.png)\n> - <br />\n> - Gamma"],
   ])("keeps a caret in an empty item, which the document view writes as <br />, when the file goes %s", (_where, before, after, insert) => {
     const editor = mountWithCaret(before, after);
 

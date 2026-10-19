@@ -136,16 +136,19 @@ const EMPTY_PARAGRAPH = /^<br\s*\/?\s*>$/i;
 /** What a line is matched by: its text as it reads, without the backslash
  *  escapes, trailing spaces and hard break that the document view adds or
  *  drops, so a line it only writes another way still matches. An empty list
- *  item or quote line gets a key no text has, so it never matches an empty
- *  line. An item that holds only `<br />`, the document view's form of an
- *  empty item, counts as empty. */
+ *  item gets a key no text has, and so does a line of quote markers alone,
+ *  so neither matches an empty line or the other. An item that holds only
+ *  `<br />`, the document view's form of an empty item, counts as empty. */
 function lineKey({ prefix, text }: SourceLine): string {
   // A line can hold a whole image's data, so each replacement runs only
   // where it can change something.
   let key = text.includes("\\") ? text.replace(/\\([!-\/:-@\[-`{-~])/g, "$1") : text;
   if (/[ \t\\]$/.test(key.slice(-1))) key = key.replace(/\\?[ \t]*$/, "");
-  if (!prefix.trim()) return key;
-  return key === "" || EMPTY_PARAGRAPH.test(key) ? "\n" : key;
+  if (!prefix.trim() || (key !== "" && !EMPTY_PARAGRAPH.test(key))) return key;
+  // An empty item and a line of quote markers alone each get a key of their
+  // own, so the blank line a drop puts into a quote never takes the caret of
+  // an empty item in it.
+  return /(?:[-*+]|\d{1,9}[.)]|\[[ xX]\])[ \t]*$/.test(prefix) ? "\n" : "\r";
 }
 
 /** A change to a text, as offsets into it. */
