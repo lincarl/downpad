@@ -564,7 +564,8 @@ describe("a file dropped away from the document text", () => {
 
     opened.insertMarkdown(IMAGE);
 
-    expect(opened.getMarkdown()).toBe(`| a    | b |\n| ---- | - |\n| cell | x |\n\n${IMAGE}\n\nBody.\n`);
+    // The table keeps the file's text, since the drop leaves it alone.
+    expect(opened.getMarkdown()).toBe(`| a | b |\n| - | - |\n| cell | x |\n\n${IMAGE}\n\nBody.\n`);
   });
 
   it("goes in as an item of its own after a list item the caret ends, as at a drop on that edge", async () => {

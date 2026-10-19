@@ -122,9 +122,10 @@ describe("the document view's Markdown", () => {
     // changed would cut the table in two there.
     editor.setMarkdown("Intro.\n\n| x | y |\n| - | - |\n| 3 |\n| 1 | 2 |\n");
     expect(editor.getMarkdown()).toBe("Intro.\n\n| x | y |\n| - | - |\n| 3 |\n| 1 | 2 |\n");
-    // The document's own form of it, as its next edit writes it.
-    replace(editor, "Intro", "Start");
-    expect(editor.getMarkdown()).toBe("Start.\n\n| x | y |\n| - | - |\n| 3 |   |\n| 1 | 2 |\n");
+    // The document's own form of it, as an edit in the table writes it. The
+    // short row is a row of the same table.
+    replace(editor, "3", "4");
+    expect(editor.getMarkdown()).toBe("Intro.\n\n| x | y |\n| - | - |\n| 4 |   |\n| 1 | 2 |\n");
   });
 
   it("is the exact text the split mirror set while the editor was opening", { timeout: 60_000 }, async () => {
