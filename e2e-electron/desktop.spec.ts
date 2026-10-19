@@ -1195,6 +1195,72 @@ test("Split chosen while a reload from disk builds shows both panes with the fil
   await expect(documentLine).toHaveText("New text from disk. Typed after.");
 });
 
+test("a reload from disk while settings rebuild the split's document view leaves no undo or image answers from before", async () => {
+  const file = path.join(directory, "reload-during-settings.md");
+  await writeFile(file, "Old text.\n\n![pixel](pixel.png)\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  // The image is missing, and the document view keeps that answer.
+  await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .md-image-missing")).toHaveCount(1);
+  const settings = await page.evaluate(() => window.mdEasy!.invoke("load_settings"));
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  const reload = page.getByRole("button", { name: "Reload", exact: true });
+  await expect(reload).toBeVisible();
+  // Answer each image after 900 ms, and hold the file read until released.
+  // Electron keeps the handlers of ipcMain.handle in `_invokeHandlers`, and a
+  // handler on the window's own `ipc` runs in their place.
+  await app!.evaluate(({ BrowserWindow, ipcMain }) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const handlers = Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>;
+    const imageUrl = handlers.get("md-easy:image-url")!;
+    const invoke = handlers.get("md-easy:invoke")!;
+    const read = new Promise((resolve) => Reflect.set(globalThis, "releaseRead", resolve));
+    const { ipc } = BrowserWindow.getAllWindows()[0]!.webContents;
+    ipc.handle("md-easy:image-url", async (event, ...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return imageUrl(event, ...args);
+    });
+    ipc.handle("md-easy:invoke", async (event, command, ...args) => {
+      if (command === "read_file") await read;
+      return invoke(event, command, ...args);
+    });
+  });
+  await reload.click();
+  // Edit the Markdown pane during the read. The edit's image is new to the
+  // document view, so a rebuild of that view waits for its answer.
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" ![x](slow.png)");
+  // Change a document setting, which builds the document view again.
+  await app!.evaluate(({ BrowserWindow }, changed) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.send("md-easy:event:settings-changed", changed);
+  }, { ...settings, mdBulletChar: settings.mdBulletChar === "*" ? "-" : "*" });
+  await page.waitForFunction(() => document.querySelector(".editor-pane-wysiwyg[hidden]") && !document.querySelector(".editor-pane-wysiwyg:not([hidden])"));
+  // While it builds, type once more, which schedules a mirror sync into it 120 ms
+  // later, and let the read finish before that sync runs.
+  await app!.evaluate(async ({ BrowserWindow }) => {
+    await BrowserWindow.getAllWindows()[0]!.webContents.insertText("!");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    (Reflect.get(globalThis, "releaseRead") as () => void)();
+  });
+  // The document view is built from the new text and shows the image now on disk.
+  await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .milkdown-image-block img")).toHaveAttribute("src", /^md-easy-file:/);
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page).toHaveTitle("reload-during-settings.md — md-easy");
+  // Its undo history starts at the reload.
+  await documentLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.type(" Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(markdownLine).toHaveText("New text from disk. Typed after.");
+});
+
 /** Drop files from the desktop onto the middle of an element, through
  *  Chromium's drag emulation, so the app gets their real paths. */
 async function dropFiles(target: Locator, files: string[]): Promise<void> {
