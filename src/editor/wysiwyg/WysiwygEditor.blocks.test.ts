@@ -670,6 +670,18 @@ describe("a join between a changed block and the file's text", () => {
     expect(editor.getMarkdown()).toBe(`${quote}\n\n- item edited\n`);
     expect(parse).not.toHaveBeenCalled();
   });
+
+  it("writes the whole body below a list left open at its end that would take too long to read back", { timeout: 60_000 }, async () => {
+    // A blank line would keep the quote apart from the list, but the open
+    // fence would take it in and hold one more line.
+    const steps = Array.from({ length: 300 }, (_, i) => `- Step ${i}`).join("\n");
+    const { editor, crepe, view } = await open(`${steps}\n- Run:\n\n  \`\`\`sh\n  echo hello\n`);
+    const { blockquote, paragraph } = view.state.schema.nodes;
+    view.dispatch(view.state.tr.insert(blockWith(view, "echo hello").to, blockquote.create(null, paragraph.create(null, view.state.schema.text("Done.")))));
+    const written = editor.getMarkdown();
+    expect(written).toBe(crepe.editor.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc)));
+    expect(written?.endsWith("  echo hello\n  ```\n\n> Done.\n")).toBe(true);
+  });
 });
 
 describe("an edit that the file's text cannot keep", () => {
