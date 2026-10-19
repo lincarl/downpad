@@ -441,18 +441,21 @@ test("End with the caret before images or formulas that start a line moves the c
     "Less\\\n$s$ is selected less.",
     "Home\\\n![Pixel](image.png) goes back home.",
     "Join\\\n![Pixel](image.png) joins the line above.",
+    "Inserted\\\n![Pixel](image.png) takes inserted text.",
+    "Emoji\\\n![Pixel](image.png) takes an emoji.",
+    "Ends\\\n![Pixel](image.png) ends the inserted text.",
   ].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   await expect(editor.locator(".md-image-missing")).toHaveCount(5);
   const loaded = () => editor.getByRole("img", { name: "Pixel" }).evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.naturalWidth > 0).length);
-  await expect.poll(loaded).toBe(8);
+  await expect.poll(loaded).toBe(11);
   await expect(editor.locator("[data-type=math_inline]")).toHaveCount(6);
   /** Click at the end of the text on `line`'s last row, go to the start of
-   *  that row with Home, press `keys` and type `text`. The click is on the
-   *  text, because a click right of the text in a table cell selects the
-   *  cell's paragraph. */
-  const typeAfter = async (keys: string | string[], line: Locator, text: string) => {
+   *  that row with Home, press `keys` and type `text`, or put it in with
+   *  `insert`. The click is on the text, because a click right of the text in
+   *  a table cell selects the cell's paragraph. */
+  const typeAfter = async (keys: string | string[], line: Locator, text: string, insert: (text: string) => Promise<unknown> = (text) => page.keyboard.type(text)) => {
     await line.scrollIntoViewIfNeeded();
     const end = await line.evaluate((element) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
@@ -466,7 +469,7 @@ test("End with the caret before images or formulas that start a line moves the c
     await page.mouse.click(end.x, end.y);
     await page.keyboard.press("Home");
     for (const key of [keys].flat()) await page.keyboard.press(key);
-    await page.keyboard.type(text);
+    await insert(text);
   };
   const paragraph = (text: string) => editor.locator("p").filter({ hasText: text });
   await typeAfter("End", paragraph("starts here."), "1");
@@ -489,6 +492,12 @@ test("End with the caret before images or formulas that start a line moves the c
   await typeAfter(["Shift+End", "Shift+Home"], paragraph("goes back home."), "c");
   // Typing over a selection that ends right after the break replaces it.
   await typeAfter("Shift+ArrowLeft", paragraph("joins the line above."), "d");
+  // Text that comes without a key press, as from an input method or the emoji
+  // panel, and a character Chromium types as two halves keep the break too.
+  await typeAfter("Shift+End", paragraph("takes inserted text."), "é", (text) => page.keyboard.insertText(text));
+  const session = await page.context().newCDPSession(page);
+  await typeAfter("Shift+End", paragraph("takes an emoji."), "😀", (text) => session.send("Input.dispatchKeyEvent", { type: "char", text, unmodifiedText: text }));
+  await typeAfter("Shift+ArrowLeft", paragraph("ends the inserted text."), "è", (text) => page.keyboard.insertText(text));
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — md-easy");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
@@ -509,7 +518,10 @@ test("End with the caret before images or formulas that start a line moves the c
     "Twice\\\na",
     "Less\\\nb.",
     "Home\\\nc![Pixel](image.png) goes back home.",
-    "Joind![Pixel](image.png) joins the line above.\n",
+    "Joind![Pixel](image.png) joins the line above.",
+    "Inserted\\\né",
+    "Emoji\\\n😀",
+    "Endsè![Pixel](image.png) ends the inserted text.\n",
   ]);
 });
 

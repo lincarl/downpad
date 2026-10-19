@@ -18,10 +18,14 @@
 // ProseMirror leaves typing over a selection in one text block to Chromium,
 // whose own selection starts or ends before the break instead. Its typing
 // replaced the break with a selection that started there and kept it with one
-// that ended there, so the plugin types over such selections itself.
+// that ended there, so the plugin types over such selections itself. It takes
+// the text from the beforeinput event, which carries all of it, so the same
+// holds for a character outside the Basic Multilingual Plane, such as an
+// emoji, and for text an input method or the emoji panel inserts without
+// composing.
 
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
-import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
+import { Plugin, TextSelection, type Selection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 
@@ -43,6 +47,13 @@ function isInlineAtom(node: ProseNode): boolean {
  *  Chromium cannot keep a selection's anchor. */
 function afterBreakBeforeAtom($pos: ResolvedPos): boolean {
   return $pos.nodeBefore?.type.name === "hardbreak" && !!$pos.nodeAfter && isInlineAtom($pos.nodeAfter);
+}
+
+/** Whether `selection` starts or ends right after a line break and before an
+ *  inline atom, where Chromium's own selection starts or ends before the break
+ *  instead. */
+function crossesBreakEdge(selection: Selection): boolean {
+  return selection instanceof TextSelection && !selection.empty && (afterBreakBeforeAtom(selection.$from) || afterBreakBeforeAtom(selection.$to));
 }
 
 /** Moves the caret past the inline atoms that start its line, keeping the
@@ -98,18 +109,18 @@ export const endPastAtoms = $prose(() => {
         }
         return false;
       },
-      handleKeyPress: (view, event) => {
-        // A selection that starts or ends right after a line break and before
-        // an inline atom, where Chromium's own selection starts or ends before
-        // the break.
-        const { selection } = view.state;
-        if (!(selection instanceof TextSelection) || selection.empty || !(afterBreakBeforeAtom(selection.$from) || afterBreakBeforeAtom(selection.$to))) return false;
-        // Type as ProseMirror does over a selection it handles itself.
-        const text = String.fromCharCode(event.charCode);
-        if (/[\r\n]/.test(text)) return false;
-        const typed = () => view.state.tr.insertText(text).scrollIntoView();
-        if (!view.someProp("handleTextInput", (handle) => handle(view, selection.from, selection.to, text, typed))) view.dispatch(typed());
-        return true;
+      handleDOMEvents: {
+        beforeinput: (view, event) => {
+          const text = event.data;
+          if (event.isComposing || event.inputType !== "insertText" || !text || /[\r\n]/.test(text)) return false;
+          const { selection } = view.state;
+          if (!crossesBreakEdge(selection)) return false;
+          event.preventDefault();
+          // Type as ProseMirror does over a selection it handles itself.
+          const typed = () => view.state.tr.insertText(text).scrollIntoView();
+          if (!view.someProp("handleTextInput", (handle) => handle(view, selection.from, selection.to, text, typed))) view.dispatch(typed());
+          return true;
+        },
       },
     },
     appendTransaction: (transactions, _oldState, state) => {
