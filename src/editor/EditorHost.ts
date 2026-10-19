@@ -385,12 +385,15 @@ export class EditorHost implements FindController {
   /**
    * Re-apply a WYSIWYG serializer/link-display settings change (§5.16, §5.6):
    * bump the config epoch (invalidating every WYSIWYG pane) and rebuild the
-   * active one now; hidden WYSIWYG panes rebuild on their next reveal.
+   * active one now; hidden WYSIWYG panes rebuild on their next reveal. During
+   * another change of panes, which may have built the active one already, that
+   * change shows the active tab again before it ends.
    */
   async reload(): Promise<void> {
     if (this.disposed) return;
     this.configEpoch += 1;
-    if (this.changing || !this.currentView) return;
+    if (!this.currentView) return;
+    if (this.changing) return this.queueShow();
     await this.runPaneChange(() => this.present());
   }
 

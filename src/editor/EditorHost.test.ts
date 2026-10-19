@@ -870,6 +870,36 @@ describe("EditorHost changes while a document pane builds", () => {
     },
   );
 
+  it("builds the shown document pane again with settings changed after a tab switch built it", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    store.set({ settings: { ...store.get().settings, maxRetainedTabEditors: 1 } });
+    const host = new EditorHost(root, store);
+    host.initLayout("document");
+    await host.reloadActiveDoc();
+    store.addTab({ ...store.get().doc, markdown: "second tab" });
+    // The switch builds the second tab's pane, then evicts the first tab's.
+    // Hold that eviction, so the settings change lands after the build.
+    let release!: () => void;
+    fakeEditors.destroyPromise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const switching = host.showActiveDoc();
+    await vi.waitFor(() => expect(fakeEditors.destroyCalls).toBe(1));
+    store.set({ settings: { ...store.get().settings, mdBulletChar: "*" } });
+    const reloading = host.reload();
+    release();
+    await Promise.all([switching, reloading]);
+
+    expect(fakeEditors.mounted).toEqual([
+      { markdown: "original markdown", bullet: "-" },
+      { markdown: "second tab", bullet: "-" },
+      { markdown: "second tab", bullet: "*" },
+    ]);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    await host.dispose();
+  });
+
   it("builds the document pane again with settings changed while it builds", async () => {
     const root = document.createElement("div");
     const store = makeStore();
