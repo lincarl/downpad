@@ -45,6 +45,9 @@ const fakeEditors = vi.hoisted(() => ({
   /** Each pane's find change callback, to simulate an edit with the card open. */
   wysiwygFindChange: null as (() => void) | null,
   rawFindChange: null as (() => void) | null,
+  /** When each document pane build starts and ends, and when the host forgets
+   *  the image answers, in order. */
+  events: [] as string[],
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -63,11 +66,13 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
     ): Promise<void> {
       fakeEditors.mountCalls += 1;
       fakeEditors.mounted.push({ markdown, bullet: style.bullet });
+      fakeEditors.events.push(`build ${markdown}`);
       fakeEditors.duringMount?.();
       this.onChange = cb.onChange;
       fakeEditors.wysiwygChange = cb.onChange;
       fakeEditors.wysiwygFindChange = cb.onFindChange ?? null;
       await fakeEditors.mountPromise;
+      fakeEditors.events.push(`built ${markdown}`);
     }
 
     getMarkdown(): string {
@@ -143,6 +148,12 @@ vi.mock("./raw/RawEditor", () => ({
 
 vi.mock("./wysiwyg/spellcheck", () => ({ applySpellcheck: vi.fn() }));
 
+vi.mock("./wysiwyg/imageView", () => ({
+  forgetImageAnswers: (): void => {
+    fakeEditors.events.push("forget image answers");
+  },
+}));
+
 import { EditorHost } from "./EditorHost";
 
 /** The classes of the visible panes. */
@@ -203,6 +214,7 @@ beforeEach(() => {
   fakeEditors.rawShowFocus = [];
   fakeEditors.wysiwygFindChange = null;
   fakeEditors.rawFindChange = null;
+  fakeEditors.events = [];
 });
 
 describe("EditorHost terminal disposal", () => {
@@ -594,6 +606,299 @@ describe("EditorHost changes while a document pane builds", () => {
       await host.dispose();
     },
   );
+
+  /** Replace the active tab's text the way a reload from disk does, then show it. */
+  function reloadFromDisk(store: Store, host: EditorHost, markdown: string): Promise<void> {
+    store.replaceActiveDoc({ ...store.get().doc, markdown, savedMarkdown: markdown, isDirty: false });
+    return host.reloadActiveDoc();
+  }
+
+  it.each([
+    ["the split", false],
+    ["a failing tab", true],
+  ])("keeps the reloaded text when typing lands in the old Markdown pane of %s while the document pane builds", async (_name, failing) => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    if (failing) fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    // The Markdown pane on screen keeps the text from before the reload until
+    // the document pane is built.
+    const typeInOldPane = fakeEditors.rawChange!;
+
+    await changeWhileBuilding(
+      () => reloadFromDisk(store, host, "text from disk"),
+      () => typeInOldPane("original markdown, typed during the reload"),
+    );
+
+    expect(store.get().doc).toMatchObject({ markdown: "text from disk", isDirty: false });
+    // One build for the reload, from the text on disk.
+    expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual(["original markdown", "text from disk"]);
+    expect(fakeEditors.rawText).toBe("text from disk");
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]);
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    // The Markdown pane built for the reload takes edits.
+    fakeEditors.rawChange!("text from disk, typed after");
+    expect(store.get().doc.markdown).toBe("text from disk, typed after");
+    await host.dispose();
+  });
+
+  /** The elements of the visible panes. */
+  const shownPanes = (root: HTMLElement): HTMLElement[] => [...root.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")];
+
+  /** Start `show`, wait until it begins to build a document pane, and hold that
+   *  build until `change` has run. Later builds finish at once. */
+  async function changeDuringMount(show: () => Promise<void>, change: () => Promise<void> | void): Promise<void> {
+    const mount = deferred();
+    fakeEditors.mountPromise = mount.promise;
+    const builds = fakeEditors.mountCalls;
+    const showing = show();
+    await vi.waitFor(() => expect(fakeEditors.mountCalls).toBe(builds + 1));
+    fakeEditors.mountPromise = Promise.resolve();
+    const changing = change();
+    mount.resolve();
+    await Promise.all([showing, changing]);
+  }
+
+  it.each([
+    ["switching tabs", false],
+    ["opening a new tab", true],
+  ])("shows the active tab's panes after %s while a reload builds, in place of the old Markdown pane", async (_name, newTab) => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    const oldMarkdownPane = root.querySelector<HTMLElement>(".editor-pane-raw")!;
+    const typeInOldPane = fakeEditors.rawChange!;
+    const second = store.addTab({ ...store.get().doc, markdown: "second tab" });
+    await host.reloadActiveDoc();
+    const secondPanes = shownPanes(root);
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+    expect(shownPanes(root)).toContain(oldMarkdownPane);
+
+    await changeDuringMount(
+      () => reloadFromDisk(store, host, "text from disk"),
+      () => {
+        if (newTab) {
+          store.addTab({ ...store.get().doc, markdown: "" });
+          return host.reloadActiveDoc();
+        }
+        store.activateTab(second);
+        return host.showActiveDoc();
+      },
+    );
+
+    // The window shows the active tab, never tab-1's Markdown pane from before
+    // the reload, where typing would be dropped.
+    expect(oldMarkdownPane.hidden).toBe(true);
+    if (newTab) {
+      expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]);
+      expect(fakeEditors.rawText).toBe("");
+      // The build for the reload keeps the image answers it waited for.
+      expect(fakeEditors.events.slice(-5)).toEqual([
+        "build text from disk",
+        "built text from disk",
+        "forget image answers",
+        "build ",
+        "built ",
+      ]);
+    } else {
+      expect(shownPanes(root)).toEqual(secondPanes);
+    }
+    // A stale report from the old pane changes nothing.
+    typeInOldPane("original markdown, typed after the switch");
+    expect(store.get().tabs.find((tab) => tab.id === "tab-1")?.doc.markdown).toBe("text from disk");
+
+    // Back on tab-1, both panes show the text from disk.
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+    expect(fakeEditors.rawText).toBe("text from disk");
+    expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual(
+      ["original markdown", "second tab", "text from disk", ...(newTab ? [""] : [])],
+    );
+    await host.dispose();
+  });
+
+  it.each(["document", "split"] as const)(
+    "shows the text from disk in the %s layout when a reload comes while the layout switch builds",
+    async (layout) => {
+      const root = document.createElement("div");
+      const store = makeStore();
+      const host = new EditorHost(root, store);
+      host.initLayout("markdown");
+      await host.reloadActiveDoc();
+      const typeInOldPane = fakeEditors.rawChange!;
+
+      await changeDuringMount(
+        () => host.setLayout(layout),
+        () => {
+          const reloading = reloadFromDisk(store, host, "text from disk");
+          // The Markdown pane on screen still holds the text from before.
+          typeInOldPane("original markdown, typed during the reload");
+          return reloading;
+        },
+      );
+
+      expect(store.get().doc).toMatchObject({ markdown: "text from disk", isDirty: false });
+      // The build that began before the reload is done again from the text on
+      // disk, which asks about its images again. The first build keeps the
+      // image answers it waited for.
+      expect(fakeEditors.events).toEqual([
+        "forget image answers",
+        "build original markdown",
+        "built original markdown",
+        "forget image answers",
+        "build text from disk",
+        "built text from disk",
+      ]);
+      expect(root.querySelectorAll(".editor-pane-wysiwyg")).toHaveLength(1);
+      expect(shown(root)).toEqual(
+        layout === "split"
+          ? ["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]
+          : ["editor-pane editor-pane-wysiwyg"],
+      );
+      // The document pane on screen takes edits, on top of the text from disk.
+      fakeEditors.wysiwygChange!("text from disk, edited in the document");
+      expect(store.get().doc.markdown).toBe("text from disk, edited in the document");
+      await host.dispose();
+    },
+  );
+
+  // The app passes on one choice at a time, because AppRuntime ignores a second
+  // layout chosen while the first waits. The last case checks EditorHost's own
+  // contract for a second choice.
+  it.each([
+    [["split"], ["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]],
+    [["markdown"], ["editor-pane editor-pane-raw"]],
+    [["split", "markdown"], ["editor-pane editor-pane-raw"]],
+  ] as const)("shows the text from disk in the last layout of %j chosen while the reload builds", async (layouts, panes) => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    let shownOnceChosen: string[] = [];
+
+    await changeDuringMount(
+      () => reloadFromDisk(store, host, "text from disk"),
+      async () => {
+        await Promise.all(layouts.map((layout) => host.setLayout(layout)));
+        shownOnceChosen = shown(root);
+      },
+    );
+
+    // The choice waits for the reload, then shows its layout.
+    expect(shownOnceChosen).toEqual(panes);
+    expect(shown(root)).toEqual(panes);
+    // One build for the reload, from the text on disk.
+    expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual(["original markdown", "text from disk"]);
+    expect(fakeEditors.rawText).toBe("text from disk");
+    // The Markdown pane on screen takes edits.
+    fakeEditors.rawChange!("text from disk, typed after");
+    expect(store.get().doc.markdown).toBe("text from disk, typed after");
+    await host.dispose();
+  });
+
+  it("tries a failing tab's document pane again when it is reloaded while another tab's pane builds", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    expect(failureOf(store, "tab-1")).toBeDefined();
+    store.addTab({ ...store.get().doc, markdown: "second tab" });
+
+    await changeDuringMount(
+      () => host.reloadActiveDoc(),
+      () => {
+        store.activateTab("tab-1");
+        return reloadFromDisk(store, host, "text from disk");
+      },
+    );
+
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    expect(fakeEditors.mounted.at(-1)?.markdown).toBe("text from disk");
+    await host.dispose();
+  });
+
+  it.each(["Markdown", "document"] as const)(
+    "builds both split panes from the text on disk when a reload comes while settings rebuild the document pane, with a %s edit's mirror pending",
+    async (source) => {
+      const root = document.createElement("div");
+      const store = makeStore();
+      const host = new EditorHost(root, store);
+      host.initLayout("split");
+      await host.reloadActiveDoc();
+      const oldMarkdownPane = root.querySelector<HTMLElement>(".editor-pane-raw")!;
+      // The edit schedules its mirror into the other pane.
+      if (source === "Markdown") fakeEditors.rawChange!("original markdown, edited");
+      else fakeEditors.wysiwygChange!("original markdown, edited");
+
+      await changeDuringMount(
+        () => {
+          store.set({ settings: { ...store.get().settings, mdBulletChar: "*" } });
+          return host.reload();
+        },
+        () => {
+          const reloading = reloadFromDisk(store, host, "text from disk");
+          // The mirror runs while the document pane builds, as its timer or a
+          // click in the split does.
+          host.flush();
+          return reloading;
+        },
+      );
+
+      expect(store.get().doc).toMatchObject({ markdown: "text from disk", isDirty: false });
+      // The document pane built from the edited text is built again from the
+      // text on disk, after the image answers are forgotten, so it has no undo
+      // history from before the reload.
+      expect(fakeEditors.events.slice(-5)).toEqual([
+        "build original markdown, edited",
+        "built original markdown, edited",
+        "forget image answers",
+        "build text from disk",
+        "built text from disk",
+      ]);
+      // The Markdown pane is built again too.
+      expect(root.contains(oldMarkdownPane)).toBe(false);
+      expect(fakeEditors.rawText).toBe("text from disk");
+      expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]);
+      await host.dispose();
+    },
+  );
+
+  it("builds the shown document pane again with settings changed after a tab switch built it", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    store.set({ settings: { ...store.get().settings, maxRetainedTabEditors: 1 } });
+    const host = new EditorHost(root, store);
+    host.initLayout("document");
+    await host.reloadActiveDoc();
+    store.addTab({ ...store.get().doc, markdown: "second tab" });
+    // The switch builds the second tab's pane, then evicts the first tab's.
+    // Hold that eviction, so the settings change lands after the build.
+    let release!: () => void;
+    fakeEditors.destroyPromise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const switching = host.showActiveDoc();
+    await vi.waitFor(() => expect(fakeEditors.destroyCalls).toBe(1));
+    store.set({ settings: { ...store.get().settings, mdBulletChar: "*" } });
+    const reloading = host.reload();
+    release();
+    await Promise.all([switching, reloading]);
+
+    expect(fakeEditors.mounted).toEqual([
+      { markdown: "original markdown", bullet: "-" },
+      { markdown: "second tab", bullet: "-" },
+      { markdown: "second tab", bullet: "*" },
+    ]);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    await host.dispose();
+  });
 
   it("builds the document pane again with settings changed while it builds", async () => {
     const root = document.createElement("div");

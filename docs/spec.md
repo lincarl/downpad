@@ -5,7 +5,7 @@ md-easy is a desktop Markdown editor for Windows and Linux. It is designed for p
 ## Core experience
 
 - Edit Markdown in a clean WYSIWYG document view.
-- Switch between Document, Markdown, and side-by-side Split views. If the Document view cannot show a file, for example one with thousands of nested quotes, that tab opens in the Markdown view and the notice bar under the tabs says why. Try again shows the Document view once the text allows it, for example after a fix in the Markdown view. Other tabs keep the chosen view, and printing such a file prints its Markdown.
+- Switch between Document, Markdown, and side-by-side Split views. A view chosen while a document opens or reloads takes effect once the document is shown, and choosing another view or tab before then does nothing. If the Document view cannot show a file, for example one with thousands of nested quotes, that tab opens in the Markdown view and the notice bar under the tabs says why. Try again shows the Document view once the text allows it, for example after a fix in the Markdown view. Other tabs keep the chosen view, and printing such a file prints its Markdown.
 - Keep the rendered document and Markdown source synchronized, including edits made in the Markdown view while the Document view opens.
 - Work with multiple documents in tabs.
 - Open, create, save, and print Markdown files using familiar desktop controls and shortcuts. Printed Markdown source continues a line too long for one page on the next page.
@@ -25,7 +25,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 
 ## Files and attachments
 
-Markdown files can be opened through the file picker, recent-files view, drag and drop, command-line paths, or desktop file associations. The app preserves the document's line-ending style and warns before unsaved work is lost. Opening, copying or saving a file without edits keeps its exact text. A document counts as unsaved while its text differs from the file, so undoing every edit marks it saved again. While a save is still being written, and for a recovered snapshot until it is saved, the document stays unsaved.
+Markdown files can be opened through the file picker, recent-files view, drag and drop, command-line paths, or desktop file associations. The app preserves the document's line-ending style and warns before unsaved work is lost. Opening, copying or saving a file without edits keeps its exact text. Reloading a file that changed on disk shows its new text, also when the view is still changing, and typing in the Markdown view while it reloads is dropped rather than bringing the old text back. A document counts as unsaved while its text differs from the file, so undoing every edit marks it saved again. While a save is still being written, and for a recovered snapshot until it is saved, the document stays unsaved.
 
 Images can be pasted or dropped into a document. They may be embedded as base64 data or stored in an attachments folder beside the Markdown file. Other dropped files are copied to the attachments folder and inserted as links. Find and replace cannot damage an embedded image. The document view does not search image sources, and the Markdown view skips the base64 data of every `data:` URI, including one written as text in a code sample.
 

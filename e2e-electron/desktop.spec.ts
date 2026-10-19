@@ -1072,6 +1072,195 @@ test("typing in the split's document pane right after the Markdown pane keeps bo
   await expect(markdownLine).toHaveText("First line. Markdown. Document.");
 });
 
+/** Make the main process never answer about an image, so a document view
+ *  waits its full second for each image before it shows. */
+async function holdImageAnswers(): Promise<void> {
+  await app!.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", () => new Promise(() => {}));
+  });
+}
+
+test("typing in the split's Markdown pane while a reload from disk builds keeps the file's new text", async () => {
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const { file, documentLine, markdownLine } = await openSplit("reload-while-typing.md", "Old text.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("Old text.");
+  // Hold back the answer about the image, so the document pane built for the
+  // reload waits a second for it. The Markdown pane from before the reload
+  // stays on screen meanwhile.
+  await holdImageAnswers();
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  // The old document pane goes once the reload has replaced the tab's text.
+  await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" Typed during the reload.");
+  // The new document pane is still building, so the typing went to the old text.
+  expect(await page.locator(".editor-pane-wysiwyg:not([hidden])").count()).toBe(0);
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page).toHaveTitle("reload-while-typing.md — md-easy");
+  // The panes built for the reload take typing.
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("New text from disk. Typed after.");
+});
+
+test("switching tabs while a reload from disk builds shows the other tab, then the reloaded text", async () => {
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const file = path.join(directory, "reloaded.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(file, "Old text.\n\n![pixel](pixel.png)\n");
+  await writeFile(other, "Other file.\n");
+  await launch(file);
+  await chooseOpen(other);
+  await expect(page).toHaveTitle("other.md — md-easy");
+  await page.getByRole("tab", { name: "reloaded.md", exact: true }).click();
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  await expect(documentLine).toHaveText("Old text.");
+  await expect(markdownLine).toHaveText("Old text.");
+  await holdImageAnswers();
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  // Switch tabs while the document pane for the reload waits for its image.
+  await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
+  await page.getByRole("tab", { name: "other.md", exact: true }).click();
+  // The other tab's panes replace the Markdown pane from before the reload.
+  await expect(documentLine).toHaveText("Other file.");
+  await expect(markdownLine).toHaveText("Other file.");
+  await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(2);
+  await expect(page).toHaveTitle("other.md — md-easy");
+  await page.getByRole("tab", { name: "reloaded.md", exact: true }).click();
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(readFile(other, "utf8")).resolves.toBe("Other file.\n");
+});
+
+test("a Reload clicked while a layout switch builds the document view shows the file's new text", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), 'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ndefaultView = "markdown"\n');
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const file = path.join(directory, "reload-during-switch.md");
+  await writeFile(file, "Old text on disk.\n\n![pixel](pixel.png)\n");
+  await launch(file);
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  await expect(markdownLine).toHaveText("Old text on disk.");
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  const reload = page.getByRole("button", { name: "Reload", exact: true });
+  await expect(reload).toBeVisible();
+  await holdImageAnswers();
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  // Reload while the document pane for the split waits for its image.
+  await page.waitForFunction(() => document.querySelector(".editor-pane-wysiwyg") !== null, undefined, { polling: "raf" });
+  await reload.click();
+  // The build from the old text is done again from the new.
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page).toHaveTitle("reload-during-switch.md — md-easy");
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("New text from disk. Typed after.");
+});
+
+test("Split chosen while a reload from disk builds shows both panes with the file's new text", async () => {
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  const file = path.join(directory, "split-during-reload.md");
+  await writeFile(file, "Old text.\n\n![pixel](pixel.png)\n");
+  await launch(file);
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  await expect(documentLine).toHaveText("Old text.");
+  await holdImageAnswers();
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  // Choose Split while the document pane for the reload waits for its image.
+  await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
+  const split = page.getByRole("radio", { name: "Split", exact: true });
+  await split.click();
+  await expect(split).toHaveAttribute("aria-checked", "true");
+  // The window switches to the split once the reload's document pane shows.
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(2);
+  await typeAtEnd(markdownLine, " Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(documentLine).toHaveText("New text from disk. Typed after.");
+});
+
+test("a reload from disk while settings rebuild the split's document view leaves no undo or image answers from before", async () => {
+  const file = path.join(directory, "reload-during-settings.md");
+  await writeFile(file, "Old text.\n\n![pixel](pixel.png)\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
+  const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
+  // The image is missing, and the document view keeps that answer.
+  await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .md-image-missing")).toHaveCount(1);
+  const settings = await page.evaluate(() => window.mdEasy!.invoke("load_settings"));
+  await writeFile(path.join(directory, "pixel.png"), onePixelPng);
+  await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
+  const reload = page.getByRole("button", { name: "Reload", exact: true });
+  await expect(reload).toBeVisible();
+  // Answer each image after 900 ms, and hold the file read until released.
+  // Electron keeps the handlers of ipcMain.handle in `_invokeHandlers`, and a
+  // handler on the window's own `ipc` runs in their place.
+  await app!.evaluate(({ BrowserWindow, ipcMain }) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const handlers = Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>;
+    const imageUrl = handlers.get("md-easy:image-url")!;
+    const invoke = handlers.get("md-easy:invoke")!;
+    const read = new Promise((resolve) => Reflect.set(globalThis, "releaseRead", resolve));
+    const { ipc } = BrowserWindow.getAllWindows()[0]!.webContents;
+    ipc.handle("md-easy:image-url", async (event, ...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return imageUrl(event, ...args);
+    });
+    ipc.handle("md-easy:invoke", async (event, command, ...args) => {
+      if (command === "read_file") await read;
+      return invoke(event, command, ...args);
+    });
+  });
+  await reload.click();
+  // Edit the Markdown pane during the read. The edit's image is new to the
+  // document view, so a rebuild of that view waits for its answer.
+  await markdownLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" ![x](slow.png)");
+  // Change a document setting, which builds the document view again.
+  await app!.evaluate(({ BrowserWindow }, changed) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.send("md-easy:event:settings-changed", changed);
+  }, { ...settings, mdBulletChar: settings.mdBulletChar === "*" ? "-" : "*" });
+  await page.waitForFunction(() => document.querySelector(".editor-pane-wysiwyg[hidden]") && !document.querySelector(".editor-pane-wysiwyg:not([hidden])"));
+  // While it builds, type once more, which schedules a mirror sync into it 120 ms
+  // later, and let the read finish before that sync runs.
+  await app!.evaluate(async ({ BrowserWindow }) => {
+    await BrowserWindow.getAllWindows()[0]!.webContents.insertText("!");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    (Reflect.get(globalThis, "releaseRead") as () => void)();
+  });
+  // The document view is built from the new text and shows the image now on disk.
+  await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .milkdown-image-block img")).toHaveAttribute("src", /^md-easy-file:/);
+  await expect(documentLine).toHaveText("New text from disk.");
+  await expect(markdownLine).toHaveText("New text from disk.");
+  await expect(page).toHaveTitle("reload-during-settings.md — md-easy");
+  // Its undo history starts at the reload.
+  await documentLine.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.type(" Typed after.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
+  await expect(markdownLine).toHaveText("New text from disk. Typed after.");
+});
+
 /** Drop files from the desktop onto the middle of an element, through
  *  Chromium's drag emulation, so the app gets their real paths. */
 async function dropFiles(target: Locator, files: string[]): Promise<void> {

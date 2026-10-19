@@ -16,7 +16,8 @@
 //
 // Cache invalidation is driven by a per-tab *revision* counter: any real change
 // to a tab's canonical string bumps its rev and stamps the authoring pane as
-// in-sync; every other pane of that tab is now stale. On reveal, a stale pane is
+// in-sync; every other pane of that tab is now stale. A stale pane's change
+// reports are dropped, since they carry older text. On reveal, a stale pane is
 // rebuilt from the canonical string (its undo resets) — so the views can never
 // diverge, yet an untouched view keeps its undo. A pane that falls behind while
 // it builds is built again before it is shown. At most `maxRetainedTabEditors`
@@ -77,7 +78,27 @@ export class EditorHost implements FindController {
   private configEpoch = 0;
   private activeTabId: string | null = null;
   private currentView: View | null = null;
-  private switching = false;
+  /** The change of panes in progress (`runPaneChange`), such as a tab shown or
+   *  a layout switched, or null. Only one runs at a time. */
+  private changing: Promise<void> | null = null;
+  /** Set when a tab switch, an open or a reload asked to show the active tab
+   *  while a change of panes ran. The active tab or its text may have changed
+   *  after that change began, so it shows the active tab again before it ends. */
+  private showQueued = false;
+  /** The layout chosen last while a change of panes ran, or null. The change
+   *  switches to it before it ends (`setLayout`). */
+  private queuedLayout: EditorLayout | null = null;
+  /** Tabs whose text an open or a reload replaced while another change of
+   *  panes ran. Their panes went stale then (`reloadActiveDoc`). Like a reload,
+   *  the next showing of each tries a failed Document view again (`present`). */
+  private readonly replacedTabs = new Set<string>();
+  /** Set when an open or a reload during another change of panes asked to
+   *  forget the image answers (`reloadActiveDoc`). The next document pane built
+   *  forgets them first, or the change does as it ends. A document pane already
+   *  building keeps the answers it waited for, because one that lost them would
+   *  render its images with their raw paths, looked up next to md-easy's own
+   *  page. */
+  private forgetImagesBeforeBuild = false;
   /** Terminal lifecycle state. `unmount` clears editors but leaves this host
    *  reusable; `dispose` permanently rejects future work for React cleanup. */
   private disposed = false;
@@ -100,7 +121,8 @@ export class EditorHost implements FindController {
    *  changes nothing, and `onChange` drops it if a newer Markdown edit landed
    *  first. */
   private applyingSync = false;
-  /** Pending debounced mirror sync and the pane whose edit it mirrors. */
+  /** Pending debounced mirror sync and the pane whose edit it mirrors. A reload
+   *  of that pane's tab drops it (`reloadActiveDoc`). */
   private pendingSync: { timer: ReturnType<typeof setTimeout>; source: Pane } | null = null;
   /** The draggable divider between the two split panes (lazily created). */
   private divider: HTMLElement | null = null;
@@ -272,8 +294,8 @@ export class EditorHost implements FindController {
    * show it. Markdown pane edits are reported as they happen.
    *
    * Edits only ever arrive through a pane's change report, which the host
-   * drops when the document pane lags the tab. Never read a pane's text here,
-   * which would skip that check and could write older text over a newer edit.
+   * drops when the pane lags the tab. Never read a pane's text here, which
+   * would skip that check and could write older text over a newer edit.
    */
   flush(): void {
     if (this.disposed || !this.activeTabId) return;
@@ -288,54 +310,66 @@ export class EditorHost implements FindController {
   /**
    * Show the active tab's document (tab switch / close→neighbour / return from
    * Recent). Reveals cached panes when in sync (undo preserved); rebuilds only
-   * stale ones. Honours the current split state.
+   * stale ones. Honours the current split state. While another change of panes
+   * runs, that change shows the active tab once it is done, and this waits for
+   * it.
    */
   async showActiveDoc(): Promise<void> {
-    if (this.disposed || this.switching) return;
-    this.switching = true;
-    try {
-      await this.present();
-    } finally {
-      this.switching = false;
-    }
+    if (this.disposed) return;
+    if (this.changing) return this.queueShow();
+    await this.runPaneChange(() => this.present());
   }
 
   /**
    * Show the active tab's document after its canonical string was replaced from
    * outside the editors (open / new / disk-reload). Forces a fresh
    * rebuild (undo resets) and invalidates the tab's panes. Image lookups are
-   * asked again, so an image that has appeared on disk since shows.
+   * asked again, so an image that has appeared on disk since shows. A Markdown
+   * pane on screen keeps the older text until the panes of the active tab are
+   * shown, and typing there meanwhile is dropped (`onChange`).
+   *
+   * While another change of panes runs, the tab's panes go stale at once, so
+   * the panes that change builds or shows take no typing that would write the
+   * older text back. It then shows the active tab again, and this waits for it.
+   * The image answers are forgotten before the next document pane is built.
+   *
+   * A pending mirror sync of an edit in the tab's split is dropped. It would
+   * copy the new text into a pane from before the reload, possibly one still
+   * building, and mark that pane current, so it would be shown with its undo
+   * history and image answers from before. Only a pane built after the reload
+   * can be current, so every pane shown for the tab is built from the new text.
    */
   async reloadActiveDoc(): Promise<void> {
-    if (this.disposed || this.switching) return;
-    this.switching = true;
-    try {
-      forgetImageAnswers();
-      const id = this.store.get().activeTabId;
-      if (id) this.bumpRev(id); // no author → every pane of this tab is now stale
-      await this.present({ rebuild: true });
-    } finally {
-      this.switching = false;
+    if (this.disposed) return;
+    const id = this.store.get().activeTabId;
+    if (id) {
+      this.bumpRev(id); // no author → every pane of this tab is now stale
+      if (this.pendingSync?.source.tabId === id) this.cancelSync();
     }
+    if (!this.changing) {
+      forgetImageAnswers();
+      return this.runPaneChange(() => this.present({ rebuild: true }));
+    }
+    if (id) this.replacedTabs.add(id);
+    this.forgetImagesBeforeBuild = true;
+    return this.queueShow();
   }
 
   /** Switch the window's layout — document / split / Markdown (§6.1). Flushes
    *  the visible edits first so the (possibly newly built) panes start from the
    *  current canonical. Choosing the document or the split while the active
    *  tab's Document view has failed tries that view again, even when the
-   *  window already has that layout. */
+   *  window already has that layout. While another change of panes runs, that
+   *  change switches to the layout chosen last once it is done, and this waits
+   *  for it. */
   async setLayout(layout: EditorLayout): Promise<void> {
-    if (this.disposed || this.switching) return;
-    const retry = layout !== "markdown";
-    if (this.windowLayout === layout && !(retry && this.hasFailed(this.store.get().activeTabId))) return;
-    this.switching = true;
-    try {
-      this.flush();
-      this.windowLayout = layout;
-      await this.present({ retry });
-    } finally {
-      this.switching = false;
+    if (this.disposed) return;
+    if (this.changing) {
+      this.queuedLayout = layout;
+      return this.changing;
     }
+    if (!this.changesLayout(layout)) return;
+    await this.runPaneChange(() => this.switchLayout(layout));
   }
 
   /** Try again to build the active tab's Document view after it failed (the
@@ -344,30 +378,23 @@ export class EditorHost implements FindController {
    *  A retry that fails again changes nothing on screen, so focus stays on
    *  Try again instead of moving into the Markdown view. */
   async retryDocumentView(): Promise<void> {
-    if (this.disposed || this.switching) return;
-    this.switching = true;
-    try {
-      await this.present({ retry: true, keepFocusOnFailure: true });
-    } finally {
-      this.switching = false;
-    }
+    if (this.disposed || this.changing) return;
+    await this.runPaneChange(() => this.present({ retry: true, keepFocusOnFailure: true }));
   }
 
   /**
    * Re-apply a WYSIWYG serializer/link-display settings change (§5.16, §5.6):
    * bump the config epoch (invalidating every WYSIWYG pane) and rebuild the
-   * active one now; hidden WYSIWYG panes rebuild on their next reveal.
+   * active one now; hidden WYSIWYG panes rebuild on their next reveal. During
+   * another change of panes, which may have built the active one already, that
+   * change shows the active tab again before it ends.
    */
   async reload(): Promise<void> {
     if (this.disposed) return;
     this.configEpoch += 1;
-    if (this.switching || !this.currentView) return;
-    this.switching = true;
-    try {
-      await this.present();
-    } finally {
-      this.switching = false;
-    }
+    if (!this.currentView) return;
+    if (this.changing) return this.queueShow();
+    await this.runPaneChange(() => this.present());
   }
 
   /** Destroy a closed tab's panes and free their DOM (spec §5.19). Call on every
@@ -384,15 +411,15 @@ export class EditorHost implements FindController {
       if (pane) await this.destroyPane(pane);
     }
     this.rev.delete(tabId);
+    this.replacedTabs.delete(tabId);
     this.tabMru = this.tabMru.filter((t) => t !== tabId);
     if (this.activeTabId === tabId) this.activeTabId = null;
   }
 
   /** Tear every editor down — used when the last tab closes (§5.19). */
   async unmount(): Promise<void> {
-    if (this.disposed || this.switching) return;
-    this.switching = true;
-    try {
+    if (this.disposed || this.changing) return;
+    await this.runPaneChange(async () => {
       this.cancelSync();
       this.scrollSync.disconnect();
       this.endDrag();
@@ -407,21 +434,14 @@ export class EditorHost implements FindController {
       this.root.style.removeProperty("--split-left");
       this.activeTabId = null;
       this.currentView = null;
-    } finally {
-      this.switching = false;
-    }
+    });
   }
 
   /** Evict retained panes beyond the configured limit — used when the user lowers
    *  the `maxRetainedTabEditors` setting at runtime. */
   async applyRetentionLimit(): Promise<void> {
-    if (this.disposed || this.switching) return;
-    this.switching = true;
-    try {
-      await this.enforceLru();
-    } finally {
-      this.switching = false;
-    }
+    if (this.disposed || this.changing) return;
+    await this.runPaneChange(() => this.enforceLru());
   }
 
   /**
@@ -443,7 +463,6 @@ export class EditorHost implements FindController {
     if (this.disposePromise) return this.disposePromise;
 
     this.disposed = true;
-    this.switching = true;
     this.saveHandler = null;
     this.openLinkHandler = null;
     this.findChangeHandler = null;
@@ -475,6 +494,70 @@ export class EditorHost implements FindController {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /** Run a change of panes. Only one runs at a time, so each public entry point
+   *  returns or queues while `changing` is set. Before it ends, the change shows
+   *  the active tab again for each tab switch, open or reload made while it ran
+   *  (`queueShow`), and switches to the layout chosen last meanwhile
+   *  (`setLayout`). Its own build or reveal may be for a tab that is no longer
+   *  active, or from text that was replaced since. */
+  private async runPaneChange(change: () => Promise<void>): Promise<void> {
+    let finish!: () => void;
+    this.changing = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    try {
+      await change();
+    } finally {
+      try {
+        while ((this.showQueued || this.queuedLayout) && !this.disposed) {
+          const show = this.showQueued;
+          const layout = this.queuedLayout;
+          this.showQueued = false;
+          this.queuedLayout = null;
+          // A layout switch shows the active tab too.
+          if (layout && this.changesLayout(layout)) await this.switchLayout(layout);
+          else if (show) await this.present();
+        }
+      } finally {
+        this.showQueued = false;
+        this.queuedLayout = null;
+        this.changing = null;
+        this.forgetPendingImageAnswers();
+        finish();
+      }
+    }
+  }
+
+  /** Ask the change of panes in progress to show the active tab before it
+   *  ends, and wait for that. */
+  private queueShow(): Promise<void> {
+    this.showQueued = true;
+    return this.changing ?? Promise.resolve();
+  }
+
+  /** Whether choosing `layout` changes the panes: it is another layout, or the
+   *  document or the split for a tab whose Document view failed, which tries
+   *  that view again. */
+  private changesLayout(layout: EditorLayout): boolean {
+    if (this.windowLayout !== layout) return true;
+    return layout !== "markdown" && this.hasFailed(this.store.get().activeTabId);
+  }
+
+  /** Show the active tab in `layout`, from the current text of its visible
+   *  panes (`flush`). */
+  private async switchLayout(layout: EditorLayout): Promise<void> {
+    this.flush();
+    this.windowLayout = layout;
+    await this.present({ retry: layout !== "markdown" });
+  }
+
+  /** Forget the image answers if a reload during a change of panes asked to. */
+  private forgetPendingImageAnswers(): void {
+    if (!this.forgetImagesBeforeBuild) return;
+    this.forgetImagesBeforeBuild = false;
+    forgetImageAnswers();
+  }
 
   private active(): Pane | null {
     if (this.disposed || this.activeTabId === null || this.currentView === null) return null;
@@ -517,8 +600,9 @@ export class EditorHost implements FindController {
    *  When the document pane cannot be built, the tab shows its Markdown alone
    *  and the failure is recorded on the tab for the notice bar. Later reveals
    *  leave the document pane unbuilt until `retry`, or a `rebuild` after the
-   *  tab's text was replaced, tries again. With `keepFocusOnFailure`, a build
-   *  that fails leaves focus where it is. */
+   *  tab's text was replaced, tries again. A tab whose text was replaced while
+   *  another change of panes ran (`replacedTabs`) tries again too. With
+   *  `keepFocusOnFailure`, a build that fails leaves focus where it is. */
   private async present(
     opts: { rebuild?: boolean; retry?: boolean; keepFocusOnFailure?: boolean } = {},
   ): Promise<void> {
@@ -527,11 +611,12 @@ export class EditorHost implements FindController {
     if (!id) return;
     const rebuild = opts.rebuild ?? false;
     const failed = this.hasFailed(id);
+    const replaced = this.replacedTabs.delete(id);
 
     // Building a pane never changes the tab's text, because the document pane
     // reports its exact source until the user edits it. In the Markdown-only
     // view the document pane isn't built at all, except to try a failed one again.
-    const attempt = failed ? rebuild || (opts.retry ?? false) : this.windowLayout !== "markdown";
+    const attempt = failed ? rebuild || replaced || (opts.retry ?? false) : this.windowLayout !== "markdown";
     let wysiwygPane: Pane | null = null;
     let failure: DocumentViewFailure | null = null;
     if (attempt) {
@@ -674,10 +759,14 @@ export class EditorHost implements FindController {
       if (this.disposed || this.applyingSync || this.panes.get(paneKey(tabId, view)) !== pane) {
         return;
       }
-      // The document pane reports after typing pauses. If the Markdown pane has
-      // changed the tab since, this pane lags it, and its report would overwrite
-      // that newer edit. The pending mirror sync then brings this pane up to date.
-      if (view === "wysiwyg" && pane.syncedRev !== this.revOf(tabId)) return;
+      // A pane that lags the tab holds older text, and its report would write
+      // that text over the tab's newer text. The document pane reports after
+      // typing pauses, so it lags a newer Markdown edit until the pending mirror
+      // sync brings it up to date. The Markdown pane lags a reload from disk or
+      // a file opened into its tab. It stays on screen and editable while the
+      // panes for the new text build, until they replace it, or until another
+      // tab's panes do when the user switched tabs meanwhile.
+      if (pane.syncedRev !== this.revOf(tabId)) return;
       if (applyEditorMarkdownForTab(this.store, tabId, m)) {
         this.bumpRev(tabId, pane);
         if (this.layout === "split" && tabId === this.activeTabId) this.scheduleSync(pane);
@@ -690,6 +779,7 @@ export class EditorHost implements FindController {
     };
 
     if (view === "wysiwyg") {
+      this.forgetPendingImageAnswers();
       const editor = new WysiwygEditor();
       pane.wysiwyg = editor;
       try {

@@ -50,6 +50,9 @@ export class AppRuntime {
   private readonly printWorkspace: PrintWorkspace;
   private readonly startup: StartupCoordinator;
   private readonly desktopEvents: DesktopEventBindings;
+  /** Set while a layout switch, Try again or a tab switch of this runtime
+   *  runs, also while the switch waits for EditorHost to finish another change
+   *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
