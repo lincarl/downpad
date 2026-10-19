@@ -767,6 +767,9 @@ describe("EditorHost changes while a document pane builds", () => {
     },
   );
 
+  // The app passes on one choice at a time, because AppRuntime ignores a second
+  // layout chosen while the first waits. The last case checks EditorHost's own
+  // contract for a second choice.
   it.each([
     [["split"], ["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]],
     [["markdown"], ["editor-pane editor-pane-raw"]],
