@@ -584,6 +584,64 @@ test("the caret at a link's end is drawn after its URL, and before it on the lin
   }).toBeLessThanOrEqual(0);
 });
 
+test("a click on the URL shown after a link puts the caret at the link's end", async () => {
+  const file = path.join(directory, "click-url.md");
+  const blocks = [
+    "Intro [one](https://example.com/1)",
+    "Intro [two](https://example.com/2)",
+    "Intro [three](https://example.com/3)",
+    "A [four](https://example.com/4)s and more.",
+    "- item [five](https://example.com/5)\n- second",
+    "B [six](https://example.com/6) and then more.",
+  ];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const urls = page.locator(".milkdown .ProseMirror .md-link-url");
+  await expect(urls).toHaveCount(6);
+  /** Click `fraction` of the way across the URL shown after link `index`. */
+  const clickUrl = async (index: number, fraction: number) => {
+    const box = (await urls.nth(index).boundingBox())!;
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+  };
+  // Chromium put a click on the URL's text, past its first few pixels, at
+  // the start of the paragraph.
+  for (const [index, fraction, typed] of [[0, 0.05, "a"], [1, 0.5, "b"], [2, 0.95, "c"], [3, 0.5, "d"], [4, 0.5, "e"]] as const) {
+    await clickUrl(index, fraction);
+    await page.keyboard.type(typed);
+  }
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Intro [one](https://example.com/1)a",
+    "Intro [two](https://example.com/2)b",
+    "Intro [three](https://example.com/3)c",
+    "A [four](https://example.com/4)ds and more.",
+    "- item [five](https://example.com/5)e\n- second",
+    blocks[5],
+  ].join("\n\n") + "\n");
+  // Shift+click on the URL extends the selection to the link's end.
+  await clickOn(" and then more.", 10, 0.25);
+  await page.keyboard.down("Shift");
+  await clickUrl(5, 0.5);
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("ControlOrMeta+c");
+  await expect.poll(clipboardText).toBe(" and then ");
+  // The URL is not part of the link, so Ctrl or Cmd+click on it opens
+  // nothing. The link itself opens last, so anything the URL opened is in by then.
+  for (const click of [() => clickUrl(5, 0.5), () => clickOn("six", 1, 0.5)]) {
+    await page.keyboard.down("ControlOrMeta");
+    await click();
+    await page.keyboard.up("ControlOrMeta");
+  }
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
+});
+
 test("a change the browser makes inside a link while the caret rests at its end keeps the link", async () => {
   const file = path.join(directory, "link-text-service.md");
   await writeFile(file, "Intro [lnk](https://example.com/a)\n\nFix [teh](https://example.com/b)\n");
