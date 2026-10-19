@@ -135,6 +135,9 @@ interface SourceItem {
   /** Whether it read in the source as it reads at the start of a text, worked
    *  out when a join needs it (`itemFresh`). */
   fresh?: boolean;
+  /** Whether it read in the source as its first lines read at the start of a
+   *  text, worked out by reading them when a join needs it (`readsAlone`). */
+  alone?: boolean;
 }
 
 /** The source body split into its top-level nodes and the blank text around them. */
@@ -428,10 +431,11 @@ export class SourceBaseline {
    * the source had. There the parser is in the state the source left, and the
    * window's first piece must still read as its source item, which shows that
    * state does not change how it reads. It does not change where the piece
-   * ends either, except for indented code (`codeMayEnd`), which is never read
-   * back there. A window ends with the first lines of a piece whose own join
-   * below is settled or from the source, so the text after it cannot change
-   * how the window reads.
+   * ends either, except for indented code whose first line is lazy
+   * (`codeMayEnd`), which is read back there only when the line below it reads
+   * as at the start of a text (`readsAlone`). A window ends with the first
+   * lines of a piece whose own join below is settled or from the source, so
+   * the text after it cannot change how the window reads.
    */
   private join(pieces: readonly Piece[], layout: SourceLayout): string[] | null {
     const budget = Math.max(this.source.length / PARSE_COST, MIN_BUDGET);
@@ -473,7 +477,9 @@ export class SourceBaseline {
         const leftOpen = above.item >= 0 && layout.items[above.item].leftOpen !== undefined;
         const ending = endingOf(above, layout);
         if (leftOpen || !apart(ending, above.text, gap, below.text)) {
-          if (above.item >= 0 && codeMayEnd(layout, above.item)) return null;
+          // In the body, the line below code that ends after its lazy first
+          // line reads as at the start of a text, and the window cannot show it.
+          if (above.item >= 0 && codeMayEnd(layout, above.item) && !fresh && !this.readsAlone(layout, below.item)) return null;
           // Read the file's gap back if that fits the budget. Otherwise a blank
           // line, if the rules show that it keeps the pieces apart.
           if (spent + size + pieceCost(above) + gap.length + headCost(below) <= budget) open = true;
@@ -661,6 +667,18 @@ export class SourceBaseline {
     }
     this.windows.set(key, wrong);
     return wrong === null;
+  }
+
+  /** Whether source item `k` read in the source as its first lines read at
+   *  the start of a text: from the same place in its first line, opening the
+   *  same blocks (`opens`). Worked out once. */
+  private readsAlone(layout: SourceLayout, k: number): boolean {
+    const item = layout.items[k];
+    if (item.alone === undefined) {
+      const node = this.tools.parse(`${head(item.text)}\n`).children[0];
+      item.alone = !!node && startOf(node) === item.lead && opens(node) === item.opens;
+    }
+    return item.alone;
   }
 
   /** The blocks the first line of `piece` should open (`opens`). Those are
@@ -984,30 +1002,39 @@ function itemFresh(layout: SourceLayout, k: number): boolean {
  * neither goes on with it nor starts a new one. There, code that was one block
  * splits, and code that read as two blocks only because of it joins up. The
  * code's first line was not lazy in the source if the parser started afresh
- * on it (`itemFresh`), and is not lazy here if `above` leaves nothing open. A
- * blank line closes a quote, and starts no code. Milkdown never writes
- * indented code, because it fences code and writes spaces at the start of a
- * line as character references, so only source items need this.
+ * on it (`itemFresh`), and is not lazy here if `above` leaves nothing open
+ * (`leavesOpen`). Milkdown never writes indented code, because it fences code
+ * and writes spaces at the start of a line as character references, so only
+ * source items need this.
  */
 function codeMayMove(layout: SourceLayout, k: number, above: Piece | undefined, gap: string): boolean {
   if (itemEnding(layout, k) !== "indented") return false;
   if (!itemFresh(layout, k)) return true;
-  const type = above && (above.item >= 0 ? layout.items[above.item].type : above.block?.type.name);
-  if (type === "blockquote") return !/\n[ \t]*\n/.test(gap);
-  return type !== undefined && STAYS_OPEN.has(type);
+  return leavesOpen(above && (above.item >= 0 ? layout.items[above.item].type : above.block?.type.name), gap);
 }
 
 /**
  * Whether source item `k`, if it is indented code, could end in another place
- * in a window that starts with it than in the body. Code that did not start
- * afresh in the source can have a lazy first line, after which micromark ends
- * it (`codeMayMove`), as below a list with wide items. At the start of a
- * window it stays open instead, and a list item that does not start at 1
- * cannot start right below it, so `> 2. Item` below it would read as text in
- * the window and as a list in the body.
+ * in a window that starts with it than in the body. That is code whose first
+ * line was lazy in the source: it did not start afresh, and the item above it
+ * left a list, quote or footnote open (`leavesOpen`), as a list with wide
+ * items does. Micromark ends such code after that line (`codeMayMove`). At the
+ * start of a window it stays open instead, and a list item that does not
+ * start at 1 or an empty one cannot start right below it. So `> 2. Item` below
+ * it would read as text in the window and as a list in the body. Code below
+ * other code or blocks stays open in the body as in the window.
  */
 function codeMayEnd(layout: SourceLayout, k: number): boolean {
-  return itemEnding(layout, k) === "indented" && !itemFresh(layout, k);
+  if (itemEnding(layout, k) !== "indented" || itemFresh(layout, k)) return false;
+  return k > 0 && leavesOpen(layout.items[k - 1].type, layout.gaps[k - 1]);
+}
+
+/** Whether a block of syntax tree or ProseMirror type `type`, with `gap` below
+ *  it, leaves a list, quote or footnote open for the line after `gap`, which
+ *  can then be lazy. A blank line closes a quote, and starts no code. */
+function leavesOpen(type: string | undefined, gap: string): boolean {
+  if (type === "blockquote") return !/\n[ \t]*\n/.test(gap);
+  return type !== undefined && STAYS_OPEN.has(type);
 }
 
 /**

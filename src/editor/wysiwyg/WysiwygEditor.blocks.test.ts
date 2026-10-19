@@ -614,6 +614,29 @@ describe("a join between a changed block and the file's text", () => {
     expect(editor.getMarkdown()).toBe("* Run:\n\n  ```sh\n  echo hello\n  ```\n");
   });
 
+  // Below a list with wide items, the code's first line is lazy, and the
+  // parser ends the code after it. A paragraph below reads the same whether
+  // the code has ended or not. Code below other code stays open, as it did in
+  // the file.
+  it.each([
+    [
+      "a paragraph moves up below indented code that a list above ends",
+      "1.   Install the tools.\n\n    make\n    make install\n\nThen restart.\n",
+      (view: EditorView) => deleteBlock(view, "make install"),
+      "1.   Install the tools.\n\n    make\nThen restart.\n",
+    ],
+    [
+      "a quote moves up below indented code that follows other code",
+      "1.   Install the tools.\n\n    make\n    make install\n\nThen:\n> 2. Restart the server.\n",
+      (view: EditorView) => deleteBlock(view, "Then:"),
+      "1.   Install the tools.\n\n    make\n    make install\n\n> 2. Restart the server.\n",
+    ],
+  ])("keeps the file's text when %s", { timeout: 60_000 }, async (_name, markdown, edit, expected) => {
+    const { editor, view } = await open(markdown);
+    edit(view);
+    expect(editor.getMarkdown()).toBe(expected);
+  });
+
   // A closing fence may be indented up to three spaces further than the
   // list item's text, also with a tab, and still close the fence.
   it.each([
