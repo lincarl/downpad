@@ -221,19 +221,27 @@ export class RawEditor {
    *  as a paragraph of its own before or after its line (`blankLinesAt`). The
    *  caret moves after the text, unless `moveCaret` is off, for a user who
    *  has moved on since the drop. Then the selection stays where it was,
-   *  before text inserted at its end. */
-  insertText(text: string, target: DropTarget | null = null, moveCaret = true): void {
-    if (!this.view || !text) return;
+   *  before text inserted at its end. Returns the target for the drop's next
+   *  file, right after this one, which the pane keeps in step with edits
+   *  until `releaseDropTarget`. For text that went in at the caret it is a
+   *  new target, so the next file follows this one even while the caret
+   *  stays before it. Null without an editor. */
+  insertText(text: string, target: DropTarget | null = null, moveCaret = true): DropTarget | null {
+    if (!this.view || !text) return null;
     const aimed = target && this.dropTargets.has(target) ? target : null;
     const at = aimed ? aimed.pos : this.view.state.selection.main.to;
     const [before, after] = aimed?.newBlock ? blankLinesAt(this.view.state.doc, at) : ["", ""];
     const end = at + before.length + text.length;
+    // Kept in step from the insert on, which moves it past the text.
+    const next = aimed ?? { pos: at };
+    this.dropTargets.add(next);
     this.view.dispatch({
       changes: { from: at, insert: before + text + after },
       ...(moveCaret ? { selection: { anchor: end } } : {}),
     });
     // The next file of the drop goes in after this one, in a block of its own.
     if (aimed?.newBlock) aimed.pos = end;
+    return next;
   }
 
   /** Make the change that puts a file dropped on the split's document pane

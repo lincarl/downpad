@@ -85,6 +85,7 @@ function type(opened: WysiwygEditor, text: string): void {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 const IMAGE = "![](attachments/pic.png)";
+const IMAGE_B = "![](attachments/pic-b.png)";
 const LINK_A = "[a.csv](attachments/a.csv)";
 const LINK_B = "[b.csv](attachments/b.csv)";
 
@@ -555,6 +556,24 @@ describe("a file dropped away from the document text", () => {
     type(opened, "x");
 
     expect(opened.getMarkdown()).toBe(`${IMAGE}\n\nx\n`);
+  });
+
+  it.each([
+    ["after a line the caret ends", 12, [IMAGE, IMAGE_B], `First line.\n\n${IMAGE}\n\n${IMAGE_B}\n\nSecond line.\n`],
+    ["inside the line at a caret in it", 6, [LINK_A, LINK_B], `First${LINK_A}${LINK_B} line.\n\nSecond line.\n`],
+    ["after the line a link joined", 6, [LINK_A, IMAGE], `First${LINK_A} line.\n\n${IMAGE}\n\nSecond line.\n`],
+  ])("keeps the files of one drop in drop order %s, for a user who has moved on", async (_where, caret, files, expected) => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, caret)));
+
+    // The caret stays where the user left it, before the files.
+    let next = opened.insertMarkdown(files[0], null, false);
+    next = opened.insertMarkdown(files[1], next, false);
+
+    expect(opened.getMarkdown()).toBe(expected);
+    expect(view.state.selection.head).toBe(caret);
+    opened.releaseDropTarget(next!);
   });
 
   it("goes in after a selected image, not over it", async () => {

@@ -13,7 +13,8 @@ import { Transform, dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { differingRuns } from "../differingRuns";
 
-/** Where the files of a drop on the document go in. The editor that made it
+/** Where the files of a drop on the document go in, or the next file of a
+ *  drop away from the text, after the one before it. The editor that made it
  *  keeps the position in step with later edits. */
 export interface DropTarget {
   pos: number;
@@ -24,6 +25,10 @@ export interface DropTarget {
    *  their own at `pos`, the start or the end of a line, as for one on
    *  base64 data that is not a Markdown image's URL. */
   newBlock?: boolean;
+  /** Set once a file dropped away from the text joined a line, with `pos`
+   *  at the end of its text in the line, so the next file goes in there as
+   *  at a caret (`insertAtSelection`). */
+  inLine?: boolean;
 }
 
 /**
@@ -263,21 +268,23 @@ function caretAfterInsert(tr: Transaction, selection: Selection, moveCaret: bool
  * Milkdown action that inserts Markdown's blocks at a drop target
  * (`placeBlocks`) and puts the caret after them, or with `moveCaret` off
  * leaves the selection where it was (`caretAfterInsert`). The target moves
- * past the blocks, so the next file of the drop follows.
+ * past the blocks, so the next file of the drop follows. Returns whether the
+ * blocks went in.
  */
 export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret = true) {
-  return (ctx: Ctx): void => {
+  return (ctx: Ctx): boolean => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
-    if (!doc?.lastChild) return;
+    if (!doc?.lastChild) return false;
     const { tr } = view.state;
     const { selection } = tr;
-    if (!placeBlocks(tr, target, doc)) return;
+    if (!placeBlocks(tr, target, doc)) return false;
     const end = changeEnd(tr);
     // The editor maps the target through this transaction. From where the
     // inserted blocks began, mapping takes it to their end.
     target.pos = tr.mapping.invert().map(end);
     view.dispatch(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock));
+    return true;
   };
 }
 
@@ -299,25 +306,38 @@ function insideText($pos: ResolvedPos): boolean {
  * as at a drop on that edge (`placeBlocks`), so a heading is never split. The
  * caret then goes after the file, or with `moveCaret` off stays where it
  * was, before the file (`caretAfterInsert`).
+ *
+ * `next` becomes the target of the drop's next file, at the end of this one,
+ * so the files of a drop keep their order while the caret stays where the
+ * user left it. After a file that joined a line, `next.inLine` is set, and
+ * this action puts the next file in there, as at a caret in the line.
+ * Otherwise the next file goes in at that block edge (`insertBlocksAt`).
+ * Returns whether the file went in.
  */
-export function insertAtSelection(markdown: string, moveCaret = true) {
-  return (ctx: Ctx): void => {
+export function insertAtSelection(markdown: string, next: DropTarget, moveCaret = true) {
+  return (ctx: Ctx): boolean => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
-    if (!doc?.lastChild) return;
+    if (!doc?.lastChild) return false;
     const { tr } = view.state;
     const { selection } = tr;
-    const { $to } = selection;
-    const text = selection instanceof TextSelection;
-    if (text && insideText($to) && doc.childCount === 1 && doc.firstChild?.type.name === "paragraph") {
+    const $to = next.inLine ? tr.doc.resolve(next.pos) : selection.$to;
+    const text = next.inLine ? $to.parent.inlineContent : selection instanceof TextSelection;
+    const joins = text && insideText($to) && doc.childCount === 1 && doc.firstChild?.type.name === "paragraph";
+    const placed: DropTarget = { pos: $to.pos, listItems: next.listItems };
+    if (joins) {
       // Open, the paragraph's text goes into the line.
       tr.setSelection(TextSelection.create(tr.doc, $to.pos)).replaceSelection(new Slice(doc.content, 1, 1));
     } else {
-      const edge = !text ? $to.pos : $to.parentOffset === 0 ? $to.before() : $to.after();
-      if (!placeBlocks(tr, { pos: edge }, doc)) return;
+      if (text) placed.pos = $to.parentOffset === 0 ? $to.before() : $to.after();
+      if (!placeBlocks(tr, placed, doc)) return false;
     }
-    if (!tr.docChanged) return;
-    view.dispatch(caretAfterInsert(tr, selection, moveCaret, changeEnd(tr), doc.lastChild.isTextblock));
+    if (!tr.docChanged) return false;
+    const end = changeEnd(tr);
+    // As in `insertBlocksAt`, mapping takes the target to the end of the file.
+    Object.assign(next, { pos: tr.mapping.invert().map(end), listItems: placed.listItems, inLine: joins });
+    view.dispatch(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock));
+    return true;
   };
 }
 

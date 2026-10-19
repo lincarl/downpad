@@ -47,6 +47,16 @@ describe("RawEditor.insertText", () => {
 
     expect(editor.getText()).toBe("First ![a.csv](attachments/a.csv).\n");
   });
+
+  it("keeps the files of one drop at the caret in drop order, for a user who has moved on", () => {
+    const editor = mountWithCaret("First line.", "\nSecond line.\n");
+
+    const next = editor.insertText("[a.csv](attachments/a.csv)", null, false);
+    editor.insertText("[b.csv](attachments/b.csv)", next, false);
+    typeOver(editor, "!");
+
+    expect(editor.getText()).toBe("First line.![a.csv](attachments/a.csv)[b.csv](attachments/b.csv)\nSecond line.\n");
+  });
 });
 
 describe("RawEditor.applyDropEdit", () => {

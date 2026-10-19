@@ -68,8 +68,10 @@ interface Pane {
 interface AimedDrop {
   /** The pane that takes the files. */
   pane: Pane;
-  /** The place in the pane the files were dropped on. Without one, they go
-   *  in at the pane's caret. */
+  /** The place in the pane the files were dropped on, which moves past each
+   *  file that goes in there. Once a file went in at a caret, it is the
+   *  place after that file, in the pane that took it. Without one, files go
+   *  in at the caret of the pane being edited. */
   target: DropTarget | null;
   /** Whether the files were dropped on the pane, which then takes focus. */
   onPane: boolean;
@@ -242,8 +244,9 @@ export class EditorHost implements FindController {
    * marked during the drag, or at the start or end for a drop above or below
    * the text. On a Markdown pane they go in at the text position nearest the
    * drop point. A drop anywhere else, or a call without a drop point, goes in
-   * at the caret of the pane being edited when the file goes in, which is the
-   * split's Markdown pane while it has focus and the document otherwise. The
+   * at the caret of the pane being edited when the first file goes in, which
+   * is the split's Markdown pane while it has focus and the document
+   * otherwise, and each later file goes in after the one before. The
    * drop also notes where focus is, for `insertDropped`. Returns null when no
    * document is shown. Call it while handling the drop event, before the drop
    * point's text can move.
@@ -274,6 +277,8 @@ export class EditorHost implements FindController {
    * Insert markdown for a file of a drop (§5.4) into the document it was
    * dropped on, in the pane `aimDrop` chose, at the drop's target after the
    * drop's earlier files, or at the caret of the pane being edited. A file
+   * after one that went in at the caret goes in right after that one, so
+   * the files keep their order even while the caret stays before them. A file
    * only goes into a document that is in front. One dropped on a document
    * that is behind another tab by now waits until that document is shown
    * again, and the document counts as unsaved until the drop ends. If by
@@ -316,8 +321,8 @@ export class EditorHost implements FindController {
     // The file's text goes into a Markdown pane's line, often the one the user
     // types in, where their next keys would land after the file.
     const stay = !this.movedOn(aimed) && !(pane.raw && this.typingIn(pane));
-    if (pane.wysiwyg) pane.wysiwyg.insertMarkdown(markdown, target, stay);
-    else pane.raw?.insertText(markdown, target, stay);
+    const next = pane.wysiwyg ? pane.wysiwyg.insertMarkdown(markdown, target, stay) : (pane.raw?.insertText(markdown, target, stay) ?? null);
+    this.followFile(aimed, pane, next);
     this.flush();
     if (aimed.onPane && stay) {
       if (pane.wysiwyg) pane.wysiwyg.focusText();
@@ -354,6 +359,23 @@ export class EditorHost implements FindController {
     return true;
   }
 
+  /** Aim the next file of a drop at `next` in `pane`, right after the file
+   *  that just went in there. That is the drop's own target moved past the
+   *  file, or for a file that went in at the caret, a new target after it,
+   *  which replaces the one the pane before held. */
+  private followFile(aimed: AimedDrop, pane: Pane, next: DropTarget | null): void {
+    if (!next || next === aimed.target) return;
+    if (aimed.target) this.releaseTarget(aimed.pane, aimed.target);
+    aimed.pane = pane;
+    aimed.target = next;
+  }
+
+  /** Stop a pane keeping a drop target in step. */
+  private releaseTarget(pane: Pane, target: DropTarget): void {
+    pane.wysiwyg?.releaseDropTarget(target);
+    pane.raw?.releaseDropTarget(target);
+  }
+
   /** Whether the user has moved on since a drop, so a file that goes in now
    *  leaves focus and the caret where they are. That is when focus has left
    *  the element it was on, or they clicked or pressed a key since. */
@@ -369,9 +391,10 @@ export class EditorHost implements FindController {
 
   /**
    * Where the next file of a drop goes in now, after the split catches up.
-   * That is the drop's target in the pane it was dropped on, while that pane
-   * is shown and holds its document's latest edit. Otherwise, as for a drop
-   * away from the text, it is the caret of the pane being edited now. Null
+   * That is the drop's target, in the pane it was dropped on or the one that
+   * took its last file, while that pane is shown and holds its document's
+   * latest edit. Otherwise, as for the first file of a drop away from the
+   * text, it is the caret of the pane being edited now. Null
    * while the drop's document is not in front, or its editor is still being
    * built.
    */
@@ -410,9 +433,7 @@ export class EditorHost implements FindController {
     this.drops.delete(drop);
     const pending = [...this.drops.keys()].some((other) => other.tabId === drop.tabId);
     this.store.setFilesPending(drop.tabId, pending);
-    if (!aimed?.target) return;
-    aimed.pane.wysiwyg?.releaseDropTarget(aimed.target);
-    aimed.pane.raw?.releaseDropTarget(aimed.target);
+    if (aimed?.target) this.releaseTarget(aimed.pane, aimed.target);
   }
 
   /** Hide the drop indicator the document pane drew while files were dragged

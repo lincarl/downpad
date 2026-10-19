@@ -138,13 +138,18 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       caret.focus();
     }
 
-    /** Like the real editor, hold the insert back until typing pauses. */
-    insertMarkdown(markdown: string, target: { pos: number } | null = null, moveCaret = true): void {
+    /** Like the real editor, hold the insert back until typing pauses, and
+     *  give the target for the drop's next file, a new one after a file that
+     *  went in at the caret. */
+    insertMarkdown(markdown: string, target: { pos: number } | null = null, moveCaret = true): { pos: number } {
       fakeEditors.markdown = `${fakeEditors.markdown}\n\n${markdown}`;
       fakeEditors.pending = true;
       fakeEditors.insertedAt = target;
       fakeEditors.insertedInto = this.root;
       fakeEditors.movedCaret = moveCaret;
+      const next = target ?? { pos: 11 };
+      fakeEditors.heldTargets.add(next);
+      return next;
     }
 
     /** Like the real editor, insert the file and give the change to the
@@ -208,12 +213,14 @@ vi.mock("./raw/RawEditor", () => ({
     releaseDropTarget(): void {}
 
     /** Like the real editor, add the text at the target or the caret, here
-     *  the end either way, and report the edit at once. */
-    insertText(text: string, target: { pos: number } | null = null, moveCaret = true): void {
+     *  the end either way, report the edit at once, and give the target for
+     *  the drop's next file. */
+    insertText(text: string, target: { pos: number } | null = null, moveCaret = true): { pos: number } {
       fakeEditors.rawText = `${fakeEditors.rawText ?? ""}${text}`;
       fakeEditors.rawInsertedAt = target;
       fakeEditors.movedCaret = moveCaret;
       this.onChange?.(fakeEditors.rawText);
+      return target ?? { pos: fakeEditors.rawText.length };
     }
 
     /** Like the real editor, make a change to the text and report it. */
@@ -1062,6 +1069,7 @@ describe("EditorHost file drops", () => {
     expect(fakeEditors.droppedAt).toBeNull();
     await host.insertDropped(onToolbar, "[a.csv](attachments/a.csv)");
     expect(fakeEditors.insertedAt).toBeNull();
+    host.releaseDrop(onToolbar);
 
     const onPage = host.aimDrop({ clientX: 300, clientY: 600, target: page })!;
     expect(fakeEditors.droppedAt).toEqual([300, 600]);
@@ -1071,6 +1079,37 @@ describe("EditorHost file drops", () => {
     host.releaseDrop(onPage);
     expect(fakeEditors.heldTargets.size).toBe(0);
     page.remove();
+    toolbar.remove();
+    await host.dispose();
+  });
+
+  it.each([
+    ["document", "document"],
+    ["Markdown view", "markdown"],
+  ] as const)("puts each later file of a drop away from the text in the %s after the one before, for a user who has moved on", async (_view, layout) => {
+    const root = document.createElement("div");
+    const toolbar = document.createElement("div");
+    document.body.append(toolbar, root);
+    const host = new EditorHost(root, makeStore());
+    host.initLayout(layout);
+    await host.reloadActiveDoc();
+    const inserted = () => (layout === "document" ? fakeEditors.insertedAt : fakeEditors.rawInsertedAt);
+
+    const drop = host.aimDrop({ clientX: 300, clientY: 20, target: toolbar })!;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // A key while the first file is read, so the caret stays before the files.
+    toolbar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Shift" }));
+    await host.insertDropped(drop, "[a.csv](attachments/a.csv)");
+    expect(inserted()).toBeNull();
+    expect(fakeEditors.movedCaret).toBe(false);
+    const afterFirst = layout === "document" ? [...fakeEditors.heldTargets][0] : { pos: fakeEditors.rawText!.length };
+    await host.insertDropped(drop, "[b.csv](attachments/b.csv)");
+
+    // At the caret, the second file would go in before the first.
+    expect(inserted()).toEqual(afterFirst);
+    host.releaseDrop(drop);
+    expect(fakeEditors.heldTargets.size).toBe(0);
+    root.remove();
     toolbar.remove();
     await host.dispose();
   });

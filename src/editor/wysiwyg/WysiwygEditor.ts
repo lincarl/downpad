@@ -457,15 +457,28 @@ export class WysiwygEditor {
    *  this editor, its blocks go in at that edge, after any file of the same
    *  drop. Otherwise they go in at the caret, after any selection, which they
    *  never replace. Either way the caret ends up after them, unless
-   *  `moveCaret` is off, for a user who has moved on since the drop. */
-  insertMarkdown(markdown: string, target: DropTarget | null = null, moveCaret = true): void {
-    if (!this.crepe || !markdown) return;
+   *  `moveCaret` is off, for a user who has moved on since the drop. Returns
+   *  the target for the drop's next file, right after this one, which the
+   *  editor keeps in step with edits until `releaseDropTarget`. For a file
+   *  that went in at the caret it is a new target, so the next file follows
+   *  this one even while the caret stays before it. Null if nothing went in
+   *  and the drop has no target here. */
+  insertMarkdown(markdown: string, target: DropTarget | null = null, moveCaret = true): DropTarget | null {
+    if (!this.crepe || !markdown) return null;
+    const aimed = target && this.dropTargets.has(target) ? target : null;
+    const next = aimed ?? { pos: 0 };
+    // Kept in step from the insert on, which moves it to the file's end.
+    this.dropTargets.add(next);
     try {
-      if (target && this.dropTargets.has(target)) this.crepe.editor.action(insertBlocksAt(markdown, target, moveCaret));
-      else this.crepe.editor.action(insertAtSelection(markdown, moveCaret));
+      const atEdge = aimed && !aimed.inLine;
+      if (this.crepe.editor.action(atEdge ? insertBlocksAt(markdown, aimed, moveCaret) : insertAtSelection(markdown, next, moveCaret))) {
+        return next;
+      }
     } catch {
       // Editor not ready / torn down mid-drop; ignore.
     }
+    if (!aimed) this.dropTargets.delete(next);
+    return aimed;
   }
 
   /**
