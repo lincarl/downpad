@@ -129,7 +129,8 @@ export class WysiwygEditor {
   /** Whether a frontmatter table should be shown (the showFrontmatterPanel
    *  setting, captured at mount). */
   private showFmPanel = false;
-  /** The body Crepe last parsed (at mount or `setMarkdown`). `getMarkdown`
+  /** The body Crepe last parsed (at mount or `setMarkdown`), or the source a
+   *  split drop changed it to (`insertMarkdownWithSource`). `getMarkdown`
    *  writes each top-level block the user has not changed since as its exact
    *  source, and Milkdown's form only for the blocks they changed. It takes
    *  the baseline of the body the document came from from the editor state,
@@ -182,6 +183,8 @@ export class WysiwygEditor {
    *  Every transaction maps their positions, so each stays at its edge, after
    *  the files of its drop already inserted. */
   private readonly dropTargets = new Set<DropTarget>();
+  /** Counts split drops, for the id of each one's undo step. */
+  private dropRuns = 0;
 
   async mount(
     root: HTMLElement,
@@ -462,8 +465,9 @@ export class WysiwygEditor {
    *  editor keeps in step with edits until `releaseDropTarget`. For a file
    *  that went in at the caret it is a new target, so the next file follows
    *  this one even while the caret stays before it. Null if nothing went in
-   *  and the drop has no target here. */
-  insertMarkdown(markdown: string, target: DropTarget | null = null, moveCaret = true): DropTarget | null {
+   *  and the drop has no target here. With `undoGroup`, later changes that
+   *  carry it join the insert's undo step. */
+  insertMarkdown(markdown: string, target: DropTarget | null = null, moveCaret = true, undoGroup?: string): DropTarget | null {
     if (!this.crepe || !markdown) return null;
     const aimed = target && this.dropTargets.has(target) ? target : null;
     const next = aimed ?? { pos: 0 };
@@ -471,7 +475,8 @@ export class WysiwygEditor {
     this.dropTargets.add(next);
     try {
       const atEdge = aimed && !aimed.inLine;
-      if (this.crepe.editor.action(atEdge ? insertBlocksAt(markdown, aimed, moveCaret) : insertAtSelection(markdown, next, moveCaret))) {
+      const insert = atEdge ? insertBlocksAt(markdown, aimed, moveCaret, undoGroup) : insertAtSelection(markdown, next, moveCaret, undoGroup);
+      if (this.crepe.editor.action(insert)) {
         return next;
       }
     } catch {
@@ -489,17 +494,27 @@ export class WysiwygEditor {
    * types there. This pane's own report would write the whole text in its own
    * form under their caret. Null when the pane cannot tell where the file
    * goes in the source, or nothing went in.
+   *
+   * The changed source becomes the source of this pane's body, in the
+   * insert's undo step. So the split's mirror of the Markdown pane's change
+   * changes nothing here (`replaceBody`), and one undo takes back the file
+   * and writes the body with the source from before the drop.
    */
   insertMarkdownWithSource(markdown: string, target: DropTarget, source: string): SourceEdit | null {
     const before = this.withView((view) => view.state.doc, null);
-    this.insertMarkdown(markdown, target, false);
+    const undoGroup = `drop-${++this.dropRuns}`;
+    this.insertMarkdown(markdown, target, false, undoGroup);
     const after = this.withView((view) => view.state.doc, null);
     if (!this.crepe || !before || !after || before === after) return null;
     const { body } = splitFrontmatter(source);
     const offset = source.length - body.length;
     try {
       const edit = this.crepe.editor.action((ctx) => sourceEditBetween(ctx, before, after, body));
-      return edit && { ...edit, from: edit.from + offset, to: edit.to + offset };
+      if (!edit) return null;
+      const slot: BaselineSlot = { baseline: null };
+      this.withView((view) => view.dispatch(setBaseline(view.state, view.state.tr, slot).setMeta("composition", undoGroup)), undefined);
+      this.rememberSource(body.slice(0, edit.from) + edit.insert + body.slice(edit.to), slot);
+      return { ...edit, from: edit.from + offset, to: edit.to + offset };
     } catch {
       return null;
     }
@@ -557,7 +572,10 @@ export class WysiwygEditor {
   }
 
   /** Replace the blocks of Crepe's body that differ from `body` and remember
-   *  its source (see `setMarkdown`). */
+   *  its source (see `setMarkdown`). A body this pane's document already
+   *  came from, with nothing to change, as after a split drop
+   *  (`insertMarkdownWithSource`), leaves the editor as it is, so it adds no
+   *  undo step that changes nothing. */
   private replaceBody(body: string): void {
     if (!this.crepe) return;
     try {
@@ -569,13 +587,19 @@ export class WysiwygEditor {
       // stays.
       const typedIn = this.withView((view) => view.hasFocus(), false);
       const slot: BaselineSlot = { baseline: null };
+      let newSource = true;
       this.crepe.editor.action(
-        mirrorMarkdown(body, typedIn, (state, tr) =>
-          setBaseline(state, setFrontmatter(state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator }), slot),
-        ),
+        mirrorMarkdown(body, typedIn, (state, tr) => {
+          setFrontmatter(state, tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator });
+          // While the user types here, a block can hold what its source does
+          // not, such as a space at the end of a line, so it takes this body
+          // as its source either way.
+          newSource = typedIn || tr.steps.length > 0 || (baselineOf(state) ?? this.baseline)?.source !== body;
+          return newSource ? setBaseline(state, tr, slot) : tr;
+        }),
       );
       // The doc updates synchronously with the dispatch.
-      this.rememberSource(body, slot);
+      if (newSource) this.rememberSource(body, slot);
     } catch {
       // Editor torn down mid-sync; ignore.
     }

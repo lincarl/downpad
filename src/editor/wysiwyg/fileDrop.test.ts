@@ -8,7 +8,7 @@ import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import type { Node } from "@milkdown/kit/prose/model";
 import { splitBlock } from "@milkdown/kit/prose/commands";
-import { undo } from "@milkdown/kit/prose/history";
+import { redo, undo } from "@milkdown/kit/prose/history";
 import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -382,6 +382,21 @@ describe("the source change for a file dropped on the split's document pane", ()
     place(opened, block("paragraph", "Item 1"), 140, 170, 60);
 
     expect(dropInSource(opened, source, 300, 169)).toBe(`Intro.\n\n- Item 1\n- ${LINK_A}\n- Item 2\n\nOutro.\n`);
+  });
+
+  it("takes the file and the source it is written in back with one undo, and puts them back with one redo", async () => {
+    const opened = await open(SOURCE);
+    place(opened, block("list_item", "Beta"), 140, 170);
+    place(opened, block("paragraph", "Beta"), 140, 170, 60);
+    const changed = dropInSource(opened, SOURCE, 300, 169);
+    expect(changed).toBe(`Title\n=====\n\n- Alpha\n- Beta\n- ${LINK_A}\n\nFirst line.\n\nSecond line.\n`);
+
+    const view = viewOf(opened);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    // The list as the file has it, not in the document view's form.
+    expect(opened.getMarkdown()).toBe(SOURCE);
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    expect(opened.getMarkdown()).toBe(changed);
   });
 
   // The document view writes an empty item as "<br />", which would show in

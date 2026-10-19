@@ -280,14 +280,21 @@ function caretAfterInsert(tr: Transaction, selection: Selection, moveCaret: bool
   return placeCaret(tr, end, endsInText).scrollIntoView();
 }
 
+/** Give an insert `undoGroup` as its composition id, which the undo history
+ *  uses to keep changes with the same id in one undo step. */
+function grouped(tr: Transaction, undoGroup: string | undefined): Transaction {
+  return undoGroup === undefined ? tr : tr.setMeta("composition", undoGroup);
+}
+
 /**
  * Milkdown action that inserts Markdown's blocks at a drop target
  * (`placeBlocks`) and puts the caret after them, or with `moveCaret` off
  * leaves the selection where it was (`caretAfterInsert`). The target moves
- * past the blocks, so the next file of the drop follows. Returns whether the
- * blocks went in.
+ * past the blocks, so the next file of the drop follows. With `undoGroup`,
+ * later changes that carry it join the insert's undo step (`grouped`).
+ * Returns whether the blocks went in.
  */
-export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret = true) {
+export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret = true, undoGroup?: string) {
   return (ctx: Ctx): boolean => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
@@ -299,7 +306,7 @@ export function insertBlocksAt(markdown: string, target: DropTarget, moveCaret =
     // The editor maps the target through this transaction. From where the
     // inserted blocks began, mapping takes it to their end.
     target.pos = tr.mapping.invert().map(end);
-    view.dispatch(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock));
+    view.dispatch(grouped(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock), undoGroup));
     return true;
   };
 }
@@ -328,9 +335,9 @@ function insideText($pos: ResolvedPos): boolean {
  * user left it. After a file that joined a line, `next.inLine` is set, and
  * this action puts the next file in there, as at a caret in the line.
  * Otherwise the next file goes in at that block edge (`insertBlocksAt`).
- * Returns whether the file went in.
+ * `undoGroup` is as for `insertBlocksAt`. Returns whether the file went in.
  */
-export function insertAtSelection(markdown: string, next: DropTarget, moveCaret = true) {
+export function insertAtSelection(markdown: string, next: DropTarget, moveCaret = true, undoGroup?: string) {
   return (ctx: Ctx): boolean => {
     const view = ctx.get(editorViewCtx);
     const doc = ctx.get(parserCtx)(markdown);
@@ -352,7 +359,7 @@ export function insertAtSelection(markdown: string, next: DropTarget, moveCaret 
     const end = changeEnd(tr);
     // As in `insertBlocksAt`, mapping takes the target to the end of the file.
     Object.assign(next, { pos: tr.mapping.invert().map(end), listItems: placed.listItems, inLine: joins });
-    view.dispatch(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock));
+    view.dispatch(grouped(caretAfterInsert(tr, selection, moveCaret, end, doc.lastChild.isTextblock), undoGroup));
     return true;
   };
 }
