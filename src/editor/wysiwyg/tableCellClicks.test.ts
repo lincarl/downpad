@@ -90,8 +90,8 @@ describe("md-easy's table view", () => {
     // Another change of the highlights in the table leaves the menu open.
     view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[4]!), view.state.doc.resolve(cells[0]!))));
     expect(menu.dataset.show).toBe("true");
-    // A selection of part of a row is not a column, so its Delete would remove
-    // rows. The menu closes.
+    // A row selection is not a column, so the column menu's Delete would
+    // remove the row. The menu closes.
     view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[3]!)));
     expect(menu.dataset.show).toBe("false");
     view.dispatch(view.state.tr.setSelection(CellSelection.colSelection(view.state.doc.resolve(cells[0]!))));
