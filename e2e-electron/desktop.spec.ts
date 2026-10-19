@@ -2581,6 +2581,43 @@ test("a click right of the text in a table cell puts the caret after it, and a r
   ].join("\n"));
 });
 
+test("a click in a table cell in the split's document pane while cells are selected puts the caret there, right after a Markdown edit", async () => {
+  const { file, markdownLine } = await openSplit("table-cells-split.md", "Intro.\n\n| Name | Notes |\n| --- | --- |\n| short text | a note |\n| a much wider value | b2 |\n");
+  const table = page.locator(".editor-pane-wysiwyg table.children");
+  const shortText = table.locator("td p").filter({ hasText: "short text" });
+  // Drag from the text "short text" into the next row's second cell.
+  const start = (await shortText.boundingBox())!;
+  const end = (await table.locator("td").filter({ hasText: "b2" }).boundingBox())!;
+  await page.mouse.move(start.x + 3, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 10, end.y + end.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(table.locator(".selectedCell")).toHaveCount(4);
+  // The edit reaches the document pane when the next press there brings it up
+  // to date. That ended the cell selection and drew the table again, so the
+  // press landed on a cell that was gone and the focus left both panes.
+  await typeAtEnd(markdownLine, " More.");
+  const room = await shortText.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const box = paragraph.getBoundingClientRect();
+    return { x: (range.getBoundingClientRect().right + box.right) / 2, y: box.top + box.height / 2 };
+  });
+  await page.mouse.click(room.x, room.y);
+  await expect(page.locator(".editor-pane-wysiwyg .ProseMirror")).toBeFocused();
+  await page.keyboard.type(" here");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Intro. More.",
+    "",
+    "| Name               | Notes  |",
+    "| ------------------ | ------ |",
+    "| short text here    | a note |",
+    "| a much wider value | b2     |",
+    "",
+  ].join("\n"));
+});
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
