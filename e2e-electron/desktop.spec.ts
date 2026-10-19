@@ -352,6 +352,76 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   await expect(page).toHaveTitle("one.md — md-easy");
 });
 
+test("Ctrl or Cmd+click and double-click on either half of a character follow only that character's link", async () => {
+  const file = path.join(directory, "text-links.md");
+  await writeFile(path.join(directory, "two.md"), "# Two\n");
+  await writeFile(file, [
+    "A [link](https://example.com/link)s and more.",
+    "Plain[next](https://example.com/next) text.",
+    "[home](https://example.com/home)[second](https://example.com/second) links.",
+    "Ends with [them](https://example.com/them)",
+    "A file [two](two.md) here.",
+    "Plain line.",
+  ].join("\n\n") + "\n");
+  // Without the URL after each link, the text after a link starts right at
+  // its last character.
+  await writeFile(path.join(directory, "profile", "settings.toml"), 'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nlinkDisplay = "text-only"\n');
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const editor = page.locator(".milkdown .ProseMirror");
+  await expect(editor.locator("a")).toHaveCount(6);
+  const plain = editor.locator("p").filter({ hasText: "Plain line." });
+  /** The point `fraction` of the way across the character at `index` of the
+   *  text node that reads `text`. A negative `index` counts from the end. */
+  const pointOn = (text: string, index: number, fraction: number) =>
+    editor.evaluate((element, [text, index, fraction]) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, (node) => (node.textContent === text ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
+      const node = walker.nextNode()!;
+      const start = index < 0 ? text.length + index : index;
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, start + 1);
+      const box = range.getBoundingClientRect();
+      return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+    }, [text, index, fraction] as const);
+  /** Ctrl or Cmd+click `fraction` of the way across a character, then click
+   *  plain text, so no link's preview covers the next target. */
+  const ctrlClick = async (text: string, index: number, fraction: number) => {
+    const point = await pointOn(text, index, fraction);
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+    await plain.click({ position: { x: 2, y: 8 } });
+  };
+  // ProseMirror puts a click on a character's right half after the character,
+  // where the plain text or the link after it starts.
+  await ctrlClick("link", -1, 0.75);
+  await ctrlClick("s and more.", 0, 0.25);
+  await ctrlClick("Plain", -1, 0.75);
+  await ctrlClick("home", -1, 0.75);
+  await ctrlClick("second", 0, 0.25);
+  // A link that ends its paragraph opens on its last character's right half,
+  // and not on a click right of it.
+  await ctrlClick("them", -1, 1.5);
+  await ctrlClick("them", -1, 0.75);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([
+    "https://example.com/link",
+    "https://example.com/home",
+    "https://example.com/second",
+    "https://example.com/them",
+  ]);
+  // A double-click on the right half of a link to a Markdown file opens that file.
+  const point = await pointOn("two", -1, 0.75);
+  await page.mouse.dblclick(point.x, point.y);
+  await expect(page).toHaveTitle("two.md — md-easy");
+});
+
 test("End with the caret before images or formulas that start a line moves the caret to the end of the line", async () => {
   const file = path.join(directory, "image-end.md");
   await writeFile(path.join(directory, "image.png"), onePixelPng);
