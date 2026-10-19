@@ -85,6 +85,9 @@ export class EditorHost implements FindController {
    *  while a change of panes ran. The active tab or its text may have changed
    *  after that change began, so it shows the active tab again before it ends. */
   private showQueued = false;
+  /** The layout chosen last while a change of panes ran, or null. The change
+   *  switches to it before it ends (`setLayout`). */
+  private queuedLayout: EditorLayout | null = null;
   /** Tabs whose text an open or a reload replaced while another change of
    *  panes ran. Their panes went stale then (`reloadActiveDoc`). Like a reload,
    *  the next showing of each tries a failed Document view again (`present`). */
@@ -346,16 +349,17 @@ export class EditorHost implements FindController {
    *  the visible edits first so the (possibly newly built) panes start from the
    *  current canonical. Choosing the document or the split while the active
    *  tab's Document view has failed tries that view again, even when the
-   *  window already has that layout. */
+   *  window already has that layout. While another change of panes runs, that
+   *  change switches to the layout chosen last once it is done, and this waits
+   *  for it. */
   async setLayout(layout: EditorLayout): Promise<void> {
-    if (this.disposed || this.changing) return;
-    const retry = layout !== "markdown";
-    if (this.windowLayout === layout && !(retry && this.hasFailed(this.store.get().activeTabId))) return;
-    await this.runPaneChange(async () => {
-      this.flush();
-      this.windowLayout = layout;
-      await this.present({ retry });
-    });
+    if (this.disposed) return;
+    if (this.changing) {
+      this.queuedLayout = layout;
+      return this.changing;
+    }
+    if (!this.changesLayout(layout)) return;
+    await this.runPaneChange(() => this.switchLayout(layout));
   }
 
   /** Try again to build the active tab's Document view after it failed (the
@@ -481,7 +485,8 @@ export class EditorHost implements FindController {
   /** Run a change of panes. Only one runs at a time, so each public entry point
    *  returns or queues while `changing` is set. Before it ends, the change shows
    *  the active tab again for each tab switch, open or reload made while it ran
-   *  (`queueShow`). Its own build or reveal may be for a tab that is no longer
+   *  (`queueShow`), and switches to the layout chosen last meanwhile
+   *  (`setLayout`). Its own build or reveal may be for a tab that is no longer
    *  active, or from text that was replaced since. */
   private async runPaneChange(change: () => Promise<void>): Promise<void> {
     let finish!: () => void;
@@ -492,12 +497,18 @@ export class EditorHost implements FindController {
       await change();
     } finally {
       try {
-        while (this.showQueued && !this.disposed) {
+        while ((this.showQueued || this.queuedLayout) && !this.disposed) {
+          const show = this.showQueued;
+          const layout = this.queuedLayout;
           this.showQueued = false;
-          await this.present();
+          this.queuedLayout = null;
+          // A layout switch shows the active tab too.
+          if (layout && this.changesLayout(layout)) await this.switchLayout(layout);
+          else if (show) await this.present();
         }
       } finally {
         this.showQueued = false;
+        this.queuedLayout = null;
         this.changing = null;
         this.forgetPendingImageAnswers();
         finish();
@@ -510,6 +521,22 @@ export class EditorHost implements FindController {
   private queueShow(): Promise<void> {
     this.showQueued = true;
     return this.changing ?? Promise.resolve();
+  }
+
+  /** Whether choosing `layout` changes the panes: it is another layout, or the
+   *  document or the split for a tab whose Document view failed, which tries
+   *  that view again. */
+  private changesLayout(layout: EditorLayout): boolean {
+    if (this.windowLayout !== layout) return true;
+    return layout !== "markdown" && this.hasFailed(this.store.get().activeTabId);
+  }
+
+  /** Show the active tab in `layout`, from the current text of its visible
+   *  panes (`flush`). */
+  private async switchLayout(layout: EditorLayout): Promise<void> {
+    this.flush();
+    this.windowLayout = layout;
+    await this.present({ retry: layout !== "markdown" });
   }
 
   /** Forget the image answers if a reload during a change of panes asked to. */

@@ -29,7 +29,7 @@ Building the document view can take a moment, for example while local images are
 
 Reloading a file from disk, or opening a file in place of an empty Untitled tab, replaces the tab's text. While the document view is built for the new text, the Markdown view on screen still holds the old text, so md-easy ignores typing there until that view is built again too. That typing would otherwise write the old text back over the new.
 
-md-easy changes the views one step at a time, such as a tab switch, a layout switch or a reload. A tab switch, an open or a reload that comes while another step still builds a view waits for that step, and md-easy then shows the active tab again. So the window never keeps showing another tab's Markdown view, where typing would be ignored, and a view built from the text before a reload is built again from the new text.
+md-easy changes the views one step at a time, such as a tab switch, a layout switch or a reload. A tab switch, an open, a reload or a layout choice that comes while another step still builds a view waits for that step, and md-easy then shows the active tab again, in the layout chosen last. So the window never keeps showing another tab's Markdown view, where typing would be ignored, a view built from the text before a reload is built again from the new text, and the window always ends in the layout the layout control shows. A layout or a tab chosen while a layout switch, Try again or a tab switch still runs is ignored, and the layout control and the tabs stay as they were.
 
 Opening a document never changes its text. The document view reports the exact source it was given until the user edits the body there, and an edit there writes the body in Milkdown's Markdown style.
 

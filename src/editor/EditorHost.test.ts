@@ -767,6 +767,37 @@ describe("EditorHost changes while a document pane builds", () => {
     },
   );
 
+  it.each([
+    [["split"], ["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]],
+    [["markdown"], ["editor-pane editor-pane-raw"]],
+    [["split", "markdown"], ["editor-pane editor-pane-raw"]],
+  ] as const)("shows the text from disk in the last layout of %j chosen while the reload builds", async (layouts, panes) => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    let shownOnceChosen: string[] = [];
+
+    await changeDuringMount(
+      () => reloadFromDisk(store, host, "text from disk"),
+      async () => {
+        await Promise.all(layouts.map((layout) => host.setLayout(layout)));
+        shownOnceChosen = shown(root);
+      },
+    );
+
+    // The choice waits for the reload, then shows its layout.
+    expect(shownOnceChosen).toEqual(panes);
+    expect(shown(root)).toEqual(panes);
+    // One build for the reload, from the text on disk.
+    expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual(["original markdown", "text from disk"]);
+    expect(fakeEditors.rawText).toBe("text from disk");
+    // The Markdown pane on screen takes edits.
+    fakeEditors.rawChange!("text from disk, typed after");
+    expect(store.get().doc.markdown).toBe("text from disk, typed after");
+    await host.dispose();
+  });
+
   it("tries a failing tab's document pane again when it is reloaded while another tab's pane builds", async () => {
     const root = document.createElement("div");
     const store = makeStore();
