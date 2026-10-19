@@ -2703,7 +2703,8 @@ test("a column menu closes when a Markdown edit in the split changes its table, 
   // Z goes into the paragraph, wherever the click put the caret there.
   await expect.poll(async () => {
     const saved = await readFile(file, "utf8");
-    return saved.indexOf("Z") < saved.indexOf("|") && saved.replace("Z", "");
+    const z = saved.indexOf("Z");
+    return z >= 0 && z < saved.indexOf("|") && saved.replace("Z", "");
   }).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1x  | b1    |\n| a2   | b2    |\n");
 });
 
