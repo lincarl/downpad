@@ -614,6 +614,29 @@ describe("a join between a changed block and the file's text", () => {
     expect(editor.getMarkdown()).toBe("* Run:\n\n  ```sh\n  echo hello\n  ```\n");
   });
 
+  // A closing fence may be indented up to three spaces further than the
+  // list item's text, also with a tab, and still close the fence.
+  it.each([
+    ["indented further than the opening fence", "* Run:\n\n  ```sh\n  echo hello\n   ```\n"],
+    ["after a tab", "* Run:\n\n  ```sh\n  echo hello\n\t```\n"],
+    ["after spaces and a tab", "* Run:\n\n  ```sh\n  echo hello\n  \t```\n"],
+    ["in a footnote", "Text[^1].\n\n[^1]: Note.\n\n    ```\n    echo hello\n       ```\n"],
+  ])("keeps a list that ends in a fence closed %s without reading it back", { timeout: 60_000 }, async (_name, markdown) => {
+    const { editor, crepe, view } = await open(markdown);
+    const parse = vi.spyOn(crepe.editor.ctx.get(remarkCtx), "parse");
+    const { blockquote, paragraph } = view.state.schema.nodes;
+    view.dispatch(view.state.tr.insert(blockWith(view, "echo hello").to, blockquote.create(null, paragraph.create(null, view.state.schema.text("Done.")))));
+    expect(editor.getMarkdown()).toBe(`${markdown}\n> Done.\n`);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("writes the whole body below a list whose fence a line indented four spaces further does not close", { timeout: 60_000 }, async () => {
+    const { editor, view } = await open("* Run:\n\n  ```sh\n  echo hello\n      ```\n");
+    const { blockquote, paragraph } = view.state.schema.nodes;
+    view.dispatch(view.state.tr.insert(blockWith(view, "echo hello").to, blockquote.create(null, paragraph.create(null, view.state.schema.text("Done.")))));
+    expect(editor.getMarkdown()).toBe("- Run:\n\n  ````sh\n  echo hello\n      ```\n  ````\n\n> Done.\n");
+  });
+
   it("gets a blank line when reading the join back would take longer than writing the whole body", { timeout: 60_000 }, async () => {
     // The list starts on its own line under the quote, but only reading the
     // whole quote back would tell.

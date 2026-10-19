@@ -789,28 +789,33 @@ export function outlineOf(tree: MdNode, text: string): OutlineNode[] | null {
  * quote, another list or footnote or at the end of the text, and does not
  * before a paragraph, heading, rule, table, code, HTML or a definition. So its
  * value can change when other text follows. A quote ends such a block at its
- * own end, also inside a list. A closing fence counts only when it is
- * indented no further than its opening fence, so a closed block can count as
- * open, which only makes the joins below it be read back.
+ * own end, also inside a list.
  */
 function leftOpen(node: MdNode, text: string): string | undefined {
   const last = lastBlock(node);
   if (!last) return undefined;
-  const start = startOf(last);
-  const block = text.slice(start, last.position?.end.offset);
+  const block = text.slice(startOf(last), last.position?.end.offset);
   if (last.type === "html") return htmlEnding(block) === "open" ? openText(last) : undefined;
-  const fence = last.type === "code" || last.type === "math" ? FENCE.exec(block) : null;
   // Indented code ends before the blank lines below it.
-  if (!fence) return undefined;
-  const close = /^( *)(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(block.slice(block.lastIndexOf("\n") + 1));
-  const column = start - (text.lastIndexOf("\n", start - 1) + 1);
-  const closed =
-    block.includes("\n") &&
-    close &&
-    close[2][0] === fence[1][0] &&
-    close[2].length >= fence[1].length &&
-    close[1].length <= column;
-  return closed ? undefined : openText(last);
+  if ((last.type !== "code" && last.type !== "math") || !FENCE.test(block)) return undefined;
+  return fenceClosed(last, block) ? undefined : openText(last);
+}
+
+/**
+ * Whether `node`, a fenced code or math block whose text is `block`, ends
+ * with a closing fence, as the parser read it. The parser leaves the fence
+ * lines out of the value. So a closed block, which ends on its closing fence,
+ * has two lines more than its value, and an open block has one more, or ends
+ * on an empty line. That tells every closing fence CommonMark accepts, such
+ * as one indented further than the opening fence or after a tab. An empty
+ * value can be no lines or one empty line, so a closed block that holds only
+ * an empty line counts as open, which only makes the joins below it be read
+ * back.
+ */
+function fenceClosed(node: MdNode, block: string): boolean {
+  const lines = block.split("\n");
+  if (node.value === undefined || !/\S/.test(lines[lines.length - 1])) return false;
+  return lines.length === (node.value === "" ? 0 : node.value.split("\n").length) + 2;
 }
 
 /** The last block of `node` below the lists, list items and footnotes it ends
