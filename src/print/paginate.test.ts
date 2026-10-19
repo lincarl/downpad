@@ -937,6 +937,52 @@ describe("splitIntoPages, splitting a quote", () => {
   });
 });
 
+describe("splitIntoPages, splitting a footnote", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  /** A footnote definition as Crepe renders it: `dl > (dt, dd)`, the note's blocks in the `dd`. */
+  function footnote(label: string, ...blocks: HTMLElement[]): HTMLElement {
+    const note = stack("dl", sized("dt", 24, label), stack("dd", ...blocks));
+    note.dataset.label = label;
+    note.dataset.type = "footnote_definition";
+    return note;
+  }
+
+  it.each([
+    ["a long paragraph", () => [longParagraph(400, "w")]],
+    ["many paragraphs", () => paragraphs(40, "p")],
+  ])(
+    "splits a footnote of %s taller than a page between its blocks, its label with the first",
+    (_kind, blocks) => {
+      // The note was neither a quote nor a list, so nothing split it, and it was
+      // shrunk onto one page.
+      const note = footnote("long", ...blocks());
+      const text = note.textContent;
+      const flow = flowWith(note);
+
+      splitIntoPages(flow, 500);
+
+      const pieces = Array.from(flow.children) as HTMLElement[];
+      expect(pieces.length).toBeGreaterThan(1);
+      expect(flow.querySelector(".print-fit")).toBeNull();
+      for (const piece of pieces) {
+        expect(piece.tagName).toBe("DL");
+        expect(piece.dataset.type).toBe("footnote_definition");
+        expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+      }
+      // Every character prints once, in order, and the label once, with the start
+      // of the note rather than alone at the foot of the page before it.
+      expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+      expect(flow.querySelectorAll("dt")).toHaveLength(1);
+      expect(Array.from(pieces[0].children, (child) => child.tagName)).toEqual(["DT", "DD"]);
+      for (const piece of pieces.slice(1)) {
+        expect(Array.from(piece.children, (child) => child.tagName)).toEqual(["DD"]);
+      }
+    },
+  );
+});
+
 /**
  * A list item as Crepe renders it, in the fake layout: the label beside the
  * content, `div.milkdown-list-item-block > li > (div.label-wrapper,

@@ -8,12 +8,13 @@
 // scrolling page.
 //
 // Blocks that are themselves taller than a page (a long table, a long list, a
-// long code block, a paragraph or heading, a quote, a Markdown source line that
-// wraps past a page) are split one level down first, so the packer always has
-// pieces it can place. Text splits between the lines it wraps onto, never inside
-// a line, and a quote or a list item between the blocks it holds, each split the
-// same way. What cannot be split, such as an image taller than a page, is shrunk
-// to fit the page rather than cut off at its edge.
+// long code block, a paragraph or heading, a quote, a footnote, a Markdown
+// source line that wraps past a page) are split one level down first, so the
+// packer always has pieces it can place. Text splits between the lines it wraps
+// onto, never inside a line, and a quote, a footnote or a list item between the
+// blocks it holds, each split the same way. What cannot be split, such as an
+// image taller than a page, is shrunk to fit the page rather than cut off at
+// its edge.
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -247,8 +248,14 @@ const TEXT_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
  * before looking inside a block, so a quote around a long list or table keeps
  * the rest of its content: splitting only the list inside dropped the quote's
  * other blocks from every piece.
+ *
+ * Crepe renders a footnote definition as `dl > (dt, dd)`, the label in the
+ * `dt` and the note's blocks in the `dd`, so a note splits between its blocks,
+ * with its label on the first piece. Before both were listed here, a footnote
+ * taller than a page was shrunk onto one page, to 4 percent of its size at 200%
+ * scale.
  */
-const CONTAINER_TAGS = new Set(["BLOCKQUOTE"]);
+const CONTAINER_TAGS = new Set(["BLOCKQUOTE", "DL", "DD"]);
 
 /** `.cm-scroller` is Crepe's code block: CodeMirror, not a `<pre>` (splitCodeMirror). */
 const SPLITTABLE_SELECTOR = "table, ul, ol, pre, .cm-scroller";
@@ -388,7 +395,8 @@ function applyFrozenColumns(table: HTMLTableElement, frozen: FrozenColumns | nul
 }
 
 /**
- * Split a block that holds other blocks, such as a quote, between its children.
+ * Split a block that holds other blocks, such as a quote or a footnote, between
+ * its children.
  *
  * A quote printed as one block, and the page body clipped one taller than a
  * page: a quote of 120 paragraphs stopped at paragraph 29. Each piece is a copy
@@ -396,6 +404,11 @@ function applyFrozenColumns(table: HTMLTableElement, frozen: FrozenColumns | nul
  * page by itself is split first by the same rules, so a long paragraph or a
  * nested quote inside the quote continues on the next page too, and a child that
  * cannot be split, such as a tall image, is shrunk to fit.
+ *
+ * A term (`dt`), such as a footnote's label, stays on the page with the start of
+ * the description after it: the description is split to leave room for it. Its
+ * first piece filled a page, so the label printed alone at the foot of the page
+ * before.
  */
 function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElement[] {
   if (!holdsBlocks(container)) return [];
@@ -409,7 +422,12 @@ function splitContainer(container: HTMLElement, maxHeightPx: number): HTMLElemen
     (Number.parseFloat(style.borderBottomWidth) || 0);
   const room = Math.max(1, maxHeightPx - chrome);
   for (const child of Array.from(container.children) as HTMLElement[]) {
-    if (child.offsetHeight + marginTopOf(child) > room) fitBlock(child, room);
+    if (child.offsetHeight + marginTopOf(child) <= room) continue;
+    const term = child.previousElementSibling as HTMLElement | null;
+    // From the term's top margin to the description's.
+    const kept =
+      term?.tagName === "DT" ? child.offsetTop - term.offsetTop + marginTopOf(term) - marginTopOf(child) : 0;
+    fitBlock(child, Math.max(1, room - kept));
   }
   const children = Array.from(container.children) as HTMLElement[];
   if (children.length < 2) return [];
