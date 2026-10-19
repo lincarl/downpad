@@ -32,6 +32,8 @@ const fakeEditors = vi.hoisted(() => ({
   /** Whether the document pane holds typing it has not reported yet. */
   pending: false,
   reportCalls: 0,
+  /** Whether each report kept a typed closing mark waiting, in order. */
+  keptTypedMarks: [] as boolean[],
   /** The text the split last mirrored into the document pane. */
   mirrored: null as string | null,
   /** The document pane's change callback, to simulate its delayed report. */
@@ -80,8 +82,9 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
     }
 
     /** Like the real editor, report held-back typing through `onChange`. */
-    reportPendingChange(): void {
+    reportPendingChange({ keepTypedMark = false }: { keepTypedMark?: boolean } = {}): void {
       fakeEditors.reportCalls += 1;
+      fakeEditors.keptTypedMarks.push(keepTypedMark);
       if (!fakeEditors.pending) return;
       fakeEditors.pending = false;
       this.onChange?.(fakeEditors.markdown);
@@ -207,6 +210,7 @@ beforeEach(() => {
   fakeEditors.markdown = "document pane's form";
   fakeEditors.pending = false;
   fakeEditors.reportCalls = 0;
+  fakeEditors.keptTypedMarks = [];
   fakeEditors.mirrored = null;
   fakeEditors.wysiwygChange = null;
   fakeEditors.rawChange = null;
@@ -1111,6 +1115,19 @@ describe("EditorHost split catch-up", () => {
 
     expect(store.get().doc.markdown).toBe("newer Markdown text\n\n![](image.png)");
     expect(fakeEditors.rawText).toBe("newer Markdown text\n\n![](image.png)");
+    await host.dispose();
+  });
+
+  it("has the document pane decide a typed closing mark unless it takes the click itself or autosave asks", async () => {
+    const { root, host } = await openSplit();
+
+    root.querySelector(".editor-pane-raw")!.dispatchEvent(new Event("pointerdown"));
+    root.querySelector(".editor-pane-wysiwyg")!.dispatchEvent(new Event("pointerdown"));
+    host.flush();
+    host.flush({ keepTypedMark: true });
+
+    // A click there may land inside the text the mark closes.
+    expect(fakeEditors.keptTypedMarks).toEqual([false, true, false, true]);
     await host.dispose();
   });
 

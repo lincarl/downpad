@@ -25,8 +25,11 @@ const MD_FILTERS = [
  */
 export interface EditorPresenter {
   /** Bring the active doc up to date with its editors, keeping them in place.
-   *  Use before reading the active doc, for example to save it, or leaving it. */
-  flush(): void;
+   *  Use before reading the active doc, for example to save it, or leaving it.
+   *  The document editor decides a typed closing `$` or `~` that waits for the
+   *  next character first, unless `keepTypedMark` asks it to keep the mark
+   *  waiting. Either way the active doc gets the mark as Save writes it. */
+  flush(options?: { keepTypedMark?: boolean }): void;
   /** Show the active tab's document, revealing its cached editor when possible
    *  (preserves undo). Use after a pure tab switch / focusing an open file. */
   showActiveDoc(): Promise<void>;
@@ -139,9 +142,14 @@ export class FileService {
     }
   }
 
-  /** Save to the current path, or fall back to Save As for an untitled buffer. */
-  save(): Promise<boolean> {
-    return this.queueSave(false);
+  /** Save to the current path, or fall back to Save As for an untitled buffer.
+   *  `keepTypedMark` is for a save nobody asked for, such as autosave. It
+   *  writes a typed closing `$` or `~` that still waits for the next character
+   *  as Save would, but leaves it waiting in the editor, so the save never
+   *  changes the document while the user types, and a digit typed next still
+   *  keeps it text. */
+  save(options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
+    return this.queueSave(false, options);
   }
 
   saveAs(): Promise<boolean> {
@@ -149,10 +157,10 @@ export class FileService {
   }
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
-  private queueSave(saveAs: boolean): Promise<boolean> {
+  private queueSave(saveAs: boolean, options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
-    this.present.flush();
+    this.present.flush(options);
     const { doc, activeTabId } = this.store.get();
     if (!activeTabId) return Promise.resolve(false);
     const request = { tabId: activeTabId, snapshot: doc, expectedPath: doc.filePath, saveAs };

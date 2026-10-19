@@ -60,10 +60,14 @@ export class SnapshotScheduler {
     }
   }
 
+  /** Save the active document if autosave is on. A typed closing `$` or `~`
+   *  that still waits for the next character is saved as Save would write it,
+   *  but keeps waiting in the editor, so a pause in typing never decides it
+   *  there. */
   private async tickAutosave(): Promise<void> {
     const { doc, settings } = this.store.get();
     if (settings.autosaveEnabled && doc.filePath && doc.isDirty) {
-      await this.files.save().catch(() => {});
+      await this.files.save({ keepTypedMark: true }).catch(() => {});
     }
   }
 }

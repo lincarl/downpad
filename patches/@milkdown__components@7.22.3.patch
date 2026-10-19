@@ -1,0 +1,27 @@
+diff --git a/lib/list-item-block/index.js b/lib/list-item-block/index.js
+index d1926c0f730d5437f2110e3b51e87dd50d0ab6d7..6dd98f86a75fe4efed85f4c057a633d8580f5e9a 100644
+--- a/lib/list-item-block/index.js
++++ b/lib/list-item-block/index.js
+@@ -183,13 +183,22 @@ const ListItem = defineComponent({
+ });
+ 
+ const pendingRestores = /* @__PURE__ */ new WeakMap();
++// md-easy patch: on a busy machine the frame can come after keys typed since
++// an item was drawn, such as right after Tab or undo in a list. Putting back
++// the selection seen then moved the caret back into the text typed since. A
++// key, click or edit before the frame leaves the selection to the user.
++const userInput = ["keydown", "pointerdown", "beforeinput", "paste", "cut", "drop"];
+ function scheduleRestore(view, item, capture) {
+   let captures = pendingRestores.get(view);
+   if (!captures) {
+     const frameCaptures = /* @__PURE__ */ new Map();
+     captures = frameCaptures;
+     pendingRestores.set(view, frameCaptures);
++    const root = view.dom.ownerDocument;
++    const forget = () => frameCaptures.clear();
++    for (const type of userInput) root.addEventListener(type, forget, true);
+     requestAnimationFrame(() => {
++      for (const type of userInput) root.removeEventListener(type, forget, true);
+       pendingRestores.delete(view);
+       if (view.isDestroyed) return;
+       const { state } = view;

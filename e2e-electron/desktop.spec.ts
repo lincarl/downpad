@@ -9,6 +9,9 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 const heading = ".milkdown .ProseMirror h1";
 /** A synthetic one-pixel PNG, to exercise the local image protocol. */
 const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
+/** MD_EASY_CPU_THROTTLING_RATE, such as 4, runs every test with the
+ *  renderer's CPU that many times slower, as on a slower machine. */
+const cpuThrottlingRate = Number(process.env.MD_EASY_CPU_THROTTLING_RATE) || undefined;
 let directory: string;
 let app: ElectronApplication | undefined;
 let page: Page;
@@ -55,6 +58,13 @@ async function launch(file?: string, developmentOverride?: string): Promise<void
   });
   page = await app.firstWindow();
   await expect(page.getByTestId("app-shell")).toBeVisible();
+  if (cpuThrottlingRate) await throttleCpu(cpuThrottlingRate);
+}
+
+/** Make the renderer's CPU `rate` times slower, as on a slower machine. */
+async function throttleCpu(rate: number): Promise<void> {
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setCPUThrottlingRate", { rate });
 }
 
 async function chooseOpen(file: string): Promise<void> {
@@ -718,6 +728,213 @@ test("native Open, edit, Save, and external file reload use actual files", async
   await expect(page.locator(heading)).toHaveText("Updated outside Electron");
 });
 
+test("typed dollar amounts and tildes stay text while a typed formula becomes math", async () => {
+  const file = path.join(directory, "prices.md");
+  await writeFile(file, "Start.\n");
+  await launch(file);
+  await typeAtEnd(
+    page.locator(".milkdown .ProseMirror p").first(),
+    " Tickets cost $5 for kids and $10, or $5-$10. Expect ~5 to ~10 or ~5-~10 minutes.",
+  );
+  await page.keyboard.press("Enter");
+  // A closing `$` waits for the next character, and Enter decides it too.
+  await page.keyboard.type("Inline $E=mc^2$ math and $x$");
+  await page.keyboard.press("Enter");
+  // A tilde right after a letter outside the Basic Multilingual Plane opens
+  // nothing either.
+  await page.keyboard.type("End 𝑥~a~ b.");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe(
+      "Start. Tickets cost \\$5 for kids and \\$10, or \\$5-\\$10. Expect \\~5 to \\~10 or \\~5-\\~10 minutes.\n\n" +
+        "Inline $E=mc^2$ math and $x$\n\nEnd 𝑥\\~a\\~ b.\n",
+    );
+});
+
+test("a character composed right after a typed closing mark is typed once and decides the mark", async () => {
+  const file = path.join(directory, "composed.md");
+  await writeFile(file, "Start.\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  /** Compose through Chromium's input method path, showing each of `marked`
+   *  in turn and then committing `committed`. */
+  const compose = async (marked: string[], committed: string) => {
+    for (const text of marked) await session.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+    await session.send("Input.insertText", { text: committed });
+  };
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Then $x$");
+  await compose(["k", "か"], "か");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await page.keyboard.type(" and ~~old~~");
+  // Striking during the composition restarted it, which typed "n" as well.
+  await compose(["n", "な"], "な");
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+  await page.keyboard.type(" end.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start. Then $x$か and ~~old~~な end.\n");
+});
+
+test("a typed closing mark is decided in a heading, by Tab in a list and by a paste", async () => {
+  const file = path.join(directory, "decided.md");
+  await writeFile(file, "# Head\n\n- item\n- next\n\nOne.\n");
+  await launch(file);
+  // Milkdown gives a heading a new id after each key, which is no edit.
+  await typeAtEnd(page.locator(heading), " $x$ and ~~old~~ end");
+  // Tab redraws the list item, which puts back the cursor it saw then once
+  // the next frame comes, unless a key came first.
+  await typeAtEnd(page.locator(".milkdown .ProseMirror li p").nth(1), " $y$");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type(" more");
+  await app!.evaluate(({ clipboard }) => clipboard.writeText(", small"));
+  await typeAtEnd(page.locator(".milkdown .ProseMirror > p").last(), " Let $z$");
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(3);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("# Head $x$ and ~~old~~ end\n\n- item\n  - next $y$ more\n\nOne. Let $z$, small\n");
+});
+
+test("undo and redo keep pasted dollars as text and let a mark that a paste or Tab decided wait again", async () => {
+  const file = path.join(directory, "undo-decided.md");
+  await writeFile(file, "Start.\n\nOne.\n\n- one\n- two\n");
+  await launch(file);
+  const paragraphs = page.locator(".milkdown .ProseMirror > p");
+  // Redo puts back pasted text, which keeps its dollars as text.
+  await app!.evaluate(({ clipboard, ClipboardItem }) =>
+    clipboard.write([new ClipboardItem({ "text/html": "<span>Let $x$</span>", "text/plain": "Let $x$" })]),
+  );
+  await typeAtEnd(paragraphs.first(), " ");
+  await page.keyboard.press("ControlOrMeta+v");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.press("ControlOrMeta+y");
+  await page.keyboard.type(" be the input");
+  // A pause makes the paste and Tab their own undo steps. Undoing one takes
+  // back the formula or strikethrough it made, and the mark waits again.
+  await app!.evaluate(({ clipboard }) => clipboard.writeText(", small"));
+  await typeAtEnd(paragraphs.nth(1), " Let $y$");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(0);
+  await page.keyboard.type(" here");
+  await typeAtEnd(page.locator(".milkdown .ProseMirror li p").nth(1), " ~old~");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.type(" new");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("Start. Let \\$x\\$ be the input\n\nOne. Let $y$ here\n\n- one\n- two ~~old~~ new\n");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(1);
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("old");
+});
+
+/** Run `act` while the page's animation frames wait, then run them, as on a
+ *  busy machine whose next frame comes only after the keys typed meanwhile. */
+async function lateFrame(act: () => Promise<void>): Promise<void> {
+  await page.evaluate(() => {
+    const request = window.requestAnimationFrame.bind(window);
+    const late: FrameRequestCallback[] = [];
+    let holding = true;
+    window.requestAnimationFrame = (callback) => request((time) => (holding ? late.push(callback) : callback(time)));
+    Object.assign(globalThis, {
+      releaseFrames: () => {
+        holding = false;
+        window.requestAnimationFrame = request;
+        for (const callback of late) request(callback);
+      },
+    });
+  });
+  await act();
+  await page.evaluate(() => {
+    const release: () => void = Reflect.get(globalThis, "releaseFrames");
+    release();
+  });
+  await twoFrames();
+}
+
+test("keys typed fast right after Tab, Shift+Tab, undo, redo or Enter in a list stay where they were typed", async () => {
+  const file = path.join(directory, "late-frame.md");
+  await writeFile(file, "- one\n- two\n  - three\n- four\n- five\n");
+  await launch(file);
+  await throttleCpu(cpuThrottlingRate ?? 4);
+  const items = page.locator(".milkdown .ProseMirror li p");
+  // Each of these redraws a list item, which puts back the cursor it saw
+  // then once the next frame comes. On a busy machine the keys typed before
+  // that frame came first, and the text typed after it landed among them.
+  /** Press `key`, type `fast` before the next frame and `then` after it. */
+  const typeAround = async (key: string, fast: string, then: string) => {
+    await lateFrame(async () => {
+      await page.keyboard.press(key);
+      await page.keyboard.type(fast);
+    });
+    await page.keyboard.type(then);
+  };
+  await typeAtEnd(items.nth(1), " $a$");
+  await typeAround("Tab", " b", "c");
+  await typeAtEnd(items.nth(2), " ~d~");
+  await typeAround("Shift+Tab", " e", "f");
+  // A pause makes Tab its own undo step, which undo and redo redraw.
+  await typeAtEnd(items.nth(3), " ~g~");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Tab");
+  await typeAround("ControlOrMeta+z", " hi", "j");
+  await typeAtEnd(items.nth(4), " $k$");
+  await page.waitForTimeout(700);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("ControlOrMeta+z");
+  await typeAround("ControlOrMeta+y", " l", "m");
+  await typeAround("Enter", "new", " item");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect
+    .poll(() => readFile(file, "utf8"))
+    .toBe("- one\n  - two $a$ bc\n  - three ~~d~~ ef\n- four ~~g~~ hij\n  - five $k$ lm\n  - new item\n");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText(["d", "g"]);
+});
+
+test("autosave in a pause writes a typed closing mark as Save would and leaves it waiting", async () => {
+  const file = path.join(directory, "autosaved.md");
+  await writeFile(file, "Start.\n\nNext.\n");
+  await writeFile(
+    path.join(directory, "profile", "settings.toml"),
+    "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nautosaveEnabled = true\nautosaveIntervalSeconds = 5\n",
+  );
+  await launch(file);
+  // Record the unsaved-changes prompts and answer Cancel.
+  await app!.evaluate(({ dialog }) => {
+    const prompts: string[] = [];
+    Object.assign(globalThis, { prompts });
+    dialog.showMessageBox = async (...args: unknown[]) => {
+      prompts.push(String((args.at(-1) as { message?: unknown }).message));
+      return { response: 0, checkboxChecked: false };
+    };
+  });
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Tickets cost $5-$");
+  // Autosave writes what Save would, and the `$` keeps waiting, so the digit
+  // typed next still keeps it text.
+  await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost $5-$\n\nNext.\n");
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(0);
+  await page.keyboard.type("10 each.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext.\n");
+  await typeAtEnd(page.locator(".milkdown .ProseMirror p").nth(1), " Let $x$");
+  await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext. Let $x$\n");
+  // Closing the tab makes the formula, which autosave has already saved.
+  await expect(page).toHaveTitle("autosaved.md — md-easy");
+  await page.getByRole("tab", { name: /autosaved\.md/ }).click({ button: "middle" });
+  await expect(page.getByRole("tab", { name: /autosaved\.md/ })).toHaveCount(0);
+  expect(await app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([]);
+  expect(await readFile(file, "utf8")).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext. Let $x$\n");
+});
+
 test("Save right after typing writes the last edit in the document and split views", async () => {
   const file = path.join(directory, "typed.md");
   await writeFile(file, "# Typed\n\nFirst line.\n");
@@ -1292,6 +1509,25 @@ test("a file dropped while typing in the split's Markdown pane lands at the care
   await expect.poll(() => readFile(file, "utf8")).toContain(link);
   const saved = await readFile(file, "utf8");
   expect(saved.replace(link, "")).toBe(text.replace("First line.", "First line. Typed during the drop."));
+});
+
+test("a formula typed last in the document pane is kept by the split's Markdown pane and a view switch", async () => {
+  const { file, documentLine, markdownLine } = await openSplit("formula-last.md");
+  await typeAtEnd(documentLine, " a $x$");
+  // Once typing pauses the Markdown pane shows the formula as Save would
+  // write it, while the closing `$` still waits for the next character.
+  await expect(markdownLine).toHaveText("First line. a $x$");
+  await expect(page.locator('.editor-pane-wysiwyg [data-type="math_inline"]')).toHaveCount(0);
+  await typeAtEnd(markdownLine, " raw");
+  await expect(page.locator('.editor-pane-wysiwyg [data-type="math_inline"]')).toHaveCount(1);
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await typeAtEnd(documentLine, " b $y$");
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw .cm-line").first()).toHaveText("First line. a $x$ raw b $y$");
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. a $x$ raw b $y$\n");
 });
 
 test("Print keeps a saved Markdown edit as typed", async () => {

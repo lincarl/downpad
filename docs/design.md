@@ -11,7 +11,7 @@ md-easy is an Electron desktop application:
 - CodeMirror provides the Markdown source editor.
 - The TypeScript main process handles native file access, settings, recovery data, printing, and desktop integration.
 - Local application data is stored in human-readable or standard formats such as Markdown, TOML, and JSON.
-- pnpm applies the fixes in `patches/` to dependencies on install. Each patch explains itself in a comment. The ProseMirror patch keeps a caret key such as End, pressed right after a click into the document view, from being undone on a busy machine.
+- pnpm applies the fixes in `patches/` to dependencies on install. Each patch explains itself in a comment. The ProseMirror patch keeps a caret key such as End, pressed right after a click into the document view, from being undone on a busy machine. The Milkdown components patch keeps text typed right after Tab, Shift+Tab, Enter, undo or redo in a list where it was typed. Each of these redraws a list item, which puts back the caret it saw then once the next frame comes. On a busy machine that frame can come after keys typed meanwhile, and the caret jumped back into them, so a key, click or edit before the frame now cancels it.
 
 Electron packages Chromium and Node.js with the app. This gives development and installed builds the same browser runtime at the cost of a larger installer.
 
