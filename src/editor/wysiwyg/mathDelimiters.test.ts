@@ -627,16 +627,23 @@ describe("math and strikethrough delimiters", () => {
   });
 
   it("types the text after a closing tilde outside the strikethrough after Left and End", { timeout: 60_000 }, async () => {
-    const { crepe, root, view } = await openCrepe("One.\n");
+    const { crepe, root, view } = await openCrepe("# Head\n\nOne.\n");
+    /** Type `text`, then press Left and End, and type `after`. */
+    const leftAndEnd = (text: string, after: string) => {
+      type(view, text);
+      // The mark waits while the cursor is inside the span, and End decides it.
+      const end = view.state.selection.from;
+      moveTo(view, end - 1);
+      moveTo(view, end);
+      type(view, after);
+    };
     moveToEnd(view, "One.");
-    type(view, " see ~a~");
-    // The mark waits while the cursor is inside the span, and End decides it.
-    const end = view.state.selection.from;
-    moveTo(view, end - 1);
-    moveTo(view, end);
-    type(view, ", b");
-    expect(strikes(root)).toEqual(["a"]);
-    expect(crepe.getMarkdown()).toBe("One. see ~~a~~, b\n");
+    leftAndEnd(" see ~a~", ", b");
+    // The heading's new id is a second change, which cleared the marks.
+    moveToEnd(view, "Head");
+    leftAndEnd(" ~~old~~", " new");
+    expect(strikes(root)).toEqual(["old", "a"]);
+    expect(crepe.getMarkdown()).toBe("# Head ~~old~~ new\n\nOne. see ~~a~~, b\n");
   });
 
   it("keeps bold set inside the text a mark closes when leaving the editor decides the mark", { timeout: 60_000 }, async () => {

@@ -623,15 +623,6 @@ function closing(state: EditorState, pos: number, next: string): Transaction | n
   return (marks ? tr.setStoredMarks(marks) : tr).setMeta(waitingKey, null);
 }
 
-/** Dispatch `tr`, which may close a waiting mark, and set the marks it sets
- *  for the next character again if a change made in reply, such as a
- *  heading's new id, cleared them. */
-function dispatchClosing(view: EditorView, tr: Transaction): void {
-  const marks = tr.storedMarks;
-  view.dispatch(tr);
-  if (marks && view.state.storedMarks !== marks) view.dispatch(view.state.tr.setStoredMarks(marks));
-}
-
 /** Whether the selection keeps the waiting mark at `pos` waiting. It does
  *  while it covers the mark, as after Shift+Left, so typing replaces the mark,
  *  and while it lies between the marks of the span the mark closes, as after a
@@ -666,7 +657,7 @@ function closeWaiting(view: EditorView, pos: number, next: string): boolean {
   if (codeTakes(view.state, pos, next)) return false;
   const tr = closing(view.state, pos, next);
   if (!tr) return false;
-  dispatchClosing(view, tr);
+  view.dispatch(tr);
   view.dispatch(closeHistory(view.state.tr));
   return true;
 }
@@ -707,6 +698,11 @@ interface Guard {
   /** One entry for each step that redo can put back, the next one last: the
    *  mark that waited when undo took the step back, or null. */
   undone: readonly (KeptMark | null)[];
+  /** The marks that deciding the last waiting mark set for the text typed
+   *  next (`nextMarks`), or null. They are kept until someone edits, moves
+   *  the cursor or sets marks, and set again once after a change nobody made,
+   *  such as a heading's new id, clears them. */
+  marks: readonly Mark[] | null;
 }
 
 /** The guard's state. A transaction sets the waiting mark with this key's
@@ -791,7 +787,7 @@ function decision(view: EditorView): Transaction | null {
  *  Markdown pane. A composition decides the mark once it ends. */
 export function decideTypedMark(view: EditorView): void {
   const tr = decision(view);
-  if (tr) dispatchClosing(view, tr);
+  if (tr) view.dispatch(tr);
 }
 
 /** The document as `decideTypedMark` would leave it, without changing the
@@ -819,7 +815,7 @@ function afterComposition(view: EditorView): void {
     const kept = (selection.empty && selection.from === waiting.pos + 1) || keepsWaiting(view.state, waiting.pos);
     const composed = selection.empty ? view.state.doc.textBetween(waiting.pos + 1, Math.max(selection.from, waiting.pos + 1)) : "";
     if ((!kept || !view.hasFocus()) && !codeTakes(view.state, waiting.pos, composed)) {
-      dispatchClosing(view, decide(view.state, waiting.pos));
+      view.dispatch(decide(view.state, waiting.pos));
     }
   }
   const { from, empty } = view.state.selection;
@@ -851,7 +847,7 @@ export const closingDelimiterGuard = $prose(() => {
   return new Plugin<Guard>({
     key: waitingKey,
     state: {
-      init: () => ({ waiting: null, done: [], undone: [] }),
+      init: () => ({ waiting: null, done: [], undone: [], marks: null }),
       /** Follow the waiting mark through changes, and note when one means it
        *  must be decided. Keep the mark that waits when a step starts, and
        *  when undo takes a step back, so that undo and redo make it wait
@@ -878,7 +874,11 @@ export const closingDelimiterGuard = $prose(() => {
           waiting = follow(tr, waiting, before, after);
           if (undoDepth(after) !== undoDepth(before)) done = [...done, tr.getMeta(waitingKey) === null ? null : kept];
         }
-        return { waiting, done: align(done, undoDepth(after)), undone: align(undone, redoDepth(after)) };
+        // A change that decides the mark sets the marks for the text typed
+        // next, and one that nobody made keeps them to set again.
+        const keepsMarks = !tr.storedMarksSet && after.selection.eq(before.selection) && !(tr.docChanged && isEdit(tr));
+        const marks = tr.getMeta(waitingKey) === null ? (tr.storedMarksSet ? tr.storedMarks : null) : keepsMarks ? guard.marks : null;
+        return { waiting, done: align(done, undoDepth(after)), undone: align(undone, redoDepth(after)), marks };
       },
     },
     props: {
@@ -935,10 +935,14 @@ export const closingDelimiterGuard = $prose(() => {
       editorView = view;
       return {};
     },
-    /** Decide a waiting mark once a change says so, in the same update, so
-     *  views drawn for that change already see the result. Crepe's list
-     *  items restore the cursor to where it was when they were drawn. */
+    /** Set the marks for the text typed next again once a change nobody
+     *  made cleared them (`Guard.marks`). Decide a waiting mark once a change
+     *  says so, in the same update, so views drawn for that change already
+     *  see the result. Crepe's list items restore the cursor to where it was
+     *  when they were drawn. */
     appendTransaction(_transactions, _before, state) {
+      const marks = waitingKey.getState(state)?.marks;
+      if (marks && state.storedMarks !== marks) return state.tr.setStoredMarks(marks);
       const waiting = waitingIn(state);
       if (!waiting?.decide || editorView?.composing || keepsWaiting(state, waiting.pos)) return null;
       return decide(state, waiting.pos);
