@@ -10,12 +10,23 @@
 // ProseMirror, which places the caret, and to prosemirror-tables, which selects
 // cells on a drag across them. The row and column handles sit outside the
 // cells, so Crepe's view still handles their clicks and drags.
+//
+// Crepe's view also has ProseMirror draw a table again, with new cells, when
+// only the selection or highlights in it change, such as a cell selection
+// starting or ending. In the split, the press of a click in the document pane
+// right after a Markdown edit first brings that pane up to date, which ends its
+// cell selection. The cell the press landed on was then gone, so the click
+// placed no caret and the focus left both panes. This view updates a table
+// whose content is unchanged in place.
 
 import { TableNodeView } from "@milkdown/kit/component/table-block";
+import type { Node } from "@milkdown/kit/prose/model";
+import { CellSelection, findTable } from "@milkdown/kit/prose/tables";
 import { tableSchema } from "@milkdown/kit/preset/gfm";
 import { $view } from "@milkdown/kit/utils";
 
-/** Crepe's table view, without its own handling of a press in a cell. */
+/** Crepe's table view, without its own handling of a press in a cell, and
+ *  keeping the cells of a table whose content has not changed. */
 class CaretTableView extends TableNodeView {
   override stopEvent(event: Event): boolean {
     const { target, type } = event;
@@ -26,10 +37,38 @@ class CaretTableView extends TableNodeView {
     }
     return super.stopEvent(event);
   }
+
+  /** Update the table in place when its content is unchanged, where Crepe's
+   *  view returns false and so has ProseMirror draw it again. ProseMirror then
+   *  redraws only the selection and highlights inside it. */
+  override update(node: Node): boolean {
+    if (!node.eq(this.node)) return super.update(node);
+    this.node = node;
+    this.nodeRef.value = node;
+    this.closeStaleMenus(node);
+    return true;
+  }
+
+  /** Close the row or column menu once its selection is gone, as drawing the
+   *  table again did. Its buttons act on the current selection, and its
+   *  Delete removes rows for any cell selection that is not a column. */
+  private closeStaleMenus(table: Node): void {
+    const { selection } = this.view.state;
+    const here = selection instanceof CellSelection && findTable(selection.$anchorCell)?.node === table;
+    const open = {
+      "col-drag-handle": here && selection.isColSelection(),
+      "row-drag-handle": here && selection.isRowSelection(),
+    };
+    for (const [role, keep] of Object.entries(open)) {
+      const menu = this.dom.querySelector<HTMLElement>(`[data-role="${role}"] .button-group`);
+      if (menu && !keep) menu.dataset.show = "false";
+    }
+  }
 }
 
-/** Crepe's table node view with a click in a cell placing the caret. Use it
- *  after Crepe's Table feature, whose settings the view reads, so it replaces
+/** Crepe's table node view with a click in a cell placing the caret, and the
+ *  cells kept while only the selection in the table changes. Use it after
+ *  Crepe's Table feature, whose settings the view reads, so it replaces
  *  Crepe's view. */
 export const tableCellClicks = $view(
   tableSchema.node,
