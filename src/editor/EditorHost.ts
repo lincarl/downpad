@@ -121,7 +121,8 @@ export class EditorHost implements FindController {
    *  changes nothing, and `onChange` drops it if a newer Markdown edit landed
    *  first. */
   private applyingSync = false;
-  /** Pending debounced mirror sync and the pane whose edit it mirrors. */
+  /** Pending debounced mirror sync and the pane whose edit it mirrors. A reload
+   *  of that pane's tab drops it (`reloadActiveDoc`). */
   private pendingSync: { timer: ReturnType<typeof setTimeout>; source: Pane } | null = null;
   /** The draggable divider between the two split panes (lazily created). */
   private divider: HTMLElement | null = null;
@@ -331,11 +332,20 @@ export class EditorHost implements FindController {
    * the panes that change builds or shows take no typing that would write the
    * older text back. It then shows the active tab again, and this waits for it.
    * The image answers are forgotten before the next document pane is built.
+   *
+   * A pending mirror sync of an edit in the tab's split is dropped. It would
+   * copy the new text into a pane from before the reload, possibly one still
+   * building, and mark that pane current, so it would be shown with its undo
+   * history and image answers from before. Only a pane built after the reload
+   * can be current, so every pane shown for the tab is built from the new text.
    */
   async reloadActiveDoc(): Promise<void> {
     if (this.disposed) return;
     const id = this.store.get().activeTabId;
-    if (id) this.bumpRev(id); // no author → every pane of this tab is now stale
+    if (id) {
+      this.bumpRev(id); // no author → every pane of this tab is now stale
+      if (this.pendingSync?.source.tabId === id) this.cancelSync();
+    }
     if (!this.changing) {
       forgetImageAnswers();
       return this.runPaneChange(() => this.present({ rebuild: true }));

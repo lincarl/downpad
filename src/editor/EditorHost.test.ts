@@ -824,6 +824,52 @@ describe("EditorHost changes while a document pane builds", () => {
     await host.dispose();
   });
 
+  it.each(["Markdown", "document"] as const)(
+    "builds both split panes from the text on disk when a reload comes while settings rebuild the document pane, with a %s edit's mirror pending",
+    async (source) => {
+      const root = document.createElement("div");
+      const store = makeStore();
+      const host = new EditorHost(root, store);
+      host.initLayout("split");
+      await host.reloadActiveDoc();
+      const oldMarkdownPane = root.querySelector<HTMLElement>(".editor-pane-raw")!;
+      // The edit schedules its mirror into the other pane.
+      if (source === "Markdown") fakeEditors.rawChange!("original markdown, edited");
+      else fakeEditors.wysiwygChange!("original markdown, edited");
+
+      await changeDuringMount(
+        () => {
+          store.set({ settings: { ...store.get().settings, mdBulletChar: "*" } });
+          return host.reload();
+        },
+        () => {
+          const reloading = reloadFromDisk(store, host, "text from disk");
+          // The mirror runs while the document pane builds, as its timer or a
+          // click in the split does.
+          host.flush();
+          return reloading;
+        },
+      );
+
+      expect(store.get().doc).toMatchObject({ markdown: "text from disk", isDirty: false });
+      // The document pane built from the edited text is built again from the
+      // text on disk, after the image answers are forgotten, so it has no undo
+      // history from before the reload.
+      expect(fakeEditors.events.slice(-5)).toEqual([
+        "build original markdown, edited",
+        "built original markdown, edited",
+        "forget image answers",
+        "build text from disk",
+        "built text from disk",
+      ]);
+      // The Markdown pane is built again too.
+      expect(root.contains(oldMarkdownPane)).toBe(false);
+      expect(fakeEditors.rawText).toBe("text from disk");
+      expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg", "editor-pane editor-pane-raw"]);
+      await host.dispose();
+    },
+  );
+
   it("builds the document pane again with settings changed while it builds", async () => {
     const root = document.createElement("div");
     const store = makeStore();
