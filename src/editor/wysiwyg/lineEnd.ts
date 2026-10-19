@@ -14,7 +14,8 @@
 // before the line break. So Shift+End there selected the line break too, the
 // first time or the next, and typing replaced the break along with the line.
 // The plugin puts the anchor back when ProseMirror reads the extended
-// selection, which it has ProseMirror do before the next frame is drawn.
+// selection, which it has ProseMirror do before the next frame is drawn, or
+// before text or a composition that comes sooner without a key press.
 // ProseMirror leaves typing over a selection in one text block to Chromium,
 // whose own selection starts or ends before the break instead. Its typing
 // replaced the break with a selection that started there and kept it with one
@@ -96,10 +97,17 @@ export const endPastAtoms = $prose(() => {
   /** The anchor of the selection that a Shift key is extending from right
    *  after a line break, until ProseMirror reads the extended selection. */
   let keptAnchor: number | null = null;
+  /** Has ProseMirror read the selection a Shift key extended, if it has not
+   *  yet. Text that comes without a key press, as from an input method or the
+   *  emoji panel, can come before the browser reports that selection. */
+  const readExtended = (view: EditorView) => {
+    if (keptAnchor !== null) view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
+  };
   return new Plugin({
     view: (view) => {
       /** Removes a selection that a composition is about to replace. */
       const removeSelection = () => {
+        readExtended(view);
         if (crossesBreakEdge(view.state.selection)) view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
       };
       // Listen in the capture phase, before ProseMirror and Milkdown.
@@ -135,6 +143,7 @@ export const endPastAtoms = $prose(() => {
         beforeinput: (view, event) => {
           const text = event.data;
           if (event.isComposing || event.inputType !== "insertText" || !text || /[\r\n]/.test(text)) return false;
+          readExtended(view);
           const { selection } = view.state;
           if (!crossesBreakEdge(selection)) return false;
           event.preventDefault();
