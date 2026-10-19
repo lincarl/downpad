@@ -1,5 +1,5 @@
-// Files dropped from the desktop (spec §5.4). A dropped Markdown file opens in
-// a tab. Other dropped files go into the document they were dropped on, an
+// Files dropped from the desktop (spec §5.4). Each dropped Markdown file opens
+// in a tab. Other dropped files go into the document they were dropped on, an
 // image as an image and any other file as a link to its copy in the
 // attachments folder. EditorHost decides where in that document each file
 // goes, and holds a file back while its document is behind another tab.
@@ -25,22 +25,31 @@ export class FileDropCoordinator {
   constructor(private readonly dependencies: FileDropDependencies) {}
 
   /**
-   * Handle the files of one drop: a markdown file opens (honoring the unsaved
-   * guard); image files embed where they were dropped on the document, or at
-   * the cursor; other files are copied into the attachments folder and linked
-   * the same way. The files go into the document they were dropped on. If
-   * another tab is in front by the time a file is read, the file waits until
-   * that document is shown again. Call it while handling the drop event,
-   * because it reads where the files go from `point` before it first awaits.
+   * Handle the files of one drop. Each Markdown file opens as an opened file
+   * does. The other files go into the document they were dropped on: images
+   * embed where they were dropped, or at the caret, and other files are
+   * copied into the attachments folder and linked the same way. Those go in
+   * first and the Markdown files open after, so no new tab puts the document
+   * behind it while they are read. If another tab is in front by the time a
+   * file is read, the file waits until that document is shown again, and the
+   * Markdown files open once it is in. Call this while handling the drop
+   * event, because it reads where the files go from `point` before it first
+   * awaits.
    */
   async handle(paths: string[], point: DropPoint): Promise<void> {
-    const { store, files, editorHost } = this.dependencies;
-    // A dropped markdown file opens in its own tab (§5.19).
-    const md = paths.find((p) => classifyDrop(p) === "md");
-    if (md) {
-      await files.openPath(md);
-      return;
+    const markdown = paths.filter((path) => classifyDrop(path) === "md");
+    const others = paths.filter((path) => classifyDrop(path) !== "md");
+    try {
+      if (others.length > 0) await this.insertFiles(others, point);
+    } finally {
+      for (const path of markdown) await this.openMarkdown(path);
     }
+  }
+
+  /** Put dropped files that are not Markdown files into the document they
+   *  were dropped on, in the order they were dropped. */
+  private async insertFiles(paths: string[], point: DropPoint): Promise<void> {
+    const { store, files, editorHost } = this.dependencies;
     // Aim now, during the drop event, while the drop point is over the text the
     // file was dropped on. Reading the file comes after. With no document open,
     // create one first so the drop has somewhere to go, and from the Recent
@@ -59,6 +68,18 @@ export class FileDropCoordinator {
       }
     } finally {
       editorHost.releaseDrop(drop);
+    }
+  }
+
+  /** Open a dropped Markdown file as `FileService.openPath` does (§5.19): in
+   *  a tab of its own, in place of an empty untitled document, or by showing
+   *  its tab if it is open already. A file that cannot be opened leaves the
+   *  drop's other Markdown files to open. */
+  private async openMarkdown(path: string): Promise<void> {
+    try {
+      await this.dependencies.files.openPath(path);
+    } catch (error) {
+      console.error(`md-easy: could not open ${baseName(path)}`, error);
     }
   }
 

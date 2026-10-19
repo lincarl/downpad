@@ -1676,6 +1676,46 @@ test("a Markdown file dropped on the document opens without leaving the drop ind
   await expect(page.locator(".milkdown-drop-indicator").first()).toBeHidden();
 });
 
+test("a Markdown file dropped with other files opens in its own tab once the other files are in where they were dropped", async () => {
+  const file = path.join(directory, "drop-mixed.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(file, "First line.\n\nSecond line.\n\nThird line.\n");
+  await writeFile(other, "# Other\n");
+  await launch(file);
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "Second line." }), [await pngFile("pixel.png"), other, await csvFile("notes.csv")]);
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Other");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  // The image and the link were in the document they were dropped on before
+  // the new tab put it behind, so they did not wait for it to come back.
+  const dropped = page.locator(".editor-pane[hidden] .ProseMirror", { hasText: "Second line." });
+  await expect(dropped.locator(".milkdown-image-block")).toHaveCount(1);
+  await expect(dropped.locator("p", { hasText: "notes.csv" })).toHaveCount(1);
+  await page.getByRole("tab", { name: /drop-mixed\.md/ }).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(
+    /^First line\.\n\nSecond line\.\n\n!\[\]\(data:image\/png;base64,[^)]+\)\n\n\[notes\.csv\]\(attachments\/notes\.csv\)\n\nThird line\.\n$/,
+  );
+});
+
+test("two Markdown files dropped together each open in a tab of their own", async () => {
+  const file = path.join(directory, "drop-two.md");
+  const first = path.join(directory, "first.md");
+  const second = path.join(directory, "second.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await writeFile(first, "# First\n");
+  await writeFile(second, "# Second\n");
+  await launch(file);
+  await dropFiles(page.locator(".ProseMirror p", { hasText: "Second line." }), [first, second]);
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Second");
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await page.getByRole("tab", { name: /first\.md/ }).click();
+  await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("First");
+  // The document they were dropped on is as it was.
+  await page.getByRole("tab", { name: /drop-two\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", "Second line."]);
+  await expect(page.getByRole("tab", { name: /drop-two\.md/ }).locator(".tab-dot")).toBeHidden();
+});
+
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
   // The document view would write this heading and these bullets another way.
   const text = "First line.\n\nSecond line.\n\nTitle\n=====\n\n* Alpha\n* Beta\n";
