@@ -616,7 +616,10 @@ describe("splitIntoPages, splitting a Markdown source line", () => {
  * - `data-text-layout` wraps its text word by word at COLUMNS monospace columns,
  *   in lines of LINE px with the glyphs TEXT px tall in the middle, inside PAD px
  *   of padding. An element laid out as an inline block inside it is one box over
- *   the columns its text takes.
+ *   the columns its text takes. `data-text-layout="rtl-run"` sets each line as
+ *   one right-to-left run in a left-to-right block, as Chromium lays out Hebrew
+ *   or Arabic when no direction is set: the line's first character at the right
+ *   end of the run, its last at the left edge.
  * - `data-stack` stacks its children, each starting where the one before ends.
  * - `data-row` sets its children side by side and is as tall as the tallest.
  * - `data-height` is that many px tall.
@@ -693,7 +696,12 @@ const fakeLayout = (() => {
     const { places, tops, heights } = linesOf(block);
     const { line, column } = places[offset];
     const top = height ? PAD + tops[line] : PAD + tops[line] + heights[line] - LINE + (LINE - TEXT) / 2;
-    return DOMRect.fromRect({ x: column * CHAR, y: top, width: CHAR * length, height: height ?? TEXT });
+    let x = column;
+    if (block.dataset.textLayout === "rtl-run") {
+      const width = places.filter((place) => place.line === line).length;
+      x = width - column - length;
+    }
+    return DOMRect.fromRect({ x: x * CHAR, y: top, width: CHAR * length, height: height ?? TEXT });
   }
 
   function override(target: object, name: string, descriptor: PropertyDescriptor): void {
@@ -755,16 +763,16 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
   beforeEach(() => fakeLayout.install());
   afterEach(() => fakeLayout.uninstall());
 
-  const words = (from: number, to: number): string =>
-    Array.from({ length: to - from }, (_, i) => `word${from + i}`).join(" ");
-
   /**
    * A block of 400 words with formatting that crosses where the pages break:
-   * bold text, a link and two inline-code boxes.
+   * bold text, a link and two inline-code boxes. `layout` is its fake text
+   * layout, and each word is `word` and its number.
    */
-  function formattedBlock(tag: string): HTMLElement {
+  function formattedBlock(tag: string, layout: string, word: string): HTMLElement {
+    const words = (from: number, to: number): string =>
+      Array.from({ length: to - from }, (_, i) => `${word}${from + i}`).join(" ");
     const block = document.createElement(tag);
-    block.dataset.textLayout = "";
+    block.dataset.textLayout = layout;
     block.innerHTML =
       `${words(0, 100)} <strong class="mark">${words(100, 250)}</strong> ` +
       `<code style="display: inline-block">x=1</code> ${words(250, 262)} ` +
@@ -774,14 +782,18 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
   }
 
   it.each([
-    ["paragraph", "P"],
-    ["heading", "H2"],
+    ["paragraph", "P", "", "word"],
+    ["heading", "H2", "", "word"],
+    // md-easy sets no text direction, so each line of a Hebrew paragraph is a
+    // right-to-left run that starts at the right, not back at the left. Judged
+    // by direction, the paragraph had no line breaks and was shrunk to fit.
+    ["Hebrew paragraph", "P", "rtl-run", "מילה"],
   ])(
     "continues a %s taller than a page between its wrapped lines, keeping its formatting",
-    (_kind, tag) => {
+    (_kind, tag, layout, word) => {
       // A text block printed as one block, so the page body clipped everything
       // after its first page.
-      const block = formattedBlock(tag);
+      const block = formattedBlock(tag, layout, word);
       const text = block.textContent!;
       const strong = block.querySelector("strong")!.textContent;
       const link = block.querySelector("a")!.textContent;

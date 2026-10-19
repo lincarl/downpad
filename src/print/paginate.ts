@@ -731,11 +731,12 @@ function splitSourceLine(line: HTMLElement, maxHeightPx: number): HTMLElement[] 
  *
  * The Document version printed such a block as one piece, and the page body
  * clipped it, so a 9,000-word paragraph printed its first page and nothing more.
- * Where the wrapped lines start is read from the laid-out block: units on one
- * line overlap vertically, and the first unit of a line sits lower and back at
- * the start of the line. A trial copy of each piece, laid out where the block
- * is, then confirms that the piece fits, so the break is exact even where a line
- * holds inline code, math or an image taller than the text.
+ * Where the wrapped lines start is read from the laid-out block: the first unit
+ * of a line sits a line lower than the characters of the line before it, in
+ * left-to-right and right-to-left text alike. A trial copy of each piece, laid
+ * out where the block is, then confirms that the piece fits, so the break is
+ * exact even where a line holds inline code, math or an image taller than the
+ * text.
  *
  * The pieces are cut out of the block with a DOM range. It moves whole nodes and
  * splits an element that spans a break, such as bold text or a link, into two
@@ -771,42 +772,77 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
     range.setEnd(item, offset + 1);
     return range.getBoundingClientRect();
   };
+  /**
+   * Whether unit `index` is a character. A hard break counts as one, because
+   * it measures as the text box of the line it ends.
+   */
+  const isCharacter = (index: number): boolean => {
+    const { item } = locate(index);
+    return item instanceof Text || item.tagName === "BR";
+  };
   const rtl = getComputedStyle(block).direction === "rtl";
   /**
-   * Whether `next`, the unit after `previous`, starts a wrapped line. It does
-   * when it moved down by more than half a unit and back towards the start of
-   * the line, or when it sits wholly below `previous` without moving forward.
-   * Units on one line share a baseline, so neither holds for them, not even for
-   * a superscript, a small image on the bottom of the line or a right-to-left
-   * run inside a left-to-right line.
+   * Whether `later`, a unit after `earlier`, sits on a later line.
+   *
+   * When either is a character, it does when its top and its bottom are both
+   * lower by more than half the smaller unit. Characters on one line share its
+   * baseline, and a box among them, such as an image, inline code or math, sits
+   * on the baseline or on the bottom of the line, so nothing on one line sits
+   * that much lower than anything else on it, not even a superscript or a small
+   * image. Which way the unit moved across the line does not matter. md-easy
+   * sets no text direction, so Chromium lays a Hebrew or Arabic paragraph out
+   * left to right with each line one right-to-left run, and a line starts at
+   * the right end of the run. Judged by direction, as two boxes are below, such
+   * a paragraph had no line breaks at all and was shrunk onto one page.
+   *
+   * Between two boxes the bottom says less, since either can be the tallest on
+   * its line. There `later` starts a line when it moved down and back towards
+   * the start of the line, or sits wholly below `earlier` without moving
+   * forward.
    */
-  const startsLine = (previous: DOMRect, next: DOMRect): boolean => {
-    const back = rtl ? next.right > previous.right + 0.5 : next.left < previous.left - 0.5;
-    const forward = rtl ? next.right < previous.right - 0.5 : next.left > previous.left + 0.5;
-    const lower = next.top - previous.top > Math.min(previous.height, next.height) / 2;
-    return (lower && back) || (next.top >= previous.bottom - 0.5 && !forward);
+  const onLaterLine = (earlier: DOMRect, later: DOMRect, character: boolean): boolean => {
+    const half = Math.min(earlier.height, later.height) / 2;
+    const lower = later.top - earlier.top > half && later.bottom - earlier.bottom > half;
+    if (character) return lower;
+    const back = rtl ? later.right > earlier.right + 0.5 : later.left < earlier.left - 0.5;
+    const forward = rtl ? later.right < earlier.right - 0.5 : later.left > earlier.left + 0.5;
+    return (lower && back) || (later.top >= earlier.bottom - 0.5 && !forward);
   };
-  /** The first unit of the line that holds unit `index`. */
+  /**
+   * The first unit of the line that holds unit `index`. Once a character of
+   * that line is found, the units before it are compared with that character,
+   * so that a box is compared with a character wherever the line has one.
+   */
   const lineStart = (index: number): number => {
     let next = box(index);
     let start = index;
+    let anchor = hasBox(next) && isCharacter(index) ? next : null;
     for (let i = index - 1; i >= 0; i--) {
       const previous = box(i);
       if (!hasBox(previous)) continue;
-      if (hasBox(next) && startsLine(previous, next)) return start;
+      const character = isCharacter(i);
+      if (hasBox(next) && onLaterLine(previous, anchor ?? next, character || anchor !== null)) return start;
       next = previous;
       start = i;
+      if (character) anchor = previous;
     }
     return 0;
   };
-  /** The first unit of the line after the one that holds unit `index`, or `end`. */
+  /**
+   * The first unit of the line after the one that holds unit `index`, or `end`.
+   * Once a character of the line is found, the units after it are compared
+   * with that character, as in lineStart.
+   */
   const nextLineStart = (index: number): number => {
     let previous = box(index);
+    let anchor = hasBox(previous) && isCharacter(index) ? previous : null;
     for (let i = index + 1; i < end; i++) {
       const next = box(i);
       if (!hasBox(next)) continue;
-      if (hasBox(previous) && startsLine(previous, next)) return i;
+      const character = isCharacter(i);
+      if (hasBox(previous) && onLaterLine(anchor ?? previous, next, character || anchor !== null)) return i;
       previous = next;
+      if (character) anchor = next;
     }
     return end;
   };

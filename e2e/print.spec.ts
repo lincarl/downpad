@@ -345,3 +345,69 @@ test("a paragraph, quote and list item taller than a page continue on the next s
   expect(result.shownLabels).toBe(3);
   expect(result.hiddenLabels).toBeGreaterThan(0);
 });
+
+test("a Hebrew or Arabic paragraph taller than a page continues on the next sheets", async ({
+  page,
+}) => {
+  // md-easy sets no text direction, so Chromium lays a Hebrew or Arabic
+  // paragraph out left to right with each line one right-to-left run, and a
+  // line starts at the right end of the run. The splitter looked for a line
+  // start back at the left, found none and shrank each paragraph onto one sheet.
+  const hebrew = ["שלום", "עולם", "ספר", "מילה", "בית", "ילד", "מים", "אור", "דרך", "לב"];
+  const arabic = ["مرحبا", "عالم", "كتاب", "كلمة", "بيت", "ولد", "ماء", "نور", "طريق", "قلب"];
+  const words = (list: string[], count: number): string =>
+    Array.from({ length: count }, (_, i) => list[i % list.length]).join(" ");
+  const markdown = [
+    "# RTL",
+    "",
+    `${words(hebrew, 1200)} **${words(hebrew, 300)}** \`קוד\` ${words(hebrew, 1500)} סוף`,
+    "",
+    `${words(arabic, 2000)} نهاية`,
+    "",
+    "The end.",
+  ].join("\n");
+
+  await page.goto("/");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await page.click(".toolbar-view button:has-text('Split')");
+  await page.locator(".editor-pane-raw .cm-content").click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(markdown);
+  await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  const result = await page.evaluate(() => {
+    let overflow = 0;
+    const texts: string[] = [];
+    const sheets = Array.from(document.querySelectorAll<HTMLElement>(".print-page"));
+    for (const sheet of sheets) {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      const box = body.getBoundingClientRect();
+      const scale = box.height / body.offsetHeight;
+      const flow = sheet.querySelector<HTMLElement>(".print-flow")!;
+      for (const block of Array.from(flow.children)) {
+        overflow = Math.max(overflow, (block.getBoundingClientRect().bottom - box.top) / scale - body.clientHeight);
+      }
+      texts.push(flow.textContent!.replace(/\s+/g, ""));
+    }
+    const sheetsWith = (word: string): number => texts.filter((text) => text.includes(word)).length;
+    return {
+      overflow,
+      text: texts.join(""),
+      shrunk: document.querySelectorAll(".print-page .print-fit").length,
+      hebrewSheets: sheetsWith("עולם"),
+      arabicSheets: sheetsWith("عالم"),
+    };
+  });
+
+  // Each paragraph continues over several sheets at its own size.
+  expect(result.shrunk).toBe(0);
+  expect(result.hebrewSheets).toBeGreaterThan(2);
+  expect(result.arabicSheets).toBeGreaterThan(1);
+  // No block reaches past its page body, and every character prints once, in order.
+  expect(result.overflow).toBeLessThanOrEqual(0.5);
+  expect(result.text).toBe(documentText);
+});
