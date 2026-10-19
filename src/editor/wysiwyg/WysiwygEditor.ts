@@ -42,6 +42,7 @@ import { endPastAtoms } from "./lineEnd";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
+import { tableCellClicks } from "./tableCellClicks";
 import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
@@ -268,6 +269,9 @@ export class WysiwygEditor {
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
+    // A click in a table cell places the caret instead of selecting the cell.
+    // Must follow the Table feature so this view replaces Crepe's.
+    this.crepe.editor.use(tableCellClicks);
     // Look up local image URLs before the first render, so none starts raw.
     this.crepe.editor.use(preloadImages(imageConfig.preload));
     // WYSIWYG find/replace search state + decorations (§5.13).
