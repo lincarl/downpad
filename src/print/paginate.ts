@@ -882,14 +882,29 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
     }
     return { node, offset: at };
   };
-  /** Whether units [from, to) fit the page, laid out as the piece will be. */
+  /**
+   * Whether units [from, to) fit the page, laid out as the piece will be.
+   *
+   * A range copies only what lies inside the node that holds both its ends,
+   * so a piece wholly inside bold text or a link came out without it, and was
+   * measured in plain text. Where bold text is wider, the cut piece then ran
+   * past the page. The copy is wrapped in copies of the elements around it, up
+   * to the block, as the cut piece is.
+   */
   const fits = (from: number, to: number): boolean => {
     const start = pointBefore(from);
     const stop = pointBefore(to);
     range.setStart(start.node, start.offset);
     range.setEnd(stop.node, stop.offset);
+    let content: Node = range.cloneContents();
+    for (let level = range.commonAncestorContainer; level !== block; level = level.parentNode!) {
+      if (!(level instanceof Element)) continue;
+      const copy = level.cloneNode(false);
+      copy.appendChild(content);
+      content = copy;
+    }
     const probe = block.cloneNode(false) as HTMLElement;
-    probe.appendChild(range.cloneContents());
+    probe.appendChild(content);
     block.before(probe);
     const height = probe.offsetHeight;
     probe.remove();

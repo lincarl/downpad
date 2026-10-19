@@ -20,6 +20,51 @@ async function openWorkspace(page: import("@playwright/test").Page): Promise<voi
   await expect(page.locator(".print-page").first()).toBeVisible();
 }
 
+/** Replace the welcome document with `markdown`, typed into the split view's Markdown pane. */
+async function typeDocument(page: import("@playwright/test").Page, markdown: string): Promise<void> {
+  await page.goto("/");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await page.click(".toolbar-view button:has-text('Split')");
+  await page.locator(".editor-pane-raw .cm-content").click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(markdown);
+}
+
+/**
+ * How far anything on the printed sheets reaches past its page body, in page
+ * px: a block, a block shrunk to fit inside its frame, or a line of text. Also
+ * the sheets' visible text, without whitespace.
+ */
+function printedSheets(page: import("@playwright/test").Page): Promise<{ overflow: number; texts: string[] }> {
+  return page.evaluate(() => {
+    let overflow = -Infinity;
+    const texts: string[] = [];
+    const range = document.createRange();
+    for (const sheet of Array.from(document.querySelectorAll<HTMLElement>(".print-workspace .print-page"))) {
+      const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+      const box = body.getBoundingClientRect();
+      const scale = box.height / body.offsetHeight;
+      const past = (rect: DOMRect): number => (rect.bottom - box.top) / scale - body.clientHeight;
+      const flow = sheet.querySelector<HTMLElement>(".print-flow")!;
+      for (const block of Array.from(flow.querySelectorAll(":scope > *, .print-fit > *"))) {
+        overflow = Math.max(overflow, past(block.getBoundingClientRect()));
+      }
+      const walker = document.createTreeWalker(flow, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (getComputedStyle(text.parentElement!).visibility === "hidden") continue;
+        range.selectNodeContents(text);
+        for (const rect of Array.from(range.getClientRects())) {
+          if (rect.width || rect.height) overflow = Math.max(overflow, past(rect));
+        }
+      }
+      const visible = flow.cloneNode(true) as HTMLElement;
+      visible.querySelectorAll('[style*="visibility: hidden"]').forEach((hidden) => hidden.remove());
+      texts.push(visible.textContent!.replace(/\s+/g, ""));
+    }
+    return { overflow, texts };
+  });
+}
+
 test("the Print button opens the workspace with a paginated preview", async ({ page }) => {
   await openWorkspace(page);
 
@@ -410,4 +455,30 @@ test("a Hebrew or Arabic paragraph taller than a page continues on the next shee
   // No block reaches past its page body, and every character prints once, in order.
   expect(result.overflow).toBeLessThanOrEqual(0.5);
   expect(result.text).toBe(documentText);
+});
+
+test("a sheet of nothing but bold text fits its page where bold text is wider", async ({ page }) => {
+  // The splitter confirms each piece of a paragraph in a trial copy. The copy
+  // of a piece wholly inside bold text left the bold out and was measured in
+  // plain text, so where the bold face is wider than the regular one, as in
+  // DejaVu Sans, the piece ran up to 75 px past the page. Wide letter spacing
+  // on bold text stands in for such a font.
+  const words = (label: string, count: number): string =>
+    Array.from({ length: count }, (_, i) => `${label}${i + 1}`).join(" ");
+  await typeDocument(page, ["# Bold", "", `${words("w", 100)} **${words("bold", 1500)}**`, "", "The end."].join("\n"));
+  await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
+  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  await page.addStyleTag({ content: ".print-doc strong { letter-spacing: 0.15em; }" });
+
+  await page.click('button[aria-label="Print"]');
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  const { overflow, texts } = await printedSheets(page);
+  // Several sheets hold bold text only, between the plain text and the end.
+  const boldOnly = await page.locator(".print-page .print-flow").evaluateAll((flows) =>
+    flows.filter((flow) => flow.children.length === 1 && flow.firstElementChild!.childNodes.length === 1 && flow.querySelector(":scope > p > strong")).length,
+  );
+  expect(boldOnly).toBeGreaterThan(1);
+  expect(overflow).toBeLessThanOrEqual(0.5);
+  expect(texts.join("")).toBe(documentText);
 });

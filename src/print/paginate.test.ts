@@ -620,6 +620,9 @@ describe("splitIntoPages, splitting a Markdown source line", () => {
  *   one right-to-left run in a left-to-right block, as Chromium lays out Hebrew
  *   or Arabic when no direction is set: the line's first character at the right
  *   end of the run, its last at the left edge.
+ * - `data-columns` on an element inside such a block makes each of its
+ *   characters that many columns wide, as a bold face can be wider than the
+ *   regular one.
  * - `data-stack` stacks its children, each starting where the one before ends.
  * - `data-row` sets its children side by side and is as tall as the tallest.
  * - `data-height` is that many px tall.
@@ -634,23 +637,44 @@ const fakeLayout = (() => {
   const COLUMNS = 40;
   const saved: [object, string, PropertyDescriptor | undefined][] = [];
 
-  /** Where each character of `text` is laid out: words wrap, spaces hang. */
-  function wrap(text: string): { line: number; column: number }[] {
+  /**
+   * Where each character of `text` is laid out: words wrap, spaces hang.
+   * `widths` holds the columns each character takes, 1 where it has none.
+   */
+  function wrap(text: string, widths: number[] = []): { line: number; column: number }[] {
     const places: { line: number; column: number }[] = [];
     let line = 0;
     let column = 0;
+    let index = 0;
     for (const word of text.split(/(?<= )/)) {
-      if (column > 0 && column + word.trimEnd().length > COLUMNS) {
+      let size = 0;
+      for (let i = 0; i < word.trimEnd().length; i++) size += widths[index + i] ?? 1;
+      if (column > 0 && column + size > COLUMNS) {
         line++;
         column = 0;
       }
-      for (let i = 0; i < word.length; i++) places.push({ line, column: column++ });
+      for (let i = 0; i < word.length; i++) {
+        places.push({ line, column });
+        column += widths[index++] ?? 1;
+      }
     }
     return places;
   }
 
   const blockOf = (node: Node): HTMLElement | null =>
     (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>("[data-text-layout]") ?? null;
+
+  /** The columns each character of a text block takes (`data-columns`). */
+  function widthsOf(block: HTMLElement): number[] {
+    const widths: number[] = [];
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      const wide = text.parentElement?.closest<HTMLElement>("[data-columns]");
+      const columns = wide && block.contains(wide) ? Number(wide.dataset.columns) : 1;
+      widths.push(...Array.from({ length: (text as Text).data.length }, () => columns));
+    }
+    return widths;
+  }
 
   /** The offset of `node`'s first character in its block's text. */
   function offsetIn(block: HTMLElement, node: Node): number {
@@ -667,15 +691,16 @@ const fakeLayout = (() => {
    * The lines of a text block: each LINE px tall, or as tall as an inline box
    * with `data-height` on it, which sits on the line with the text on its bottom.
    */
-  function linesOf(block: HTMLElement): { places: { line: number; column: number }[]; tops: number[]; heights: number[] } {
-    const places = wrap(block.textContent ?? "");
+  function linesOf(block: HTMLElement): { places: { line: number; column: number }[]; tops: number[]; heights: number[]; widths: number[] } {
+    const widths = widthsOf(block);
+    const places = wrap(block.textContent ?? "", widths);
     const heights = Array.from({ length: places.length ? places[places.length - 1].line + 1 : 1 }, () => LINE);
     for (const box of Array.from(block.querySelectorAll<HTMLElement>("[data-height]"))) {
       const line = places[offsetIn(block, box)].line;
       heights[line] = Math.max(heights[line], Number(box.dataset.height));
     }
     const tops = heights.map((_, i) => heights.slice(0, i).reduce((a, b) => a + b, 0));
-    return { places, tops, heights };
+    return { places, tops, heights, widths };
   }
 
   const textHeight = (block: HTMLElement): number =>
@@ -693,15 +718,16 @@ const fakeLayout = (() => {
 
   /** The box of `length` characters from `offset` in `block`, or of an inline box `height` px tall there. */
   function charBox(block: HTMLElement, offset: number, length: number, height?: number): DOMRect {
-    const { places, tops, heights } = linesOf(block);
+    const { places, tops, heights, widths } = linesOf(block);
     const { line, column } = places[offset];
     const top = height ? PAD + tops[line] : PAD + tops[line] + heights[line] - LINE + (LINE - TEXT) / 2;
+    const columns = widths.slice(offset, offset + length).reduce((a, b) => a + b, 0);
     let x = column;
     if (block.dataset.textLayout === "rtl-run") {
-      const width = places.filter((place) => place.line === line).length;
-      x = width - column - length;
+      const width = widths.filter((_, i) => places[i].line === line).reduce((a, b) => a + b, 0);
+      x = width - column - columns;
     }
-    return DOMRect.fromRect({ x: x * CHAR, y: top, width: CHAR * length, height: height ?? TEXT });
+    return DOMRect.fromRect({ x: x * CHAR, y: top, width: CHAR * columns, height: height ?? TEXT });
   }
 
   function override(target: object, name: string, descriptor: PropertyDescriptor): void {
@@ -836,6 +862,27 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
       expect(code.map((box) => box.textContent)).toEqual(["x=1", "y=2"]);
     },
   );
+
+  it("measures a piece that lies wholly inside bold text in bold", () => {
+    // The trial copy of such a piece left out the bold element around it, so
+    // it was measured in plain text, and with bold text wider than plain text
+    // the piece ran past the page.
+    const words = (label: string, count: number): string =>
+      Array.from({ length: count }, (_, i) => `${label}${i}`).join(" ");
+    const block = document.createElement("p");
+    block.dataset.textLayout = "";
+    block.innerHTML = `${words("w", 100)} <strong data-columns="2">${words("b", 600)}</strong> end.`;
+    const text = block.textContent;
+    const flow = flowWith(block);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children) as HTMLElement[];
+    // Some pieces hold nothing but bold text.
+    expect(pieces.filter((piece) => piece.childNodes.length === 1 && piece.firstElementChild?.tagName === "STRONG").length).toBeGreaterThan(1);
+    for (const piece of pieces) expect(piece.offsetHeight).toBeLessThanOrEqual(500);
+    expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+  });
 });
 
 /** An element of a fake-layout tree: `data-height` px tall, holding `text`. */
