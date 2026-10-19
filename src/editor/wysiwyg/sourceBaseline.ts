@@ -401,17 +401,19 @@ export class SourceBaseline {
    * back in windows (`reads`). When a window does not read as its pieces, the
    * join where it went wrong gets a blank line and the window is read again.
    * A few joins could change how a kept block reads in a way no window shows
-   * (`codeMayMove`, `readsOnlyAtEnd`), and make the whole body be written.
-   * The budget for reading back is spent the same way whether or not a
-   * window's result is cached, so a document always gets the same text.
+   * (`codeMayMove`, `codeMayEnd`, `readsOnlyAtEnd`), and make the whole body
+   * be written. The budget for reading back is spent the same way whether or
+   * not a window's result is cached, so a document always gets the same text.
    *
    * A window starts at the top of the body, below a join the rules settle,
    * where the parser starts afresh as it does in the window, or below a join
    * the source had. There the parser is in the state the source left, and the
    * window's first piece must still read as its source item, which shows that
-   * state does not change it. A window ends with the first lines of a piece
-   * whose own join below is settled or from the source, so the text after it
-   * cannot change how the window reads.
+   * state does not change how it reads. It does not change where the piece
+   * ends either, except for indented code (`codeMayEnd`), which is never read
+   * back there. A window ends with the first lines of a piece whose own join
+   * below is settled or from the source, so the text after it cannot change
+   * how the window reads.
    */
   private join(pieces: readonly Piece[], layout: SourceLayout): string[] | null {
     const budget = Math.max(this.source.length / PARSE_COST, MIN_BUDGET);
@@ -449,6 +451,7 @@ export class SourceBaseline {
         if (above.item >= 0 && readsOnlyAtEnd(layout, above.item)) return null;
         const ending = endingOf(above, layout);
         if (!apart(ending, above.text, gap, below.text)) {
+          if (above.item >= 0 && codeMayEnd(layout, above.item)) return null;
           // Read the file's gap back if that fits the budget. Otherwise a blank
           // line, if the rules show that it keeps the pieces apart.
           if (spent + size + pieceCost(above) + gap.length + headCost(below) <= budget) open = true;
@@ -883,6 +886,19 @@ function codeMayMove(layout: SourceLayout, k: number, above: Piece | undefined, 
   const type = above && (above.item >= 0 ? layout.items[above.item].type : above.block?.type.name);
   if (type === "blockquote") return !/\n[ \t]*\n/.test(gap);
   return type !== undefined && STAYS_OPEN.has(type);
+}
+
+/**
+ * Whether source item `k`, if it is indented code, could end in another place
+ * in a window that starts with it than in the body. Code that did not start
+ * afresh in the source can have a lazy first line, after which micromark ends
+ * it (`codeMayMove`), as below a list with wide items. At the start of a
+ * window it stays open instead, and a list item that does not start at 1
+ * cannot start right below it, so `> 2. Item` below it would read as text in
+ * the window and as a list in the body.
+ */
+function codeMayEnd(layout: SourceLayout, k: number): boolean {
+  return itemEnding(layout, k) === "indented" && !itemFresh(layout, k);
 }
 
 /**

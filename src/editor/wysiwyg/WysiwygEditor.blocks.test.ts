@@ -763,6 +763,15 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => deleteBlock(view, "Then:"),
       "```\nmake\n```\n\n> - empty first item\n",
     ],
+    // Below the list with wide items, the code's first line is lazy, so the
+    // parser ends the code after it. Read without the list, the code would
+    // still be open, and the line below it would read as text.
+    [
+      "a list in a quote below indented code that a list above ends",
+      "1.   Install the tools.\n\n    make\n    make install\n\n> 2. Restart the server.\n",
+      (view: EditorView) => deleteBlock(view, "make install"),
+      "1. Install the tools.\n\n```\nmake\n```\n\n> 2\\. Restart the server.\n",
+    ],
     // At the end of a file with no line break after it, a tag alone on its
     // line right below a list item reads as its own block. With anything
     // after it, it reads as part of the item.
