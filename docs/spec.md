@@ -17,7 +17,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 
 - Headings, paragraphs, emphasis, links, and block quotes.
 - Ordered, unordered, and task lists.
-- Tables, horizontal rules, inline code, and fenced code blocks. A fence keeps the options after its language, such as `title="server.js"`, and a `latex` fence stays a fence rather than becoming a math block.
+- Tables, horizontal rules, inline code, and fenced code blocks. A click in a table cell puts the caret where it lands, as in a paragraph, so a click right of a cell's text puts it at the end of that line. A drag across cells selects them. A fence keeps the options after its language, such as `title="server.js"`, and a `latex` fence stays a fence rather than becoming a math block.
 - Syntax highlighting for code blocks, and VS Code's Markdown colors in the Markdown view.
 - Inline and block math rendered with KaTeX. Dollar signs follow Pandoc's rules, so prices such as `$5` and `$10` stay text, both in opened files and while typing. A typed closing `$` or `~` becomes math or strikethrough once the next character, Enter, moving the cursor out of the text it closes, leaving the editor, Save, or another edit such as a paste shows that Pandoc or GFM would read the same text that way. Autosave saves it as Save would but leaves it waiting on screen, so a digit typed next still keeps it text. A typed tilde right after a letter or digit opens no strikethrough, so `10~20` stays text, and a `$` or `~` in code stays code text. A formula right before a digit is saved as `$$x$$`, a `|` in a formula in a table cell as `\|`, and a paragraph that is only `$$...$$` is a math block.
 - Mermaid diagrams rendered from fenced `mermaid` blocks.
