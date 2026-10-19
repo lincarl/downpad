@@ -111,8 +111,11 @@ function AppContent({ store }: { store: Store }) {
 
   return (
     <AppRuntimeProvider runtime={runtime}>
+      {/* The single column is exactly as wide as the window. A row that needs
+          more room, such as the status bar with a long path, fits its own
+          content to it instead of making every row wider than the window. */}
       <div
-        className="app grid h-screen grid-rows-[39px_46px_auto_minmax(0,1fr)_22px] overflow-hidden bg-window text-ink"
+        className="app grid h-screen grid-cols-[minmax(0,1fr)] grid-rows-[39px_46px_auto_minmax(0,1fr)_22px] overflow-hidden bg-window text-ink"
         data-testid="app-shell"
       >
         <Toolbar />
@@ -932,6 +935,8 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
   const words = countWords(doc.markdown);
   return (
     <footer className={STATUS_BAR_CLASS}>
+      {/* A path too long for the room left of the word count ends in an
+          ellipsis. Its tooltip has the whole path. */}
       <span
         className="status-left min-w-0 overflow-hidden text-ellipsis whitespace-nowrap"
         title={path}

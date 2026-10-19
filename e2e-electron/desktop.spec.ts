@@ -2441,6 +2441,37 @@ test("the document page fills the window for a short document", async () => {
   expect(Math.round(bottoms.page)).toBe(Math.round(bottoms.view));
 });
 
+test("a long path in the status bar is cut short to fit a narrow window", async () => {
+  // Folders long enough that the path needs more room than a 600px window has.
+  const folder = path.join(directory, "quarterly-planning-documents", "team-meetings-and-weekly-reviews", "october-sessions");
+  await mkdir(folder, { recursive: true });
+  const file = path.join(folder, "notes.md");
+  await writeFile(file, "# Notes\n\nOne paragraph.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Notes");
+  await expect(page.locator(".status-left")).toHaveText(file);
+  await expect(page.locator(".status-left")).toHaveAttribute("title", file);
+  for (const width of [600, 480]) {
+    await app!.evaluate(({ BrowserWindow }, contentWidth) => BrowserWindow.getAllWindows()[0]!.setContentSize(contentWidth, 600), width);
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+    const layout = await page.getByTestId("app-shell").evaluate((shell) => {
+      const status = shell.querySelector(".status-left")!;
+      return {
+        shell: shell.scrollWidth,
+        rows: [...shell.children].map((row) => row.getBoundingClientRect().right),
+        wordCount: shell.querySelector(".status-right")!.getBoundingClientRect().right,
+        path: { shown: status.clientWidth, whole: status.scrollWidth },
+      };
+    });
+    // The toolbar, tabs, editor and status bar, with its word count, end
+    // inside the window, and only the path gives way.
+    expect(layout.shell).toBe(width);
+    expect(Math.max(...layout.rows)).toBeLessThanOrEqual(width);
+    expect(layout.wordCount).toBeLessThanOrEqual(width);
+    expect(layout.path.whole).toBeGreaterThan(layout.path.shown);
+  }
+});
+
 test("an edit in the document view keeps the blank line after the frontmatter", async () => {
   const file = path.join(directory, "frontmatter.md");
   await writeFile(file, "---\ntitle: x\n---\n\nFirst line.\n");
