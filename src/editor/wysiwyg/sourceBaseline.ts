@@ -1178,8 +1178,9 @@ function linksToKeptDefinition(pieces: readonly Piece[], layout: SourceLayout): 
 function bracketLabels(text: string): string[] {
   const labels: string[] = [];
   // An escape is matched first, so an escaped bracket neither opens nor
-  // closes a label.
-  for (const match of text.matchAll(/\\.|\[((?:\\.|[^\\[\]])*)\]/g)) {
+  // closes a label. A backslash before a line break escapes nothing, and the
+  // label goes on.
+  for (const match of text.matchAll(/\\[\s\S]|\[((?:\\[\s\S]|[^\\[\]])*)\]/g)) {
     const label = match[1];
     if (label !== undefined && /\S/.test(label) && !inlineLinkAt(text, match.index + match[0].length)) {
       labels.push(referenceLabel(label));

@@ -805,6 +805,13 @@ describe("an edit near text that reads as it does only where it is", () => {
       (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
       "Intro.</div>\n[q] here\n\n> Quote [a](https://q.example).\n",
     ],
+    // A label goes on over a line break, also after a backslash.
+    [
+      "bracketed text over a backslash and a line break in merged HTML next to a kept definition",
+      "Intro.\n\n</div>\n[r\\\nef] here\n\nUses [r\\\nef].\n\n[r\\\nef]: https://r.example\n",
+      (view: EditorView) => view.dispatch(view.state.tr.join(view.state.doc.child(0).nodeSize)),
+      "Intro.</div>\n[r\\\nef] here\n\nUses [r\\\nef](https://r.example).\n",
+    ],
     // Parentheses that are no link destination leave `[ref]` a reference.
     [
       "bracketed text before parentheses with a space in merged HTML next to a kept definition",
