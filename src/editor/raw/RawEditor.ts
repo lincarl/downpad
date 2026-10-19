@@ -130,12 +130,25 @@ function splitLine(line: string): SourceLine {
   return { prefix, indent: match?.[1].length ?? 0, text: line.slice(prefix.length) };
 }
 
+/** The document view's form of an empty paragraph, as Milkdown reads it. */
+const EMPTY_PARAGRAPH = /^<br\s*\/?\s*>$/i;
+
+/** What a line is matched by: its text, or for an empty list item or quote
+ *  line a key no text has, so it never matches an empty line. An item that
+ *  holds only `<br />`, the document view's form of an empty item, counts as
+ *  empty. */
+function lineKey({ prefix, text }: SourceLine): string {
+  if (!prefix.trim()) return text;
+  return text === "" || EMPTY_PARAGRAPH.test(text.trim()) ? "\n" : text;
+}
+
 /** Where a caret at `column` of the line `from` goes in the line `to`, which
- *  has the same text. In the text it stays before the same character. In the
+ *  has the same text, or is the same empty item. In the text it stays before
+ *  the same character, and in an empty item at the start of its text. In the
  *  part before the text, it stays at the line's start, before the quote or
  *  list marker, or as far from the text as it was, within the marker. */
 function columnIn(from: SourceLine, to: SourceLine, column: number): number {
-  if (column >= from.prefix.length) return to.prefix.length + column - from.prefix.length;
+  if (column >= from.prefix.length) return to.prefix.length + (from.text === to.text ? column - from.prefix.length : 0);
   if (column < from.indent) return Math.min(column, to.indent);
   if (column === from.indent) return to.indent;
   return Math.max(to.indent, to.prefix.length - (from.prefix.length - column));
@@ -145,12 +158,13 @@ function columnIn(from: SourceLine, to: SourceLine, column: number): number {
  * The changes that make `edit` to `doc`, a drop's rewrite of a list or other
  * block, and where a position in `doc` goes through them. The lines the edit
  * touches are matched up by their text after the indentation and markers
- * (`LINE_PREFIX`), with Myers' diff (`differingRuns`). Each run of lines put
- * in is a change of its own, and so is the part before the text of each line
- * whose text stays, where that part changes, as for a list item that only
- * gets a new number. Each run of other lines that differ is one change too.
- * A position in a line whose text stays goes to the same place in that line
- * (`columnIn`). Any other position maps with the edit's `assoc`.
+ * (`LINE_PREFIX`, `lineKey`), with Myers' diff (`differingRuns`). Each run of
+ * lines put in is a change of its own, and so is the part before the text of
+ * each line whose text stays, where that part changes, as for a list item
+ * that only gets a new number, and the text of an empty item the document
+ * view writes as `<br />`. Each run of other lines that differ is one change
+ * too. A position in a line whose text stays goes to the same place in that
+ * line (`columnIn`). Any other position maps with the edit's `assoc`.
  */
 export function dropEditChanges(doc: Text, { from, to, insert, assoc }: SourceEdit): { changes: ChangeSet; mapPos: (pos: number) => number } {
   const first = doc.lineAt(from);
@@ -178,15 +192,20 @@ export function dropEditChanges(doc: Text, { from, to, insert, assoc }: SourceEd
   let a = 0;
   let b = 0;
   // Match the lines of `before` up to `until` with the next lines of
-  // `after`, and change the part before their text where it differs.
+  // `after`, and change the part before their text and the text where they
+  // differ.
   const keep = (until: number): void => {
     for (; a < until; a += 1, b += 1) {
       kept[a] = b;
-      const { prefix } = before[a];
+      const { prefix, text } = before[a];
       if (prefix !== after[b].prefix) specs.push({ from: startsA[a], to: startsA[a] + prefix.length, insert: after[b].prefix });
+      const textFrom = startsA[a] + prefix.length;
+      if (text !== after[b].text) specs.push({ from: textFrom, to: textFrom + text.length, insert: after[b].text });
     }
   };
-  for (const run of differingRuns(before.length, after.length, (i, j) => before[i].text === after[j].text)) {
+  const keysA = before.map(lineKey);
+  const keysB = after.map(lineKey);
+  for (const run of differingRuns(before.length, after.length, (i, j) => keysA[i] === keysB[j])) {
     keep(run.fromA);
     // The lines with the line break before them, or at the start with the
     // one after them, so lines put in or taken out take a line break along.

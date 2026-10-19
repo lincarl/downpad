@@ -110,6 +110,23 @@ describe("RawEditor.applyDropEdit", () => {
     expect(editor.getText()).toBe(`1. One\n2. ${LINK}\n3. Two\n4. ThXree\n5. Four\n`);
   });
 
+  // An image dropped beside an item's text goes into that item as its second
+  // block, after a blank line. The document view writes an empty item as "<br />".
+  it.each([
+    ["into the item before it, at the end of a numbered list", "1. One\n2. Two\n3. ", "", "1. One\n2. Two\n\n   ![](a.png)\n3. <br />"],
+    ["into the item before it, at the end of a bulleted list", "- Alpha\n- Beta\n- ", "", "- Alpha\n- Beta\n\n  ![](a.png)\n- <br />"],
+    ["into the item before it, mid-list", "- Alpha\n- ", "\n- Gamma", "- Alpha\n\n  ![](a.png)\n- <br />\n- Gamma"],
+    ["into it", "- Alpha\n- ", "\n- Gamma", "- Alpha\n- <br />\n\n  ![](a.png)\n- Gamma"],
+    ["as an item before it", "- Alpha\n- ", "\n- Gamma", `- Alpha\n- ${LINK}\n- <br />\n- Gamma`],
+  ])("keeps a caret in an empty item, which the document view writes as <br />, when the file goes %s", (_where, before, after, insert) => {
+    const editor = mountWithCaret(before, after);
+
+    editor.applyDropEdit({ from: 0, to: before.length + after.length, insert, assoc: -1 });
+    editor.insertText("X");
+
+    expect(editor.getText()).toBe(insert.replace("<br />", "X<br />"));
+  });
+
   /** Put `text` in the pane with the caret at `caret`, make a drop's `edit`,
    *  and type X. */
   function typeAfterDrop(editor: RawEditor, text: string, caret: number, edit: SourceEdit): string {
@@ -186,9 +203,17 @@ describe("dropEditChanges", () => {
     start: number;
   }
 
-  /** The lines of a list, each as its indentation, the part before its text
-   *  and the text. Each nested list is indented to its parent's text. */
-  function writeList(items: Item[], styles: Style[]): Array<{ indent: number; prefix: string; text: string }> {
+  /** A line of a list as its indentation, the part before its text, the
+   *  text, and the indentation of the item's later blocks. */
+  interface Line {
+    indent: number;
+    prefix: string;
+    text: string;
+    content: number;
+  }
+
+  /** The lines of a list. Each nested list is indented to its parent's text. */
+  function writeList(items: Item[], styles: Style[]): Line[] {
     const numbers: number[] = [];
     const widths: number[] = [];
     return items.map(({ depth, text, task }) => {
@@ -199,11 +224,14 @@ describe("dropEditChanges", () => {
       const indent = depth === 0 ? 0 : widths[depth - 1];
       const marker = style.bullet ?? `${numbers[depth]}${style.delimiter}`;
       widths[depth] = indent + marker.length + 1;
-      return { indent, prefix: `${" ".repeat(indent)}${marker} ${task ? `[${task}] ` : ""}`, text };
+      return { indent, prefix: `${" ".repeat(indent)}${marker} ${task ? `[${task}] ` : ""}`, text, content: widths[depth] };
     });
   }
 
-  it("keeps every caret in a line whose text stays before the same character of that text", () => {
+  /** Whether a line is an empty item, which the document view writes as "<br />". */
+  const isEmpty = (line: Line): boolean => line.text === "" || line.text === "<br />";
+
+  it("keeps every caret in a line whose text stays before the same character of that text, or in the same empty item", () => {
     const failures: string[] = [];
     for (let seed = 1; seed <= 3000; seed += 1) {
       const random = seeded(seed);
@@ -215,8 +243,9 @@ describe("dropEditChanges", () => {
       const newStyles = styles.map((style) =>
         random() < 0.3 ? (style.bullet ? { ...style, bullet: pick(["-", "*", "+"]) } : { ...style, delimiter: pick([".", ")"]) }) : style,
       );
-      // Unless another line changes too, items can share a text. Otherwise
-      // they are drawn from the texts shuffled.
+      // Unless another line changes too, items can share a text, and some
+      // are empty, as just typed. Otherwise they are drawn from the texts
+      // shuffled.
       const variant = pick(["insert", "insert", "insert", "change", "remove"]);
       const texts = variant === "insert" ? [] : [...TEXTS];
       for (let index = texts.length - 1; index > 0; index -= 1) {
@@ -226,18 +255,23 @@ describe("dropEditChanges", () => {
       const items: Item[] = [];
       for (let index = 0, count = 1 + Math.floor(random() * 7); index < count; index += 1) {
         const depth = index === 0 ? 0 : Math.min(2, Math.floor(random() * (items[index - 1].depth + 2)));
-        items.push({ depth, text: texts.pop() ?? pick(TEXTS), ...(random() < 0.15 ? { task: pick([" ", "x"]) } : {}) });
+        const text = variant === "insert" && random() < 0.2 ? "" : (texts.pop() ?? pick(TEXTS));
+        items.push({ depth, text, ...(random() < 0.15 ? { task: pick([" ", "x"]) } : {}) });
       }
-      // The file goes in as an item at a depth that fits between its neighbors.
+      // The item that also changes or goes, if any.
+      const other = variant === "insert" ? -1 : Math.floor(random() * items.length);
+      // The file goes in as an item at a depth that fits between its
+      // neighbors, or an image as the second block of the item before, after
+      // a blank line, as the document view puts an image beside that item's text.
       const at = Math.floor(random() * (items.length + 1));
+      const image = at > 0 && !(variant === "remove" && other === at - 1) && random() < 0.3;
       const lowest = at < items.length ? Math.max(0, items[at].depth - 1) : 0;
       const highest = at > 0 ? Math.min(2, items[at - 1].depth + 1) : 0;
       const file = pick(FILES);
       const link: Item = { depth: lowest + Math.floor(random() * (highest - lowest + 1)), text: `[${file}](attachments/${encodeURI(file)})` };
-      const newItems = [...items.slice(0, at), link, ...items.slice(at)];
-      // Where each item went, and the item that also changes or goes, if any.
-      const moved = items.map((_item, index) => (index < at ? index : index + 1));
-      const other = variant === "insert" ? -1 : Math.floor(random() * items.length);
+      const newItems = image ? [...items] : [...items.slice(0, at), link, ...items.slice(at)];
+      // The line each line went to.
+      let moved = items.map((_item, index) => (index < at || image ? index : index + 1));
       if (variant === "change") newItems[moved[other]] = { ...items[other], text: `${items[other].text}!` };
       if (variant === "remove") {
         newItems.splice(moved[other], 1);
@@ -248,9 +282,18 @@ describe("dropEditChanges", () => {
         });
       }
 
-      const lines = writeList(items, styles);
-      const newLines = writeList(newItems, newStyles);
-      const write = (list: typeof lines): string => list.map((line) => line.prefix + line.text).join("\n");
+      // An empty item can be written "<br />", before and after.
+      const emptyAs = (text: string) => (line: Line): Line => (line.text === "" ? { ...line, text } : line);
+      const lines = writeList(items, styles).map(emptyAs(random() < 0.25 ? "<br />" : ""));
+      const newLines = writeList(newItems, newStyles).map(emptyAs(random() < 0.6 ? "<br />" : ""));
+      if (image) {
+        const holder = moved[at - 1];
+        const { content } = newLines[holder];
+        const blank = { indent: 0, prefix: "", text: "", content: 0 };
+        newLines.splice(holder + 1, 0, blank, { indent: content, prefix: " ".repeat(content), text: `![](attachments/${encodeURI(file)})`, content });
+        moved = moved.map((line) => (line > holder ? line + 2 : line));
+      }
+      const write = (list: Line[]): string => list.map((line) => line.prefix + line.text).join("\n");
       const intro = "Intro text.\n\n";
       const source = `${intro}${write(lines)}\n\nEnd text.\n`;
       const changed = `${intro}${write(newLines)}\n\nEnd text.\n`;
@@ -261,13 +304,14 @@ describe("dropEditChanges", () => {
       if (result !== changed) failures.push(`seed ${seed}: text ${JSON.stringify(result)}, not ${JSON.stringify(changed)}`);
 
       // Where each line starts, before and after.
-      const startOf = (list: typeof lines, index: number): number =>
+      const startOf = (list: Line[], index: number): number =>
         intro.length + list.slice(0, index).reduce((sum, line) => sum + line.prefix.length + line.text.length + 1, 0);
-      const check = (pos: number, expected: number): void => {
+      // Check that `pos` goes to `lowest`, or anywhere up to `highest`.
+      const check = (pos: number, lowest: number, highest = lowest): void => {
         const got = mapPos(pos);
-        if (got !== expected) {
+        if (got < lowest || got > highest) {
           const show = (text: string, at: number) => JSON.stringify(`${text.slice(text.lastIndexOf("\n", at - 1) + 1, at)}|${text.slice(at, text.indexOf("\n", at))}`);
-          failures.push(`seed ${seed}: ${show(source, pos)} went to ${show(result, got)}, not ${show(result, expected)}`);
+          failures.push(`seed ${seed}: ${show(source, pos)} went to ${show(result, got)}, not ${show(result, lowest)}`);
         }
       };
       lines.forEach((line, index) => {
@@ -280,10 +324,16 @@ describe("dropEditChanges", () => {
         check(start, newStart);
         check(start + line.indent, newStart + newLine.indent);
         check(start + line.prefix.length - 1, newStart + newLine.prefix.length - 1);
-        // The start of the text, its middle (between whole characters), and its end.
+        // The start of the text, its middle (between whole characters), and
+        // its end. A caret in an empty item stays in it.
+        const text = start + line.prefix.length;
+        const newText = newStart + newLine.prefix.length;
         let middle = Math.floor(line.text.length / 2);
         if (/[\uDC00-\uDFFF]/.test(line.text.charAt(middle))) middle -= 1;
-        for (const column of [0, middle, line.text.length]) check(start + line.prefix.length + column, newStart + newLine.prefix.length + column);
+        for (const column of [0, middle, line.text.length]) {
+          if (isEmpty(line) && isEmpty(newLine)) check(text + column, newText, newText + newLine.text.length);
+          else check(text + column, newText + column);
+        }
       });
       // Around the list.
       check(3, 3);
