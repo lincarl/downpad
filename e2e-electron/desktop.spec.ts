@@ -457,8 +457,7 @@ test("End with the caret before images or formulas that start a line moves the c
   await expect(editor.locator("[data-type=math_inline]")).toHaveCount(8);
   /** Click at the end of the text on `line`'s last row, go to the start of
    *  that row with Home, press `keys` and type `text`, or put it in with
-   *  `insert`. The click is on the text, because a click right of the text in
-   *  a table cell selects the cell's paragraph. */
+   *  `insert`. */
   const typeAfter = async (keys: string | string[], line: Locator, text: string, insert: (text: string) => Promise<unknown> = (text) => page.keyboard.type(text)) => {
     await line.scrollIntoViewIfNeeded();
     const end = await line.evaluate((element) => {
