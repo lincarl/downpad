@@ -196,6 +196,12 @@ test("a mouse click on a find option keeps typing in the field it was in", async
   await expect(replaceInput).toHaveValue("Hello");
   await expect(page.getByRole("checkbox", { name: "Match case" })).not.toBeChecked();
 
+  // From anywhere else, such as the document, a click focuses the check box.
+  await page.locator(`${wysiwyg} h1`).click();
+  await page.getByRole("checkbox", { name: "Whole word" }).click();
+  await expect(page.getByRole("checkbox", { name: "Whole word" })).toBeFocused();
+  await page.getByRole("checkbox", { name: "Whole word" }).click();
+
   // The keyboard keeps focus on the check box.
   await page.getByRole("checkbox", { name: "Whole word" }).focus();
   await page.keyboard.press("Space");
