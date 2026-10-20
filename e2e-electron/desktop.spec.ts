@@ -1436,6 +1436,40 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
 });
 
+test("a click or Shift+click on a fold arrow in the Markdown view folds its section and leaves the cursor where it was", async () => {
+  const file = path.join(directory, "fold-arrows.md");
+  await writeFile(file, ["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three."].join("\n\n") + "\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const placeholders = page.locator(".editor-pane-raw .cm-foldPlaceholder");
+  /** The middle of the fold arrow beside the line that reads `text`. */
+  const foldArrow = (text: string) =>
+    page.locator(".editor-pane-raw").evaluate((pane, text) => {
+      const line = [...pane.querySelectorAll(".cm-line")].find((element) => element.textContent === text)!.getBoundingClientRect();
+      const arrow = [...pane.querySelectorAll(".cm-foldGutter .cm-gutterElement span")]
+        .map((element) => element.getBoundingClientRect())
+        .find((box) => box.top < line.bottom && box.bottom > line.top)!;
+      return { x: arrow.left + arrow.width / 2, y: arrow.top + arrow.height / 2 };
+    }, text);
+  // The handler for presses on line numbers took presses on fold arrows too.
+  // A Shift+click there selected from the cursor to the start of the
+  // heading's line, and the next key replaced the Markdown in between. A
+  // click moved the cursor there.
+  await caretInMarkdown("Text three.");
+  await shiftClickAt(await foldArrow("# One"));
+  await expect(placeholders).toHaveCount(1);
+  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+  await page.keyboard.type("X");
+  const activeLine = page.locator(".editor-pane-raw .cm-activeLine");
+  await expect(activeLine).toHaveText("Text three.X");
+  const second = await foldArrow("# Two");
+  await page.mouse.click(second.x, second.y);
+  await expect(placeholders).toHaveCount(2);
+  await expect(activeLine).toHaveText("Text three.X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.X"].join("\n\n") + "\n");
+});
+
 test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {
   const file = path.join(directory, "table-add-focus.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "| Name | Notes |\n| --- | --- |\n| a1 | b1 |", "Last line."].join("\n\n") + "\n");

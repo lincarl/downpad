@@ -8,7 +8,8 @@
 // focus stayed in the pane, so the next key replaced the Markdown between the
 // caret and that point. From the find card it focused the document at its old
 // caret. `shiftPressesAsClicks` has the browser take such a press as a plain
-// click instead.
+// click instead. It leaves a press that the editor with focus holds, such as
+// one on the fold arrows of a CodeMirror editor.
 //
 // A press on the page around the editors, such as beside the document's
 // column, in a split pane's margin or below the end of the document view or
@@ -28,7 +29,8 @@ const EDITORS = ".ProseMirror, .cm-editor";
  *  selection after the press's handlers, just before the browser handles the
  *  press. A press that a handler cancelled, or during which a handler moved
  *  focus, as the document view does for a press on its text, is left as it
- *  is. Returns a function that stops this. */
+ *  is, and so is a press inside the CodeMirror editor whose content has
+ *  focus. Returns a function that stops this. */
 export function shiftPressesAsClicks(root: HTMLElement): () => void {
   const page = root.ownerDocument;
   let focusedAtPress: Element | null = null;
@@ -40,7 +42,9 @@ export function shiftPressesAsClicks(root: HTMLElement): () => void {
     if (!event.shiftKey || event.button !== 0 || event.defaultPrevented) return;
     const focused = page.activeElement;
     if (focused !== focusedAtPress) return;
-    if (focused && focused !== page.body && event.target instanceof Node && focused.contains(event.target)) return;
+    // A CodeMirror editor holds its gutters with its content.
+    const holder = focused?.closest(".cm-content") ? focused.closest(".cm-editor") : focused;
+    if (holder && holder !== page.body && event.target instanceof Node && holder.contains(event.target)) return;
     page.getSelection()?.removeAllRanges();
   };
   root.addEventListener("mousedown", pressed, { capture: true, signal: listening.signal });
