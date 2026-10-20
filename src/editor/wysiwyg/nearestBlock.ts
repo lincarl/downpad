@@ -113,12 +113,17 @@ function into(box: DOMRect, x: number, y: number): { left: number; top: number }
 }
 
 /** The position in the text block `block` that ProseMirror finds at the point
- *  moved into the block's box. Beside a line that is the line's start or end,
- *  and above or below the block a place on its first or last line. */
+ *  moved into the block's lines. Beside a line that is the line's start or
+ *  end, and above or below the block a place on its first or last line. The
+ *  block's box can hold padding below its last line, where Chromium on Linux
+ *  and macOS puts the caret at the line's end whatever the point's x, so the
+ *  point goes between the top of the first line and the bottom of the last. */
 export function textPosition(view: EditorView, { node, pos, box }: Block, x: number, y: number): number {
-  const found = view.posAtCoords(into(box, x, y));
   const start = pos + 1;
   const end = pos + node.nodeSize - 1;
+  const top = view.coordsAtPos(start, 1).top;
+  const bottom = view.coordsAtPos(end, -1).bottom;
+  const found = view.posAtCoords({ left: clamp(x, box.left + 1, box.right - 1), top: clamp(y, top + 1, bottom - 1) });
   if (found && found.pos >= start && found.pos <= end) return found.pos;
   return x < (box.left + box.right) / 2 ? start : end;
 }
