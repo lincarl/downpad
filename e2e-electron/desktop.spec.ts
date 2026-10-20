@@ -523,8 +523,7 @@ test("typing over a link's selected text keeps the link", async () => {
   await writeFile(file, "A [word](https://example.com/a) b.\n\nIntro [link](https://example.com/b)\n\nC [text](https://example.com/c) d.\n");
   await launch(file);
   await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(3);
-  const word = await pointOn("word", 1, 0.5);
-  await page.mouse.dblclick(word.x, word.y);
+  await selectText("word");
   await page.keyboard.type("new");
   // The last character, selected from the link's end. With the URL drawn
   // before the selection's end, Chromium typed it outside the link.
@@ -532,8 +531,7 @@ test("typing over a link's selected text keeps the link", async () => {
   await page.keyboard.press("End");
   await page.keyboard.press("Shift+ArrowLeft");
   await page.keyboard.type("ks");
-  const text = await pointOn("text", 1, 0.5);
-  await page.mouse.dblclick(text.x, text.y);
+  await selectText("text");
   await app!.evaluate(({ clipboard }) => clipboard.writeText("pasted"));
   await page.keyboard.press("ControlOrMeta+v");
   await page.keyboard.type("xy");
