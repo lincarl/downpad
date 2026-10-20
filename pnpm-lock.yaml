@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@milkdown/components@7.22.3': c4122dc180c2521a64973a34bda4a44fb61a23f0454d3083dac87e80c15f61fd
+  '@milkdown/components@7.22.3': 514c19369d5133cda1096664653755b1a8cfc563b8b27e8b0bb817174906a8f5
   prosemirror-view@1.41.8: 2abfda9f513d6e188a7022eb11efa130fc7f7083cb9c0cde499e74558d7fbeb9
 
 importers:
@@ -4652,7 +4652,7 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
-  '@milkdown/components@7.22.3(patch_hash=c4122dc180c2521a64973a34bda4a44fb61a23f0454d3083dac87e80c15f61fd)(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(typescript@6.0.3)':
+  '@milkdown/components@7.22.3(patch_hash=514c19369d5133cda1096664653755b1a8cfc563b8b27e8b0bb817174906a8f5)(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(typescript@6.0.3)':
     dependencies:
       '@codemirror/language': 6.12.3
       '@codemirror/state': 6.6.0
@@ -4725,7 +4725,7 @@ snapshots:
 
   '@milkdown/kit@7.22.3(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(typescript@6.0.3)':
     dependencies:
-      '@milkdown/components': 7.22.3(patch_hash=c4122dc180c2521a64973a34bda4a44fb61a23f0454d3083dac87e80c15f61fd)(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(typescript@6.0.3)
+      '@milkdown/components': 7.22.3(patch_hash=514c19369d5133cda1096664653755b1a8cfc563b8b27e8b0bb817174906a8f5)(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(typescript@6.0.3)
       '@milkdown/core': 7.22.3
       '@milkdown/ctx': 7.22.3
       '@milkdown/exception': 7.22.3

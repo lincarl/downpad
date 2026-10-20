@@ -1109,15 +1109,38 @@ test("a click on the URL shown after a link puts the caret at the link's end, an
     await page.keyboard.up("ControlOrMeta");
   };
   await ctrlClickUrl(6);
-  // With the pointer resting there, Crepe shows the preview of the link that
-  // follows over the line above, and a click on the preview opens its link.
-  await clickOn(" end.", 2, 0.5);
-  await expect(page.locator(".milkdown-link-preview")).toBeHidden();
+  // No link preview shows on the URL, so none covers the line above.
   await ctrlClickUrl(5);
   await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/7", "https://example.com/6"]);
   await page.keyboard.type("f");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe([...edited, "B [six](https://example.com/6)f and then more.", blocks[6]].join("\n\n") + "\n");
+});
+
+test("the link preview shows the link whose text is under the pointer, never the one after it", async () => {
+  const file = path.join(directory, "link-preview.md");
+  await writeFile(file, ["C [seven](https://example.com/7)[eight](https://example.com/8) end.", "Plain line."].join("\n\n") + "\n");
+  await launch(file);
+  const urls = page.locator(".milkdown .ProseMirror .md-link-url");
+  await expect(urls).toHaveCount(2);
+  // Crepe shows the preview only while the document has focus.
+  await clickOn("Plain line.", 2, 0.5);
+  const preview = page.locator(".milkdown-link-preview");
+  // ProseMirror gives the position after a character for the pointer on its
+  // right half, where the next link starts, and the preview showed that link.
+  let point = await pointOn("seven", -1, 0.75);
+  await page.mouse.move(point.x, point.y);
+  await expect(preview).toHaveAttribute("data-show", "true");
+  await expect(preview.locator(".link-display")).toHaveText("https://example.com/7");
+  // The URL shown after a link is not link text, so no preview shows there.
+  // It showed the next link, while a Ctrl or Cmd+click there opens this one.
+  const url = (await urls.first().boundingBox())!;
+  await page.mouse.move(url.x + url.width / 2, url.y + url.height / 2);
+  await expect(preview).toBeHidden();
+  point = await pointOn("eight", 1, 0.5);
+  await page.mouse.move(point.x, point.y);
+  await expect(preview).toHaveAttribute("data-show", "true");
+  await expect(preview.locator(".link-display")).toHaveText("https://example.com/8");
 });
 
 test("a change the browser makes inside a link while the caret rests at its end keeps the link", async () => {
