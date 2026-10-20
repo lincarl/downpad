@@ -530,6 +530,73 @@ test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", asy
   expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([]);
 });
 
+test("Shift+click or Shift+drag on a link's text extends the selection", async () => {
+  const file = path.join(directory, "shift-click-link.md");
+  await writeFile(file, [
+    "Before the link [docs](https://example.com/docs) after the link.",
+    "Start [alpha](https://example.com/a) middle [beta](https://example.com/b) end.",
+    "From here [gamma](https://example.com/c) to there.",
+    "| Head A | Head B |\n| --- | --- |\n| one [delta](https://example.com/d) x | two |\n| three | four |",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(5);
+  const shiftClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("Shift");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("Shift");
+  };
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  // Chromium put the caret at a Shift+click on a link, so typing went in
+  // there instead of over the text from the caret to the click.
+  await clickOn("docs", -1, 0.75);
+  await shiftClick(await pointOn("docs", 0, 0.25));
+  await expect.poll(selected).toBe("docs");
+  await page.keyboard.type("a");
+  await clickOn("Start ", 2, 0.25);
+  await shiftClick(await pointOn("beta", 2, 0.25));
+  await expect.poll(selected).toBe("art alpha middle be");
+  await page.keyboard.type("b");
+  // A Shift+drag that starts on a link extends the selection from the caret
+  // too. Chromium started a new selection at the press.
+  await clickOn("From here ", 2, 0.25);
+  const press = await pointOn("gamma", 2, 0.25);
+  const release = await pointOn(" to there.", 5, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(selected).toBe("om here gamma to t");
+  await page.keyboard.type("c");
+  // Shift+click from a link onto other text, and inside a table cell.
+  await clickOn("delta", 1, 0.25);
+  await shiftClick(await pointOn(" x", 1, 0.75));
+  await expect.poll(selected).toBe("elta x");
+  await clickOn("one ", 1, 0.25);
+  await shiftClick(await pointOn("delta", 2, 0.25));
+  await expect.poll(selected).toBe("ne de");
+  await page.keyboard.type("d");
+  // Shift+click into another cell still selects the cells.
+  await clickOn("two", 1, 0.5);
+  await shiftClick(await pointOn("lta", 1, 0.5));
+  await expect(page.locator(".milkdown .ProseMirror .selectedCell")).toHaveCount(2);
+  await clickOn("four", 1, 0.5);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Before the link [a](https://example.com/docs) after the link.",
+    "Stb[ta](https://example.com/b) end.",
+    "Frchere.",
+    // Milkdown pads the columns of a table it writes.
+    [
+      "| Head A                           | Head B |",
+      "| -------------------------------- | ------ |",
+      "| od[lta](https://example.com/d) x | two    |",
+      "| three                            | four   |",
+    ].join("\n"),
+  ].join("\n\n") + "\n");
+});
+
 test("text typed, composed or pasted right after a link goes after it", async () => {
   const file = path.join(directory, "after-link.md");
   await writeFile(file, [

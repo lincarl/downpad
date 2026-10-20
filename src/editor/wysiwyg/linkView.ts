@@ -11,6 +11,11 @@
 // (Cmd on macOS, Ctrl elsewhere), and the block around it on the next one, so
 // the next key replaced a whole paragraph, heading or list.
 //
+// Shift+click on link text extends the selection, as on other text. Chromium
+// does not extend the selection when the mouse goes down on a link, even in
+// an editable element, and ProseMirror leaves Shift+click to the browser, so
+// the click put a caret there instead.
+//
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
 // so it never becomes part of the document or the serialized markdown. It is
 // drawn outside every mark. ProseMirror otherwise draws a widget inside the
@@ -244,6 +249,44 @@ function clickAsPlain(view: EditorView, pos: number, event: MouseEvent): true {
   return true;
 }
 
+/** Extend the selection to a Shift+click on link text, and on to the
+ *  pointer while the button stays down, as Chromium does for a Shift+click
+ *  or Shift+drag on other text. Chromium put a caret at the click instead
+ *  (see the header). A press on an image inside a link is left alone, and
+ *  so is a drag another handler takes over, such as prosemirror-tables'
+ *  selection of the cells the pointer crosses. prosemirror-tables runs
+ *  first and takes a Shift+click into another cell itself. Unlike
+ *  Chromium's drag selection, the drag does not scroll the document when
+ *  the pointer leaves it. */
+function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
+  if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element)) return false;
+  const link = event.target.closest("a");
+  const found = link && view.dom.contains(link) ? view.posAtCoords({ left: event.clientX, top: event.clientY }) : null;
+  if (!found || (found.inside >= 0 && view.state.doc.nodeAt(found.inside)?.isInline)) return false;
+  event.preventDefault();
+  view.focus();
+  const { anchor } = view.state.selection;
+  const extend = (head: number): void => {
+    const { doc, selection } = view.state;
+    const next = TextSelection.between(doc.resolve(anchor), doc.resolve(head));
+    if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
+  };
+  extend(found.pos);
+  const root = view.dom.ownerDocument;
+  const move = (moved: MouseEvent): void => {
+    if (view.isDestroyed || !(moved.buttons & 1) || !(view.state.selection instanceof TextSelection)) return end();
+    const at = view.posAtCoords({ left: moved.clientX, top: moved.clientY });
+    if (at) extend(at.pos);
+  };
+  const end = (): void => {
+    root.removeEventListener("mousemove", move);
+    root.removeEventListener("mouseup", end);
+  };
+  root.addEventListener("mousemove", move);
+  root.addEventListener("mouseup", end);
+  return true;
+}
+
 function openExternally(href: string): void {
   if (isElectron()) {
     void desktopBridge().openExternal(href).catch(() => {});
@@ -284,6 +327,9 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
         event.preventDefault();
         openExternally(href);
         return true;
+      },
+      handleDOMEvents: {
+        mousedown: shiftClickOnLink,
       },
       handleDoubleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
         // Double-click a link to a local .md file → open it in a tab (§5.6),
