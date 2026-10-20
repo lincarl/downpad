@@ -1752,6 +1752,149 @@ test("a click in the document's side padding beside a block puts the caret on th
   await expect.poll(() => readFile(file, "utf8")).toBe(edited.join("\n\n") + "\n");
 });
 
+/** The x of a point in the document view's side padding, 8px from the text
+ *  column on the left, which is clear of the block handle, or 10px from the
+ *  view's edge on the right. */
+async function besideX(side: "left" | "right"): Promise<number> {
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const view = (await documentView.boundingBox())!;
+  const padding = await documentView.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+  return side === "left" ? view.x + padding - 8 : view.x + view.width - 10;
+}
+
+/** The first text node in `target`, as its text and the offsets where each
+ *  of its display lines starts and ends, with the middle of each line's
+ *  height. */
+function textLines(target: Locator): Promise<{ text: string; lines: { start: number; end: number; y: number }[] }> {
+  return target.evaluate((element) => {
+    const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const text = node.textContent!;
+    const range = document.createRange();
+    const lines: { start: number; end: number; y: number }[] = [];
+    for (let index = 0; index < text.length; index++) {
+      range.setStart(node, index);
+      range.setEnd(node, index + 1);
+      const box = range.getClientRects()[0];
+      if (!box) continue;
+      const y = box.top + box.height / 2;
+      const line = lines.at(-1);
+      if (line && Math.abs(line.y - y) < box.height / 2) line.end = index + 1;
+      else lines.push({ start: index, end: index + 1, y });
+    }
+    return { text, lines };
+  });
+}
+
+test("a drag from the document's side padding selects to the line beside or under the pointer, and a click there that moves a few pixels only puts the caret", async () => {
+  const file = path.join(directory, "side-padding-drags.md");
+  const words = (text: string, times: number) => Array.from({ length: times }, () => text).join(" ");
+  const items = Array.from({ length: 30 }, (_, index) => `- Item ${index + 1} ` + words("has words that wrap over lines.", 5));
+  await writeFile(file, [
+    "> " + words("Quote words wrap over the lines.", 18),
+    "| Head A | Head B |\n| --- | --- |\n| x1 | " + words("Cell words wrap.", 16) + " |",
+    items.join("\n"),
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const quote = documentView.locator("blockquote p");
+  const cell = documentView.locator("td").last();
+  const item = (index: number) => documentView.locator("li").nth(index).locator("p");
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  /** Collapse the whitespace of a selection that crosses lines or blocks. */
+  const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+  const left = await besideX("left");
+  const right = await besideX("right");
+  /** Scroll `target` into the middle of the view and read its lines. */
+  const linesIn = async (target: Locator) => {
+    await target.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    return textLines(target);
+  };
+  /** Press at `x` and `y`, move to `to` with the button held and release. */
+  const drag = async (x: number, y: number, to: { x: number; y: number }) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: Math.max(1, Math.round(Math.abs(to.y - y) / 8)) });
+    await page.mouse.up();
+  };
+  /** Type a character and expect it in line `line` of `target`'s text as
+   *  `linesIn` read it, with no text replaced. Backspace then takes it out. */
+  const typeInLine = async (target: Locator, before: Awaited<ReturnType<typeof textLines>>, line: number) => {
+    await page.keyboard.type("9");
+    const after = await target.evaluate((element) => element.textContent!);
+    const at = after.indexOf("9");
+    expect(after.slice(0, at) + after.slice(at + 1)).toBe(before.text);
+    expect(at).toBeGreaterThanOrEqual(before.lines[line]!.start);
+    expect(at).toBeLessThanOrEqual(before.lines[line]!.end);
+    await page.keyboard.press("Backspace");
+  };
+  // ProseMirror gave the end of the quote's paragraph for a point beside
+  // its middle line, so a move of a pixel after the press selected the rest
+  // of the paragraph, and the next key replaced it.
+  let lines = await linesIn(quote);
+  expect(lines.lines.length).toBeGreaterThanOrEqual(8);
+  await drag(right, lines.lines[4]!.y, { x: right - 1, y: lines.lines[4]!.y + 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(quote, lines, 4);
+  // Left of the quote's text, over its bar, it gave the paragraph's start.
+  const view = (await documentView.boundingBox())!;
+  const column = view.x + await documentView.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+  await drag(column - 2, lines.lines[3]!.y, { x: column + 3, y: lines.lines[3]!.y + 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(quote, lines, 3);
+  // A drag beside the lines selects from the end of one to the end of
+  // another, and one into the text to the pointer.
+  await drag(right, lines.lines[1]!.y, { x: right, y: lines.lines[3]!.y });
+  expect(flat(await selected())).toBe(flat(lines.text.slice(lines.lines[1]!.end, lines.lines[3]!.end)));
+  const into = await quote.evaluate((element, offset) => {
+    const range = document.createRange();
+    range.setStart(element.firstChild!, offset);
+    range.setEnd(element.firstChild!, offset + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * 0.25, y: box.top + box.height / 2 };
+  }, lines.lines[5]!.start + 3);
+  await drag(right, lines.lines[2]!.y, into);
+  expect(flat(await selected())).toBe(flat(lines.text.slice(lines.lines[2]!.end, lines.lines[5]!.start + 3)));
+  // Beside a table row, the lines of its last cell.
+  lines = await linesIn(cell);
+  expect(lines.lines.length).toBeGreaterThanOrEqual(3);
+  await drag(right, lines.lines[1]!.y, { x: right - 2, y: lines.lines[1]!.y + 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(cell, lines, 1);
+  await drag(right, lines.lines[0]!.y, { x: right, y: lines.lines[2]!.y });
+  expect(flat(await selected())).toBe(flat(lines.text.slice(lines.lines[0]!.end, lines.lines[2]!.end)));
+  // Left of a list item, ProseMirror gave the position before its
+  // paragraph, so the selection ended in the item before.
+  lines = await linesIn(item(1));
+  await drag(left, lines.lines[1]!.y, { x: left + 2, y: lines.lines[1]!.y - 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(item(1), lines, 1);
+  const next = await textLines(item(2));
+  await drag(left, lines.lines[0]!.y, { x: left, y: next.lines[1]!.y });
+  expect(flat(await selected())).toBe(flat(lines.text + " " + next.text.slice(0, next.lines[1]!.start)));
+  // The document scrolls while the pointer is below it, and the selection
+  // runs to the start of the line beside the pointer at its bottom edge.
+  const area = page.locator(".editor-area");
+  const areaBox = (await area.boundingBox())!;
+  await item(2).evaluate((element) => element.scrollIntoView({ block: "start" }));
+  const scrolled = await area.evaluate((element) => element.scrollTop);
+  await page.mouse.move(left, (await textLines(item(2))).lines[0]!.y);
+  await page.mouse.down();
+  await page.mouse.move(left, areaBox.y + areaBox.height + 8, { steps: 5 });
+  await expect.poll(() => area.evaluate((element) => element.scrollTop)).toBeGreaterThan(scrolled + areaBox.height / 2);
+  await page.mouse.up();
+  // A caret at a soft wrap draws at the end of the line above, so the head
+  // is found by its offset among the line starts.
+  const head = await page.evaluate(() => {
+    const selection = document.getSelection()!;
+    const items = [...document.querySelectorAll(".milkdown .ProseMirror li")];
+    return { item: items.findIndex((element) => element.contains(selection.focusNode)), offset: selection.focusOffset };
+  });
+  lines = await textLines(item(head.item));
+  const line = lines.lines.find((each) => each.start === head.offset);
+  expect(line).toBeDefined();
+  expect(Math.abs(line!.y - (areaBox.y + areaBox.height))).toBeLessThan((lines.lines[1]!.y - lines.lines[0]!.y) * 1.5);
+});
+
 /** The point `fraction` of the way across the character at `index` of the
  *  split's Markdown pane's line that reads `text`. */
 function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
