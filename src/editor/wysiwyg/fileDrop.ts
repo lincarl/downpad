@@ -1,8 +1,10 @@
 // Where a file dropped on the document goes in (§5.4). While something is
-// dragged over the document, Crepe's drop indicator (prosemirror-drop-indicator)
-// draws a line at the block edge nearest the pointer, and Crepe inserts dropped
-// blocks there. md-easy takes file drops before Crepe sees them, so it finds
-// that edge the same way and inserts the file's Markdown there itself.
+// dragged over the document, md-easy draws the drop line at the block edge
+// where a drop at the pointer goes in, which is the edge nearest the pointer,
+// or above or below a table or a code, math or Mermaid block rather than
+// inside it (dropEdge.ts). A block dragged there goes in at that edge. The app
+// takes file drops before the editor hears them, so it finds the same edge
+// and inserts the file's Markdown there itself.
 
 import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
@@ -13,6 +15,7 @@ import { Transform, dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { differingRuns } from "../differingRuns";
 import { keepCaretPlain } from "./linkEdges";
+import { changeEnd, dropEdge } from "./dropEdge";
 
 /** Where the files of a drop on the document go in, or the next file of a
  *  drop away from the text, after the one before it. The editor that made it
@@ -34,43 +37,17 @@ export interface DropTarget {
 
 /**
  * Where a file dropped at a viewport point goes in, as a document position.
- * Over the document that is the block edge Crepe's drop indicator marks there.
- * The indicator does not show above or below the document, so a drop there
- * goes in at its start or end. Null when no block is rendered.
+ * Over the document that is the block edge the drop line marks there
+ * (`dropEdge`), the edge nearest the point, or the nearer edge of a table
+ * that edge is inside or of a code, math or Mermaid block under the point.
+ * The line does not show above or below the document, so a drop there goes
+ * in at its start or end. Null when no block is rendered.
  */
 export function dropPosition(view: Pick<EditorView, "dom" | "state" | "nodeDOM">, x: number, y: number): number | null {
   const { top, bottom } = view.dom.getBoundingClientRect();
   if (y < top) return 0;
   if (y > bottom) return view.state.doc.content.size;
-  return nearestBlockEdge(view, x, y);
-}
-
-/**
- * The block edge nearest a viewport point, as Crepe's drop indicator picks it:
- * the top or bottom edge of any block, lists and their items included, by the
- * distance from the point to the nearer end of the edge. On a tie the earlier
- * position wins. Returns the document position at that edge, or null when no
- * block is rendered.
- */
-function nearestBlockEdge(view: Pick<EditorView, "state" | "nodeDOM">, x: number, y: number): number | null {
-  const nearest = { pos: -1, distance: Infinity };
-  const consider = (pos: number, left: number, right: number, edge: number): void => {
-    const distance = Math.min(Math.abs(x - left), Math.abs(x - right)) + Math.abs(y - edge);
-    if (distance < nearest.distance || (distance === nearest.distance && pos < nearest.pos)) {
-      Object.assign(nearest, { pos, distance });
-    }
-  };
-  view.state.doc.descendants((node, pos) => {
-    const dom = view.nodeDOM(pos);
-    if (dom instanceof HTMLElement) {
-      const { top, bottom, left, right } = dom.getBoundingClientRect();
-      consider(pos, left, right, top);
-      consider(pos + node.nodeSize, left, right, bottom);
-    }
-    // A text block's children are inline, so only containers are searched.
-    return !node.isTextblock;
-  });
-  return nearest.pos < 0 ? null : nearest.pos;
+  return dropEdge(view, x, y)?.pos ?? null;
 }
 
 /** Whether a node is an empty paragraph, a line with nothing typed on it. */
@@ -154,12 +131,14 @@ function beforeListItem($pos: ResolvedPos, content: Fragment): number | null {
 /**
  * Put `doc`'s blocks in at a drop target, where Crepe puts a block dropped at
  * that edge. They go in beside the blocks there, never splitting one. A table
- * cannot hold them, so a drop on a table puts them above or below it. An empty
- * line at the edge takes them, as typing on it would, so Crepe's empty last
- * line never ends up mid-document, where it would be saved as `<br />`. In a
- * list, a link becomes a list item of its own where Crepe would make the list
- * loose (`listItemAt`), and an image at the start of an item goes in before
- * the item (`beforeListItem`). Returns whether the document changed.
+ * cannot hold them, so a target inside a table, such as a caret in a cell,
+ * puts them above or below it. A drop on a table already aims there
+ * (`dropPosition`). An empty line at the edge takes them, as typing on it
+ * would, so Crepe's empty last line never ends up mid-document, where it would
+ * be saved as `<br />`. In a list, a link becomes a list item of its own where
+ * Crepe would make the list loose (`listItemAt`), and an image at the start of
+ * an item goes in before the item (`beforeListItem`). Returns whether the
+ * document changed.
  */
 function placeBlocks(tr: Transaction, target: DropTarget, doc: Node): boolean {
   const { content } = doc;
@@ -183,15 +162,6 @@ function placeBlocks(tr: Transaction, target: DropTarget, doc: Node): boolean {
     else tr.replaceRange(at, at, slice);
   }
   return tr.docChanged;
-}
-
-/** Where the last step of a transaction ends its change, in the new document. */
-function changeEnd(tr: Transaction): number {
-  let end = 0;
-  tr.mapping.maps[tr.mapping.maps.length - 1]?.forEach((_from, _to, _newFrom, newTo) => {
-    end = newTo;
-  });
-  return end;
 }
 
 /**

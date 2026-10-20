@@ -33,8 +33,9 @@
 // must clear them too.
 //
 // ProseMirror also gives plain text that is dropped the marks of the place it
-// is dropped on, and Crepe's drop indicator then puts it in a block of its
-// own. So text dropped on a link became a new link to the same target.
+// is dropped on, and the drop then puts it in a block of its own at a block
+// edge (dropEdge.ts). So text dropped on a link became a new link to the same
+// target.
 // `transformPasted` below takes the link off.
 //
 // A file dropped right before a link to the same target, such as a missing
@@ -212,8 +213,8 @@ function linkEdgesPlugin(): Plugin<LinkEdgesState> {
       /** Take the links off text pasted or dropped as plain text. Plain text
        *  holds no links of its own. ProseMirror gives it the marks of the
        *  place it goes in, which for a drop is the place under the pointer,
-       *  even though Crepe's drop indicator puts the text in a block of its
-       *  own, outside that link. A paste at the caret gets the marks there
+       *  even though the drop puts the text in a block of its own at a block
+       *  edge, outside that link. A paste at the caret gets the marks there
        *  again from Milkdown's paste handling, which reads stored marks. */
       transformPasted(slice, view, plain) {
         const link = view.state.schema.marks.link;

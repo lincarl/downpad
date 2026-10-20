@@ -244,16 +244,15 @@ export class EditorHost implements FindController {
   /**
    * Aim the files of a drop (§5.4) at the pane under the drop point. On the
    * document pane, or on the page around it in the Document view, they go in
-   * at the block edge nearest the drop point, which Crepe's drop indicator
-   * marked during the drag, or at the start or end for a drop above or below
-   * the text. On a Markdown pane they go in at the text position nearest the
-   * drop point. A drop anywhere else, or a call without a drop point, goes in
-   * at the caret of the pane being edited when the first file goes in, which
-   * is the split's Markdown pane while it has focus and the document
-   * otherwise, and each later file goes in after the one before. The
-   * drop also notes where focus is, for `insertDropped`. Returns null when no
-   * document is shown. Call it while handling the drop event, before the drop
-   * point's text can move.
+   * at the block edge the drop line marked there during the drag, or at the
+   * start or end for a drop above or below the text. On a Markdown pane they
+   * go in at the text position nearest the drop point. A drop anywhere else,
+   * or a call without a drop point, goes in at the caret of the pane being
+   * edited when the first file goes in, which is the split's Markdown pane
+   * while it has focus and the document otherwise, and each later file goes in
+   * after the one before. The drop also notes where focus is, for
+   * `insertDropped`. Returns null when no document is shown. Call it while
+   * handling the drop event, before the drop point's text can move.
    */
   aimDrop(drop?: DropPoint): FileDrop | null {
     if (this.disposed || this.activeTabId === null) return null;
@@ -446,13 +445,6 @@ export class EditorHost implements FindController {
     const pending = [...this.drops.keys()].some((other) => other.tabId === drop.tabId);
     this.store.setFilesPending(drop.tabId, pending);
     if (aimed?.target) this.releaseTarget(aimed.pane, aimed.target);
-  }
-
-  /** Hide the drop indicator the document pane drew while files were dragged
-   *  over it. The app takes file drops before the editor sees them (§5.4). */
-  hideDropIndicator(): void {
-    if (this.disposed) return;
-    this.active()?.wysiwyg?.hideDropIndicator();
   }
 
   /** (Re)apply the spell-check setting to every editor under the host (§5.14). */

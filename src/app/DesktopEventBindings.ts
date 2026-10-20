@@ -148,8 +148,6 @@ export class DesktopEventBindings {
       if (!event.dataTransfer || !hasFiles(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      // The editor never sees this drop, so clear the indicator it drew for it.
-      this.dependencies.editorHost.hideDropIndicator();
       const bridge = desktopBridge();
       const paths = Array.from(event.dataTransfer.files)
         .map((file) => bridge.getPathForFile(file))
