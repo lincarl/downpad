@@ -332,6 +332,11 @@ describe("something dragged within the document onto a code block", () => {
     codeElement().dispatchEvent(enter);
     expect(enter.defaultPrevented).toBe(false);
     expect(dragOver(codeElement(), 300, 200, EXTERNAL)).toBeNull();
+    // Neither md-easy nor ProseMirror takes the drop, which jsdom's code
+    // block, shown without CodeMirror, leaves alone.
+    const dropped = dragEvent("drop", 300, 200, EXTERNAL);
+    codeElement().dispatchEvent(dropped);
+    expect(dropped.defaultPrevented).toBe(false);
     expect(view.state.doc.textContent).toBe("Intro.const x = 1;End.");
   });
 });
