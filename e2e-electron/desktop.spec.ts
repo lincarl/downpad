@@ -751,6 +751,41 @@ test("Shift+click on an image in a line extends the selection to the side of it 
   ].join("\n\n") + "\n");
 });
 
+test("Shift+click on an image in a line while a code block has focus puts the caret beside it", async () => {
+  const file = path.join(directory, "shift-click-image-from-code.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "```\nconst alpha = 1;\n```",
+    "Pics ![Bar](bar.svg) after.",
+    "Go [![Bar](bar.svg) text](https://example.com/m) end.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror .cm-line")).toHaveCount(1);
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
+  await expect(images).toHaveCount(2);
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  const code = page.locator(".milkdown .ProseMirror .cm-content");
+  // Chromium puts no caret on an image, so focus went back to the code block
+  // and the next key went in there.
+  for (const [index, fraction, typed] of [[0, 0.75, "x"], [1, 0.25, "y"]] as const) {
+    await page.locator(".milkdown .ProseMirror .cm-line").click();
+    await expect(code).toBeFocused();
+    const box = (await images.nth(index).boundingBox())!;
+    await page.keyboard.down("Shift");
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.keyboard.up("Shift");
+    await page.keyboard.type(typed);
+  }
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "```\nconst alpha = 1;\n```",
+    "Pics ![Bar](bar.svg)x after.",
+    "Go y[![Bar](bar.svg) text](https://example.com/m) end.",
+  ].join("\n\n") + "\n");
+});
+
 test("Shift+click on a link's text while a code block has focus puts the caret there", async () => {
   const file = path.join(directory, "shift-click-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "Then [docs](https://example.com/docs) after the link."].join("\n\n") + "\n");

@@ -199,7 +199,9 @@ const IN_SELECTION = "md-in-selection";
  *  input for a path instead. Load and error events do not bubble, so the plugin
  *  catches them on their way down to the image. Inline images inside a text
  *  selection get the IN_SELECTION class, and Shift+click on an inline image
- *  or a chip extends the selection to it. The plugin also draws the decoration of showAgain. */
+ *  or a chip extends the selection to it, or puts the caret beside it while
+ *  the document does not have focus. The plugin also draws the decoration of
+ *  showAgain. */
 export function missingImages(onError: (event: Event) => void) {
   return $prose(
     () =>
@@ -265,9 +267,12 @@ export function missingImages(onError: (event: Event) => void) {
             // click left the caret where it was or moved it. Extend it to the
             // side of the image or chip clicked, as on text. While the
             // document does not have focus, the selection to extend is not
-            // the one the user sees, so the press is left to the browser.
+            // the one the user sees, such as one in a code block that has
+            // focus, so the click puts the caret at that side instead.
+            // Chromium puts no caret on an image, so focus stayed where it
+            // was and the next key went in there.
             mousedown: (view, event) => {
-              if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element) || !view.hasFocus()) return false;
+              if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element)) return false;
               const host = event.target.closest<HTMLElement>(".milkdown-image-inline");
               const found = host && view.dom.contains(host) ? imageNodeAtDom(view, host) : null;
               if (!host || !found) return false;
@@ -275,7 +280,12 @@ export function missingImages(onError: (event: Event) => void) {
               const head = event.clientX < left + width / 2 ? found.pos : found.pos + found.node.nodeSize;
               event.preventDefault();
               const { doc, selection } = view.state;
-              view.dispatch(view.state.tr.setSelection(TextSelection.create(doc, selection.anchor, head)));
+              const focused = view.hasFocus();
+              const next = focused ? TextSelection.between(selection.$anchor, doc.resolve(head)) : TextSelection.create(doc, head);
+              view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
+              // Focus only once the selection has left a code block, since
+              // focusing the view moves focus into the block that holds it.
+              if (!focused) view.focus();
               return true;
             },
           },
