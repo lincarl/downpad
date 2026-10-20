@@ -3737,6 +3737,28 @@ test("a block dragged by its handle onto a tall table while the page scrolls goe
   await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", ...fillers, "Move me.", table, "End."].join("\n\n") + "\n");
 });
 
+test("text from another app dropped on a table cell goes in below the table, where the drop line shows", async () => {
+  const file = path.join(directory, "text-drop-table.md");
+  const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";
+  await writeFile(file, `Intro.\n\n${table}\n\nEnd.\n`);
+  await launch(file);
+  const tableBox = (await page.locator(".milkdown-table-block").boundingBox())!;
+  const b3 = await centerOf(page.locator(".milkdown .ProseMirror td", { hasText: "b3" }));
+  // Chromium's drag emulation, as for text dragged from another app. Crepe's
+  // table kept this drop from the editor, so it did nothing, though the drop
+  // line showed between the table's rows.
+  const cdp = await page.context().newCDPSession(page);
+  const data = { items: [{ mimeType: "text/plain", data: "From another app." }], dragOperationsMask: 1 };
+  await cdp.send("Input.dispatchDragEvent", { type: "dragEnter", x: b3.x, y: b3.y - 4, data });
+  await cdp.send("Input.dispatchDragEvent", { type: "dragOver", x: b3.x, y: b3.y - 4, data });
+  await cdp.send("Input.dispatchDragEvent", { type: "dragOver", x: b3.x, y: b3.y, data });
+  await expect.poll(dropLineY).toBeCloseTo(tableBox.y + tableBox.height, 0);
+  await cdp.send("Input.dispatchDragEvent", { type: "drop", x: b3.x, y: b3.y, data });
+  await cdp.detach();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(`Intro.\n\n${table}\n\nFrom another app.\n\nEnd.\n`);
+});
+
 test("a click in a table cell in the split's document pane while cells are selected puts the caret there, right after a Markdown edit", async () => {
   const { file, markdownLine } = await openSplit("table-cells-split.md", "Intro.\n\n| Name | Notes |\n| --- | --- |\n| short text | a note |\n| a much wider value | b2 |\n");
   const table = page.locator(".editor-pane-wysiwyg table.children");

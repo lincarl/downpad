@@ -6,8 +6,8 @@
 // out into a new table. So a drop whose nearest edge is inside a table goes in
 // above or below the whole table, at the table's edge nearer the pointer, and
 // the indicator draws its line there. That holds for blocks and text dragged
-// within the document (`dropBesideTable`, `tableDropIndicator`) and for
-// dropped files (fileDrop.ts).
+// within the document, text dragged in from elsewhere (`dropBesideTable`,
+// `tableDropIndicator`), and dropped files (fileDrop.ts).
 
 import { dropIndicatorState, type DropIndicatorState } from "@milkdown/kit/plugin/cursor";
 import type { Slice } from "@milkdown/kit/prose/model";
@@ -143,12 +143,28 @@ export function dropBesideTable(view: EditorView, event: DragEvent, slice: Slice
   return true;
 }
 
+/**
+ * Whether ProseMirror, rather than Crepe's table view, takes the events of a
+ * drag over a table (tableCellClicks.ts), and so puts its drop in above or
+ * below the table. That holds for a drag ProseMirror tracks in
+ * `view.dragging`, such as a block dragged by Crepe's block handle or selected
+ * text, and for text dragged in from elsewhere, such as another app or the
+ * Split view's Markdown pane. The table keeps the drags of its own row and
+ * column handles, which carry no text, and drags of files, which the app takes
+ * (fileDrop.ts).
+ */
+export function editorTakesDrag(view: Pick<EditorView, "dragging">, event: DragEvent): boolean {
+  if (view.dragging) return true;
+  const types = event.dataTransfer?.types ?? [];
+  return !types.includes("Files") && (types.includes("text/plain") || types.includes("text/html"));
+}
+
 /** Whether something dropped at a dragover's point goes in at the drop
- *  indicator's line. A table keeps a drop on it from ProseMirror, unless
- *  ProseMirror started the drag (tableCellClicks.ts). The app takes dropped
- *  files and puts them in at the line (fileDrop.ts). */
+ *  indicator's line. A table keeps the drop of a drag that ProseMirror does
+ *  not take there (`editorTakesDrag`), such as a row dragged by its handle.
+ *  The app takes dropped files and puts them in at the line (fileDrop.ts). */
 function dropsAtLine(view: EditorView, event: DragEvent): boolean {
-  if (view.dragging || event.dataTransfer?.types.includes("Files")) return true;
+  if (editorTakesDrag(view, event) || event.dataTransfer?.types.includes("Files")) return true;
   const { target } = event;
   const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   return !element?.closest(".milkdown-table-block");
@@ -160,7 +176,9 @@ function dropsAtLine(view: EditorView, event: DragEvent): boolean {
  * As Crepe's indicator does for its own edges, it hides the line where a move
  * would leave the dragged block where it is. Use it after Crepe's Cursor
  * feature, so its listener runs after the indicator's own and moves the line
- * the indicator just drew.
+ * the indicator just drew. It moves only a line the indicator shows, so while
+ * the page scrolls under a still pointer, when the indicator hides its line,
+ * no line shows here either.
  */
 export const tableDropIndicator = $prose(
   (ctx) =>

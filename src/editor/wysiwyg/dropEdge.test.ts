@@ -138,19 +138,27 @@ function dragWord(view: EditorView, word: string): void {
   view.dragging = { slice: selection.content(), move: true };
 }
 
-/** A drag event of `type` at a viewport point, carrying data of `types`. */
-function dragEvent(type: string, x: number, y: number, types: string[] = ["text/html", "text/plain"]): DragEvent {
+/** The data a drag of a block or text within the document carries, which
+ *  ProseMirror reads from `view.dragging` instead. */
+const DRAGGED = { "text/html": "", "text/plain": "" };
+
+/** The data a drag of text from another app carries. */
+const EXTERNAL = { "text/plain": "EXTERNAL" };
+
+/** A drag event of `type` at a viewport point, carrying `data` by type. */
+function dragEvent(type: string, x: number, y: number, data: Record<string, string> = DRAGGED): DragEvent {
   const event = new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
-  const dataTransfer = { types, files: [], getData: () => "", setData: () => {}, clearData: () => {}, dropEffect: "move" };
+  const dataTransfer = { types: Object.keys(data), files: [], getData: (format: string) => data[format] ?? "", setData: () => {}, clearData: () => {}, dropEffect: "move" };
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
   return event;
 }
 
-/** Drop what is dragged on `target` at a viewport point. jsdom cannot find the
- *  document position under a point, so it is the start of `target`'s node. */
-function drop(view: EditorView, target: Element, x: number, y: number): void {
+/** Drop what is dragged, or `data`, on `target` at a viewport point. jsdom
+ *  cannot find the document position under a point, so it is the start of
+ *  `target`'s node. */
+function drop(view: EditorView, target: Element, x: number, y: number, data?: Record<string, string>): void {
   vi.spyOn(view, "posAtCoords").mockReturnValue({ pos: view.posAtDOM(target, 0), inside: -1 });
-  target.dispatchEvent(dragEvent("drop", x, y));
+  target.dispatchEvent(dragEvent("drop", x, y, data));
 }
 
 /** The paragraph element of the cell that holds `text`. */
@@ -219,11 +227,41 @@ describe("something dragged within the document", () => {
   });
 });
 
+describe("text dragged in from another app", () => {
+  it("has its dragenter on a table cell cancelled, so the browser never drops it into the cell itself", async () => {
+    await open(`Intro.\n\n${TABLE}`);
+    const enter = dragEvent("dragenter", 300, 250, EXTERNAL);
+    cellParagraph("4").dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+  });
+
+  it("goes in below a table when dropped on the lower half of a cell, as it does beside the table", async () => {
+    const view = await open(`Intro.\n\n${TABLE}\nEnd.\n`);
+    // The table from 130px to 250px, with the "3 | 4" row from 210px.
+    layOut(view, ["Intro."], ["End."]);
+    drop(view, cellParagraph("4"), 300, 230, EXTERNAL);
+    expect(editor!.getMarkdown()).toBe(`Intro.\n\n${TABLE}\nEXTERNAL\n\nEnd.\n`);
+  });
+});
+
+describe("a table", () => {
+  it("keeps a drag that carries no text, such as a row dragged by its handle, or one that carries files", async () => {
+    await open(`Intro.\n\n${TABLE}`);
+    const drags: Record<string, string>[] = [{}, { Files: "", "text/plain": "a.csv" }];
+    for (const data of drags) {
+      // The table cancels dragover but not dragenter, as Crepe's does.
+      const enter = dragEvent("dragenter", 300, 250, data);
+      cellParagraph("4").dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(false);
+    }
+  });
+});
+
 describe("the drop indicator", () => {
-  /** Drag over `target` at a viewport point, carrying data of `types`, and
-   *  return where the indicator then shows. */
-  function dragOver(target: Element, x: number, y: number, types?: string[]) {
-    target.dispatchEvent(dragEvent("dragover", x, y, types));
+  /** Drag over `target` at a viewport point, carrying `data`, and return
+   *  where the indicator then shows. */
+  function dragOver(target: Element, x: number, y: number, data?: Record<string, string>) {
+    target.dispatchEvent(dragEvent("dragover", x, y, data));
     return crepeOf(editor!).editor.ctx.get(dropIndicatorState.key);
   }
 
@@ -239,7 +277,7 @@ describe("the drop indicator", () => {
     expect(dragOver(view.dom, 10, 203)).toMatchObject({ pos: table, line: { p1: { y: top }, p2: { y: top } } });
     view.dragging = null;
     // Files from the desktop, which the app puts in at the line.
-    expect(dragOver(cellParagraph("4"), 300, 238, ["Files"])).toMatchObject({ pos: after });
+    expect(dragOver(cellParagraph("4"), 300, 238, { Files: "" })).toMatchObject({ pos: after });
   });
 
   it("hides its line over the upper half of a table right below the dragged block, which a drop leaves where it is", async () => {
@@ -252,12 +290,13 @@ describe("the drop indicator", () => {
     expect(dragOver(cellParagraph("2"), 300, 205)).toBeNull();
   });
 
-  it("leaves its line inside a table for text from another app dragged onto a cell, which the table keeps from the editor", async () => {
+  it("draws its line at a table's nearer edge for text from another app dragged onto a cell, where a drop there goes in", async () => {
     const view = await open(`Intro.\n\n${TABLE}\nEnd.\n`);
-    layOut(view, ["Intro."], ["End."]);
+    const { bottom } = layOut(view, ["Intro."], ["End."]);
     const table = positionOf(view, nodeOf("table"));
-    const shown = dragOver(cellParagraph("4"), 300, 237, ["text/plain"]);
-    expect(shown?.pos).toBeGreaterThan(table);
-    expect(shown?.pos).toBeLessThan(table + view.state.doc.nodeAt(table)!.nodeSize);
+    const after = table + view.state.doc.nodeAt(table)!.nodeSize;
+    // Over a cell near the bottom of the "1 | 2" row, which ends at 210px, in
+    // the table's lower half.
+    expect(dragOver(cellParagraph("4"), 300, 207, EXTERNAL)).toMatchObject({ pos: after, line: { p1: { y: bottom }, p2: { y: bottom } } });
   });
 });

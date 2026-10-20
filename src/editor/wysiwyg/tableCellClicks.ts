@@ -43,16 +43,21 @@
 // the page scrolls under a still pointer. With that last update not cancelled,
 // a block dragged by its handle onto a cell was dropped by Chromium itself,
 // which put a copy of the block's text into the cell, and the block stayed
-// where it was. This view leaves the events of a drag that ProseMirror started
-// to ProseMirror, which cancels the dragenter and puts the drop in above or
-// below the table (dropEdge.ts). The table keeps the drags of its own row and
-// column handles, and other drops on it, as before.
+// where it was. With the last update a cancelled dragover, no one took the
+// drop, so text from another app dropped on a cell did nothing. This view
+// leaves the events of a drag that ProseMirror tracks in `view.dragging`,
+// such as a block dragged by its handle or selected text, and of text dragged
+// in from elsewhere, to ProseMirror. ProseMirror then cancels the dragenter
+// and puts the drop in above or below the table (dropEdge.ts). The table
+// keeps the drags of its own row and column handles, and drags of files, as
+// before.
 
 import { TableNodeView } from "@milkdown/kit/component/table-block";
 import type { Node } from "@milkdown/kit/prose/model";
 import { CellSelection, findTable } from "@milkdown/kit/prose/tables";
 import { tableSchema } from "@milkdown/kit/preset/gfm";
 import { $view } from "@milkdown/kit/utils";
+import { editorTakesDrag } from "./dropEdge";
 
 /** Whether the selection is a whole row, and a whole column, of a table. */
 interface SelectedLines {
@@ -64,8 +69,8 @@ interface SelectedLines {
 const lineHandles = '[data-role="col-drag-handle"], [data-role="row-drag-handle"]';
 
 /** Crepe's table view, without its own handling of a press in a cell or of a
- *  drag that ProseMirror started, and keeping the cells of a table whose
- *  content has not changed while no whole row or column is selected in it. */
+ *  drag of a block or text, and keeping the cells of a table whose content
+ *  has not changed while no whole row or column is selected in it. */
 class CaretTableView extends TableNodeView {
   /** Whether a press that started on a row or column handle, or in its menu,
    *  has not yet ended with its click. */
@@ -112,10 +117,12 @@ class CaretTableView extends TableNodeView {
 
   override stopEvent(event: Event): boolean {
     const { target, type } = event;
-    // ProseMirror takes the events of a drag it started, such as a block
-    // dragged by its handle, here as anywhere else, so it cancels the
-    // dragenter and puts the drop in above or below the table (dropEdge.ts).
-    if (this.view.dragging && (type === "drop" || type.startsWith("drag"))) return false;
+    // ProseMirror takes the events of a drag of a block or text, here as
+    // anywhere else, so it cancels the dragenter and puts the drop in above or
+    // below the table (dropEdge.ts).
+    if ((type === "drop" || type.startsWith("drag")) && event instanceof DragEvent && editorTakesDrag(this.view, event)) {
+      return false;
+    }
     const press = type === "mousedown" || type === "pointerdown";
     // A button inside a cell still keeps its press, as in Crepe's view.
     if (press && target instanceof Element && this.contentDOM.contains(target) && !target.closest("button")) {
@@ -168,8 +175,8 @@ class CaretTableView extends TableNodeView {
 }
 
 /** Crepe's table node view with a click in a cell placing the caret, the
- *  drop of a block or text dragged within the document left to ProseMirror,
- *  and the cells kept while only the selection in the table changes, unless
+ *  drop of a block or text left to ProseMirror (`editorTakesDrag`), and the
+ *  cells kept while only the selection in the table changes, unless
  *  it becomes a whole row or column. Use it after Crepe's Table feature, whose
  *  settings the view reads, so it replaces Crepe's view. */
 export const tableCellClicks = $view(
