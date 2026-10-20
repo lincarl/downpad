@@ -426,6 +426,37 @@ test("an image selected between code blocks below a rule is replaced after Ctrl+
   await expectReplaced("漢", "![First](pic.svg)");
 });
 
+test("text that comes without a key replaces an image selected between paragraphs and selected table cells as a key does", async () => {
+  // Text from an input method, the emoji panel or dictation comes with no
+  // key event, as DevTools sends it here. Chromium typed it over the image
+  // and joined the paragraphs around it, and kept the text of the first of
+  // two selected cells.
+  const file = path.join(directory, "keyless.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
+  await writeFile(file, ["Above.", "![Pic](pic.svg)", "Below.", table, "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  const image = page.locator(".milkdown .ProseMirror .milkdown-image-block");
+  await image.click();
+  await expect(image).toHaveClass(/\bselected\b/);
+  await session.send("Input.insertText", { text: "漢字" });
+  await expect(image).toHaveCount(0);
+  // Select the cells from "one" to "two" with a Shift+click.
+  await clickOn("one", 1, 0.5);
+  const two = await pointOn("two", 1, 0.5);
+  await page.keyboard.down("Shift");
+  await page.mouse.click(two.x, two.y);
+  await page.keyboard.up("Shift");
+  await expect(page.locator(".milkdown .ProseMirror .selectedCell")).toHaveCount(2);
+  await session.send("Input.insertText", { text: "かな" });
+  await page.keyboard.press("ControlOrMeta+s");
+  // A key puts its text in the cell where the selection ends and empties the
+  // other one. Milkdown pads the columns of a table it writes.
+  const written = "| A     | B    |\n| ----- | ---- |\n|       | かな   |\n| three | four |";
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "漢字", "Below.", written, "Last line."].join("\n\n") + "\n");
+});
+
 test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
   const file = path.join(directory, "image-links.md");
   // An image wide enough to click either half of.

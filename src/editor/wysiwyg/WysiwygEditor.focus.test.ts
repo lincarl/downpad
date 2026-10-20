@@ -13,11 +13,19 @@
 // also while it has focus already. The patch puts the block's selection back
 // when no input moved the selection since ProseMirror set it, and before a key
 // or text that comes without one goes in.
+//
+// ProseMirror itself types a key over a selection that is not text, such as
+// a selected block or cells, and left text that comes without a key, such as
+// from an input method, to Chromium. Over an image between two
+// paragraphs, Chromium removed the DOM range around the image, which joined
+// the paragraphs. The patch types such text as ProseMirror types a key.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
-import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
+import type { Node as ProseNode } from "@milkdown/kit/prose/model";
+import { NodeSelection, TextSelection, type Selection } from "@milkdown/kit/prose/state";
+import { CellSelection } from "@milkdown/kit/prose/tables";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -215,5 +223,75 @@ describe("a selected block that the page moves to the start of the document", ()
     await moveToStart(start);
     expect(view.state.selection).toBeInstanceOf(TextSelection);
     expect(view.state.selection.from).toBe(1);
+  });
+});
+
+describe("text that comes without a key over a selection that is not text", () => {
+  const imageBetweenParagraphs = ["Above.", "![Pic](pic.png)", "Below."].join("\n\n") + "\n";
+
+  /** The position of the first node in `doc` that `test` accepts. */
+  function find(doc: ProseNode, test: (node: ProseNode) => boolean): number {
+    let found = -1;
+    doc.descendants((node, pos) => {
+      if (found < 0 && test(node)) found = pos;
+      return found < 0;
+    });
+    return found;
+  }
+
+  /** Open `markdown`, focus it and give it the selection `select` makes. */
+  async function open(markdown: string, select: (doc: ProseNode) => Selection): Promise<EditorView> {
+    const view = await mount(markdown);
+    view.dom.focus();
+    view.dispatch(view.state.tr.setSelection(select(view.state.doc)));
+    await settle();
+    return view;
+  }
+
+  const selectImage = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "image-block"));
+
+  /** Send `data` as an input method, the emoji panel or dictation does, with
+   *  no key, and return the event. jsdom has no default action, so text that
+   *  the editor leaves to the browser goes nowhere. */
+  function input(view: EditorView, data: string, inputType = "insertText"): InputEvent {
+    const event = new InputEvent("beforeinput", { inputType, data, bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(event);
+    return event;
+  }
+
+  it("replaces an image selected between two paragraphs, and the paragraphs stay apart", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    expect(input(view, "漢字").defaultPrevented).toBe(true);
+    await settle();
+    expect(editor!.getMarkdown()).toBe(["Above.", "漢字", "Below."].join("\n\n") + "\n");
+  });
+
+  it("replaces selected table cells as a key does", async () => {
+    const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
+    const view = await open(["Above.", table].join("\n\n") + "\n", (doc) => {
+      const cell = (text: string) => find(doc, (node) => node.type.spec.tableRole === "cell" && node.textContent === text);
+      return CellSelection.create(doc, cell("one"), cell("two"));
+    });
+    expect(input(view, "漢字").defaultPrevented).toBe(true);
+    await settle();
+    // The text goes in the cell where the selection ends, and the other
+    // selected cell is emptied. Milkdown pads the columns of a table it writes.
+    expect(editor!.getMarkdown()).toBe(["Above.", "| A     | B    |\n| ----- | ---- |\n|       | 漢字   |\n| three | four |"].join("\n\n") + "\n");
+  });
+
+  it("leaves a composition over a selected image, and text over selected text, to the browser", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    // ProseMirror reads the DOM selection as a composition starts, which
+    // here puts the caret after "Above.", so select the image again.
+    view.dispatch(view.state.tr.setSelection(selectImage(view.state.doc)));
+    expect(input(view, "か", "insertCompositionText").defaultPrevented).toBe(false);
+    expect(input(view, "漢字").defaultPrevented).toBe(false);
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "漢字", bubbles: true }));
+    await vi.advanceTimersByTimeAsync(100);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 3)));
+    await settle();
+    expect(input(view, "漢字").defaultPrevented).toBe(false);
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
   });
 });
