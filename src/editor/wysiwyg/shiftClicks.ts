@@ -17,14 +17,23 @@
 // Markdown pane toward the click, which CodeMirror cut off at its start or
 // end, and focus stayed there, so the next key replaced the code or Markdown
 // between the caret and that point. On an image Chromium placed no caret, and
-// the next key went into the editor that had focus. Any Shift+press on the
-// document's text or on an inline node such as an image then puts the caret
-// at the press, or at the side of the node pressed, and focuses the document.
-// A Shift+drag from there selects from the press, as a plain drag does.
+// the next key went into the editor that had focus. prosemirror-tables, which
+// handles a press before the plugins md-easy adds, decided from that
+// selection too. A caret left in one cell made a Shift+click into another
+// select both cells, and a cell selection made a Shift+click anywhere in the
+// document select a cell. It cancelled the press, so focus stayed outside and
+// the next key went in there. A Shift+press from outside on the document's
+// text or on an inline node such as an image therefore puts the caret at the
+// press, or at the side of the node pressed, and focuses the document, before
+// any other plugin sees the press. The press then goes on as one in the
+// focused document, so a Shift+drag from there selects from the press, and
+// selects cells across a table, as a plain drag does.
 //
-// prosemirror-tables handles a press first, and selects cells on a Shift+click
-// into another cell.
+// With focus in the document, prosemirror-tables selects cells on a
+// Shift+click into another cell, or while cells are selected.
 
+import { SchemaReady, prosePluginsCtx } from "@milkdown/kit/core";
+import type { MilkdownPlugin } from "@milkdown/kit/ctx";
 import { $prose } from "@milkdown/kit/utils";
 import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -56,20 +65,31 @@ function pressedPosition(view: EditorView, event: MouseEvent, focused: boolean):
   return found.pos;
 }
 
-/** Handle a Shift+press in the document view (see the header). With focus
- *  in the document, the selection goes from its anchor to the press.
- *  Without, the caret goes to the press, and the document then takes focus.
- *  Focusing first would move focus back into a code block that holds the
- *  selection, since focusing the view puts the browser's selection where
- *  ProseMirror's is. */
+/** Put the caret at a Shift+press from outside the document view, and
+ *  focus the view (see the header). It returns false, so the press goes on
+ *  to the other plugins, ProseMirror and the browser as one in the focused
+ *  view with the caret at the press. Focusing first would move focus back
+ *  into a code block that holds the selection, since focusing the view puts
+ *  the browser's selection where ProseMirror's is. */
+function shiftPressFromOutside(view: EditorView, event: MouseEvent): boolean {
+  if (!event.shiftKey || event.button !== 0 || view.hasFocus()) return false;
+  const head = pressedPosition(view, event, false);
+  if (head === null) return false;
+  const $head = view.state.doc.resolve(head);
+  view.dispatch(view.state.tr.setSelection(TextSelection.between($head, $head)).setMeta("pointer", true));
+  view.focus();
+  return false;
+}
+
+/** Extend the selection on a Shift+press on link text or on an image in a
+ *  line while the document view has focus (see the header), from the
+ *  selection's anchor to the press. */
 function shiftPress(view: EditorView, event: MouseEvent): boolean {
-  if (!event.shiftKey || event.button !== 0) return false;
-  const focused = view.hasFocus();
-  const head = pressedPosition(view, event, focused);
+  if (!event.shiftKey || event.button !== 0 || !view.hasFocus()) return false;
+  const head = pressedPosition(view, event, true);
   if (head === null) return false;
   event.preventDefault();
-  dragSelect(view, focused ? view.state.selection.anchor : head, head);
-  if (!focused) view.focus();
+  dragSelect(view, view.state.selection.anchor, head);
   return true;
 }
 
@@ -154,16 +174,20 @@ function dragSelect(view: EditorView, anchor: number, head: number): void {
   win?.addEventListener("blur", end);
 }
 
-/** Milkdown plugin for Shift+click and Shift+drag in the document view (see
- *  the header). It must follow prosemirror-tables, which Crepe's Table
- *  feature adds first. */
-export const shiftClicks = $prose(
-  () =>
-    new Plugin({
-      props: {
-        handleDOMEvents: {
-          mousedown: shiftPress,
-        },
-      },
-    }),
-);
+/** Milkdown plugin that puts a ProseMirror plugin for a Shift+press from
+ *  outside the document view before all others, including prosemirror-tables,
+ *  which Crepe adds before any plugin md-easy uses. */
+const fromOutside: MilkdownPlugin = (ctx) => async () => {
+  await ctx.wait(SchemaReady);
+  const plugin = new Plugin({ props: { handleDOMEvents: { mousedown: shiftPressFromOutside } } });
+  ctx.update(prosePluginsCtx, (plugins) => [plugin, ...plugins]);
+  return () => ctx.update(prosePluginsCtx, (plugins) => plugins.filter((other) => other !== plugin));
+};
+
+/** Milkdown plugins for Shift+click and Shift+drag in the document view (see
+ *  the header). The one for a press in the focused view follows
+ *  prosemirror-tables, so that one selects cells first. */
+export const shiftClicks: MilkdownPlugin[] = [
+  fromOutside,
+  $prose(() => new Plugin({ props: { handleDOMEvents: { mousedown: shiftPress } } })),
+];

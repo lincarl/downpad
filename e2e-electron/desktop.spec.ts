@@ -902,6 +902,107 @@ test("Shift+click in the document while a code block or the Markdown pane has fo
   ].join("\n\n") + "\n");
 });
 
+test("Shift+click in the document from the find card or the Markdown pane puts the caret at the click after a caret or cell selection in a table", async () => {
+  const file = path.join(directory, "shift-click-from-table.md");
+  await writeFile(file, [
+    "| Head A | Head B |\n| --- | --- |\n| alpha text | beta text |\n| gamma text | delta text |\n| epsilon | zeta |",
+    "First line.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const selectedCells = documentView.locator(".selectedCell");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** Shift+click a quarter of the way across the character at `index` of
+   *  the text node that reads `text`. */
+  const shiftClick = async (text: string, index: number) => {
+    const point = await pointOn(text, index, 0.25);
+    await page.keyboard.down("Shift");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("Shift");
+  };
+  /** Select the cells from the one that reads `from` to the one that reads
+   *  `to` with a Shift+click while the document has focus. */
+  const selectCells = async (from: string, to: string) => {
+    await clickOn(from, 1, 0.5);
+    await shiftClick(to, 1);
+    await expect(selectedCells).toHaveCount(2);
+  };
+  /** Leave the document for the find card. */
+  const toFind = async () => {
+    await page.keyboard.press("ControlOrMeta+f");
+    await expect(find).toBeFocused();
+  };
+  // prosemirror-tables took the Shift+click with the document's selection
+  // from before, a caret in another cell, and selected both cells. Focus
+  // stayed in the find card, so the next key went in there.
+  await clickOn("alpha text", 2, 0.25);
+  await toFind();
+  await shiftClick("beta text", 2);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("Q");
+  // With a cell selection from before, it took a Shift+click anywhere in the
+  // document and selected the cell where that selection started.
+  await selectCells("gamma text", "delta text");
+  await toFind();
+  await shiftClick("First line.", 6);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("R");
+  await toFind();
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  // So did a Shift+click from the split's Markdown pane, and the next key
+  // went into the Markdown at its caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  /** Leave the document for the end of the Markdown pane's last line of text. */
+  const toMarkdown = async () => {
+    await page.locator(".editor-pane-raw .cm-line").filter({ hasText: /^Last/ }).click();
+    await page.keyboard.press("End");
+    await expect(markdown).toBeFocused();
+  };
+  await clickOn("epsilon", 2, 0.25);
+  await toMarkdown();
+  await shiftClick("zeta", 2);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("S");
+  await selectCells("alpha text", "gamma text");
+  await toMarkdown();
+  await shiftClick("Last line.", 4);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("T");
+  // A Shift+drag from there across cells still selects the cells, as a
+  // plain drag does.
+  await toMarkdown();
+  const press = await pointOn("beQta text", 2, 0.25);
+  const release = await pointOn("delta text", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  // Milkdown pads the columns of a table it writes.
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    [
+      "| Head A     | Head B     |",
+      "| ---------- | ---------- |",
+      "| alpha text | beQta text |",
+      "| gamma text | delta text |",
+      "| epsilon    | zeSta      |",
+    ].join("\n"),
+    "First Rline.",
+    "LastT line.",
+  ].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);
