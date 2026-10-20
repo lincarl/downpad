@@ -8,7 +8,7 @@ import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import type { Node } from "@milkdown/kit/prose/model";
 import { splitBlock } from "@milkdown/kit/prose/commands";
-import { redo, undo } from "@milkdown/kit/prose/history";
+import { closeHistory, redo, undo } from "@milkdown/kit/prose/history";
 import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -78,6 +78,18 @@ function type(opened: WysiwygEditor, text: string): void {
   const { from, to } = view.state.selection;
   const insert = () => view.state.tr.insertText(text, from, to);
   if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, text, insert))) view.dispatch(insert());
+}
+
+/** Delete the character before the caret, or after it for `dir` 1, as
+ *  ProseMirror reads Backspace or Delete from the browser. It sets the caret
+ *  the browser left and keeps the deleted character's marks for it. */
+function deleteAround(opened: WysiwygEditor, dir: -1 | 1): void {
+  const view = viewOf(opened);
+  const { head } = view.state.selection;
+  const [from, to] = dir < 0 ? [head - 1, head] : [head, head + 1];
+  const { doc, tr } = view.state;
+  tr.delete(from, to).setSelection(TextSelection.create(tr.doc, from));
+  view.dispatch(tr.ensureMarks(doc.resolve(from).marksAcross(doc.resolve(to)) ?? []));
 }
 
 /** Wait for the editor's node views to settle after an edit, as they have
@@ -528,19 +540,55 @@ describe("a file dropped away from the document text", () => {
     expect(opened.getMarkdown()).toBe(`Alpha beta${LINK_A}! gamma.\n\nSecond line.\n`);
   });
 
+  /** Edits made right after the drop, before the typing, and what the
+   *  joined link `[report.csv](attachments/report.csv)` holds around the
+   *  typed y then. */
+  const editsAfterDrop: [string, (opened: WysiwygEditor) => void, string, string][] = [
+    ["no edit", () => {}, "report.csv", "report.csv"],
+    ["Backspace", (opened) => deleteAround(opened, -1), "report.cs", "report.csv"],
+    ["Delete", (opened) => deleteAround(opened, 1), "report.csv", "eport.csv"],
+    ["undo of a letter typed", (opened) => {
+      const view = viewOf(opened);
+      // A pause after the drop makes the letter an undo step of its own.
+      view.dispatch(closeHistory(view.state.tr));
+      type(opened, "x");
+      undo(view.state, view.dispatch);
+    }, "report.csv", "report.csv"],
+  ];
+
   // Milkdown updates a heading's id after each edit of it, in a change of its own.
-  it.each([["a paragraph", ""], ["a heading", "# "]])("keeps typing after the file out of the same link right after it in %s", async (_where, prefix) => {
-    const opened = await open(`${prefix}a[report.csv](attachments/report.csv)b\n`);
+  const containers = [["a paragraph", ""], ["a heading", "# "]] as const;
+  it.each(containers.flatMap(([where, prefix]) => editsAfterDrop.map(([name, edit, before, after]) => [where, name, prefix, edit, before, after] as const)))(
+    "keeps typing after the file out of the same link right after it in %s after %s",
+    async (_where, _name, prefix, edit, before, after) => {
+      const opened = await open(`${prefix}a[report.csv](attachments/report.csv)b\n`);
+      const view = viewOf(opened);
+      // Before the link, whose attachment is missing, so the dropped file
+      // takes its name and ProseMirror joins the two links into one.
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
+
+      opened.insertMarkdown("[report.csv](attachments/report.csv)");
+      await settle();
+      edit(opened);
+      await settle();
+      type(opened, "y");
+
+      expect(opened.getMarkdown()).toBe(`${prefix}a[${before}](attachments/report.csv)y[${after}](attachments/report.csv)b\n`);
+    },
+  );
+
+  it("keeps typing after the file out of a link whose side the caret was on", async () => {
+    const opened = await open("A [word](https://e.com/w)s more.\n");
     const view = viewOf(opened);
-    // Before the link, whose attachment is missing, so the dropped file
-    // takes its name and ProseMirror joins the two links into one.
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 7)));
+    // The virtual cursor's Left at the link's end puts the caret on its side.
+    view.dispatch(view.state.tr.setStoredMarks(view.state.selection.$head.nodeBefore!.marks));
 
-    opened.insertMarkdown("[report.csv](attachments/report.csv)");
+    opened.insertMarkdown(LINK_A);
     await settle();
-    type(opened, "x");
+    type(opened, "y");
 
-    expect(opened.getMarkdown()).toBe(`${prefix}a[report.csv](attachments/report.csv)x[report.csv](attachments/report.csv)b\n`);
+    expect(opened.getMarkdown()).toBe(`A [word](https://e.com/w)${LINK_A}ys more.\n`);
   });
 
   it("puts an image dropped at a caret inside a line after that line", async () => {

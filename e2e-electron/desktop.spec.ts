@@ -2385,24 +2385,50 @@ test("typing right after a file dropped before a link to the same file stays out
   const file = path.join(directory, "drop-before-same-link.md");
   // The attachments are missing, so a dropped file takes the name of one, and
   // its link the same target.
-  await writeFile(file, "a[report.csv](attachments/report.csv)b\n\n# c[notes.csv](attachments/notes.csv)d\n");
+  const lines = [
+    "a[report.csv](attachments/report.csv)b",
+    "# c[notes.csv](attachments/notes.csv)d",
+    "e[data.csv](attachments/data.csv)f",
+    "# g[list.csv](attachments/list.csv)h",
+    "i[log.csv](attachments/log.csv)j",
+  ];
+  await writeFile(file, `${lines.join("\n\n")}\n`);
   await launch(file);
-  await expect(page.locator(".ProseMirror a")).toHaveCount(2);
+  await expect(page.locator(".ProseMirror a")).toHaveCount(lines.length);
   const toolbar = page.getByRole("button", { name: "Save", exact: true });
   // Dropped away from the text, a file goes in at the caret, and ProseMirror
   // joins its link with the one after it. Milkdown changes a heading's id
-  // after each edit of it, which drops the marks set for the caret.
-  for (const [name, typed] of [["report.csv", "x"], ["notes.csv", "y"]] as const) {
+  // after each edit of it, and Backspace or Delete gives the caret's next
+  // text the deleted character's marks.
+  const steps: [string, () => Promise<void>, string][] = [
+    ["report.csv", async () => {}, "x"],
+    ["notes.csv", async () => {}, "y"],
+    ["data.csv", () => page.keyboard.press("Backspace"), "z"],
+    ["list.csv", () => page.keyboard.press("Delete"), "w"],
+    ["log.csv", async () => {
+      // A pause makes the letter an undo step of its own, apart from the drop.
+      await page.waitForTimeout(700);
+      await page.keyboard.type("v");
+      await page.keyboard.press("ControlOrMeta+z");
+      await expect(page.locator(".ProseMirror a", { hasText: "log.csvlog.csv" })).toHaveCount(1);
+    }, "u"],
+  ];
+  for (const [name, edit, typed] of steps) {
     await clickOn(name, 0, 0.25);
     await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
     await dropFiles(toolbar, [await csvFile(name)]);
     await expect(page.locator(".ProseMirror a", { hasText: name + name })).toHaveCount(1);
+    await edit();
     await page.keyboard.type(typed);
   }
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(
-    "a[report.csv](attachments/report.csv)x[report.csv](attachments/report.csv)b\n\n# c[notes.csv](attachments/notes.csv)y[notes.csv](attachments/notes.csv)d\n",
-  );
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "a[report.csv](attachments/report.csv)x[report.csv](attachments/report.csv)b",
+    "# c[notes.csv](attachments/notes.csv)y[notes.csv](attachments/notes.csv)d",
+    "e[data.cs](attachments/data.csv)z[data.csv](attachments/data.csv)f",
+    "# g[list.csv](attachments/list.csv)w[ist.csv](attachments/list.csv)h",
+    "i[log.csv](attachments/log.csv)u[log.csv](attachments/log.csv)j",
+  ].join("\n\n") + "\n");
 });
 
 test("a file dropped on a collapsed base64 image in the Markdown view goes in after the image", async () => {

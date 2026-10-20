@@ -12,6 +12,7 @@ import { Selection, TextSelection, type EditorState, type Transaction } from "@m
 import { Transform, dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { differingRuns } from "../differingRuns";
+import { keepCaretPlain } from "./linkEdges";
 
 /** Where the files of a drop on the document go in, or the next file of a
  *  drop away from the text, after the one before it. The editor that made it
@@ -199,9 +200,9 @@ function changeEnd(tr: Transaction): number {
  * typing after a dropped link starts plain text outside the link. linkEdges.ts
  * does that at a link's edge, but ProseMirror joins a dropped link with the
  * same link right after it, such as one to a missing attachment that the
- * file now fills, and the caret is then inside the joined link. So the caret
- * gets the marks there without the link as its stored marks, which
- * linkEdges.ts sets again after a change that leaves the caret in place.
+ * file now fills, and the caret is then inside the joined link. So that
+ * caret is a plain caret (`keepCaretPlain`), where typing stays out of the
+ * link while the caret stays there.
  * After an image the caret goes to the start of the next text. With no text
  * after it, it goes in the gap after the image, where typing starts a new
  * line, and where Crepe adds an empty last line at the end of the document.
@@ -209,12 +210,7 @@ function changeEnd(tr: Transaction): number {
  */
 function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transaction {
   const $end = tr.doc.resolve(end);
-  if ($end.parent.inlineContent) {
-    tr.setSelection(TextSelection.create(tr.doc, end));
-    const link = tr.doc.type.schema.marks.link;
-    const marks = $end.marks();
-    return link?.isInSet(marks) ? tr.setStoredMarks(link.removeFromSet(marks)) : tr;
-  }
+  if ($end.parent.inlineContent) return keepCaretPlain(tr.setSelection(TextSelection.create(tr.doc, end)), end);
   const before = Selection.findFrom($end, -1, true);
   if (endsInText && before) return tr.setSelection(before);
   const after = Selection.findFrom($end, 1, true);

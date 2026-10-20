@@ -39,11 +39,14 @@
 //
 // A file dropped right before a link to the same target, such as a missing
 // attachment that the file now fills, joins that link, so the caret after the
-// file is inside one link. fileDrop.ts gives that caret the marks there
-// without the link as its stored marks. ProseMirror drops stored marks on
-// every change, and Milkdown changes a heading's id after each edit of it,
-// so such marks are set again after a change that leaves the caret where it
-// was (`keptPlainMarks`).
+// file is inside one link. fileDrop.ts makes that caret a plain caret
+// (`keepCaretPlain`). It follows the caret while each change maps it to
+// where the caret is, as typing, Backspace, Delete, undo and Milkdown's
+// update of a heading's id do, and a plain caret inside a link gets the
+// marks there without the link, as a caret at a link's edge does. Stored
+// marks alone did not last, as ProseMirror drops them on every change, and
+// after Backspace or Delete gives the caret's next text the deleted text's
+// marks.
 
 import { Fragment, Mark, Slice, type MarkType, type Node as ProseNode, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
@@ -76,36 +79,36 @@ function caretOf(state: EditorState): ResolvedPos | null {
   return selection instanceof TextSelection ? selection.$cursor : null;
 }
 
+/** What the plugin tracks. */
+interface LinkEdgesState {
+  /** The caret position on a link's side, where typing goes into the link,
+   *  or null. */
+  side: number | null;
+  /** The caret position right after a dropped file, where typing stays out
+   *  of a link even inside it, or null. */
+  plain: number | null;
+}
+
+const linkEdgesKey = new PluginKey<LinkEdgesState>("md-easy-link-edges");
+
+/** Make the caret at `pos` after `tr` a plain caret, where text put in stays
+ *  out of a link around it while the caret stays there, as right after a
+ *  dropped file whose link joins the same link after it. */
+export function keepCaretPlain(tr: Transaction, pos: number): Transaction {
+  return tr.setMeta(linkEdgesKey, pos);
+}
+
 /** The marks that text put in at the caret of `state` gets, without a link
- *  the caret is not inside, or null when they hold no such link. */
+ *  the caret is not inside, or at a plain caret without any link, or null
+ *  when they hold no such link. */
 function plainMarksAt(state: EditorState): readonly Mark[] | null {
   const $cursor = caretOf(state);
   if (!$cursor) return null;
   const marks = state.storedMarks ?? $cursor.marks();
-  const link = edgeLink($cursor, marks);
+  const plain = linkEdgesKey.getState(state)?.plain === $cursor.pos;
+  const link = plain ? state.schema.marks.link?.isInSet(marks) : edgeLink($cursor, marks);
   return link ? link.removeFromSet(marks) : null;
 }
-
-/**
- * The stored marks of the caret of `before`, inside a link, that leave the
- * link out, when `transactions` changed the document and left that caret
- * where it was. ProseMirror drops stored marks on every change, such as
- * Milkdown's update of a heading's id after each edit of the heading. Null
- * otherwise.
- */
-function keptPlainMarks(transactions: readonly Transaction[], before: EditorState, state: EditorState): readonly Mark[] | null {
-  const $before = caretOf(before);
-  const $caret = caretOf(state);
-  const link = state.schema.marks.link;
-  const stored = before.storedMarks;
-  if (!$before || !$caret || !link || !stored || link.isInSet(stored) || state.storedMarks) return null;
-  if (!link.isInSet($before.marks()) || !link.isInSet($caret.marks()) || transactions.some((tr) => tr.selectionSet)) return null;
-  return transactions.reduce((pos, tr) => tr.mapping.map(pos), $before.pos) === $caret.pos ? stored : null;
-}
-
-/** The caret position on a link's side, where typing goes into the link, or
- *  null. */
-const linkSideKey = new PluginKey<number | null>("md-easy-link-side");
 
 /** Whether `tr` typed over the selection of `before`, which held a link, with
  *  text that kept the link and ends at `$caret`, the link's edge. */
@@ -140,11 +143,30 @@ function linkSide(tr: Transaction, side: number | null, before: EditorState, aft
   return after.storedMarks && edgeLink($caret, after.storedMarks) ? $caret.pos : null;
 }
 
-/** The caret position when the caret is on a link's side at its edge, where
- *  typing goes into the link, or null. */
-function linkSideCaret(state: EditorState): number | null {
-  const side = linkSideKey.getState(state) ?? null;
-  return side !== null && side === caretOf(state)?.pos ? side : null;
+/** The plain caret after `tr`, given `plain` before it. `keepCaretPlain`
+ *  puts it at a position, and it follows the caret while the caret stays at
+ *  that position as `tr` maps it, as typing, Backspace, Delete and undo
+ *  leave it there. */
+function plainCaret(tr: Transaction, plain: number | null, after: EditorState): number | null {
+  if (plain === null) return null;
+  const mapped = tr.mapping.map(plain);
+  return caretOf(after)?.pos === mapped ? mapped : null;
+}
+
+/** The state after `tr`. A plain caret placed by `tr` ends a link side, and
+ *  a link side ends a plain caret, so the last of them wins. */
+function applyLinkEdges(tr: Transaction, value: LinkEdgesState, before: EditorState, after: EditorState): LinkEdgesState {
+  const placed = tr.getMeta(linkEdgesKey) as number | undefined;
+  if (placed !== undefined) return { side: null, plain: placed };
+  const side = linkSide(tr, value.side, before, after);
+  return { side, plain: side === null ? plainCaret(tr, value.plain, after) : null };
+}
+
+/** Whether the caret of `state` is on a link's side at its edge, where
+ *  typing goes into the link. */
+function onLinkSide(state: EditorState): boolean {
+  const side = linkEdgesKey.getState(state)?.side ?? null;
+  return side !== null && side === caretOf(state)?.pos;
 }
 
 /** `fragment` with no `link` marks, at any depth. */
@@ -158,14 +180,15 @@ function withoutLinks(fragment: Fragment, link: MarkType): Fragment {
 }
 
 /** A plugin that keeps text put in at a link's edge out of the link. After
- *  every change, a caret at a link's edge gets the marks there without the
- *  link as its stored marks, unless it is on the link's side (`linkSide`). */
-function linkEdgesPlugin(): Plugin<number | null> {
-  return new Plugin<number | null>({
-    key: linkSideKey,
+ *  every change, a caret at a link's edge, or a plain caret inside a link,
+ *  gets the marks there without the link as its stored marks, unless it is
+ *  on the link's side (`linkSide`). */
+function linkEdgesPlugin(): Plugin<LinkEdgesState> {
+  return new Plugin<LinkEdgesState>({
+    key: linkEdgesKey,
     state: {
-      init: () => null,
-      apply: linkSide,
+      init: () => ({ side: null, plain: null }),
+      apply: applyLinkEdges,
     },
     props: {
       /** Give text the browser changes away from the caret, such as a text
@@ -197,9 +220,9 @@ function linkEdgesPlugin(): Plugin<number | null> {
         return plain && link ? new Slice(withoutLinks(slice.content, link), slice.openStart, slice.openEnd) : slice;
       },
     },
-    appendTransaction(transactions, before, state) {
-      if (linkSideCaret(state) !== null) return null;
-      const marks = plainMarksAt(state) ?? keptPlainMarks(transactions, before, state);
+    appendTransaction(_transactions, _before, state) {
+      if (onLinkSide(state)) return null;
+      const marks = plainMarksAt(state);
       return marks ? state.tr.setStoredMarks(marks) : null;
     },
   });
