@@ -1289,6 +1289,31 @@ test("Shift+click on a code block's code or a frontmatter cell from elsewhere pu
   await expect.poll(() => readFile(file, "utf8")).toBe("---\ntiztle: Suryvey\n---\n\n```\nconst alpha = 1;\nconst xbeta = 2;\n```\n\nLast line.\n");
 });
 
+test("a click or Shift+click on the frontmatter table's caption or beside the table leaves focus where it was", async () => {
+  const file = path.join(directory, "frontmatter-caption-click.md");
+  await writeFile(file, "---\ntitle: Survey\n---\n\nFirst line.\n\nLast line.\n");
+  await launch(file);
+  const table = page.locator(".frontmatter-table");
+  await expect(table).toBeVisible();
+  // Chromium moved focus to the page, and the next key was lost.
+  await clickOn("Last line.", -1, 0.75);
+  const wrap = (await page.locator(".frontmatter-table-wrap").boundingBox())!;
+  const box = (await table.boundingBox())!;
+  await page.mouse.click((box.x + box.width + wrap.x + wrap.width) / 2, box.y + box.height / 2);
+  await expect(page.locator(".milkdown .ProseMirror")).toBeFocused();
+  await page.keyboard.type("a");
+  // From the split's Markdown pane, a Shift+click on the caption extended the
+  // pane's selection to its start, and the next key replaced the Markdown
+  // before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("First line.");
+  await shiftClickAt(await centerOf(page.locator(".frontmatter-tab")));
+  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: Survey\n---\n\nFirst line.b\n\nLast line.a\n");
+});
+
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
   const file = path.join(directory, "block-handle-add-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");

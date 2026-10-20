@@ -689,6 +689,14 @@ export class WysiwygEditor {
           this.composition = { id: ++this.compositions, cell: event.target };
         });
         panel.addEventListener("compositionend", () => (this.composition = null));
+        // A press on the table outside its cells, buttons and read-only
+        // values, such as on its caption or beside it, leaves focus where it
+        // was. Chromium moved focus to the page, and the next key went nowhere.
+        panel.addEventListener("mousedown", (event) => {
+          const { target } = event;
+          if (event.button !== 0 || !(target instanceof Element) || target.closest("button, pre")) return;
+          if (!(target instanceof HTMLElement && target.isContentEditable)) event.preventDefault();
+        });
         // A Shift+click on a cell from another editor puts the caret at the
         // click, as a plain click does.
         shiftPressesAsClicks(panel);

@@ -21,7 +21,7 @@ The editor supports common Markdown and GitHub Flavored Markdown features, inclu
 - Syntax highlighting for code blocks, and VS Code's Markdown colors in the Markdown view. There a `$$` formula outside a list or quote keeps the body color, as fenced code does.
 - Inline and block math rendered with KaTeX. Dollar signs follow Pandoc's rules, so prices such as `$5` and `$10` stay text, both in opened files and while typing. A typed closing `$` or `~` becomes math or strikethrough once the next character, Enter, moving the cursor out of the text it closes, leaving the editor, Save, or another edit such as a paste shows that Pandoc or GFM would read the same text that way. Autosave saves it as Save would but leaves it waiting on screen, so a digit typed next still keeps it text. A typed tilde right after a letter or digit opens no strikethrough, so `10~20` stays text, and a `$` or `~` in code stays code text. A formula right before a digit is saved as `$$x$$`, a `|` in a formula in a table cell as `\|`, and a paragraph that is only `$$...$$` is a math block.
 - Mermaid diagrams rendered from fenced `mermaid` blocks.
-- YAML frontmatter, editable from the document view or as source. In the document view, edits in the frontmatter table and in the document share one undo history, so undo and redo go through them in the order they were made.
+- YAML frontmatter, editable from the document view or as source. In the document view, edits in the frontmatter table and in the document share one undo history, so undo and redo go through them in the order they were made. A click on the table outside its cells and buttons, such as on its caption, leaves the caret where it was.
 
 ## Files and attachments
 
