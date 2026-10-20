@@ -693,13 +693,15 @@ export class WysiwygEditor {
           this.composition = { id: ++this.compositions, cell: event.target };
         });
         panel.addEventListener("compositionend", () => (this.composition = null));
-        // A press on the table outside its cells, buttons and read-only
-        // values, such as on its caption or beside it, leaves focus where it
-        // was. Chromium moved focus to the page, and the next key went nowhere.
+        // A press on the table outside its keys, values and buttons, such as
+        // on its caption or in the blank space around them, leaves focus
+        // where it was. Chromium moved focus to the page, and the next key
+        // went nowhere. Each key and value carries data-part
+        // (FrontmatterPanel), and a press on one, also a read-only one, stays
+        // with the browser, so its text can be selected.
         panel.addEventListener("mousedown", (event) => {
           const { target } = event;
-          if (event.button !== 0 || !(target instanceof Element) || target.closest("button, pre")) return;
-          if (!(target instanceof HTMLElement && target.isContentEditable)) event.preventDefault();
+          if (event.button === 0 && target instanceof Element && !target.closest("button, [data-part]")) event.preventDefault();
         });
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);

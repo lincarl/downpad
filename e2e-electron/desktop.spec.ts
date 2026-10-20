@@ -1347,6 +1347,20 @@ test("Shift+click extends a selection in read-only frontmatter text, also while 
   await expect.poll(selectedText).toBe("rst comment sec");
 });
 
+test("a double-click selects the text of a read-only key in the frontmatter table", async () => {
+  const file = path.join(directory, "frontmatter-read-only-key.md");
+  await writeFile(file, "---\ntitle: Survey\ncomplex:\n  - first item\n  - second item\n---\n\nBody line.\n");
+  await launch(file);
+  const key = page.locator(".frontmatter-table th.frontmatter-key", { hasText: /^complex$/ });
+  await expect(key).toBeVisible();
+  // The table kept focus where it was on every press on a read-only key, so
+  // a double-click there selected nothing.
+  await clickOn("Body line.", -1, 0.75);
+  const point = await pointInText(key, 3, 0.5);
+  await page.mouse.dblclick(point.x, point.y);
+  await expect.poll(selectedText).toBe("complex");
+});
+
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
   const file = path.join(directory, "block-handle-add-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
