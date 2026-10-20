@@ -100,6 +100,15 @@ describe("packByHeight, keeping a heading with the block after it", () => {
   /** A heading measured like `block`. */
   const heading = (top: number, height: number, label: string, marginTop = 0): HTMLElement =>
     block(top, height, label, marginTop, "h2");
+  /** An empty paragraph or a rule, measured like `block`. */
+  const blank = (top: number, height: number, label: string, tag: "p" | "hr" = "p"): HTMLElement =>
+    block(top, height, label, 0, tag);
+  /** A paragraph measured like `block` that holds nothing but a `child` element, such as an image. */
+  const holding = (child: string, top: number, height: number, label: string): HTMLElement => {
+    const paragraph = block(top, height, label, 0, "p");
+    paragraph.append(document.createElement(child));
+    return paragraph;
+  };
 
   it.each([
     ["a heading that would end a page", () => [block(0, 150, "a"), heading(160, 30, "h"), block(200, 100, "b")], [["a"], ["h", "b"]]],
@@ -122,6 +131,30 @@ describe("packByHeight, keeping a heading with the block after it", () => {
   });
 
   it.each([
+    ["an empty paragraph", () => [block(0, 150, "a"), heading(160, 30, "h"), blank(195, 8, "empty"), block(210, 100, "b")], [["a"], ["h", "empty", "b"]]],
+    ["a paragraph holding only a line break", () => [block(0, 150, "a"), heading(160, 30, "h"), holding("br", 195, 8, "break"), block(210, 100, "b")], [["a"], ["h", "break", "b"]]],
+    ["a rule", () => [block(0, 150, "a"), heading(160, 30, "h"), blank(195, 10, "rule", "hr"), block(215, 100, "b")], [["a"], ["h", "rule", "b"]]],
+    [
+      "an empty paragraph and a subheading",
+      () => [block(0, 140, "a"), heading(150, 20, "h1"), blank(175, 8, "empty"), heading(190, 20, "h2"), block(215, 100, "b")],
+      [["a"], ["h1", "empty", "h2", "b"]],
+    ],
+  ])("moves a heading with %s under it to the next page, with the block after them", (_kind, items, pages) => {
+    // The heading went with the empty paragraph or rule under it, and nothing
+    // more, so it stayed at the foot of the page and its text started the next.
+    expect(labels(packByHeight(items(), 250))).toEqual(pages);
+  });
+
+  it.each([
+    ["a rule", "hr"],
+    ["an empty paragraph", "p"],
+  ] as const)("packs %s with no heading above it as before", (_kind, tag) => {
+    // Only a heading starts a run, so a document without headings breaks as it did.
+    const items = [block(0, 200, "a"), blank(210, 10, "blank", tag), block(225, 100, "b")];
+    expect(labels(packByHeight(items, 250))).toEqual([["a", "blank"], ["b"]]);
+  });
+
+  it.each([
     // A heading moved without its block would print alone on a page.
     ["the block after it is too tall to share an empty page", () => [block(0, 100, "a"), heading(110, 30, "h"), block(150, 240, "tall")], [["a", "h"], ["tall"]]],
     // Only the subheading and the block fit an empty page together. Moving the
@@ -134,7 +167,21 @@ describe("packByHeight, keeping a heading with the block after it", () => {
     // The page leaves room for the heading's top margin above it, so the two
     // fit only without it.
     ["they fit an empty page only without the heading's top margin", () => [block(0, 90, "a"), heading(120, 30, "h", 30), block(160, 200, "b")], [["a", "h"], ["b"]]],
+    // The empty paragraph does not end the run, so the subheading after it
+    // starts none of its own.
+    [
+      "only the last heading of a run with an empty paragraph in it fits an empty page with the block",
+      () => [block(0, 100, "a"), heading(110, 30, "h1"), blank(145, 8, "empty"), heading(160, 30, "h2"), block(200, 200, "tall")],
+      [["a", "h1", "empty", "h2"], ["tall"]],
+    ],
+    // An image is what the heading introduces, not a blank to move past.
+    [
+      "the block after it holds only an image",
+      () => [block(0, 150, "a"), heading(160, 30, "h"), holding("img", 195, 40, "image"), block(240, 100, "b")],
+      [["a", "h", "image"], ["b"]],
+    ],
     ["no block follows the heading", () => [block(0, 240, "a"), heading(245, 30, "h")], [["a"], ["h"]]],
+    ["only an empty paragraph follows the heading", () => [block(0, 230, "a"), heading(235, 10, "h"), blank(248, 8, "empty")], [["a", "h"], ["empty"]]],
   ])("packs a heading as before when %s", (_kind, items, pages) => {
     expect(labels(packByHeight(items(), 250))).toEqual(pages);
   });

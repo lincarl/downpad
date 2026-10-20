@@ -20,8 +20,9 @@
 // the top of the page counts: its own top margin collapsed with those of the
 // first blocks inside it and of the containers around it (leadingMargin).
 //
-// A heading prints on the page of the block after it, or of that block's first
-// piece, when the two fit a page together (packBoxes).
+// A heading prints on the page of the first block after it that holds
+// content, or of that block's first piece, when they fit a page together.
+// Empty paragraphs and rules between them move with it (packBoxes).
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -54,9 +55,10 @@ export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Elem
  * with the first item's, as leadingMargin describes. An element taller than
  * the limit gets a group to itself rather than an empty page before it.
  *
- * A heading goes in the group of the item after it whenever the two fit a
- * group together (packBoxes), so a page does not end with a heading whose
- * text starts on the next page.
+ * A heading goes in the group of the next item that is not blank (isBlank),
+ * with the blank items between them, whenever they fit a group together
+ * (packBoxes). A page then does not end with a heading whose text starts on
+ * the next page.
  */
 export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: number, outer: number[] = []): T[][] {
   const boxes = items.map((el) => ({
@@ -64,12 +66,28 @@ export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: num
     height: el.offsetHeight,
     marginTop: leadingMargin(el, outer),
     keepWithNext: HEADING_TAGS.has(el.tagName),
+    blank: isBlank(el),
   }));
   return packBoxes(boxes, maxHeightPx).map((group) => group.map((i) => items[i]));
 }
 
 /** Headings, which print on the page of the block after them (packBoxes). */
 const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
+
+/**
+ * Whether a block shows nothing that a heading above it could introduce. That
+ * is a rule, or a paragraph with no text, image or other box in it, such as an
+ * empty line saved as `<br />`. A heading kept with only such a block stayed
+ * at the foot of a page, and its text started the next page.
+ */
+function isBlank(el: HTMLElement): boolean {
+  if (el.tagName === "HR") return true;
+  return (
+    el.tagName === "P" &&
+    !el.textContent?.trim() &&
+    Array.from(el.querySelectorAll("*")).every((child) => child.tagName === "BR")
+  );
+}
 
 /** One laid-out item's vertical extent, as the packer sees it. */
 interface Box {
@@ -82,6 +100,11 @@ interface Box {
   marginTop?: number;
   /** Whether the item goes on the page of the item after it, as a heading does. */
   keepWithNext?: boolean;
+  /**
+   * Whether the item shows nothing that a `keepWithNext` item could introduce,
+   * so a run of those items goes on past it to the next item (isBlank).
+   */
+  blank?: boolean;
 }
 
 /**
@@ -94,7 +117,9 @@ interface Box {
  * do not. A run of `keepWithNext` items, such as a heading or a heading and
  * its subheading, goes on the page with the item after the run, so a heading
  * that does not fit above the start of its text moves to the next page with
- * it, as a word processor keeps a heading with the next paragraph. A run that
+ * it, as a word processor keeps a heading with the next paragraph. The run
+ * takes in the `blank` items among and after its headings, such as an empty
+ * paragraph or a rule, and ends at the first item that is neither. A run that
  * cannot share an empty page with the item after it, such as a heading before
  * a piece of a split paragraph that fills a page, is packed item by item
  * instead, since moving it would leave a page holding nothing but the run.
@@ -118,20 +143,28 @@ function packBoxes(boxes: Box[], maxHeightPx: number): number[][] {
 }
 
 /**
- * The last of the boxes that go on one page with `boxes[first]`: the box
- * after the run of `keepWithNext` boxes that `first` starts, when the run and
- * that box fit an empty page together, or `first` itself. A box inside a run
- * starts none, so a run that cannot move whole is packed as it always was.
+ * Returns the index of the last box that shares a page with `boxes[first]`.
+ * When `first` starts a run (packBoxes), that is the box after the run, if
+ * the run and that box fit an empty page together. Otherwise it is `first`
+ * itself. A box inside a run starts none, so a run that cannot move whole is
+ * packed as it always was.
  */
 function keptTogether(boxes: Box[], first: number, maxHeightPx: number): number {
-  if (!boxes[first].keepWithNext || boxes[first - 1]?.keepWithNext) return first;
+  if (!boxes[first].keepWithNext || inRun(boxes, first)) return first;
   let next = first + 1;
-  while (next < boxes.length && boxes[next].keepWithNext) next++;
+  while (next < boxes.length && (boxes[next].keepWithNext || boxes[next].blank)) next++;
   if (next === boxes.length) return first;
   return bottomOf(boxes, first, next) - topOf(boxes[first]) <= maxHeightPx ? next : first;
 }
 
-/** Where a page that starts with `box` begins: above the margin the box takes there. */
+/** Whether `boxes[index]` follows a `keepWithNext` box with only blank boxes between them. */
+function inRun(boxes: Box[], index: number): boolean {
+  let previous = index - 1;
+  while (previous >= 0 && boxes[previous].blank) previous--;
+  return previous >= 0 && Boolean(boxes[previous].keepWithNext);
+}
+
+/** The top of a page that starts with `box`, above the margin the box takes there. */
 function topOf(box: Box): number {
   return box.top - (box.marginTop ?? 0);
 }
