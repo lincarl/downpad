@@ -11,7 +11,8 @@
 // Chromium moves a selection it cannot show, such as a selected image between
 // two code blocks, to the start of the document whenever the page is focused,
 // also while it has focus already. The patch puts the block's selection back
-// when no input moved the selection since ProseMirror set it.
+// when no input moved the selection since ProseMirror set it, and before a key
+// or text that comes without one goes in.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -164,6 +165,19 @@ describe("a selected block that the page moves to the start of the document", ()
     view.dom.dispatchEvent(new KeyboardEvent("keypress", { key: "Q", charCode: 81, bubbles: true, cancelable: true }));
     await settle();
     expect(editor!.getMarkdown()).toBe(["# Head", code("a"), "Q", code("b")].join("\n\n") + "\n");
+  });
+
+  it("keeps the block selected for text that comes without a key before ProseMirror reads the move, and the text replaces it", async () => {
+    const { view, start } = await selectImage();
+    // An input method or the emoji panel can focus the page, which moves the
+    // selection, and insert its text before Chromium reports the move.
+    document.getSelection()!.collapse(start, 0);
+    const input = new InputEvent("beforeinput", { inputType: "insertText", data: "漢", bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(input);
+    document.dispatchEvent(new Event("selectionchange"));
+    await settle();
+    expect(input.defaultPrevented).toBe(true);
+    expect(editor!.getMarkdown()).toBe(["# Head", code("a"), "漢", code("b")].join("\n\n") + "\n");
   });
 
   it("keeps the block selected when the page moves the selection before a rule at the start", async () => {

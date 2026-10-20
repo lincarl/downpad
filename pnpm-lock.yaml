@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@milkdown/components@7.22.3': 2fbea33e0ab5a90c84234e848faf7ddda300c6d430ce651191be58fe204636a9
-  prosemirror-view@1.41.8: 8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98
+  prosemirror-view@1.41.8: f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e
 
 importers:
 
@@ -41,7 +41,7 @@ importers:
         version: 1.6.4
       '@milkdown/crepe':
         specifier: ^7.22.3
-        version: 7.22.3(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98))(typescript@6.0.3)
+        version: 7.22.3(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e))(typescript@6.0.3)
       '@milkdown/kit':
         specifier: 7.22.3
         version: 7.22.3(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(typescript@6.0.3)
@@ -4691,7 +4691,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@milkdown/crepe@7.22.3(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98))(typescript@6.0.3)':
+  '@milkdown/crepe@7.22.3(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e))(typescript@6.0.3)':
     dependencies:
       '@codemirror/commands': 6.10.3
       '@codemirror/language': 6.12.3
@@ -4706,7 +4706,7 @@ snapshots:
       dompurify: 3.4.7
       katex: 0.19.0
       lodash-es: 4.18.1
-      prosemirror-virtual-cursor: 0.4.2(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98))
+      prosemirror-virtual-cursor: 0.4.2(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e))
       remark-math: 6.0.0
       unist-util-visit: 5.1.0
       vue: 3.5.35(typescript@6.0.3)
@@ -4913,7 +4913,7 @@ snapshots:
       prosemirror-state: 1.4.4
       prosemirror-tables: 1.8.5
       prosemirror-transform: 1.12.0
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   '@milkdown/transformer@7.22.3':
     dependencies:
@@ -7577,26 +7577,26 @@ snapshots:
       '@ocavue/utils': 1.6.0
       prosemirror-model: 1.25.7
       prosemirror-state: 1.4.4
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   prosemirror-dropcursor@1.8.2:
     dependencies:
       prosemirror-state: 1.4.4
       prosemirror-transform: 1.12.0
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   prosemirror-gapcursor@1.4.1:
     dependencies:
       prosemirror-keymap: 1.2.3
       prosemirror-model: 1.25.7
       prosemirror-state: 1.4.4
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   prosemirror-history@1.5.0:
     dependencies:
       prosemirror-state: 1.4.4
       prosemirror-transform: 1.12.0
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
       rope-sequence: 1.3.4
 
   prosemirror-inputrules@1.5.1:
@@ -7616,7 +7616,7 @@ snapshots:
   prosemirror-safari-ime-span@1.0.2:
     dependencies:
       prosemirror-state: 1.4.4
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   prosemirror-schema-list@1.5.1:
     dependencies:
@@ -7628,7 +7628,7 @@ snapshots:
     dependencies:
       prosemirror-model: 1.25.7
       prosemirror-transform: 1.12.0
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   prosemirror-tables@1.8.5:
     dependencies:
@@ -7636,23 +7636,23 @@ snapshots:
       prosemirror-model: 1.25.7
       prosemirror-state: 1.4.4
       prosemirror-transform: 1.12.0
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   prosemirror-transform@1.12.0:
     dependencies:
       prosemirror-model: 1.25.7
 
-  prosemirror-view@1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98):
+  prosemirror-view@1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e):
     dependencies:
       prosemirror-model: 1.25.7
       prosemirror-state: 1.4.4
       prosemirror-transform: 1.12.0
 
-  prosemirror-virtual-cursor@0.4.2(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)):
+  prosemirror-virtual-cursor@0.4.2(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)):
     optionalDependencies:
       prosemirror-model: 1.25.7
       prosemirror-state: 1.4.4
-      prosemirror-view: 1.41.8(patch_hash=8075d2e81b46edd6f49d64acdd56b391965eb1f602a8570bd74df3db445c7f98)
+      prosemirror-view: 1.41.8(patch_hash=f2f87687f39e5ddde357bfc43246a0048071c59b240adad014fc6cf5ba36716e)
 
   pump@3.0.4:
     dependencies:

@@ -390,6 +390,42 @@ test("a key typed over an image or code block selected between images and code b
   await typeOver("A", "![Shown](pic.svg)");
 });
 
+test("an image selected between code blocks below a rule is replaced after Ctrl+C and by text that comes without a key", async () => {
+  // As in the test above, Playwright focuses the page before each event it
+  // sends, and Chromium then moves the selection to the start of the
+  // document. Before a rule, ProseMirror reads that as a gap cursor.
+  const file = path.join(directory, "below-rule.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const code = (name: string) => `\`\`\`js\nconst ${name} = 1;\n\`\`\``;
+  const blocks = ["---", code("one"), "![First](pic.svg)", code("two"), "![Second](pic.svg)", code("three"), "Last line."];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-block");
+  await expect(images).toHaveCount(2);
+  /** Save and expect `text` in the file in place of `block`. */
+  const expectReplaced = async (text: string, block: string) => {
+    await page.keyboard.press("ControlOrMeta+s");
+    blocks[blocks.indexOf(block)] = text;
+    await expect.poll(() => readFile(file, "utf8")).toBe(blocks.join("\n\n") + "\n");
+  };
+  // Ctrl+C moves no selection, so the selection still goes back after it.
+  // A person holds a key for a moment, so the key's handling ends before
+  // its release. Without the delay, the release that DevTools sends right
+  // away focuses the page and moves the selection before that.
+  await images.nth(1).click();
+  await expect(images.nth(1)).toHaveClass(/\bselected\b/);
+  await page.keyboard.press("ControlOrMeta+c", { delay: 100 });
+  await page.keyboard.press("Shift+KeyB");
+  await expectReplaced("B", "![Second](pic.svg)");
+  // Text from an input method, the emoji panel or dictation comes with no
+  // key event.
+  await images.first().click();
+  await expect(images.first()).toHaveClass(/\bselected\b/);
+  const session = await page.context().newCDPSession(page);
+  await session.send("Input.insertText", { text: "漢" });
+  await expectReplaced("漢", "![First](pic.svg)");
+});
+
 test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
   const file = path.join(directory, "image-links.md");
   // An image wide enough to click either half of.
