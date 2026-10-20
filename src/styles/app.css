@@ -775,6 +775,15 @@ body {
   user-select: none;
 }
 
+/* Crepe's block handle slid to each new block over 0.2s and took clicks on its
+   way. After the document changed width, as on a switch to the Split view, it
+   slid from where it had been, which could be over a list item's bullet, so a
+   click there selected the handle's block instead (blockHandle.ts). The handle
+   now appears beside its block at once and only fades in. */
+.editor-host .milkdown .milkdown-block-handle {
+  transition-property: opacity;
+}
+
 /* Dark document surface for the WYSIWYG (Crepe) editor (§6.2). Crepe pins a full
    LIGHT palette directly on `.milkdown` (white background, black text — see its
    reset.css `--crepe-color-*` vars), so merely darkening the page left light text

@@ -1,4 +1,5 @@
-// Focus after a press on Crepe's block handle.
+// Focus after a press on Crepe's block handle, and the handle after the
+// document view changes width.
 //
 // A press on the handle selects its block and focuses the document view.
 // The handle lies outside the view and takes no focus, so Chromium then moved
@@ -12,6 +13,17 @@
 // drag, this plugin focuses the view if nothing else has taken focus. The
 // handle's block, or the block the drag moved, is then selected, so the next
 // key replaces it, as after a click on the handle.
+//
+// The handle finds the block under the pointer only on a pointer move over
+// the document view, at most every 200 ms. After the view changes width, as
+// on a switch from the Document view to the Split view, it stayed where it
+// was, which could be over the text, such as a list item's bullet or a task's
+// box. A click there right after the switch selected the handle's block, and
+// the next key replaced it. Once the pointer moved, the handle slid into
+// place over 0.2 s and still took clicks on its way. This plugin hides the
+// handle whenever the view's width changes, so it takes no press until the
+// pointer shows it again beside the block under it, and md-easy's styles have
+// it appear there at once rather than slide.
 
 import { Plugin } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -50,16 +62,32 @@ function focusAfterHandlePress(view: EditorView, holder: HTMLElement): () => voi
   };
 }
 
+/** Hide the view's block handle whenever the view's width changes (see the
+ *  header). Returns a function that stops this. */
+function hideHandleOnResize(view: EditorView, holder: HTMLElement): () => void {
+  let width = view.dom.offsetWidth;
+  const observer = new ResizeObserver(() => {
+    if (view.dom.offsetWidth === width) return;
+    width = view.dom.offsetWidth;
+    // Crepe hides the handle the same way, and shows it again on the next
+    // pointer move over a block.
+    for (const handle of holder.querySelectorAll<HTMLElement>(`:scope > ${HANDLE}`)) handle.dataset.show = "false";
+  });
+  observer.observe(view.dom);
+  return () => observer.disconnect();
+}
+
 /** ProseMirror plugin that focuses the document view after a press on Crepe's
- *  block handle (see the header). Crepe puts the handle in the element that
- *  holds the view. */
+ *  block handle and hides the handle when the view's width changes (see the
+ *  header). Crepe puts the handle in the element that holds the view. */
 export const blockHandle = $prose(
   () =>
     new Plugin({
       view(view) {
         const holder = view.dom.parentElement;
         if (!holder) return {};
-        return { destroy: focusAfterHandlePress(view, holder) };
+        const stops = [focusAfterHandlePress(view, holder), hideHandleOnResize(view, holder)];
+        return { destroy: () => stops.forEach((stop) => stop()) };
       },
     }),
 );

@@ -1594,6 +1594,50 @@ test("after a press or drag on the block handle from anywhere, the next key repl
   await expect.poll(() => readFile(file, "utf8")).toBe(["B", "First.", code("alpha"), "A", "C", "D", "Last line."].join("\n\n") + "\n");
 });
 
+test("the block handle hides when the document changes width, so a click on a bullet or a task's box right after a switch of view reaches it", async () => {
+  const file = path.join(directory, "block-handle-resize.md");
+  await writeFile(file, ["First line.", "- one\n- two\n- three", "Middle line.", "- [ ] task a\n- [ ] task b", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const handle = page.locator(".milkdown-block-handle");
+  /** The list item whose text starts with `text`. */
+  const item = (text: string) => documentView.locator(".milkdown-list-item-block", { has: page.locator("p", { hasText: new RegExp(`^${text}`) }) });
+  /** Show the block handle beside the item that starts with `text` in the
+   *  Document view and switch to the Split view. Returns the center of the
+   *  item's bullet or task box, which lies under the handle's place from
+   *  before the switch. */
+  const switchBeside = async (text: string) => {
+    await page.getByRole("radio", { name: "Document", exact: true }).click();
+    const paragraph = (await item(text).locator("p").boundingBox())!;
+    const middle = paragraph.y + paragraph.height / 2;
+    await page.mouse.move(paragraph.x + 20, middle);
+    await expect.poll(async () => {
+      const box = await handle.boundingBox();
+      return (await handle.getAttribute("data-show")) === "true" && !!box && Math.abs(box.y + box.height / 2 - middle) < 8;
+    }).toBe(true);
+    await page.getByRole("radio", { name: "Split", exact: true }).click();
+    const label = await centerOf(item(text).locator(".label-wrapper"));
+    const box = (await handle.boundingBox())!;
+    expect(label.x > box.x && label.x < box.x + box.width && label.y > box.y && label.y < box.y + box.height).toBe(true);
+    return label;
+  };
+  // Crepe's handle stayed where it was after the switch, and then slid into
+  // place on the next pointer move, so it took the click on the bullet. It
+  // selected its item, and the next key replaced the item.
+  const bullet = await switchBeside("two");
+  await page.mouse.click(bullet.x, bullet.y);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  // On a task's box, the task stayed open and the next key replaced it. The
+  // box toggles the task, and the caret stays where it was.
+  const box = await switchBeside("task b");
+  await page.mouse.click(box.x, box.y);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("b");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["First line.", "- one\n- abtwo\n- three", "Middle line.", "- [ ] task a\n- [x] task b", "Last line."].join("\n\n") + "\n");
+});
+
 test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {
   const file = path.join(directory, "page-presses.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");

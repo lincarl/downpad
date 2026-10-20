@@ -296,7 +296,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(paddingPresses);
     // Focus leaves a code block once the document's selection has left it.
     this.crepe.editor.use(codeBlockFocus);
-    // The document takes focus after a press on the block handle.
+    // The document takes focus after a press on the block handle, and the
+    // handle hides when the document changes width.
     this.crepe.editor.use(blockHandle);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
