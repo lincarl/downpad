@@ -15,7 +15,7 @@
 //     in Milkdown's form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, editorViewOptionsCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
@@ -43,6 +43,7 @@ import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
 import { tableCellClicks } from "./tableCellClicks";
+import { dropBesideTable, tableDropIndicator } from "./dropEdge";
 import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
@@ -289,6 +290,17 @@ export class WysiwygEditor {
     // A click in a table cell places the caret instead of selecting the cell.
     // Must follow the Table feature so this view replaces Crepe's.
     this.crepe.editor.use(tableCellClicks);
+    // A block or text dropped on or beside a table goes in above or below it,
+    // never between its rows or cells. As a prop of the view itself, the drop
+    // handler runs before the drop indicator's. The plugin moves the
+    // indicator's line to that edge, so it must follow the Cursor feature.
+    this.crepe.editor.config((ctx) => {
+      ctx.update(editorViewOptionsCtx, (prev) => ({
+        ...prev,
+        handleDrop: (view, event, slice, moved) => dropBesideTable(view, event, slice, moved) || (prev.handleDrop?.(view, event, slice, moved) ?? false),
+      }));
+    });
+    this.crepe.editor.use(tableDropIndicator);
     // Look up local image URLs before the first render, so none starts raw.
     this.crepe.editor.use(preloadImages(imageConfig.preload));
     // WYSIWYG find/replace search state + decorations (§5.13).

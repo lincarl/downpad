@@ -148,6 +148,23 @@ describe("a file dropped on the document", () => {
     // Inserted at the cell's edge, the link would get a new column of its own.
     expect(opened.getMarkdown()).toBe(`First line.\n\n${table}\n[a.csv](attachments/a.csv)\n`);
   });
+
+  it("goes in at the edge of a table nearer the drop point", async () => {
+    const table = "| a | b |\n| - | - |\n| 1 | 2 |\n| a much longer cell text here | 4 |\n";
+    const opened = await open(`First line.\n\n${table}`);
+    place(opened, block("paragraph", "First line."), 100, 130);
+    place(opened, block("table"), 140, 260);
+    place(opened, block("table_header_row"), 140, 180);
+    place(opened, block("table_row", "12"), 180, 220);
+    place(opened, block("table_row", "a much longer cell text here4"), 220, 260);
+
+    // Just above the last row, below the middle of the table. The edge there
+    // comes before the middle of the table's text, which has most of it in
+    // the last row.
+    opened.insertMarkdown("[a.csv](attachments/a.csv)", opened.dropTargetAt(300, 216));
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${table}\n[a.csv](attachments/a.csv)\n`);
+  });
 });
 
 describe("the caret after a file dropped on the document", () => {

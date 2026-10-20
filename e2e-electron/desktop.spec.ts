@@ -3614,6 +3614,121 @@ test("a click right of the text in a table cell puts the caret after it, and a r
   ].join("\n"));
 });
 
+/** Press on the grip of Crepe's block handle beside `block` and move a little,
+ *  which starts dragging the block. */
+async function startBlockDrag(block: Locator): Promise<void> {
+  const box = (await block.boundingBox())!;
+  const handle = page.locator(".milkdown-block-handle");
+  await page.mouse.move(box.x + 10, box.y + box.height / 2);
+  // Crepe shows the handle beside the block under the pointer once
+  // floating-ui has placed it.
+  await expect.poll(async () => {
+    const handleBox = await handle.boundingBox();
+    if (!handleBox || (await handle.getAttribute("data-show")) !== "true") return false;
+    const middle = handleBox.y + handleBox.height / 2;
+    return middle > box.y && middle < box.y + box.height && handleBox.x + handleBox.width <= box.x;
+  }).toBe(true);
+  const grip = await centerOf(handle.locator(".operation-item").nth(1));
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 5, grip.y + 5, { steps: 3 });
+}
+
+/** The height on the page of the drop indicator's line, or null while it is
+ *  hidden. It is read from the place the line is given, since the line moves
+ *  there over a fifth of a second. */
+async function dropLineY(): Promise<number | null> {
+  return page.locator(".milkdown-drop-indicator").evaluate((line) => {
+    if (!(line instanceof HTMLElement) || line.style.display === "none") return null;
+    const top = /translate\([-\d.]+px, ([-\d.]+)px\)/.exec(line.style.transform)?.[1];
+    return top === undefined ? null : Number(top) + Number.parseFloat(line.style.height) / 2;
+  });
+}
+
+test("a block dragged by its handle onto a table, or beside it, goes in above or below the whole table, where the drop line shows", async () => {
+  const file = path.join(directory, "block-drag-table.md");
+  await writeFile(file, "Intro.\n\nMove me.\n\n| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |\n\nEnd.\n");
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  const tableBox = async () => (await page.locator(".milkdown-table-block").boundingBox())!;
+  // Onto cell b3, in the table's lower half. Crepe's table kept this drop from
+  // the editor, so it did nothing, or once the page had scrolled, Chromium put
+  // a copy of the block's text into the cell.
+  await startBlockDrag(editor.locator("p", { hasText: "Move me." }));
+  const b3 = await centerOf(editor.locator("td", { hasText: "b3" }));
+  await page.mouse.move(b3.x, b3.y, { steps: 10 });
+  await page.mouse.move(b3.x + 1, b3.y);
+  const below = await tableBox();
+  await expect.poll(dropLineY).toBeCloseTo(below.y + below.height, 0);
+  await page.mouse.up();
+  await expect(editor.locator(".milkdown-table-block + p")).toHaveText("Move me.");
+  // Into the margin left of row a1, in the table's upper half. Crepe put the
+  // block between the rows there, which cut the table in two.
+  await startBlockDrag(editor.locator("p", { hasText: "End." }));
+  const a1 = (await editor.locator("td", { hasText: "a1" }).boundingBox())!;
+  await page.mouse.move(a1.x - 30, a1.y + a1.height / 2, { steps: 10 });
+  await page.mouse.move(a1.x - 31, a1.y + a1.height / 2);
+  await expect.poll(dropLineY).toBeCloseTo((await tableBox()).y, 0);
+  await page.mouse.up();
+  // A drag across a cell's text still selects it.
+  const b2 = editor.locator("td p", { hasText: "b2" });
+  const text = await b2.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const { left, right, top, bottom } = range.getBoundingClientRect();
+    return { left, right, y: (top + bottom) / 2 };
+  });
+  await page.mouse.move(text.left - 1, text.y);
+  await page.mouse.down();
+  await page.mouse.move(text.right + 1, text.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.type("B2");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Intro.",
+    "",
+    "End.",
+    "",
+    "| Head A | Head B |",
+    "| ------ | ------ |",
+    "| a1     | b1     |",
+    "| a2     | B2     |",
+    "| a3     | b3     |",
+    "",
+    "Move me.",
+    "",
+  ].join("\n"));
+});
+
+test("a block dragged by its handle onto a table while the page scrolls goes in below the table once", async () => {
+  const file = path.join(directory, "block-drag-scroll.md");
+  const fillers = Array.from({ length: 40 }, (_, index) => `Filler ${index + 1}.`);
+  const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";
+  await writeFile(file, ["Intro.", "Move me.", ...fillers, table, "End."].join("\n\n") + "\n");
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  const moved = editor.locator("p", { hasText: "Move me." });
+  await startBlockDrag(moved);
+  // Hold the pointer at the bottom of the page, where the editor scrolls the
+  // page as the pointer moves, until row a2 is under it. Each update of such a
+  // drag lands on a new element. Chromium sent only a dragenter then, which
+  // Crepe's table did not cancel, so it dropped a copy of the block's text into
+  // the cell itself.
+  const area = (await page.locator(".editor-area").boundingBox())!;
+  const x = (await moved.boundingBox())!.x + 40;
+  const y = area.y + area.height - 6;
+  await page.mouse.move(x, y, { steps: 10 });
+  let wiggle = 0;
+  await expect.poll(async () => {
+    wiggle += 1;
+    await page.mouse.move(x + (wiggle % 2), y);
+    return page.evaluate(([pointX, pointY]) => document.elementFromPoint(pointX, pointY)?.closest("td")?.textContent ?? null, [x, y]);
+  }, { timeout: 20_000, intervals: [25] }).toBe("a2");
+  await page.mouse.up();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", ...fillers, table, "Move me.", "End."].join("\n\n") + "\n");
+});
+
 test("a click in a table cell in the split's document pane while cells are selected puts the caret there, right after a Markdown edit", async () => {
   const { file, markdownLine } = await openSplit("table-cells-split.md", "Intro.\n\n| Name | Notes |\n| --- | --- |\n| short text | a note |\n| a much wider value | b2 |\n");
   const table = page.locator(".editor-pane-wysiwyg table.children");
