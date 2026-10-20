@@ -50,10 +50,8 @@
 // focus toward such a press too, so from the Markdown pane the next key
 // replaced the Markdown from its start to the caret. From the find card it
 // focused the document at its old caret, where a plain click on a code
-// block's toolbar focuses the code block. Chromium extends only a selection
-// there is, so `shiftPressesAsClicks` drops the browser's selection once the
-// press's handlers are done, and Chromium then handles the press as a plain
-// click. The frontmatter table above the document uses the same. ProseMirror
+// block's toolbar focuses the code block. The browser takes such a press as a
+// plain click (`shiftPressesAsClicks` in shell/pagePresses.ts). ProseMirror
 // still sees the Shift key, so this plugin does what a plain click does where
 // ProseMirror decides. It selects a rule or an image on its own line, and it
 // gives up a cell selection for a caret, so prosemirror-tables leaves the
@@ -136,7 +134,7 @@ function selectedOnClick(node: ProseNode): boolean {
  *  click elsewhere. Anywhere else it gives up a cell selection for a caret
  *  in the cell its head is in, so prosemirror-tables leaves the press alone,
  *  and returns false, so the browser takes the press as a plain click
- *  (`shiftPressesAsClicks`). */
+ *  (`shiftPressesAsClicks` in shell/pagePresses.ts). */
 function blockPressFromOutside(view: EditorView, event: MouseEvent): boolean {
   const { target } = event;
   const found = view.posAtCoords({ left: event.clientX, top: event.clientY });
@@ -159,33 +157,6 @@ function clickCaret(view: EditorView, event: MouseEvent): number | null {
   const caret = view.dom.ownerDocument.caretPositionFromPoint?.(event.clientX, event.clientY);
   if (!caret || !view.dom.contains(caret.offsetNode)) return null;
   return view.posAtDOM(caret.offsetNode, caret.offset, 1);
-}
-
-/** Have the browser take a Shift+press inside `element` as a plain click
- *  when the focused element does not hold what was pressed, as when the
- *  Markdown pane has focus and the press is in the document (see the
- *  header). Chromium extends only a selection there is, so this drops the
- *  browser's selection after the press's handlers, just before the browser
- *  handles the press. A press that a handler cancelled, or during which a
- *  handler moved focus, as the document view does for a press on its text,
- *  is left as it is. Returns a function that stops this. */
-export function shiftPressesAsClicks(element: HTMLElement): () => void {
-  const root = element.ownerDocument;
-  let focusedAtPress: Element | null = null;
-  const listening = new AbortController();
-  const pressed = (): void => {
-    focusedAtPress = root.activeElement;
-  };
-  const handled = (event: MouseEvent): void => {
-    if (!event.shiftKey || event.button !== 0 || event.defaultPrevented) return;
-    const focused = root.activeElement;
-    if (focused !== focusedAtPress) return;
-    if (focused && focused !== root.body && event.target instanceof Node && focused.contains(event.target)) return;
-    root.getSelection()?.removeAllRanges();
-  };
-  element.addEventListener("mousedown", pressed, { capture: true, signal: listening.signal });
-  element.addEventListener("mousedown", handled, { signal: listening.signal });
-  return () => listening.abort();
 }
 
 /** Extend the selection on a Shift+press on link text or on an image in a
@@ -283,15 +254,10 @@ export function dragSelect(view: EditorView, anchor: number, head: number): void
 
 /** Milkdown plugin that puts a ProseMirror plugin for presses from outside
  *  the document view before all others, including prosemirror-tables,
- *  which Crepe adds before any plugin md-easy uses. It also has the browser
- *  take a Shift+press from outside on the view as a plain click
- *  (`shiftPressesAsClicks`). */
+ *  which Crepe adds before any plugin md-easy uses. */
 const fromOutside: MilkdownPlugin = (ctx) => async () => {
   await ctx.wait(SchemaReady);
-  const plugin = new Plugin({
-    props: { handleDOMEvents: { mousedown: shiftPressFromOutside } },
-    view: (view) => ({ destroy: shiftPressesAsClicks(view.dom) }),
-  });
+  const plugin = new Plugin({ props: { handleDOMEvents: { mousedown: shiftPressFromOutside } } });
   ctx.update(prosePluginsCtx, (plugins) => [plugin, ...plugins]);
   return () => ctx.update(prosePluginsCtx, (plugins) => plugins.filter((other) => other !== plugin));
 };

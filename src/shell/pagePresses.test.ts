@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 // shiftPressesAsClicks drops the browser's selection before the browser
 // handles a Shift+press inside an element from an editor outside what was
-// pressed, so Chromium takes the press as a plain click. These tests check
-// when it does and when it leaves the selection alone.
+// pressed, so Chromium takes the press as a plain click. pagePressesKeepFocus
+// cancels a press on the page around the editors, so focus stays where it
+// was. These tests check when each acts and when it leaves the press alone.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { shiftPressesAsClicks } from "./shiftClicks";
+import { pagePressesKeepFocus, shiftPressesAsClicks } from "./pagePresses";
 
 let stop: (() => void) | null = null;
 afterEach(() => {
@@ -71,5 +72,47 @@ describe("shiftPressesAsClicks", () => {
     element.tabIndex = 0;
     element.focus();
     expect(press(target)).toBe(true);
+  });
+});
+
+describe("pagePressesKeepFocus", () => {
+  /** An editor area with a column around a document view and a CodeMirror
+   *  editor, a frontmatter table and a divider beside them. */
+  function area() {
+    const element = document.createElement("div");
+    element.innerHTML = [
+      '<div class="column"><div class="pane">',
+      '<div class="frontmatter"><span class="caption">Frontmatter</span></div>',
+      '<div class="milkdown"><div class="ProseMirror" contenteditable="true"><p>Text</p></div><div class="toolbar"></div></div>',
+      "</div>",
+      '<div class="divider" tabindex="0"></div>',
+      '<div class="pane"><div class="cm-editor"><div class="cm-gutters"></div></div></div></div>',
+    ].join("");
+    document.body.append(element);
+    stop = pagePressesKeepFocus(element);
+    return element;
+  }
+
+  /** Press `target` with `button` and return whether the press was cancelled. */
+  function cancelled(target: Element, button = 0): boolean {
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button });
+    target.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it("cancels a press on the area or an element that holds an editor, outside the editor", () => {
+    const element = area();
+    expect(cancelled(element)).toBe(true);
+    expect(cancelled(element.querySelector(".column")!)).toBe(true);
+    for (const pane of element.querySelectorAll(".pane")) expect(cancelled(pane)).toBe(true);
+    expect(cancelled(element.querySelector(".milkdown")!)).toBe(true);
+  });
+
+  it("leaves a press inside an editor, on another element or with another button", () => {
+    const element = area();
+    for (const selector of [".ProseMirror", "p", ".cm-editor", ".cm-gutters", ".caption", ".toolbar", ".divider"]) {
+      expect(cancelled(element.querySelector(selector)!), selector).toBe(false);
+    }
+    expect(cancelled(element.querySelector(".column")!, 2)).toBe(false);
   });
 });

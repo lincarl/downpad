@@ -1343,6 +1343,45 @@ test("the block handle's add button from a code block puts the next key in the n
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "First line.", "a", "Last line."].join("\n\n") + "\n");
 });
 
+test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {
+  const file = path.join(directory, "page-presses.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  // Chromium moved focus to the page on a press beside the document's column
+  // or below its last line, and the next key was lost, also when the
+  // document or a code block had focus.
+  await clickOn("Last line.", -1, 0.75);
+  const area = (await page.locator("#document-editor-panel").boundingBox())!;
+  await page.mouse.click(area.x + 10, area.y + area.height / 2);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  const column = (await page.locator(".editor-column").boundingBox())!;
+  await page.mouse.click(column.x + 40, column.y + column.height - 20);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  // From the split's Markdown pane, Chromium extended the pane's selection to
+  // its start on a Shift+click beside the document pane's text, or on the
+  // empty part of the tab strip, and the next key replaced the Markdown
+  // before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("First line.");
+  const pane = (await page.locator(".editor-pane-wysiwyg").boundingBox())!;
+  await shiftClickAt({ x: pane.x + 10, y: pane.y + pane.height / 2 });
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("c");
+  const strip = (await page.locator(".tabstrip").boundingBox())!;
+  await shiftClickAt({ x: strip.x + strip.width * 0.6, y: strip.y + strip.height / 2 });
+  await expect(markdown).not.toBeFocused();
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;b\n```", "First line.c", "Last line.a"].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);

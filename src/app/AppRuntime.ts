@@ -18,6 +18,7 @@ import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
 import { hasUnsavedChanges, layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
+import { pagePressesKeepFocus, shiftPressesAsClicks } from "../shell/pagePresses";
 import { preparePrintJob } from "../print/printDocument";
 import { PrintWorkspace } from "../print/PrintWorkspace";
 import { installAppShortcuts } from "./installAppShortcuts";
@@ -99,6 +100,12 @@ export class AppRuntime {
       copyMarkdown: () => void this.copyMarkdown(),
       insertLink: (href) => this.editorHost.insertLink(href),
     }));
+
+    // A Shift+press outside the element that has focus is a plain click, so
+    // it never extends the selection of an editor elsewhere, and a press on
+    // the page around the editors leaves focus where it was (§5.6).
+    this.cleanups.push(shiftPressesAsClicks(document.documentElement));
+    this.cleanups.push(pagePressesKeepFocus(hosts.editorArea));
 
     this.printWorkspace = new PrintWorkspace({
       getSettings: () => this.store.get().settings,

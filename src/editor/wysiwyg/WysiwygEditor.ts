@@ -35,7 +35,7 @@ import { stringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
-import { shiftClicks, shiftPressesAsClicks } from "./shiftClicks";
+import { shiftClicks } from "./shiftClicks";
 import { listLabelClicks } from "./listLabelClicks";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
@@ -697,9 +697,6 @@ export class WysiwygEditor {
           if (event.button !== 0 || !(target instanceof Element) || target.closest("button, pre")) return;
           if (!(target instanceof HTMLElement && target.isContentEditable)) event.preventDefault();
         });
-        // A Shift+click on a cell from another editor puts the caret at the
-        // click, as a plain click does.
-        shiftPressesAsClicks(panel);
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);
       }
