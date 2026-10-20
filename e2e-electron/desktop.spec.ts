@@ -1314,6 +1314,39 @@ test("a click or Shift+click on the frontmatter table's caption or beside the ta
   await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: Survey\n---\n\nFirst line.b\n\nLast line.a\n");
 });
 
+/** The point `fraction` of the way across the character at `index` of the
+ *  first text in `element`. */
+function pointInText(element: Locator, index: number, fraction: number): Promise<{ x: number; y: number }> {
+  return element.evaluate((element, [index, fraction]) => {
+    const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(node, index);
+    range.setEnd(node, index + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+  }, [index, fraction] as const);
+}
+
+/** The text of the browser's selection. */
+function selectedText(): Promise<string> {
+  return page.evaluate(() => document.getSelection()!.toString());
+}
+
+test("Shift+click extends a selection in read-only frontmatter text, also while nothing has focus", async () => {
+  const file = path.join(directory, "frontmatter-read-only-comment.md");
+  await writeFile(file, "---\n# First comment second comment\n---\n\nBody line.\n");
+  await launch(file);
+  const comment = page.locator(".frontmatter-raw .frontmatter-code");
+  await expect(comment).toBeVisible();
+  // While nothing had focus, the listener that has the browser take a
+  // Shift+press from an editor as a plain click dropped every selection, so
+  // the Shift+click only moved the caret.
+  const start = await pointInText(comment, 4, 0.25);
+  await page.mouse.click(start.x, start.y);
+  await shiftClickAt(await pointInText(comment, 19, 0.25));
+  await expect.poll(selectedText).toBe("rst comment sec");
+});
+
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
   const file = path.join(directory, "block-handle-add-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");

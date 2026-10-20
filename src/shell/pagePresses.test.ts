@@ -8,6 +8,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "./pagePresses";
 
+// jsdom has no isContentEditable. An element is editable here when the
+// nearest element with a contenteditable attribute does not set it to false.
+Object.defineProperty(HTMLElement.prototype, "isContentEditable", {
+  configurable: true,
+  get(this: HTMLElement) {
+    const host = this.closest("[contenteditable]");
+    return !!host && host.getAttribute("contenteditable") !== "false";
+  },
+});
+
 let stop: (() => void) | null = null;
 afterEach(() => {
   stop?.();
@@ -19,7 +29,7 @@ afterEach(() => {
  *  with a target to press inside it. */
 function setUp() {
   const outside = document.createElement("div");
-  outside.contentEditable = "true";
+  outside.setAttribute("contenteditable", "true");
   outside.tabIndex = 0;
   outside.textContent = "Outside text";
   const element = document.createElement("div");
@@ -72,6 +82,45 @@ describe("shiftPressesAsClicks", () => {
     element.tabIndex = 0;
     element.focus();
     expect(press(target)).toBe(true);
+  });
+
+  it("drops the selection of an editor outside while a button has focus", () => {
+    const { outside, element, target } = setUp();
+    const button = document.createElement("button");
+    element.append(button);
+    button.focus();
+    // Chromium keeps the selection in the editor, where jsdom moves it.
+    document.getSelection()!.collapse(outside.firstChild, 4);
+    expect(press(target)).toBe(false);
+  });
+
+  it("drops the selection of a focused text field, which Chromium reports at the field's place", () => {
+    const { target } = setUp();
+    const field = document.createElement("input");
+    document.body.prepend(field);
+    field.focus();
+    document.getSelection()!.collapse(document.body, 0);
+    expect(document.activeElement).toBe(field);
+    expect(press(target)).toBe(false);
+  });
+
+  it("leaves a selection in text that cannot be edited, also while nothing has focus", () => {
+    const { outside, element } = setUp();
+    const text = document.createElement("pre");
+    text.textContent = "# First comment second comment";
+    element.append(text);
+    outside.blur();
+    document.getSelection()!.collapse(text.firstChild, 4);
+    expect(document.activeElement).toBe(document.body);
+    expect(press(text)).toBe(true);
+  });
+
+  it("drops the selection of an editor while nothing has focus", () => {
+    const { outside, target } = setUp();
+    outside.blur();
+    document.getSelection()!.collapse(outside.firstChild, 4);
+    expect(document.activeElement).toBe(document.body);
+    expect(press(target)).toBe(false);
   });
 
   it("leaves the selection when the CodeMirror editor whose content has focus holds the press, as on a fold arrow", () => {
