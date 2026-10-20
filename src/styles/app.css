@@ -1110,8 +1110,9 @@ body {
 
 /* The URL is generated content, so a click on it puts the caret at the
    link's end. Chromium put a click on DOM text there at the paragraph's start.
-   Unscoped so the printed clone (printRender.ts) shows the URL as before. */
-.md-link-url::after {
+   The printed clone holds the URL as text instead, without `data-url`, so a
+   page break can fall between its lines (printRender.ts). */
+.md-link-url[data-url]::after {
   content: " (" attr(data-url) ")";
 }
 

@@ -16,7 +16,9 @@
 // Chromium has no caret position inside text that can be neither edited nor
 // selected, and a click on such text put the caret at the start of the
 // paragraph. Chromium puts a click on generated content after the suffix,
-// which ProseMirror reads as the link's end.
+// which ProseMirror reads as the link's end. Print writes the URL into the
+// suffix as text (printRender.ts), because the paginator breaks a paragraph
+// or heading only between lines of its text.
 //
 // The suffix holds an empty comment, so it has a child but no text. Chromium
 // treats a non-editable element with no children as one solid object, and
@@ -172,9 +174,9 @@ function suffixesFor(state: EditorState): DecorationSet | undefined {
 }
 
 /** The suffix element for `href`. The URL it shows is CSS generated content
- *  from `data-url` (see `.md-link-url::after`), not text in the DOM, so a
- *  click on it puts the caret at the link's end. The empty comment keeps an
- *  input method's composition after it working (see the header). */
+ *  from `data-url` (see `.md-link-url[data-url]::after`), not text in the
+ *  DOM, so a click on it puts the caret at the link's end. The empty comment
+ *  keeps an input method's composition after it working (see the header). */
 function makeSuffix(href: string): () => HTMLElement {
   return () => {
     const span = document.createElement("span");

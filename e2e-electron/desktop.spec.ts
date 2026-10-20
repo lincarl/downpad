@@ -3914,6 +3914,23 @@ test("the empty line after a final list adds no blank sheet to the print", async
   await expect(page.locator(".print-page")).toHaveCount(1);
 });
 
+test("a heading with the URL shown after its link continues on the next sheet at the chosen size", async () => {
+  const file = path.join(directory, "linked-heading.md");
+  await writeFile(file, "# [API](https://example.com/documentation/reference)\n");
+  // On a small page at twice the size, the heading and its URL are taller than a page.
+  await writeFile(path.join(directory, "profile", "settings.toml"), 'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nprintPaperSize = "a5"\nprintMargins = "wide"\nprintScalePercent = 200\n');
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror .md-link-url")).toHaveCount(1);
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  await expect(page.locator(".print-page").first()).toBeVisible();
+  // The paginator breaks a heading between the lines of its text. Drawn as
+  // generated content, the URL had none, so the heading was shrunk onto one sheet.
+  await expect(page.locator(".print-fit")).toHaveCount(0);
+  expect(await page.locator(".print-page").count()).toBeGreaterThan(1);
+  const printed = await page.locator(".print-page .print-flow").allTextContents();
+  expect(printed.join("")).toBe("API (https://example.com/d…umentation/reference)");
+});
+
 test("the Markdown version continues a source line taller than a page on the next pages", async () => {
   const file = path.join(directory, "long-lines.md");
   // The nested quotes overflow the Markdown parser's stack, so the file prints as

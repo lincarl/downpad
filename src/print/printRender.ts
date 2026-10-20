@@ -82,8 +82,23 @@ export function sanitize(el: Element): Element {
   }
   // A missing inline image's hover text asks for a click, which does nothing here.
   el.querySelectorAll(".md-image-missing").forEach((n) => n.removeAttribute("title"));
+  printLinkUrls(el);
   dropTrailingEmptyLines(el);
   return el;
+}
+
+/**
+ * Write the URL shown after each link (linkView.ts) into its element as text.
+ * The editor draws it as CSS generated content from `data-url`, and the
+ * paginator breaks a paragraph or heading only between lines of its text, so
+ * a heading whose URL wrapped past a page was shrunk onto one sheet. Without
+ * `data-url` the element draws no generated content, so the URL prints once.
+ */
+function printLinkUrls(el: Element): void {
+  el.querySelectorAll<HTMLElement>(".md-link-url[data-url]").forEach((url) => {
+    url.textContent = ` (${url.dataset.url})`;
+    url.removeAttribute("data-url");
+  });
 }
 
 /**
