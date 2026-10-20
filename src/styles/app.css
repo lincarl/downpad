@@ -766,6 +766,15 @@ body {
   max-width: 100%;
 }
 
+/* A row or column handle holds no caret, so Chromium cleared the selection on
+   a press there. A drag that moved no row or column put none back, and the next
+   key went nowhere, or with DevTools input to the start of the document. A
+   press that cannot start a selection leaves the selection as it was, and a
+   click on the handle still selects its row or column. */
+.editor-host .milkdown-table-block .cell-handle {
+  user-select: none;
+}
+
 /* Dark document surface for the WYSIWYG (Crepe) editor (§6.2). Crepe pins a full
    LIGHT palette directly on `.milkdown` (white background, black text — see its
    reset.css `--crepe-color-*` vars), so merely darkening the page left light text

@@ -5611,6 +5611,52 @@ test("a click right of the text in a table cell puts the caret after it, and a r
   ].join("\n"));
 });
 
+test("a drag of a table's row or column handle that moves nothing leaves the caret where it was", async () => {
+  const file = path.join(directory, "table-handles.md");
+  const markdown = "Intro.\n\n| Name | Notes |\n| --- | --- |\n| one | two |\n| three | four |\n\nLast line.\n";
+  await writeFile(file, markdown);
+  await launch(file);
+  const table = page.locator(".milkdown .ProseMirror table.children");
+  const preview = page.locator(".milkdown-table-block .drag-preview");
+  await page.locator(".milkdown .ProseMirror > p", { hasText: "Last line." }).click();
+  await page.keyboard.press("End");
+  /** Drag the `role` handle of `cell`'s column or row a little, staying over
+   *  that column or row, so the drop moves nothing. Chromium cleared the
+   *  selection on the press, and nothing put it back. */
+  const dragInPlace = async (cell: Locator, role: "col" | "row"): Promise<void> => {
+    const handle = page.locator(`[data-role="${role}-drag-handle"]`);
+    // Crepe hides the handles 200 ms after the pointer leaves the table.
+    await page.waitForTimeout(300);
+    await cell.hover();
+    await expect(handle).toHaveAttribute("data-show", "true");
+    const cellBox = (await cell.boundingBox())!;
+    // The handle moves to the cell once floating-ui has placed it.
+    await expect.poll(async () => {
+      const box = await handle.boundingBox();
+      if (!box) return false;
+      return role === "col"
+        ? Math.abs(box.x + box.width / 2 - (cellBox.x + cellBox.width / 2)) < 2
+        : Math.abs(box.y + box.height / 2 - (cellBox.y + cellBox.height / 2)) < 2;
+    }).toBe(true);
+    const box = (await handle.boundingBox())!;
+    const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 6, start.y + 6);
+    await expect(preview).toHaveAttribute("data-show", "true");
+    await page.mouse.move(start.x + 10, start.y + 10, { steps: 4 });
+    await page.waitForTimeout(100);
+    await page.mouse.up();
+    await expect(preview).toHaveAttribute("data-show", "false");
+  };
+  await dragInPlace(table.locator("td", { hasText: "one" }), "col");
+  await page.keyboard.type("a");
+  await dragInPlace(table.locator("td", { hasText: "three" }), "row");
+  await page.keyboard.type("b");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(markdown.replace("Last line.", "Last line.ab"));
+});
+
 /** Press on the grip of Crepe's block handle beside `block` and move a little,
  *  which starts dragging the block. */
 async function startBlockDrag(block: Locator): Promise<void> {
