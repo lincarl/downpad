@@ -1200,6 +1200,84 @@ test("a click or Shift+click on a list item's bullet puts the caret at the start
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "- FAone\n- Btwo\n- Cthree\n- Dfour\n- Efive", "| A | B |\n| --- | --- |\n| x1 | y1 |", "Last line."].join("\n\n") + "\n");
 });
 
+test("Shift+click from the find card or the Markdown pane on a rule or an image on its own line selects it as a click does, and so does a click from a code block", async () => {
+  const file = path.join(directory, "shift-click-rule-image.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "Above.", "---", "![Bar](bar.svg)", "Middle.", "---", "![Bar](bar.svg)", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const rules = documentView.locator("hr");
+  const images = documentView.locator(".milkdown-image-block");
+  await expect(images).toHaveCount(2);
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).locator("img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  // From the find card, a Shift+click on a rule or an image focused the
+  // document and left its selection as it was, so the next key went to its
+  // old caret or was lost. A click selects the rule or the image.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await shiftClickAt(await centerOf(rules.first()));
+  await expect(documentView).toBeFocused();
+  await expect(rules.first()).toHaveClass(/ProseMirror-selectednode/);
+  await page.keyboard.type("a");
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await shiftClickAt(await centerOf(images.first().locator("img")));
+  await expect(documentView).toBeFocused();
+  await expect(images.first()).toHaveClass(/selected/);
+  await page.keyboard.type("b");
+  // From a code block, ProseMirror selected the image, but focus went back
+  // into the code block, and the next key went into the code.
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  const last = await centerOf(images.last().locator("img"));
+  await page.mouse.click(last.x, last.y);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("c");
+  // From the split's Markdown pane, Chromium extended the pane's selection
+  // to its start, and the next key replaced the Markdown before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await shiftClickAt(await centerOf(rules.last()));
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "Above.", "a", "b", "Middle.", "d", "c", "Last line."].join("\n\n") + "\n");
+});
+
+test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
+  const file = path.join(directory, "block-handle-add-from-code.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  // Show the handle of the first paragraph and click its add button, once
+  // Crepe has moved the handle beside the paragraph from the code block.
+  const paragraph = await centerOf(documentView.locator("p", { hasText: "First line." }));
+  await page.mouse.move(paragraph.x, paragraph.y, { steps: 4 });
+  const add = page.locator(".milkdown-block-handle[data-show=true] .operation-item").first();
+  let button = { x: 0, y: 0 };
+  await expect.poll(async () => {
+    button = await centerOf(add);
+    return Math.abs(button.y - paragraph.y) < 8;
+  }).toBe(true);
+  await page.mouse.move(button.x, button.y, { steps: 6 });
+  await page.mouse.click(button.x, button.y);
+  // Crepe focused the document before it put the paragraph in, which put
+  // focus back into the code block, so the next key went into the code.
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "First line.", "a", "Last line."].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);

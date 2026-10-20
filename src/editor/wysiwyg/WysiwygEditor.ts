@@ -54,6 +54,7 @@ import {
 } from "./findEngine";
 import { codeBlockFindHighlights } from "./findReveal";
 import { codeBlockClicks } from "./codeBlockClicks";
+import { codeBlockFocus } from "./codeBlockFocus";
 import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
@@ -285,6 +286,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(shiftClicks);
     // A press on a list item's bullet or number puts the caret at its text.
     this.crepe.editor.use(listLabelClicks);
+    // Focus leaves a code block once the document's selection has left it.
+    this.crepe.editor.use(codeBlockFocus);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
     // Show missing inline images as missing too, and keep missing images in
