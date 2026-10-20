@@ -15,10 +15,11 @@
 // the browser's handling of the release, which is where Chromium puts the
 // caret for a click inside a selection, so the plugin puts it there itself.
 //
-// Shift+click on link text extends the selection, as on other text. Chromium
-// does not extend the selection when the mouse goes down on a link, even in
-// an editable element, and ProseMirror leaves Shift+click to the browser, so
-// the click put a caret there instead.
+// Shift+click on link text extends the selection, and a Shift+drag from
+// there follows the pointer and scrolls the document, as on other text.
+// Chromium does not extend the selection when the mouse goes down on a link,
+// even in an editable element, and ProseMirror leaves Shift+click to the
+// browser, so the click put a caret there instead.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
 // so it never becomes part of the document or the serialized markdown. It is
@@ -266,11 +267,9 @@ function clickAsPlain(view: EditorView, pos: number, event: MouseEvent, selectLe
  *  (see the header). The press is left to the browser while the document
  *  does not have focus, such as when a code block, the Markdown pane or the
  *  find card has it, since the selection to extend is not the one the user
- *  sees. A press on an image inside a link is left alone too, and so is a
- *  drag another handler takes over, such as prosemirror-tables' selection of
- *  the cells the pointer crosses. prosemirror-tables runs first and takes a
- *  Shift+click into another cell itself. Unlike Chromium's drag selection,
- *  the drag does not scroll the document when the pointer leaves it. */
+ *  sees. A press on an image inside a link is left alone too.
+ *  prosemirror-tables runs first and takes a Shift+click into another cell
+ *  itself. */
 function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
   if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element) || !view.hasFocus()) return false;
   const link = event.target.closest("a");
@@ -284,19 +283,67 @@ function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
     if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
   };
   extend(found.pos);
+  followDrag(view, extend);
+  return true;
+}
+
+/** The nearest ancestor of `element` that scrolls its content vertically. */
+function scrollerOf(element: Element): Element | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
+  }
+  return null;
+}
+
+/** Call `extend` with the position under the pointer until the mouse button
+ *  is released, as Chromium's own drag selection follows the pointer. While
+ *  the pointer is above or below the document's scroll container, the
+ *  container scrolls each frame by as far as the pointer is outside it, as
+ *  Chromium scrolls, and the selection follows to the container's edge.
+ *  Following stops once the selection is no longer a text selection, as when
+ *  prosemirror-tables takes the drag over to select the cells it crosses,
+ *  and when the window loses focus. */
+function followDrag(view: EditorView, extend: (head: number) => void): void {
   const root = view.dom.ownerDocument;
-  const move = (moved: MouseEvent): void => {
-    if (view.isDestroyed || !(moved.buttons & 1) || !(view.state.selection instanceof TextSelection)) return end();
-    const at = view.posAtCoords({ left: moved.clientX, top: moved.clientY });
+  const win = root.defaultView;
+  const scroller = scrollerOf(view.dom);
+  let pointer: { left: number; top: number } | null = null;
+  let frame = 0;
+  const follow = (): void => {
+    frame = 0;
+    if (!pointer || view.isDestroyed || !(view.state.selection instanceof TextSelection)) return end();
+    const dom = view.dom.getBoundingClientRect();
+    let { left, top } = pointer;
+    if (scroller) {
+      const box = scroller.getBoundingClientRect();
+      const outside = top < box.top ? top - box.top : top > box.bottom ? top - box.bottom : 0;
+      if (outside) {
+        scroller.scrollTop += outside;
+        top = Math.min(Math.max(top, box.top + 1), box.bottom - 1);
+        frame = win?.requestAnimationFrame(follow) ?? 0;
+      }
+    }
+    // A point outside the document has no position in it.
+    left = Math.min(Math.max(left, dom.left + 1), dom.right - 1);
+    top = Math.min(Math.max(top, dom.top + 1), dom.bottom - 1);
+    const at = view.posAtCoords({ left, top });
     if (at) extend(at.pos);
   };
+  const move = (moved: MouseEvent): void => {
+    if (!(moved.buttons & 1)) return end();
+    pointer = { left: moved.clientX, top: moved.clientY };
+    if (!frame) follow();
+  };
   const end = (): void => {
+    if (frame) win?.cancelAnimationFrame(frame);
+    frame = 0;
     root.removeEventListener("mousemove", move);
     root.removeEventListener("mouseup", end);
+    win?.removeEventListener("blur", end);
   };
   root.addEventListener("mousemove", move);
   root.addEventListener("mouseup", end);
-  return true;
+  win?.addEventListener("blur", end);
 }
 
 function openExternally(href: string): void {

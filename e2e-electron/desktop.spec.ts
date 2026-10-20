@@ -705,6 +705,40 @@ test("Shift+click on a link's text while a code block has focus puts the caret t
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "Then [dozcs](https://example.com/docs) after the link."].join("\n\n") + "\n");
 });
 
+test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
+  const file = path.join(directory, "shift-drag-scroll.md");
+  const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);
+  await writeFile(file, ["Start [anchor](https://example.com/a) here.", ...lines].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(61);
+  const area = page.locator(".editor-area");
+  const scrollTop = () => area.evaluate((element) => element.scrollTop);
+  expect(await area.evaluate((element) => element.scrollHeight > element.clientHeight * 2)).toBe(true);
+  await clickOn("Start ", 2, 0.25);
+  const press = await pointOn("anchor", 2, 0.25);
+  const areaBox = (await area.boundingBox())!;
+  await page.keyboard.down("Shift");
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  // The pointer rests below the document, over the status bar.
+  await page.mouse.move(press.x, areaBox.y + areaBox.height + 8, { steps: 5 });
+  await expect.poll(scrollTop).toBeGreaterThan(areaBox.height);
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  const selected = await page.evaluate(() => document.getSelection()!.toString());
+  expect(selected.startsWith("art anchor here.")).toBe(true);
+  // The selection follows to the bottom edge of the scrolled document.
+  const last = await page.locator(".milkdown .ProseMirror > p").evaluateAll((blocks, bottom) => {
+    const shown = blocks.filter((block) => block.getBoundingClientRect().bottom <= bottom);
+    return shown[shown.length - 1]!.textContent;
+  }, areaBox.y + areaBox.height);
+  expect(selected).toContain(last);
+  // The document stops scrolling once the button is released.
+  const released = await scrollTop();
+  await page.waitForTimeout(300);
+  expect(await scrollTop()).toBe(released);
+});
+
 test("text typed, composed or pasted right after a link goes after it", async () => {
   const file = path.join(directory, "after-link.md");
   await writeFile(file, [
