@@ -712,19 +712,22 @@ test("Shift+click or Shift+drag on a link's text extends the selection", async (
   ].join("\n\n") + "\n");
 });
 
-test("Shift+click on an image in a line extends the selection to the side of it clicked", async () => {
+test("Shift+click on an image in a line extends the selection to the side of it clicked, and a Shift+drag from there follows the pointer", async () => {
   const file = path.join(directory, "shift-click-image.md");
   await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
   await writeFile(file, [
     "Pics ![Bar](bar.svg) after.",
     "Go [![Bar](bar.svg) text](https://example.com/m) end.",
+    "Drag ![Bar](bar.svg) from the image here.",
   ].join("\n\n") + "\n");
   await launch(file);
   const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
-  await expect(images).toHaveCount(2);
-  for (const index of [0, 1]) {
+  await expect(images).toHaveCount(3);
+  for (const index of [0, 1, 2]) {
     await expect.poll(() => images.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
   }
+  /** The image in the paragraph that starts with `text`. */
+  const imageIn = (text: string) => page.locator(".milkdown .ProseMirror > p").filter({ hasText: text }).locator(".milkdown-image-inline img");
   /** Shift+click `fraction` of the way across `image`. */
   const shiftClick = async (image: Locator, fraction: number) => {
     const box = (await image.boundingBox())!;
@@ -735,73 +738,101 @@ test("Shift+click on an image in a line extends the selection to the side of it 
   // Chromium does not extend the selection on a Shift+click on an image, so
   // the caret stayed where it was and the next key went in there.
   await clickOn(" after.", 2, 0.25);
-  await shiftClick(images.first(), 0.25);
+  await shiftClick(imageIn("Pics"), 0.25);
   await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe(" a");
   await page.keyboard.type("x");
   // On the right half of an image inside a link, the selection ends after it.
   await clickOn(" end.", 2, 0.25);
-  await shiftClick(images.last(), 0.75);
+  await shiftClick(imageIn("Go"), 0.75);
   await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe(" text e");
   await page.keyboard.type("y");
+  // A Shift+drag from an image follows the pointer. It stopped at the side
+  // of the image pressed.
+  await clickOn("Drag ", 1, 0.75);
+  const box = (await imageIn("Drag").boundingBox())!;
+  const release = await pointOn(" from the image here.", 8, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe("ag  from th");
+  await page.keyboard.type("z");
   await page.keyboard.press("ControlOrMeta+s");
   // Typing over selected text of a link keeps the link.
   await expect.poll(() => readFile(file, "utf8")).toBe([
     "Pics xfter.",
     "Go [![Bar](bar.svg)y](https://example.com/m)nd.",
+    "Drze image here.",
   ].join("\n\n") + "\n");
 });
 
-test("Shift+click on an image in a line while a code block has focus puts the caret beside it", async () => {
-  const file = path.join(directory, "shift-click-image-from-code.md");
+test("Shift+click in the document while a code block or the Markdown pane has focus puts the caret at the click", async () => {
+  const file = path.join(directory, "shift-click-from-code.md");
   await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
   await writeFile(file, [
-    "```\nconst alpha = 1;\n```",
+    "```js\nconst alpha = 1;\nconst beta = 2;\n```",
+    "Plain words here.",
+    "Then [docs](https://example.com/docs) after the link.",
     "Pics ![Bar](bar.svg) after.",
     "Go [![Bar](bar.svg) text](https://example.com/m) end.",
+    "Last line.",
   ].join("\n\n") + "\n");
   await launch(file);
-  await expect(page.locator(".milkdown .ProseMirror .cm-line")).toHaveCount(1);
+  const lines = page.locator(".milkdown .ProseMirror .cm-line");
+  await expect(lines).toHaveCount(2);
   const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
   await expect(images).toHaveCount(2);
   for (const index of [0, 1]) {
     await expect.poll(() => images.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
   }
-  const code = page.locator(".milkdown .ProseMirror .cm-content");
-  // Chromium puts no caret on an image, so focus went back to the code block
-  // and the next key went in there.
-  for (const [index, fraction, typed] of [[0, 0.75, "x"], [1, 0.25, "y"]] as const) {
-    await page.locator(".milkdown .ProseMirror .cm-line").click();
-    await expect(code).toBeFocused();
-    const box = (await images.nth(index).boundingBox())!;
+  /** Put the caret at the start of the code block, Shift+click `point` and
+   *  type `typed`. */
+  const fromCode = async (point: { x: number; y: number }, typed: string) => {
+    const line = (await lines.first().boundingBox())!;
+    await page.mouse.click(line.x + 1, line.y + line.height / 2);
+    await expect(page.locator(".milkdown .ProseMirror .cm-content")).toBeFocused();
     await page.keyboard.down("Shift");
-    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.mouse.click(point.x, point.y);
     await page.keyboard.up("Shift");
     await page.keyboard.type(typed);
-  }
+  };
+  /** The point `fraction` of the way across `image`. */
+  const across = async (image: Locator, fraction: number) => {
+    const box = (await image.boundingBox())!;
+    return { x: box.x + box.width * fraction, y: box.y + box.height / 2 };
+  };
+  // Chromium extended the code block's selection toward the click, which
+  // CodeMirror cut off at the end of the block, and focus stayed in the
+  // block. The next key replaced the code from the caret on.
+  await fromCode(await pointOn("Plain words here.", 3, 0.25), "p");
+  // So did a Shift+click on the URL shown after a link.
+  const url = (await page.locator(".milkdown .ProseMirror .md-link-url").first().boundingBox())!;
+  await fromCode({ x: url.x + url.width / 2, y: url.y + url.height / 2 }, "u");
+  await fromCode(await pointOn("docs", 2, 0.25), "z");
+  // Chromium puts no caret on an image, so the next key went into the block.
+  await fromCode(await across(images.first(), 0.75), "x");
+  await fromCode(await across(images.last(), 0.25), "y");
+  // With the caret in the split's Markdown pane, Chromium selected that
+  // pane's text from its start, and the next key replaced it.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await page.locator(".editor-pane-raw .cm-line").filter({ hasText: "Last line." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.down("Shift");
+  const last = await pointOn("Last line.", 4, 0.25);
+  await page.mouse.click(last.x, last.y);
+  await page.keyboard.up("Shift");
+  await page.keyboard.type("m");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe([
-    "```\nconst alpha = 1;\n```",
+    "```js\nconst alpha = 1;\nconst beta = 2;\n```",
+    "Plapin words here.",
+    "Then [dozcs](https://example.com/docs)u after the link.",
     "Pics ![Bar](bar.svg)x after.",
     "Go y[![Bar](bar.svg) text](https://example.com/m) end.",
+    "Lastm line.",
   ].join("\n\n") + "\n");
-});
-
-test("Shift+click on a link's text while a code block has focus puts the caret there", async () => {
-  const file = path.join(directory, "shift-click-from-code.md");
-  await writeFile(file, ["```\nconst alpha = 1;\n```", "Then [docs](https://example.com/docs) after the link."].join("\n\n") + "\n");
-  await launch(file);
-  await expect(page.locator(".milkdown .ProseMirror .cm-line")).toHaveCount(1);
-  await clickOn("const alpha = 1;", 3, 0.25);
-  // The selection to extend was the code block's, which the user does not
-  // see in the document, and focus stayed in the block, so the next key went
-  // in there.
-  await page.keyboard.down("Shift");
-  await clickOn("docs", 2, 0.25);
-  await page.keyboard.up("Shift");
-  await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains("ProseMirror") ?? false)).toBe(true);
-  await page.keyboard.type("z");
-  await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "Then [dozcs](https://example.com/docs) after the link."].join("\n\n") + "\n");
 });
 
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {

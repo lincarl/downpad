@@ -23,7 +23,7 @@
 import { convertFileSrc } from "../../ipc/bridge";
 import { openDialog } from "../../ipc/dialogs";
 import { $prose } from "@milkdown/kit/utils";
-import { NodeSelection, Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, PluginKey } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
@@ -198,10 +198,8 @@ const IN_SELECTION = "md-in-selection";
  *  empty URL and gives no new error. One whose path was cleared shows Crepe's
  *  input for a path instead. Load and error events do not bubble, so the plugin
  *  catches them on their way down to the image. Inline images inside a text
- *  selection get the IN_SELECTION class, and Shift+click on an inline image
- *  or a chip extends the selection to it, or puts the caret beside it while
- *  the document does not have focus. The plugin also draws the decoration of
- *  showAgain. */
+ *  selection get the IN_SELECTION class. The plugin also draws the decoration
+ *  of showAgain. Shift+click on an image is in shiftClicks.ts. */
 export function missingImages(onError: (event: Event) => void) {
   return $prose(
     () =>
@@ -260,34 +258,6 @@ export function missingImages(onError: (event: Event) => void) {
               }
             }
             return marks.length ? DecorationSet.create(state.doc, marks) : null;
-          },
-          handleDOMEvents: {
-            // Chromium does not extend the selection on a Shift+click on an
-            // image, and finds no place in a chip to extend it to, so the
-            // click left the caret where it was or moved it. Extend it to the
-            // side of the image or chip clicked, as on text. While the
-            // document does not have focus, the selection to extend is not
-            // the one the user sees, such as one in a code block that has
-            // focus, so the click puts the caret at that side instead.
-            // Chromium puts no caret on an image, so focus stayed where it
-            // was and the next key went in there.
-            mousedown: (view, event) => {
-              if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element)) return false;
-              const host = event.target.closest<HTMLElement>(".milkdown-image-inline");
-              const found = host && view.dom.contains(host) ? imageNodeAtDom(view, host) : null;
-              if (!host || !found) return false;
-              const { left, width } = host.getBoundingClientRect();
-              const head = event.clientX < left + width / 2 ? found.pos : found.pos + found.node.nodeSize;
-              event.preventDefault();
-              const { doc, selection } = view.state;
-              const focused = view.hasFocus();
-              const next = focused ? TextSelection.between(selection.$anchor, doc.resolve(head)) : TextSelection.create(doc, head);
-              view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
-              // Focus only once the selection has left a code block, since
-              // focusing the view moves focus into the block that holds it.
-              if (!focused) view.focus();
-              return true;
-            },
           },
         },
       }),

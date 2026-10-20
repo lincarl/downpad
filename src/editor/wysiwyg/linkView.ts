@@ -14,12 +14,7 @@
 // paragraph, heading or list. Taking the click from ProseMirror also cancels
 // the browser's handling of the release, which is where Chromium puts the
 // caret for a click inside a selection, so the plugin puts it there itself.
-//
-// Shift+click on link text extends the selection, and a Shift+drag from
-// there follows the pointer and scrolls the document, as on other text.
-// Chromium does not extend the selection when the mouse goes down on a link,
-// even in an editable element, and ProseMirror leaves Shift+click to the
-// browser, so the click put a caret there instead.
+// Shift+click and Shift+drag on link text are in shiftClicks.ts.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
 // so it never becomes part of the document or the serialized markdown. It is
@@ -261,106 +256,6 @@ function clickAsPlain(view: EditorView, pos: number, event: MouseEvent, selectLe
   if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
 }
 
-/** Extend the selection to a Shift+click on link text, and on to the
- *  pointer while the button stays down, as Chromium does for a Shift+click
- *  or Shift+drag on other text. Chromium put a caret at the click instead
- *  (see the header). The press is left to the browser while the document
- *  does not have focus, such as when a code block, the Markdown pane or the
- *  find card has it, since the selection to extend is not the one the user
- *  sees. A press on an image inside a link is left alone too.
- *  prosemirror-tables runs first and takes a Shift+click into another cell
- *  itself. */
-function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
-  if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element) || !view.hasFocus()) return false;
-  const link = event.target.closest("a");
-  const found = link && view.dom.contains(link) ? view.posAtCoords({ left: event.clientX, top: event.clientY }) : null;
-  if (!found || (found.inside >= 0 && view.state.doc.nodeAt(found.inside)?.isInline)) return false;
-  event.preventDefault();
-  // The anchor stays where the press found it, also when another plugin
-  // changes the selection in between. prosemirror-tables makes a selection
-  // that ends at the start of a cell select the paragraph it starts in, and
-  // an anchor taken from that selection stayed at the paragraph's start for
-  // the rest of the drag. A change to the document moves positions, though.
-  // It can be a key pressed while the button is down, such as Backspace, or
-  // a change made along with the selection, such as strikethrough made of
-  // text typed just before. The anchor then becomes that of the selection,
-  // which ProseMirror moved along with the change, as Chromium's drag
-  // selection goes on from where such a key left the caret.
-  let { doc } = view.state;
-  let { anchor } = view.state.selection;
-  const extend = (head: number): void => {
-    const { state } = view;
-    if (state.doc !== doc) {
-      doc = state.doc;
-      anchor = state.selection.anchor;
-    }
-    const next = TextSelection.between(doc.resolve(anchor), doc.resolve(head));
-    if (!next.eq(state.selection)) view.dispatch(state.tr.setSelection(next).setMeta("pointer", true));
-  };
-  extend(found.pos);
-  followDrag(view, extend);
-  return true;
-}
-
-/** The nearest ancestor of `element` that scrolls its content vertically. */
-function scrollerOf(element: Element): Element | null {
-  for (let node = element.parentElement; node; node = node.parentElement) {
-    if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
-  }
-  return null;
-}
-
-/** Call `extend` with the position under the pointer until the mouse button
- *  is released, as Chromium's own drag selection follows the pointer. While
- *  the pointer is above or below the document's scroll container, the
- *  container scrolls each frame by as far as the pointer is outside it, as
- *  Chromium scrolls, and the selection follows to the container's edge.
- *  Following stops once the selection is no longer a text selection, as when
- *  prosemirror-tables takes the drag over to select the cells it crosses,
- *  and when the window loses focus. */
-function followDrag(view: EditorView, extend: (head: number) => void): void {
-  const root = view.dom.ownerDocument;
-  const win = root.defaultView;
-  const scroller = scrollerOf(view.dom);
-  let pointer: { left: number; top: number } | null = null;
-  let frame = 0;
-  const follow = (): void => {
-    frame = 0;
-    if (!pointer || view.isDestroyed || !(view.state.selection instanceof TextSelection)) return end();
-    const dom = view.dom.getBoundingClientRect();
-    let { left, top } = pointer;
-    if (scroller) {
-      const box = scroller.getBoundingClientRect();
-      const outside = top < box.top ? top - box.top : top > box.bottom ? top - box.bottom : 0;
-      if (outside) {
-        scroller.scrollTop += outside;
-        top = Math.min(Math.max(top, box.top + 1), box.bottom - 1);
-        frame = win?.requestAnimationFrame(follow) ?? 0;
-      }
-    }
-    // A point outside the document has no position in it.
-    left = Math.min(Math.max(left, dom.left + 1), dom.right - 1);
-    top = Math.min(Math.max(top, dom.top + 1), dom.bottom - 1);
-    const at = view.posAtCoords({ left, top });
-    if (at) extend(at.pos);
-  };
-  const move = (moved: MouseEvent): void => {
-    if (!(moved.buttons & 1)) return end();
-    pointer = { left: moved.clientX, top: moved.clientY };
-    if (!frame) follow();
-  };
-  const end = (): void => {
-    if (frame) win?.cancelAnimationFrame(frame);
-    frame = 0;
-    root.removeEventListener("mousemove", move);
-    root.removeEventListener("mouseup", end);
-    win?.removeEventListener("blur", end);
-  };
-  root.addEventListener("mousemove", move);
-  root.addEventListener("mouseup", end);
-  win?.addEventListener("blur", end);
-}
-
 function openExternally(href: string): void {
   if (isElectron()) {
     void desktopBridge().openExternal(href).catch(() => {});
@@ -404,9 +299,6 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
         clickAsPlain(view, pos, event, !href);
         if (href) openExternally(href);
         return true;
-      },
-      handleDOMEvents: {
-        mousedown: shiftClickOnLink,
       },
       handleDoubleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
         // Double-click a link to a local .md file → open it in a tab (§5.6),

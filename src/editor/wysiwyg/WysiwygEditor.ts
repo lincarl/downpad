@@ -35,6 +35,7 @@ import { stringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
+import { shiftClicks } from "./shiftClicks";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
@@ -278,6 +279,9 @@ export class WysiwygEditor {
     this.crepe.editor.use(copyWithoutTrailingLine);
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.
     this.crepe.editor.use(linkViewPlugin(context));
+    // Shift+click and Shift+drag on link text and images, and from outside
+    // the document (§5.5, §5.6).
+    this.crepe.editor.use(shiftClicks);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
     // Show missing inline images as missing too, and keep missing images in
