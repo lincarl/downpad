@@ -533,6 +533,60 @@ test("typing over a link's selected text keeps the link", async () => {
   );
 });
 
+test("an input method's composition right after a link goes in once", async () => {
+  const file = path.join(directory, "compose-after-link.md");
+  await writeFile(file, [
+    "Kana [one](https://example.com/1)",
+    "Korean [two](https://example.com/2)",
+    "A [three](https://example.com/3)s and more.",
+    "Emptied [four](https://example.com/4)",
+    "Text only [five](https://example.com/5)",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror .md-link-url")).toHaveCount(5);
+  const session = await page.context().newCDPSession(page);
+  /** Compose each text of `steps` in turn, as an input method does, then
+   *  commit `commit`. An empty step empties the composition, which ends it. */
+  const compose = async (steps: string[], commit: string) => {
+    for (const text of steps) await session.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+    await session.send("Input.insertText", { text: commit });
+  };
+  /** Click the text before a link, then press End. */
+  const endOf = async (text: string) => {
+    await clickOn(text, 0, 0.5);
+    await page.keyboard.press("End");
+  };
+  // With the URL shown after the link, a composition of more than one step
+  // went in twice.
+  await endOf("Kana ");
+  await compose(["か", "かな"], "かな");
+  await endOf("Korean ");
+  await compose(["ㅎ", "하", "한"], "한");
+  await clickOn("three", -1, 0.75);
+  await compose(["か", "", "な", "なに"], "なに");
+  await endOf("Emptied ");
+  await compose(["か", "", "な", "なに"], "なに");
+  await page.keyboard.press("ControlOrMeta+s");
+  const composed = [
+    "Kana [one](https://example.com/1)かな",
+    "Korean [two](https://example.com/2)한",
+    "A [three](https://example.com/3)なにs and more.",
+    "Emptied [four](https://example.com/4)なに",
+  ];
+  await expect.poll(() => readFile(file, "utf8")).toBe([...composed, "Text only [five](https://example.com/5)"].join("\n\n") + "\n");
+  // The same steps with only the link text shown, which always worked.
+  const settings = await page.evaluate(() => window.mdEasy!.invoke("load_settings"));
+  await app!.evaluate(({ BrowserWindow }, changed) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.send("md-easy:event:settings-changed", changed);
+  }, { ...settings, linkDisplay: "text-only" });
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(5);
+  await expect(page.locator(".milkdown .ProseMirror .md-link-url")).toHaveCount(0);
+  await endOf("Text only ");
+  await compose(["か", "かな"], "かな");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([...composed, "Text only [five](https://example.com/5)かな"].join("\n\n") + "\n");
+});
+
 test("Left at a link's end where text follows types into the link", async () => {
   const file = path.join(directory, "link-side.md");
   await writeFile(file, "A [link](https://example.com/b)s and more.\n");

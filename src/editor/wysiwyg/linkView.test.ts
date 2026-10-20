@@ -135,12 +135,13 @@ describe("link URL suffixes", () => {
     const doc = schema.nodes.doc.create(null, [p(text("a", "https://a.example"), text("b", "https://b.example"), text(" c"))]);
     const view = new EditorView(document.createElement("div"), { state: EditorState.create({ doc, plugins: [linkUrlPlugin(ctx)] }) });
     // The URL shows through CSS, with no text in the DOM that a click could
-    // land in (see linkView.ts).
+    // land in, and an empty comment keeps an input method's composition after
+    // it working (see linkView.ts).
     const drawn = [...view.dom.querySelectorAll<HTMLElement>(".md-link-url")].map(
-      (suffix) => `${suffix.dataset.url} in ${suffix.parentElement?.nodeName}, text ${JSON.stringify(suffix.textContent)}`,
+      (suffix) => `${suffix.dataset.url} in ${suffix.parentElement?.nodeName}, holding ${suffix.innerHTML}`,
     );
     view.destroy();
-    expect(drawn).toEqual(['https://a.example in P, text ""', 'https://b.example in P, text ""']);
+    expect(drawn).toEqual(["https://a.example in P, holding <!---->", "https://b.example in P, holding <!---->"]);
   });
 
   it("keeps the key of a suffix that only moved", () => {

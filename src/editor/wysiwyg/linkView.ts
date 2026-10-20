@@ -18,6 +18,14 @@
 // paragraph. Chromium puts a click on generated content after the suffix,
 // which ProseMirror reads as the link's end.
 //
+// The suffix holds an empty comment, so it has a child but no text. Chromium
+// treats a non-editable element with no children as one solid object, and
+// an input method's composition right after such a suffix broke once it had
+// more than one step. Chromium dropped the composition and put the committed
+// text in a second time. Text in the suffix, even a zero-width space, also
+// kept the composition, but Chromium then lost the caret when a composition
+// there was emptied, and the next one went in at the paragraph's start.
+//
 // A plain caret at a link's end, where typed text goes outside the link
 // (linkEdges.ts), is drawn after the suffix, where that text shows. A caret
 // there on the link's side, where typed text joins the link, and a selection
@@ -163,13 +171,15 @@ function suffixesFor(state: EditorState): DecorationSet | undefined {
 
 /** The suffix element for `href`. The URL it shows is CSS generated content
  *  from `data-url` (see `.md-link-url::after`), not text in the DOM, so a
- *  click on it puts the caret at the link's end (see the header). */
+ *  click on it puts the caret at the link's end. The empty comment keeps an
+ *  input method's composition after it working (see the header). */
 function makeSuffix(href: string): () => HTMLElement {
   return () => {
     const span = document.createElement("span");
     span.className = "md-link-url";
     span.dataset.url = middleTruncate(href);
     span.title = href;
+    span.append(document.createComment(""));
     return span;
   };
 }
