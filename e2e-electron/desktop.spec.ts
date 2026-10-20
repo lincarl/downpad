@@ -3700,20 +3700,23 @@ test("a block dragged by its handle onto a table, or beside it, goes in above or
   ].join("\n"));
 });
 
-test("a block dragged by its handle onto a table while the page scrolls goes in below the table once", async () => {
+test("a block dragged by its handle onto a tall table while the page scrolls goes in above the table once, and is scrolled into view", async () => {
   const file = path.join(directory, "block-drag-scroll.md");
-  const fillers = Array.from({ length: 40 }, (_, index) => `Filler ${index + 1}.`);
-  const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";
+  const fillers = Array.from({ length: 20 }, (_, index) => `Filler ${index + 1}.`);
+  const rows = Array.from({ length: 50 }, (_, index) => `| a${index + 1} | b${index + 1} |`);
+  const table = ["| Head A | Head B |", "| --- | --- |", ...rows].join("\n");
   await writeFile(file, ["Intro.", "Move me.", ...fillers, table, "End."].join("\n\n") + "\n");
   await launch(file);
   const editor = page.locator(".milkdown .ProseMirror");
   const moved = editor.locator("p", { hasText: "Move me." });
   await startBlockDrag(moved);
-  // Hold the pointer at the bottom of the page, where the editor scrolls the
-  // page as the pointer moves, until row a2 is under it. Each update of such a
-  // drag lands on a new element. Chromium sent only a dragenter then, which
-  // Crepe's table did not cancel, so it dropped a copy of the block's text into
-  // the cell itself.
+  // Hold the pointer at the bottom of the page, where the page scrolls as the
+  // pointer moves, until one of rows a18 to a24, in the table's upper half and
+  // with the table's top out of view, is under it. The scroll speeds up, so it
+  // can pass a single row between two looks. Each update of such a drag lands
+  // on a new element. Chromium sent only a dragenter then, which Crepe's table
+  // did not cancel, so it dropped a copy of the block's text into the cell
+  // itself.
   const area = (await page.locator(".editor-area").boundingBox())!;
   const x = (await moved.boundingBox())!.x + 40;
   const y = area.y + area.height - 6;
@@ -3723,10 +3726,15 @@ test("a block dragged by its handle onto a table while the page scrolls goes in 
     wiggle += 1;
     await page.mouse.move(x + (wiggle % 2), y);
     return page.evaluate(([pointX, pointY]) => document.elementFromPoint(pointX, pointY)?.closest("td")?.textContent ?? null, [x, y]);
-  }, { timeout: 20_000, intervals: [25] }).toBe("a2");
+  }, { timeout: 30_000, intervals: [20] }).toMatch(/^a(1[89]|2[0-4])$/);
   await page.mouse.up();
+  // The table's top was far above the view, and the page scrolls to the block.
+  await expect.poll(async () => {
+    const box = (await moved.boundingBox())!;
+    return box.y >= area.y && box.y + box.height <= area.y + area.height;
+  }).toBe(true);
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", ...fillers, table, "Move me.", "End."].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", ...fillers, "Move me.", table, "End."].join("\n\n") + "\n");
 });
 
 test("a click in a table cell in the split's document pane while cells are selected puts the caret there, right after a Markdown edit", async () => {

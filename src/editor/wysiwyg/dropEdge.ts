@@ -108,8 +108,10 @@ function backInPlace(view: EditorView, pos: number): boolean {
  * Crepe's indicator would put it, between the table's rows or cells. Moved
  * content leaves where it was, and content moved right beside itself stays
  * there. The content and the selection after it are as at any other edge.
- * Returns false for a drop elsewhere, which Crepe's indicator takes, and for a
- * drop with nothing to put in, such as a row dragged by its handle.
+ * The edge of a tall table can be far from the pointer, out of view, so the
+ * page then scrolls to show what went in. Returns false for a drop elsewhere,
+ * which Crepe's indicator takes, and for a drop with nothing to put in, such
+ * as a row dragged by its handle.
  */
 export function dropBesideTable(view: EditorView, event: DragEvent, slice: Slice, move: boolean): boolean {
   if (!slice.content.size) return false;
@@ -137,7 +139,7 @@ export function dropBesideTable(view: EditorView, event: DragEvent, slice: Slice
     tr.setSelection(view.someProp("createSelectionBetween", (create) => create(view, $pos, $end)) ?? TextSelection.between($pos, $end));
   }
   view.focus();
-  view.dispatch(tr.setMeta("uiEvent", "drop"));
+  view.dispatch(tr.setMeta("uiEvent", "drop").scrollIntoView());
   return true;
 }
 
