@@ -26,8 +26,13 @@
 // find and replace clears them (autolinkReplace.ts). Other code that puts
 // text in away from the caret with `insertText` or `replaceSelectionWith`
 // must clear them too.
+//
+// ProseMirror also gives plain text that is dropped the marks of the place it
+// is dropped on, and Crepe's drop indicator then puts it in a block of its
+// own. So text dropped on a link became a new link to the same target.
+// `transformPasted` below takes the link off.
 
-import { Mark, type ResolvedPos } from "@milkdown/kit/prose/model";
+import { Fragment, Mark, Slice, type MarkType, type Node as ProseNode, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { $prose } from "@milkdown/kit/utils";
 
@@ -99,6 +104,16 @@ function linkSideCaret(state: EditorState): number | null {
   return side !== null && side === caretOf(state)?.pos ? side : null;
 }
 
+/** `fragment` with no `link` marks, at any depth. */
+function withoutLinks(fragment: Fragment, link: MarkType): Fragment {
+  const nodes: ProseNode[] = [];
+  fragment.forEach((node) => {
+    const inner = node.isLeaf ? node : node.copy(withoutLinks(node.content, link));
+    nodes.push(inner.mark(link.removeFromSet(inner.marks)));
+  });
+  return Fragment.from(nodes);
+}
+
 /** A plugin that keeps text put in at a link's edge out of the link. After
  *  every change, a caret at a link's edge gets the marks there without the
  *  link as its stored marks, unless it is on the link's side (`linkSide`). */
@@ -127,6 +142,16 @@ function linkEdgesPlugin(): Plugin<number | null> {
         for (const mark of marks) tr.addMark(from, end, mark);
         view.dispatch(tr);
         return true;
+      },
+      /** Take the links off text pasted or dropped as plain text. Plain text
+       *  holds no links of its own. ProseMirror gives it the marks of the
+       *  place it goes in, which for a drop is the place under the pointer,
+       *  even though Crepe's drop indicator puts the text in a block of its
+       *  own, outside that link. A paste at the caret gets the marks there
+       *  again from Milkdown's paste handling, which reads stored marks. */
+      transformPasted(slice, view, plain) {
+        const link = view.state.schema.marks.link;
+        return plain && link ? new Slice(withoutLinks(slice.content, link), slice.openStart, slice.openEnd) : slice;
       },
     },
     appendTransaction(_transactions, _before, state) {

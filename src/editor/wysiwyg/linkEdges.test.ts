@@ -6,6 +6,7 @@ import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import { toggleMark } from "@milkdown/kit/prose/commands";
 import { undo } from "@milkdown/kit/prose/history";
+import { Fragment, Slice } from "@milkdown/kit/prose/model";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import { DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -234,6 +235,37 @@ describe("changes away from a caret at a link's edge", () => {
     caret(view, end);
     input(view, end - 2, end, "he");
     expect(editor.getMarkdown()).toBe("Intro [the](https://e.com/a)\n");
+  });
+});
+
+describe("text dropped or pasted as plain text", () => {
+  /** Run the editor's `transformPasted` props over `slice`, as ProseMirror
+   *  does for a drop or a paste, which is `plain` for plain text. */
+  function transform(view: EditorView, slice: Slice, plain: boolean): Slice {
+    let result = slice;
+    view.someProp("transformPasted", (f) => {
+      result = f(result, view, plain);
+    });
+    return result;
+  }
+
+  it("loses the link that ProseMirror gives it from the place it goes in", { timeout: 60_000 }, async () => {
+    const { view } = await open("Intro [link](https://e.com/a)\n");
+    const { schema } = view.state;
+    // ProseMirror gives dropped plain text the marks at the drop point, here
+    // the link's end, before Crepe's drop indicator puts it in a block of its own.
+    const marks = view.state.doc.resolve(at(view, "link")).marks();
+    const dropped = new Slice(Fragment.from(schema.nodes.paragraph.create(null, schema.text("dropped", marks))), 1, 1);
+    expect(marks.map((mark) => mark.type.name)).toEqual(["link"]);
+    expect(transform(view, dropped, true).content.firstChild!.firstChild!.marks).toEqual([]);
+  });
+
+  it("keeps a link of its own in rich text", { timeout: 60_000 }, async () => {
+    const { view } = await open("Intro text\n");
+    const { schema } = view.state;
+    const link = schema.marks.link!.create({ href: "https://e.com/r" });
+    const rich = new Slice(Fragment.from(schema.nodes.paragraph.create(null, schema.text("rich", [link]))), 1, 1);
+    expect(transform(view, rich, false).content.firstChild!.firstChild!.marks).toEqual([link]);
   });
 });
 

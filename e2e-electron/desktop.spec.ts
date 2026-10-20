@@ -613,6 +613,33 @@ test("text typed where a link's whole text was deleted is plain", async () => {
   await expect.poll(() => readFile(file, "utf8")).toBe("A xy b.\n\nC zw d.\n");
 });
 
+test("plain text dropped on a link does not take the link", async () => {
+  const file = path.join(directory, "drop-on-link.md");
+  await writeFile(file, "First.\n\nIntro [link](https://example.com/a)\n\nA [more](https://example.com/b)s and more.\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(2);
+  /** Drop `text` as plain text at a point, through Chromium's drag emulation. */
+  const dropText = async (text: string, point: { x: number; y: number }) => {
+    const cdp = await page.context().newCDPSession(page);
+    const data = { items: [{ mimeType: "text/plain", data: text }], dragOperationsMask: 1 };
+    for (const type of ["dragEnter", "dragOver", "drop"] as const) {
+      await cdp.send("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data });
+    }
+    await cdp.detach();
+  };
+  // ProseMirror gave the text the marks under the pointer, and Crepe's drop
+  // indicator put it in a block of its own as a new link to the same target.
+  await dropText("dropped", await pointOn("link", -1, 0.75));
+  await expect(page.locator(".milkdown .ProseMirror p", { hasText: "dropped" })).toHaveCount(1);
+  const url = (await page.locator(".milkdown .ProseMirror .md-link-url").nth(1).boundingBox())!;
+  await dropText("again", { x: url.x + url.width / 2, y: url.y + url.height / 2 });
+  await expect(page.locator(".milkdown .ProseMirror p", { hasText: "again" })).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "First.\n\ndropped\n\nIntro [link](https://example.com/a)\n\nagain\n\nA [more](https://example.com/b)s and more.\n",
+  );
+});
+
 test("Left at a link's end where text follows types into the link", async () => {
   const file = path.join(directory, "link-side.md");
   await writeFile(file, "A [link](https://example.com/b)s and more.\n");
