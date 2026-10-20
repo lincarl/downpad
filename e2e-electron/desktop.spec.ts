@@ -1130,8 +1130,10 @@ test("Shift+click from the find card, the Markdown pane or a code block on a cod
   // to its start, and the next key replaced the Markdown before the caret.
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   await caretInMarkdown("Last line.");
+  // The press is right of the code's last line. Below a line, Chromium on
+  // Windows puts a click's caret at the point of the line nearest to it.
   const edge = (await blocks.nth(1).boundingBox())!;
-  await shiftClickAt({ x: edge.x + edge.width / 2, y: edge.y + edge.height - 3 });
+  await shiftClickAt({ x: edge.x + edge.width - 24, y: edge.y + edge.height - 3 });
   await expect(blocks.nth(1).locator(".cm-content")).toBeFocused();
   await page.keyboard.type("b");
   // From another code block, Chromium selected that block's code from its
@@ -1153,13 +1155,14 @@ test("a click or Shift+click on a list item's bullet puts the caret at the start
   const documentView = page.locator(".milkdown .ProseMirror");
   const selectedCells = documentView.locator(".selectedCell");
   const find = page.getByRole("textbox", { name: "Find in document" });
-  /** The middle of the bullet of the list item whose text starts with `text`. */
-  const bullet = (text: string) => centerOf(documentView.locator(".milkdown-list-item-block", { has: page.locator("p", { hasText: new RegExp(`^${text}`) }) }).locator(".label-wrapper"));
-  /** Click the bullet of the item that starts with `text`, and type `typed`. */
+  /** The bullet of the list item whose text starts with `text`. */
+  const bullet = (text: string) => documentView.locator(".milkdown-list-item-block", { has: page.locator("p", { hasText: new RegExp(`^${text}`) }) }).locator(".label-wrapper");
+  /** Click the bullet of the item that starts with `text`, and type `typed`.
+   *  Crepe's block handle follows the pointer only every 200 ms and slides
+   *  into place, so right after a switch of view it can still lie over a
+   *  bullet. A locator's click waits until the press reaches the bullet. */
   const clickBullet = async (text: string, shift: boolean, typed: string) => {
-    const point = await bullet(text);
-    if (shift) await shiftClickAt(point);
-    else await page.mouse.click(point.x, point.y);
+    await bullet(text).click({ modifiers: shift ? ["Shift"] : [] });
     await expect(documentView).toBeFocused();
     await page.keyboard.type(typed);
   };
