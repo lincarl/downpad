@@ -24,15 +24,15 @@
 const EDITORS = ".ProseMirror, .cm-editor";
 
 /** Have the browser take a Shift+press inside `root` as a plain click when
- *  it would extend the selection of an editor or a text field that does not
- *  hold what was pressed, as when the Markdown pane has focus and the press is
- *  in the document (see the header). Chromium extends only a selection there
- *  is, so this drops the browser's selection after the press's handlers, just
- *  before the browser handles the press. A press that a handler cancelled, or
- *  during which a handler moved focus, as the document view does for a press
- *  on its text, is left as it is. So is a press inside the focused element,
- *  and a selection in text that cannot be edited. Returns a function that
- *  stops this. */
+ *  the focused element does not hold what was pressed and the selection is
+ *  that of an editor or a text field, as when the Markdown pane has focus and
+ *  the press is in the document (see the header). Chromium extends only a
+ *  selection there is, so this drops the browser's selection after the
+ *  press's handlers, just before the browser handles the press. A press that
+ *  a handler cancelled, or during which a handler moved focus, as the
+ *  document view does for a press on its text, is left as it is, and so is a
+ *  selection in text that cannot be edited. Returns a function that stops
+ *  this. */
 export function shiftPressesAsClicks(root: HTMLElement): () => void {
   const page = root.ownerDocument;
   let focusedAtPress: Element | null = null;
