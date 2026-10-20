@@ -620,6 +620,73 @@ test("Ctrl or Cmd+click inside a selection puts the caret where it lands", async
   expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
 });
 
+test("Ctrl or Cmd+click on an image puts the caret beside it when it opens a link, and selects it from a code block", async () => {
+  const file = path.join(directory, "ctrl-click-image.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "```\nconst alpha = 1;\n```",
+    "Text with some words tail.",
+    "Pics ![Bar](bar.svg) after.",
+    "Filler line.",
+    "Go [![Bar](bar.svg)](https://example.com/img) end.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline");
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).locator("img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  const preview = page.locator(".milkdown-link-preview");
+  /** Press Ctrl or Cmd `fraction` of the way across `image` and hold the
+   *  button for `hold` ms, then move the pointer off the link and wait for
+   *  its preview to go, so the preview cannot cover the next target. */
+  const ctrlClick = async (image: Locator, fraction: number, hold = 0) => {
+    const box = (await image.boundingBox())!;
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.move(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.mouse.down();
+    if (hold) await page.waitForTimeout(hold);
+    await page.mouse.up();
+    await page.keyboard.up("ControlOrMeta");
+    const away = (await page.locator(".milkdown .ProseMirror > p").first().boundingBox())!;
+    await page.mouse.move(away.x + 2, away.y + away.height / 2);
+    await expect(preview).toBeHidden();
+  };
+  // Chromium puts no caret on an image, so a Ctrl or Cmd+click that opened
+  // the image's link left a selected image or text elsewhere selected, and
+  // the next key replaced it.
+  await ctrlClick(images.first(), 0.5);
+  await expect(images.first()).toHaveClass(/selected/);
+  await ctrlClick(images.last(), 0.25);
+  await page.keyboard.type("v");
+  await selectText("Text with some words tail.");
+  await ctrlClick(images.last(), 0.75);
+  await page.keyboard.type("w");
+  // With focus in a code block, ProseMirror's selection stays in the block.
+  // Focusing the document before selecting the image put the browser's
+  // selection, and focus, back there, so the image showed as selected and
+  // the next key went into the block. A press of a usual length shows it.
+  // An instant one ends before ProseMirror moves the browser's selection.
+  await page.locator(".milkdown .ProseMirror .cm-line").click();
+  await ctrlClick(images.first(), 0.5, 150);
+  await page.keyboard.type("z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "```\nconst alpha = 1;\n```",
+    "Text with some words tail.",
+    "Pics z after.",
+    "Filler line.",
+    "Go v[![Bar](bar.svg)](https://example.com/img)w end.",
+  ].join("\n\n") + "\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/img", "https://example.com/img"]);
+});
+
 test("Ctrl or Cmd+click in a code block adds a cursor only once the block has focus", async () => {
   const file = path.join(directory, "ctrl-click-code.md");
   await writeFile(file, ["Intro line here.", "```\nconst code = 1;\nlet other = 2;\n```", "Outro line."].join("\n\n") + "\n");

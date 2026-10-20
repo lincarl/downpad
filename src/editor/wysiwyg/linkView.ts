@@ -8,9 +8,10 @@
 //
 // A Ctrl/Cmd-click gets the selection a plain click there gets, whether or
 // not it opens a link, except that only one that opens no link selects an
-// image under the pointer. ProseMirror selects the block under the pointer
-// as a node on a click with that modifier (Cmd on macOS, Ctrl elsewhere),
-// and the block around it on the next one, so the next key replaced a whole
+// image under the pointer. One that opens a link puts the caret beside the
+// image instead. ProseMirror selects the block under the pointer as a node
+// on a click with that modifier (Cmd on macOS, Ctrl elsewhere), and the
+// block around it on the next one, so the next key replaced a whole
 // paragraph, heading or list. Taking the click from ProseMirror also cancels
 // the browser's handling of the release, which is where Chromium puts the
 // caret for a click inside a selection, so the plugin puts it there itself.
@@ -241,19 +242,26 @@ function suffixHref(view: EditorView, event: MouseEvent): string | null {
  *  selection, such as a selected image, as ProseMirror does for a plain
  *  click, since Chromium can report no change for a click at its hidden
  *  caret. With `selectLeaf`, a click on an image or other leaf node selects
- *  it. Anywhere else the caret stays where the browser put it on the press. */
+ *  it. Without, a click on an image or other inline node gets the caret at
+ *  the side of it clicked. Chromium puts no caret there, so the selection
+ *  from before stayed, and the next key replaced it. Anywhere else the caret
+ *  stays where the browser put it on the press.
+ *
+ *  The view takes focus only once the selection is in place. While a code
+ *  block has focus, ProseMirror's selection is in the block, and focusing
+ *  the view puts the browser's selection, and focus, back there. */
 function clickAsPlain(view: EditorView, pos: number, event: MouseEvent, selectLeaf: boolean): void {
   const { doc, selection } = view.state;
-  const inside = selectLeaf ? (view.posAtCoords({ left: event.clientX, top: event.clientY })?.inside ?? -1) : -1;
-  const leaf = inside >= 0 ? doc.nodeAt(inside) : null;
+  const inside = view.posAtCoords({ left: event.clientX, top: event.clientY })?.inside ?? -1;
+  const clicked = inside >= 0 ? doc.nodeAt(inside) : null;
   const within = !selection.empty && selection.from <= pos && pos <= selection.to;
   const nearHidden = !selection.visible && Math.min(Math.abs(pos - selection.from), Math.abs(pos - selection.to)) <= 2;
   let next: Selection | null = null;
-  if (leaf?.isAtom && NodeSelection.isSelectable(leaf)) next = NodeSelection.create(doc, inside);
-  else if (within || nearHidden) next = Selection.near(doc.resolve(pos));
+  if (selectLeaf && clicked?.isAtom && NodeSelection.isSelectable(clicked)) next = NodeSelection.create(doc, inside);
+  else if (within || nearHidden || clicked?.isInline) next = Selection.near(doc.resolve(pos));
   if (!next) return;
-  if (!view.hasFocus()) view.focus();
   if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
+  if (!view.hasFocus()) view.focus();
 }
 
 function openExternally(href: string): void {
@@ -295,7 +303,8 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
         // at a link's end draws its URL again.
         const href = clickedHref(view, event) ?? suffixHref(view, event);
         // A click that opens a link leaves an image under the pointer
-        // unselected, so the next key cannot replace it.
+        // unselected, with the caret beside it, so the next key cannot
+        // replace it.
         clickAsPlain(view, pos, event, !href);
         if (href) openExternally(href);
         return true;
