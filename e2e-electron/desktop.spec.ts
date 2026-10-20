@@ -468,6 +468,725 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   await expect(page).toHaveTitle("two.md — md-easy");
 });
 
+test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", async () => {
+  const file = path.join(directory, "ctrl-click-plain.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "Before the link [docs](https://example.com/docs) after the link.",
+    "# Plain heading",
+    "- outer item\n  - inner item with words\n  - another inner",
+    "Text ![Bar](bar.svg) more words.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const image = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
+  await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  const ctrlClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+  };
+  /** The selected text, and the element ProseMirror marks as selected as a
+   *  node. Crepe's inline image marks itself with the class "selected"
+   *  instead, which `selectedImage` finds. */
+  const selection = () => page.evaluate(() => ({
+    text: document.getSelection()!.toString(),
+    node: document.querySelector(".ProseMirror .ProseMirror-selectednode")?.tagName ?? null,
+  }));
+  const selectedImage = page.locator(".milkdown .ProseMirror .milkdown-image-inline.selected");
+  // ProseMirror selected the paragraph, heading or list item under the
+  // pointer as a node, so the next key replaced all of it.
+  await ctrlClick(await pointOn(" after the link.", 3, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("a");
+  await ctrlClick(await pointOn("Plain heading", 2, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("b");
+  // A second Ctrl or Cmd+click inside a selected node selected the node around it.
+  await ctrlClick(await pointOn("inner item with words", 2, 0.25));
+  await ctrlClick(await pointOn("inner item with words", 17, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("c");
+  // On an image it selects the image, as a plain click does, also the
+  // second time. Right after the selected image it puts the caret there,
+  // where Chromium can report no change of the selection.
+  const box = (await image.boundingBox())!;
+  await ctrlClick({ x: box.x + box.width * 0.3, y: box.y + box.height / 2 });
+  await expect(selectedImage).toHaveCount(1);
+  await ctrlClick({ x: box.x + box.width * 0.7, y: box.y + box.height / 2 });
+  await expect(selectedImage).toHaveCount(1);
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await ctrlClick(await pointOn(" more words.", 0, 0.3));
+  await expect(selectedImage).toHaveCount(0);
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Before the link [docs](https://example.com/docs) afater the link.",
+    "# Plbain heading",
+    "- outer item\n  - inner item with wcords\n  - another inner",
+    "Text ![Bar](bar.svg)d more words.",
+  ].join("\n\n") + "\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([]);
+});
+
+test("Ctrl or Cmd+click inside a selection puts the caret where it lands", async () => {
+  const file = path.join(directory, "ctrl-click-selection.md");
+  await writeFile(file, [
+    "Selected words here.",
+    "First paragraph with plain words.",
+    "Second paragraph with more words.",
+    "B [six](https://example.com/6) and then more.",
+    "Last paragraph here.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  await expect(page.locator(".milkdown .ProseMirror .md-link-url")).toHaveCount(1);
+  const ctrlClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+  };
+  /** The selected text, and the element ProseMirror selected as a node. */
+  const selection = () => page.evaluate(() => ({
+    text: document.getSelection()!.toString(),
+    node: document.querySelector(".ProseMirror .ProseMirror-selectednode")?.tagName ?? null,
+  }));
+  // Chromium keeps a selection that a press lands inside, and puts the caret
+  // there on the release, which ProseMirror cancelled, so the next key
+  // replaced the whole selection.
+  await selectText("Selected words here.");
+  await expect.poll(selection).toEqual({ text: "Selected words here.", node: null });
+  await ctrlClick(await pointOn("Selected words here.", 3, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("a");
+  // A paragraph the block handle selected.
+  const block = page.locator(".milkdown .ProseMirror > p").filter({ hasText: "First paragraph" });
+  const blockBox = (await block.boundingBox())!;
+  await page.mouse.move(blockBox.x + 10, blockBox.y + blockBox.height / 2);
+  const grip = page.locator(".milkdown-block-handle .operation-item").last();
+  await expect.poll(async () => {
+    const box = await grip.boundingBox();
+    return !!box && box.y < blockBox.y + blockBox.height && box.y + box.height > blockBox.y;
+  }).toBe(true);
+  const gripBox = (await grip.boundingBox())!;
+  await page.mouse.move(gripBox.x + gripBox.width / 2, gripBox.y + gripBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect.poll(async () => (await selection()).node).toBe("P");
+  await ctrlClick(await pointOn("First paragraph with plain words.", 6, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("b");
+  // The whole document, with Ctrl or Cmd still held from Ctrl or Cmd+A.
+  const point = await pointOn("Second paragraph with more words.", 7, 0.25);
+  await page.keyboard.down("ControlOrMeta");
+  await page.keyboard.press("a");
+  await expect.poll(async () => (await selection()).text).toContain("Last paragraph here.");
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up("ControlOrMeta");
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("c");
+  // Ctrl or Cmd+click on the URL after a link opens the link and puts the
+  // caret at the link's end, also inside a selection.
+  await clickOn("B ", 0, 0.25);
+  await page.keyboard.down("Shift");
+  await clickOn(" and then more.", 10, 0.25);
+  await page.keyboard.up("Shift");
+  await expect.poll(selection).toEqual({ text: "B six and then ", node: null });
+  const url = (await page.locator(".milkdown .ProseMirror .md-link-url").boundingBox())!;
+  await ctrlClick({ x: url.x + url.width / 2, y: url.y + url.height / 2 });
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Selaected words here.",
+    "First bparagraph with plain words.",
+    "Second cparagraph with more words.",
+    "B [six](https://example.com/6)d and then more.",
+    "Last paragraph here.",
+  ].join("\n\n") + "\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
+});
+
+test("Ctrl or Cmd+click on an image puts the caret beside it when it opens a link, and selects it from a code block", async () => {
+  const file = path.join(directory, "ctrl-click-image.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "```\nconst alpha = 1;\n```",
+    "Text with some words tail.",
+    "Pics ![Bar](bar.svg) after.",
+    "Filler line.",
+    "Go [![Bar](bar.svg)](https://example.com/img) end.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline");
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).locator("img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  const preview = page.locator(".milkdown-link-preview");
+  /** Press Ctrl or Cmd `fraction` of the way across `image` and hold the
+   *  button for `hold` ms, then move the pointer off the link and wait for
+   *  its preview to go, so the preview cannot cover the next target. */
+  const ctrlClick = async (image: Locator, fraction: number, hold = 0) => {
+    const box = (await image.boundingBox())!;
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.move(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.mouse.down();
+    if (hold) await page.waitForTimeout(hold);
+    await page.mouse.up();
+    await page.keyboard.up("ControlOrMeta");
+    const away = (await page.locator(".milkdown .ProseMirror > p").first().boundingBox())!;
+    await page.mouse.move(away.x + 2, away.y + away.height / 2);
+    await expect(preview).toBeHidden();
+  };
+  // Chromium puts no caret on an image, so a Ctrl or Cmd+click that opened
+  // the image's link left a selected image or text elsewhere selected, and
+  // the next key replaced it.
+  await ctrlClick(images.first(), 0.5);
+  await expect(images.first()).toHaveClass(/selected/);
+  await ctrlClick(images.last(), 0.25);
+  await page.keyboard.type("v");
+  await selectText("Text with some words tail.");
+  await ctrlClick(images.last(), 0.75);
+  await page.keyboard.type("w");
+  // With focus in a code block, ProseMirror's selection stays in the block.
+  // Focusing the document before selecting the image put the browser's
+  // selection, and focus, back there, so the image showed as selected and
+  // the next key went into the block. A press of a usual length shows it.
+  // An instant one ends before ProseMirror moves the browser's selection.
+  await page.locator(".milkdown .ProseMirror .cm-line").click();
+  await ctrlClick(images.first(), 0.5, 150);
+  await page.keyboard.type("z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "```\nconst alpha = 1;\n```",
+    "Text with some words tail.",
+    "Pics z after.",
+    "Filler line.",
+    "Go v[![Bar](bar.svg)](https://example.com/img)w end.",
+  ].join("\n\n") + "\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/img", "https://example.com/img"]);
+});
+
+test("Ctrl or Cmd+click in a code block adds a cursor only once the block has focus", async () => {
+  const file = path.join(directory, "ctrl-click-code.md");
+  await writeFile(file, ["Intro line here.", "```\nconst code = 1;\nlet other = 2;\n```", "Outro line."].join("\n\n") + "\n");
+  await launch(file);
+  const block = page.locator(".milkdown .ProseMirror .milkdown-code-block");
+  await expect(block.locator(".cm-line")).toHaveCount(2);
+  const ctrlClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+  };
+  await clickOn("Intro line here.", 3, 0.25);
+  // CodeMirror added a cursor to the one at the block's start, which the user
+  // had not put there, so typing went in at both.
+  await ctrlClick(await pointOn("let other = 2;", 6, 0.25));
+  await expect(block.locator(".cm-cursor")).toHaveCount(1);
+  await page.keyboard.type("q");
+  // In the block that has focus, it still adds a cursor.
+  await ctrlClick(await pointOn("const code = 1;", 6, 0.25));
+  await expect(block.locator(".cm-cursor")).toHaveCount(2);
+  await page.keyboard.type("w");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro line here.", "```\nconst wcode = 1;\nlet otqwher = 2;\n```", "Outro line."].join("\n\n") + "\n");
+});
+
+test("Shift+click or Shift+drag on a link's text extends the selection", async () => {
+  const file = path.join(directory, "shift-click-link.md");
+  await writeFile(file, [
+    "Before the link [docs](https://example.com/docs) after the link.",
+    "Start [alpha](https://example.com/a) middle [beta](https://example.com/b) end.",
+    "From here [gamma](https://example.com/c) to there.",
+    "| Head A | Head B |\n| --- | --- |\n| one [delta](https://example.com/d) x | two |\n| three | four |",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(5);
+  const shiftClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("Shift");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("Shift");
+  };
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  // Chromium put the caret at a Shift+click on a link, so typing went in
+  // there instead of over the text from the caret to the click.
+  await clickOn("docs", -1, 0.75);
+  await shiftClick(await pointOn("docs", 0, 0.25));
+  await expect.poll(selected).toBe("docs");
+  await page.keyboard.type("a");
+  await clickOn("Start ", 2, 0.25);
+  await shiftClick(await pointOn("beta", 2, 0.25));
+  await expect.poll(selected).toBe("art alpha middle be");
+  await page.keyboard.type("b");
+  // A Shift+drag that starts on a link extends the selection from the caret
+  // too. Chromium started a new selection at the press.
+  await clickOn("From here ", 2, 0.25);
+  const press = await pointOn("gamma", 2, 0.25);
+  const release = await pointOn(" to there.", 5, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(selected).toBe("om here gamma to t");
+  await page.keyboard.type("c");
+  // Shift+click from a link onto other text, and inside a table cell.
+  await clickOn("delta", 1, 0.25);
+  await shiftClick(await pointOn(" x", 1, 0.75));
+  await expect.poll(selected).toBe("elta x");
+  await clickOn("one ", 1, 0.25);
+  await shiftClick(await pointOn("delta", 2, 0.25));
+  await expect.poll(selected).toBe("ne de");
+  await page.keyboard.type("d");
+  // Shift+click into another cell still selects the cells.
+  await clickOn("two", 1, 0.5);
+  await shiftClick(await pointOn("lta", 1, 0.5));
+  await expect(page.locator(".milkdown .ProseMirror .selectedCell")).toHaveCount(2);
+  await clickOn("four", 1, 0.5);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Before the link [a](https://example.com/docs) after the link.",
+    "Stb[ta](https://example.com/b) end.",
+    "Frchere.",
+    // Milkdown pads the columns of a table it writes.
+    [
+      "| Head A                           | Head B |",
+      "| -------------------------------- | ------ |",
+      "| od[lta](https://example.com/d) x | two    |",
+      "| three                            | four   |",
+    ].join("\n"),
+  ].join("\n\n") + "\n");
+});
+
+test("Shift+click on an image in a line extends the selection to the side of it clicked, and a Shift+drag from there follows the pointer", async () => {
+  const file = path.join(directory, "shift-click-image.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "Pics ![Bar](bar.svg) after.",
+    "Go [![Bar](bar.svg) text](https://example.com/m) end.",
+    "Drag ![Bar](bar.svg) from the image here.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
+  await expect(images).toHaveCount(3);
+  for (const index of [0, 1, 2]) {
+    await expect.poll(() => images.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  /** The image in the paragraph that starts with `text`. */
+  const imageIn = (text: string) => page.locator(".milkdown .ProseMirror > p").filter({ hasText: text }).locator(".milkdown-image-inline img");
+  /** Shift+click `fraction` of the way across `image`. */
+  const shiftClick = async (image: Locator, fraction: number) => {
+    const box = (await image.boundingBox())!;
+    await page.keyboard.down("Shift");
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.keyboard.up("Shift");
+  };
+  // Chromium does not extend the selection on a Shift+click on an image, so
+  // the caret stayed where it was and the next key went in there.
+  await clickOn(" after.", 2, 0.25);
+  await shiftClick(imageIn("Pics"), 0.25);
+  await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe(" a");
+  await page.keyboard.type("x");
+  // On the right half of an image inside a link, the selection ends after it.
+  await clickOn(" end.", 2, 0.25);
+  await shiftClick(imageIn("Go"), 0.75);
+  await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe(" text e");
+  await page.keyboard.type("y");
+  // A Shift+drag from an image follows the pointer. It stopped at the side
+  // of the image pressed.
+  await clickOn("Drag ", 1, 0.75);
+  const box = (await imageIn("Drag").boundingBox())!;
+  const release = await pointOn(" from the image here.", 8, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe("ag  from th");
+  await page.keyboard.type("z");
+  await page.keyboard.press("ControlOrMeta+s");
+  // Typing over selected text of a link keeps the link.
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Pics xfter.",
+    "Go [![Bar](bar.svg)y](https://example.com/m)nd.",
+    "Drze image here.",
+  ].join("\n\n") + "\n");
+});
+
+test("Shift+click in the document while a code block or the Markdown pane has focus puts the caret at the click", async () => {
+  const file = path.join(directory, "shift-click-from-code.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "```js\nconst alpha = 1;\nconst beta = 2;\n```",
+    "Plain words here.",
+    "Then [docs](https://example.com/docs) after the link.",
+    "Pics ![Bar](bar.svg) after.",
+    "Go [![Bar](bar.svg) text](https://example.com/m) end.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const lines = page.locator(".milkdown .ProseMirror .cm-line");
+  await expect(lines).toHaveCount(2);
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
+  await expect(images).toHaveCount(2);
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  /** Put the caret at the start of the code block, Shift+click `point` and
+   *  type `typed`. */
+  const fromCode = async (point: { x: number; y: number }, typed: string) => {
+    const line = (await lines.first().boundingBox())!;
+    await page.mouse.click(line.x + 1, line.y + line.height / 2);
+    await expect(page.locator(".milkdown .ProseMirror .cm-content")).toBeFocused();
+    await page.keyboard.down("Shift");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("Shift");
+    await page.keyboard.type(typed);
+  };
+  /** The point `fraction` of the way across `image`. */
+  const across = async (image: Locator, fraction: number) => {
+    const box = (await image.boundingBox())!;
+    return { x: box.x + box.width * fraction, y: box.y + box.height / 2 };
+  };
+  // Chromium extended the code block's selection toward the click, which
+  // CodeMirror cut off at the end of the block, and focus stayed in the
+  // block. The next key replaced the code from the caret on.
+  await fromCode(await pointOn("Plain words here.", 3, 0.25), "p");
+  // So did a Shift+click on the URL shown after a link.
+  const url = (await page.locator(".milkdown .ProseMirror .md-link-url").first().boundingBox())!;
+  await fromCode({ x: url.x + url.width / 2, y: url.y + url.height / 2 }, "u");
+  await fromCode(await pointOn("docs", 2, 0.25), "z");
+  // Chromium puts no caret on an image, so the next key went into the block.
+  await fromCode(await across(images.first(), 0.75), "x");
+  await fromCode(await across(images.last(), 0.25), "y");
+  // With the caret in the split's Markdown pane, Chromium selected that
+  // pane's text from its start, and the next key replaced it.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await page.locator(".editor-pane-raw .cm-line").filter({ hasText: "Last line." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.down("Shift");
+  const last = await pointOn("Last line.", 4, 0.25);
+  await page.mouse.click(last.x, last.y);
+  await page.keyboard.up("Shift");
+  await page.keyboard.type("m");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "```js\nconst alpha = 1;\nconst beta = 2;\n```",
+    "Plapin words here.",
+    "Then [dozcs](https://example.com/docs)u after the link.",
+    "Pics ![Bar](bar.svg)x after.",
+    "Go y[![Bar](bar.svg) text](https://example.com/m) end.",
+    "Lastm line.",
+  ].join("\n\n") + "\n");
+});
+
+test("Shift+click in the document from the find card or the Markdown pane puts the caret at the click after a caret or cell selection in a table", async () => {
+  const file = path.join(directory, "shift-click-from-table.md");
+  await writeFile(file, [
+    "| Head A | Head B |\n| --- | --- |\n| alpha text | beta text |\n| gamma text | delta text |\n| epsilon | zeta |",
+    "First line.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const selectedCells = documentView.locator(".selectedCell");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** Shift+click a quarter of the way across the character at `index` of
+   *  the text node that reads `text`. */
+  const shiftClick = async (text: string, index: number) => {
+    const point = await pointOn(text, index, 0.25);
+    await page.keyboard.down("Shift");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("Shift");
+  };
+  /** Select the cells from the one that reads `from` to the one that reads
+   *  `to` with a Shift+click while the document has focus. */
+  const selectCells = async (from: string, to: string) => {
+    await clickOn(from, 1, 0.5);
+    await shiftClick(to, 1);
+    await expect(selectedCells).toHaveCount(2);
+  };
+  /** Leave the document for the find card. */
+  const toFind = async () => {
+    await page.keyboard.press("ControlOrMeta+f");
+    await expect(find).toBeFocused();
+  };
+  // prosemirror-tables took the Shift+click with the document's selection
+  // from before, a caret in another cell, and selected both cells. Focus
+  // stayed in the find card, so the next key went in there.
+  await clickOn("alpha text", 2, 0.25);
+  await toFind();
+  await shiftClick("beta text", 2);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("Q");
+  // With a cell selection from before, it took a Shift+click anywhere in the
+  // document and selected the cell where that selection started.
+  await selectCells("gamma text", "delta text");
+  await toFind();
+  await shiftClick("First line.", 6);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("R");
+  await toFind();
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  // So did a Shift+click from the split's Markdown pane, and the next key
+  // went into the Markdown at its caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  /** Leave the document for the end of the Markdown pane's last line of text. */
+  const toMarkdown = async () => {
+    await page.locator(".editor-pane-raw .cm-line").filter({ hasText: /^Last/ }).click();
+    await page.keyboard.press("End");
+    await expect(markdown).toBeFocused();
+  };
+  await clickOn("epsilon", 2, 0.25);
+  await toMarkdown();
+  await shiftClick("zeta", 2);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("S");
+  await selectCells("alpha text", "gamma text");
+  await toMarkdown();
+  await shiftClick("Last line.", 4);
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(0);
+  await page.keyboard.type("T");
+  // A Shift+drag from there across cells still selects the cells, as a
+  // plain drag does.
+  await toMarkdown();
+  const press = await pointOn("beQta text", 2, 0.25);
+  const release = await pointOn("delta text", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(documentView).toBeFocused();
+  await expect(selectedCells).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  // Milkdown pads the columns of a table it writes.
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    [
+      "| Head A     | Head B     |",
+      "| ---------- | ---------- |",
+      "| alpha text | beQta text |",
+      "| gamma text | delta text |",
+      "| epsilon    | zeSta      |",
+    ].join("\n"),
+    "First Rline.",
+    "LastT line.",
+  ].join("\n\n") + "\n");
+});
+
+test("Shift+click from the find card or the Markdown pane beside or below a table cell's text puts the caret where a plain click does", async () => {
+  const file = path.join(directory, "shift-click-cell-space.md");
+  // The note wraps, so its row is taller than the line of "epsilon".
+  const note = "a note long enough to wrap onto more than one line in its cell, both in the Document view and in the document pane of the split view, whose cells are narrower still";
+  await writeFile(file, [
+    `| Head A | Head B |\n| --- | --- |\n| alpha | beta |\n| gamma | delta |\n| epsilon | ${note} |\n| eta | zeta |`,
+    "First line.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const selectedCells = documentView.locator(".selectedCell");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** Shift+click the cell that reads `text`, `inset` pixels from its left
+   *  edge, or from its right edge when negative, and `y` of the way down,
+   *  then type `typed`. Within 8 pixels of a cell's edge, Crepe shows the
+   *  button that adds a row or column under the pointer, so the presses stay
+   *  11 pixels in, which is still in the cell's 16-pixel padding. */
+  const shiftClickCell = async (text: string, inset: number, y: number, typed: string) => {
+    const box = (await documentView.locator("td, th").filter({ hasText: new RegExp(`^${text}$`) }).boundingBox())!;
+    await page.keyboard.down("Shift");
+    await page.mouse.click(inset >= 0 ? box.x + inset : box.x + box.width + inset, box.y + box.height * y);
+    await page.keyboard.up("Shift");
+    await expect(documentView).toBeFocused();
+    await expect(selectedCells).toHaveCount(0);
+    await page.keyboard.type(typed);
+  };
+  /** Leave the document for the find card. */
+  const toFind = async () => {
+    await page.keyboard.press("ControlOrMeta+f");
+    await expect(find).toBeFocused();
+  };
+  // A press right of or below a cell's text gave the position after the
+  // cell's paragraph. The caret went to the start of the next cell, so
+  // prosemirror-tables selected the cells from there to the one pressed, and
+  // the next key replaced their text. For the last column that took the
+  // cells up to the start of the next row.
+  await clickOn("First line.", 2, 0.25);
+  await toFind();
+  await shiftClickCell("gamma", -11, 0.5, "A");
+  await toFind();
+  await shiftClickCell("delta", -11, 0.5, "B");
+  await toFind();
+  await shiftClickCell("epsilon", -11, 0.6, "C");
+  // After the table's last cell the caret went past the table, and Chromium
+  // extended the selection from there back to the click, over the cell's text.
+  await toFind();
+  await shiftClickCell("zeta", -11, 0.5, "D");
+  await toFind();
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  /** Leave the document for the end of the Markdown pane's last line of text. */
+  const toMarkdown = async () => {
+    await page.locator(".editor-pane-raw .cm-line").filter({ hasText: /^Last/ }).click();
+    await page.keyboard.press("End");
+    await expect(markdown).toBeFocused();
+  };
+  await toMarkdown();
+  await shiftClickCell("Head B", -11, 0.5, "E");
+  // A plain click left of a cell's text, below its last line, puts the caret
+  // at the end of that line. The caret went before the cell's paragraph, at
+  // the start of the line, so the next key replaced the cell's text. On
+  // Windows, Chromium puts the caret of such a click at the point of the line
+  // nearest to it instead, here its start.
+  await toMarkdown();
+  await shiftClickCell("epsilonC", 11, 0.6, "F");
+  const epsilon = process.platform === "win32" ? "FepsilonC" : "epsilonCF";
+  await page.keyboard.press("ControlOrMeta+s");
+  // Milkdown pads the columns of a table it writes, here to the note's width.
+  const second = (text: string) => text.padEnd(note.length);
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    [
+      `| Head A    | ${second("Head BE")} |`,
+      `| --------- | ${"-".repeat(note.length)} |`,
+      `| alpha     | ${second("beta")} |`,
+      `| gammaA    | ${second("deltaB")} |`,
+      `| ${epsilon} | ${note} |`,
+      `| eta       | ${second("zetaD")} |`,
+    ].join("\n"),
+    "First line.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+});
+
+test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
+  const file = path.join(directory, "shift-drag-scroll.md");
+  const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);
+  await writeFile(file, ["Start [anchor](https://example.com/a) here.", ...lines].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(61);
+  const area = page.locator(".editor-area");
+  const scrollTop = () => area.evaluate((element) => element.scrollTop);
+  expect(await area.evaluate((element) => element.scrollHeight > element.clientHeight * 2)).toBe(true);
+  await clickOn("Start ", 2, 0.25);
+  const press = await pointOn("anchor", 2, 0.25);
+  const areaBox = (await area.boundingBox())!;
+  await page.keyboard.down("Shift");
+  await page.mouse.move(press.x, press.y);
+  await page.mouse.down();
+  // The pointer rests below the document, over the status bar.
+  await page.mouse.move(press.x, areaBox.y + areaBox.height + 8, { steps: 5 });
+  await expect.poll(scrollTop).toBeGreaterThan(areaBox.height);
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  const selected = await page.evaluate(() => document.getSelection()!.toString());
+  expect(selected.startsWith("art anchor here.")).toBe(true);
+  // The selection follows to the bottom edge of the scrolled document.
+  const last = await page.locator(".milkdown .ProseMirror > p").evaluateAll((blocks, bottom) => {
+    const shown = blocks.filter((block) => block.getBoundingClientRect().bottom <= bottom);
+    return shown[shown.length - 1]!.textContent;
+  }, areaBox.y + areaBox.height);
+  expect(selected).toContain(last);
+  // The document stops scrolling once the button is released.
+  const released = await scrollTop();
+  await page.waitForTimeout(300);
+  expect(await scrollTop()).toBe(released);
+});
+
+test("a Shift+drag from a link's text keeps its anchor, and goes on from the selection's anchor after the document changes", async () => {
+  const file = path.join(directory, "shift-drag-edit.md");
+  await writeFile(file, [
+    "Start [anchor](https://example.com/a) here and more words.",
+    "| Head A | Head B |\n| --- | --- |\n| one |  |",
+    "Typed here and then [link](https://example.com/l) after it.",
+    "End line near the end.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(2);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  // prosemirror-tables turns a selection that ends at the start of a cell
+  // into one of the paragraph it starts in, which moved the anchor to the
+  // paragraph's start for the rest of the drag.
+  await clickOn(" here and more words.", 3, 0.25);
+  let point = await pointOn("anchor", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  const empty = (await page.locator(".milkdown .ProseMirror td").nth(1).boundingBox())!;
+  await page.mouse.move(empty.x + empty.width / 2, empty.y + empty.height / 2, { steps: 4 });
+  await expect.poll(selected).toBe("Start anchor here and more words.");
+  point = await pointOn(" here and more words.", 15, 0.5);
+  await page.mouse.move(point.x, point.y, { steps: 4 });
+  await expect.poll(selected).toBe("re and more ");
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  // A typed closing `~~` becomes strikethrough once the caret leaves it, here
+  // on the press, which takes the four tildes out. The drag went on from a
+  // position four characters past the caret.
+  await clickOn("Typed here and then ", 9, 0.75);
+  await page.keyboard.type(" ~~struck~~");
+  point = await pointOn("link", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("struck");
+  point = await pointOn(" after it.", 4, 0.25);
+  await page.mouse.move(point.x, point.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(selected).toBe(" and then link aft");
+  await page.keyboard.press("Backspace");
+  // Backspace with the button still down took the selected text out, and the
+  // drag then reached past the end of the document.
+  await clickOn("End line near the end.", 14, 0.25);
+  point = await pointOn("anchor", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Backspace");
+  point = await pointOn("the end.", 4, 0.25);
+  await page.mouse.move(point.x, point.y, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(selected).toBe("the ");
+  await page.keyboard.type("Q");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start [an](https://example.com/a)Qend.\n");
+  expect(errors).toEqual([]);
+});
+
 test("text typed, composed or pasted right after a link goes after it", async () => {
   const file = path.join(directory, "after-link.md");
   await writeFile(file, [
@@ -715,7 +1434,7 @@ test("the caret at a link's end is drawn after its URL, and before it on the lin
   expect(Math.abs(caret - right)).toBeLessThanOrEqual(2);
 });
 
-test("a click on the URL shown after a link puts the caret at the link's end", async () => {
+test("a click on the URL shown after a link puts the caret at the link's end, and Ctrl or Cmd+click opens that link", async () => {
   const file = path.join(directory, "click-url.md");
   const blocks = [
     "Intro [one](https://example.com/1)",
@@ -724,6 +1443,7 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
     "A [four](https://example.com/4)s and more.",
     "- item [five](https://example.com/5)\n- second",
     "B [six](https://example.com/6) and then more.",
+    "C [seven](https://example.com/7)[eight](https://example.com/8) end.",
   ];
   await writeFile(file, blocks.join("\n\n") + "\n");
   await launch(file);
@@ -735,7 +1455,7 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
     };
   });
   const urls = page.locator(".milkdown .ProseMirror .md-link-url");
-  await expect(urls).toHaveCount(6);
+  await expect(urls).toHaveCount(8);
   /** Click `fraction` of the way across the URL shown after link `index`. */
   const clickUrl = async (index: number, fraction: number) => {
     const box = (await urls.nth(index).boundingBox())!;
@@ -748,14 +1468,14 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
     await page.keyboard.type(typed);
   }
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe([
+  const edited = [
     "Intro [one](https://example.com/1)a",
     "Intro [two](https://example.com/2)b",
     "Intro [three](https://example.com/3)c",
     "A [four](https://example.com/4)ds and more.",
     "- item [five](https://example.com/5)e\n- second",
-    blocks[5],
-  ].join("\n\n") + "\n");
+  ];
+  await expect.poll(() => readFile(file, "utf8")).toBe([...edited, ...blocks.slice(5)].join("\n\n") + "\n");
   // Shift+click on the URL extends the selection to the link's end.
   await clickOn(" and then more.", 10, 0.25);
   await page.keyboard.down("Shift");
@@ -763,14 +1483,80 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
   await page.keyboard.up("Shift");
   await page.keyboard.press("ControlOrMeta+c");
   await expect.poll(clipboardText).toBe(" and then ");
-  // The URL is not part of the link, so Ctrl or Cmd+click on it opens
-  // nothing. The link itself opens last, so anything the URL opened is in by then.
-  for (const click of [() => clickUrl(5, 0.5), () => clickOn("six", 1, 0.5)]) {
+  // Ctrl or Cmd+click on the URL opens the link before it, also when another
+  // link follows right after it. It opened nothing and selected the whole
+  // paragraph, so the next key replaced it. Now the caret goes to the end of
+  // the link, as on a plain click on the URL.
+  const ctrlClickUrl = async (index: number) => {
     await page.keyboard.down("ControlOrMeta");
-    await click();
+    await clickUrl(index, 0.5);
     await page.keyboard.up("ControlOrMeta");
-  }
-  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
+  };
+  await ctrlClickUrl(6);
+  // No link preview shows on the URL, so none covers the line above.
+  await ctrlClickUrl(5);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/7", "https://example.com/6"]);
+  await page.keyboard.type("f");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([...edited, "B [six](https://example.com/6)f and then more.", blocks[6]].join("\n\n") + "\n");
+});
+
+test("the link preview shows the link whose text is under the pointer, never the one after it", async () => {
+  const file = path.join(directory, "link-preview.md");
+  await writeFile(file, ["C [seven](https://example.com/7)[eight](https://example.com/8) end.", "Plain line."].join("\n\n") + "\n");
+  await launch(file);
+  const urls = page.locator(".milkdown .ProseMirror .md-link-url");
+  await expect(urls).toHaveCount(2);
+  // Crepe shows the preview only while the document has focus.
+  await clickOn("Plain line.", 2, 0.5);
+  const preview = page.locator(".milkdown-link-preview");
+  // ProseMirror gives the position after a character for the pointer on its
+  // right half, where the next link starts, and the preview showed that link.
+  let point = await pointOn("seven", -1, 0.75);
+  await page.mouse.move(point.x, point.y);
+  await expect(preview).toHaveAttribute("data-show", "true");
+  await expect(preview.locator(".link-display")).toHaveText("https://example.com/7");
+  // The URL shown after a link is not link text, so no preview shows there.
+  // It showed the next link, while a Ctrl or Cmd+click there opens this one.
+  const url = (await urls.first().boundingBox())!;
+  await page.mouse.move(url.x + url.width / 2, url.y + url.height / 2);
+  await expect(preview).toBeHidden();
+  point = await pointOn("eight", 1, 0.5);
+  await page.mouse.move(point.x, point.y);
+  await expect(preview).toHaveAttribute("data-show", "true");
+  await expect(preview.locator(".link-display")).toHaveText("https://example.com/8");
+});
+
+test("the link preview's Remove and Edit act on the whole link, also one of an image and a caption", async () => {
+  const file = path.join(directory, "link-preview-range.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, ["[![Alt](bar.svg) caption](https://example.com/target)", "Mixed [a **bold** b](https://example.com/m) end.", "Plain line."].join("\n\n") + "\n");
+  await launch(file);
+  await expect.poll(() => page.locator(".milkdown .ProseMirror .milkdown-image-inline img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  // Crepe shows the preview only while the document has focus.
+  await clickOn("Plain line.", 2, 0.5);
+  const preview = page.locator(".milkdown-link-preview");
+  /** Rest the pointer on `text` until the preview of `href` shows. */
+  const hover = async (text: string, href: string) => {
+    const point = await pointOn(text, 1, 0.5);
+    await page.mouse.move(point.x, point.y);
+    await expect(preview).toHaveAttribute("data-show", "true");
+    await expect(preview.locator(".link-display")).toHaveText(href);
+  };
+  // The preview acted on the first node of the link, or the one under the
+  // pointer, so Remove took the link off the image or the caption only, and
+  // Edit gave only the bold text the new address.
+  await hover(" caption", "https://example.com/target");
+  await preview.locator(".link-remove-button").click();
+  await expect(preview).toBeHidden();
+  await hover("bold", "https://example.com/m");
+  await preview.locator(".link-edit-button").click();
+  await expect(page.locator(".milkdown-link-edit input")).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type("https://example.com/new");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["![Alt](bar.svg) caption", "Mixed [a **bold** b](https://example.com/new) end.", "Plain line."].join("\n\n") + "\n");
 });
 
 test("a change the browser makes inside a link while the caret rests at its end keeps the link", async () => {

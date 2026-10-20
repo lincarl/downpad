@@ -1,3 +1,69 @@
+diff --git a/lib/link-tooltip/index.js b/lib/link-tooltip/index.js
+index beb0075e791ec3ab70ea3372fd126b452d820581..8e5ba3e57166265ef1e83676cae5bfcf6da58b49 100644
+--- a/lib/link-tooltip/index.js
++++ b/lib/link-tooltip/index.js
+@@ -463,9 +463,14 @@ function findMarkPosition(mark, node, doc, from, to) {
+   return markPos;
+ }
+ function shouldShowPreviewWhenHover(ctx, view, event) {
+-  const $pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+-  if (!$pos) return;
+-  const { pos } = $pos;
++  // md-easy patch: ProseMirror gives the position after a character for a
++  // pointer on its right half, and the position after a link for a pointer
++  // on the URL md-easy shows after it. A link that follows starts there, so
++  // the preview showed that link, while a Ctrl or Cmd+click opens the one
++  // under the pointer. Take the link from the element under the pointer.
++  const link = event.target instanceof Element ? event.target.closest("a") : null;
++  if (!link || !view.dom.contains(link)) return;
++  const pos = view.posAtDOM(link, 0);
+   const node = view.state.doc.nodeAt(pos);
+   if (!node) return;
+   const mark = node.marks.find(
+@@ -477,6 +482,21 @@ function shouldShowPreviewWhenHover(ctx, view, event) {
+   return { show: true, pos, node, mark };
+ }
+ 
++// md-easy patch: the range of the link that `mark` makes at `pos`, the run
++// of nodes around it in its block that all carry the mark. The document view
++// shows such a run as one link, with one URL after it. The run can also be
++// two links to the same address with nothing between them, such as one in
++// bold right after another, which Edit and Remove then change together.
++function linkRange(doc, pos, mark) {
++  const $pos = doc.resolve(pos);
++  const { parent } = $pos;
++  let first = $pos.index();
++  let end = first + 1;
++  while (first > 0 && mark.isInSet(parent.child(first - 1).marks)) first--;
++  while (end < parent.childCount && mark.isInSet(parent.child(end).marks)) end++;
++  return { from: $pos.posAtIndex(first), to: $pos.posAtIndex(end) };
++}
++
+ keepAlive(h);
+ const PreviewLink = defineComponent({
+   props: {
+@@ -663,16 +683,11 @@ function configureLinkPreviewTooltip(ctx) {
+     if (state.mode === "edit") return;
+     const result = shouldShowPreviewWhenHover(ctx, view, event);
+     if (result) {
+-      const position = view.state.doc.resolve(result.pos);
+-      const markPosition = findMarkPosition(
+-        result.mark,
+-        result.node,
+-        view.state.doc,
+-        position.before(),
+-        position.after()
+-      );
+-      const from = markPosition.start;
+-      const to = markPosition.end;
++      // md-easy patch: Edit and Remove act on the whole link. The preview
++      // took only the node under the pointer, so they split a link of
++      // several nodes, such as an image with a caption after it or text
++      // around bold text, and Remove left the link on the rest.
++      const { from, to } = linkRange(view.state.doc, result.pos, result.mark);
+       linkPreviewTooltipView.show(
+         result.mark,
+         from,
 diff --git a/lib/list-item-block/index.js b/lib/list-item-block/index.js
 index d1926c0f730d5437f2110e3b51e87dd50d0ab6d7..6dd98f86a75fe4efed85f4c057a633d8580f5e9a 100644
 --- a/lib/list-item-block/index.js
