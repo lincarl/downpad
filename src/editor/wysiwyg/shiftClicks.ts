@@ -56,7 +56,7 @@
 // ProseMirror decides. It selects a rule or an image on its own line, and it
 // gives up a cell selection for a caret, so prosemirror-tables leaves the
 // press alone. A press on a list item's bullet, number or task box is in
-// listLabelClicks.ts, and one on a code block's code or line numbers in
+// listLabelClicks.ts, and one on a code block's code or gutter in
 // codeMirrorPresses.ts.
 //
 // With focus in the document, prosemirror-tables selects cells on a
