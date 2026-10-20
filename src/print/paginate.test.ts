@@ -133,6 +133,15 @@ describe("packByHeight, keeping a heading with the block after it", () => {
   it.each([
     ["an empty paragraph", () => [block(0, 150, "a"), heading(160, 30, "h"), blank(195, 8, "empty"), block(210, 100, "b")], [["a"], ["h", "empty", "b"]]],
     ["a paragraph holding only a line break", () => [block(0, 150, "a"), heading(160, 30, "h"), holding("br", 195, 8, "break"), block(210, 100, "b")], [["a"], ["h", "break", "b"]]],
+    [
+      "a paragraph holding only a bold non-breaking space",
+      () => {
+        const spacer = holding("strong", 195, 8, "spacer");
+        spacer.firstElementChild!.textContent = "\u00a0";
+        return [block(0, 150, "a"), heading(160, 30, "h"), spacer, block(210, 100, "b")];
+      },
+      [["a"], ["h", "spacer", "b"]],
+    ],
     ["a rule", () => [block(0, 150, "a"), heading(160, 30, "h"), blank(195, 10, "rule", "hr"), block(215, 100, "b")], [["a"], ["h", "rule", "b"]]],
     [
       "an empty paragraph and a subheading",

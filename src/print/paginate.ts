@@ -74,18 +74,23 @@ export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: num
 /** Headings, which print on the page of the block after them (packBoxes). */
 const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 
+/** Elements that only format text or break a line, so they show nothing
+ *  without text in them. */
+const TEXT_ONLY_TAGS = new Set(["BR", "SPAN", "STRONG", "B", "EM", "I", "U", "S", "DEL", "STRIKE", "MARK", "CODE", "A", "SUB", "SUP", "SMALL"]);
+
 /**
  * Whether a block shows nothing that a heading above it could introduce. That
  * is a rule, or a paragraph with no text, image or other box in it, such as an
- * empty line saved as `<br />`. A heading kept with only such a block stayed
- * at the foot of a page, and its text started the next page.
+ * empty line saved as `<br />` or a bold non-breaking space. A heading kept
+ * with only such a block stayed at the foot of a page, and its text started
+ * the next page.
  */
 function isBlank(el: HTMLElement): boolean {
   if (el.tagName === "HR") return true;
   return (
     el.tagName === "P" &&
     !el.textContent?.trim() &&
-    Array.from(el.querySelectorAll("*")).every((child) => child.tagName === "BR")
+    Array.from(el.querySelectorAll("*")).every((child) => TEXT_ONLY_TAGS.has(child.tagName))
   );
 }
 
