@@ -10,8 +10,7 @@
 // caret. `shiftPressesAsClicks` has the browser take such a press as a plain
 // click instead. It leaves a selection in text that cannot be edited, such as
 // a read-only value in the frontmatter table, which Chromium extends as on any
-// page, and a press that the editor with focus holds, such as one on the fold
-// arrows of a CodeMirror editor.
+// page.
 //
 // A press on the page around the editors, such as beside the document's
 // column, in a split pane's margin or below the end of the document view or
@@ -32,8 +31,8 @@ const EDITORS = ".ProseMirror, .cm-editor";
  *  before the browser handles the press. A press that a handler cancelled, or
  *  during which a handler moved focus, as the document view does for a press
  *  on its text, is left as it is. So is a press inside the focused element,
- *  or inside the CodeMirror editor whose content has focus, and a selection
- *  in text that cannot be edited. Returns a function that stops this. */
+ *  and a selection in text that cannot be edited. Returns a function that
+ *  stops this. */
 export function shiftPressesAsClicks(root: HTMLElement): () => void {
   const page = root.ownerDocument;
   let focusedAtPress: Element | null = null;
@@ -47,9 +46,7 @@ export function shiftPressesAsClicks(root: HTMLElement): () => void {
     if (focused !== focusedAtPress) return;
     const selection = page.getSelection();
     if (!selection?.rangeCount || inPlainText(selection.anchorNode)) return;
-    // A CodeMirror editor holds its gutters with its content.
-    const holder = focused?.closest(".cm-content") ? focused.closest(".cm-editor") : focused;
-    if (holder && holder !== page.body && event.target instanceof Node && holder.contains(event.target)) return;
+    if (focused && focused !== page.body && event.target instanceof Node && focused.contains(event.target)) return;
     selection.removeAllRanges();
   };
   root.addEventListener("mousedown", pressed, { capture: true, signal: listening.signal });

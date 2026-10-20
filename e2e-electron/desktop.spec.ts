@@ -1483,38 +1483,47 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
 });
 
-test("a click or Shift+click on a fold arrow in the Markdown view folds its section and leaves the cursor where it was", async () => {
+test("a click or Shift+click on the fold gutter in the Markdown view folds a section on its arrow and leaves focus and the cursor where they were", async () => {
   const file = path.join(directory, "fold-arrows.md");
   await writeFile(file, ["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three."].join("\n\n") + "\n");
   await launch(file);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const markdown = page.locator(".editor-pane-raw .cm-content");
   const placeholders = page.locator(".editor-pane-raw .cm-foldPlaceholder");
-  /** The middle of the fold arrow beside the line that reads `text`. */
-  const foldArrow = (text: string) =>
+  const activeLine = page.locator(".editor-pane-raw .cm-activeLine");
+  /** The middle of the fold gutter beside the line that reads `text`, on its
+   *  fold arrow if it has one. */
+  const inFoldGutter = (text: string) =>
     page.locator(".editor-pane-raw").evaluate((pane, text) => {
       const line = [...pane.querySelectorAll(".cm-line")].find((element) => element.textContent === text)!.getBoundingClientRect();
-      const arrow = [...pane.querySelectorAll(".cm-foldGutter .cm-gutterElement span")]
-        .map((element) => element.getBoundingClientRect())
-        .find((box) => box.top < line.bottom && box.bottom > line.top)!;
-      return { x: arrow.left + arrow.width / 2, y: arrow.top + arrow.height / 2 };
+      const gutter = pane.querySelector(".cm-foldGutter")!.getBoundingClientRect();
+      return { x: gutter.left + gutter.width / 2, y: line.top + line.height / 2 };
     }, text);
   // The handler for presses on line numbers took presses on fold arrows too.
   // A Shift+click there selected from the cursor to the start of the
-  // heading's line, and the next key replaced the Markdown in between. A
-  // click moved the cursor there.
+  // heading's line, and the next key replaced the Markdown in between.
   await caretInMarkdown("Text three.");
-  await shiftClickAt(await foldArrow("# One"));
+  await shiftClickAt(await inFoldGutter("# One"));
   await expect(placeholders).toHaveCount(1);
-  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+  await expect(markdown).toBeFocused();
   await page.keyboard.type("X");
-  const activeLine = page.locator(".editor-pane-raw .cm-activeLine");
   await expect(activeLine).toHaveText("Text three.X");
-  const second = await foldArrow("# Two");
+  // A click there moved the cursor to the heading's line. Before that
+  // handler, Chromium focused CodeMirror's scroll container, and the next key
+  // was lost.
+  const second = await inFoldGutter("# Two");
   await page.mouse.click(second.x, second.y);
   await expect(placeholders).toHaveCount(2);
-  await expect(activeLine).toHaveText("Text three.X");
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("Y");
+  // On a Shift+click beside a line without an arrow, Chromium selected from
+  // the cursor to the start of the Markdown, and the next key replaced it.
+  await shiftClickAt(await inFoldGutter("Text three.XY"));
+  await expect(placeholders).toHaveCount(2);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("Z");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.X"].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.XYZ"].join("\n\n") + "\n");
 });
 
 test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {

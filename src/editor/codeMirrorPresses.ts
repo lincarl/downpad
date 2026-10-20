@@ -12,14 +12,17 @@
 // as a plain click's caret does, and a Shift+drag from there selects from the
 // press.
 //
-// CodeMirror handles presses on its text only. A press on a line number went
-// to the browser, which focused CodeMirror's scroll container. That takes no
-// keys, so the next key was lost. A press on a line number therefore puts the
-// cursor at the start of its line, as a press left of the line's text does,
-// and focuses the editor. A Shift+press there while the editor has focus
-// extends the selection to that point instead. A press on a fold arrow, in the
-// gutter beside the line numbers, is left to CodeMirror, which folds or
-// unfolds on the click and leaves the selection as it is.
+// CodeMirror handles presses on its text only. A press on a gutter went to
+// the browser. On a line number or a fold arrow, Chromium focused CodeMirror's
+// scroll container, which takes no keys, so the next key was lost. On a
+// Shift+press in the fold gutter's blank space beside a line, it extended the
+// selection to the start of the text, and the next key replaced the text in
+// between. A press on a line number therefore puts the cursor at the start of
+// its line, as a press left of the line's text does, and focuses the editor.
+// A Shift+press there while the editor has focus extends the selection to that
+// point instead. A press on another gutter, such as on a fold arrow, keeps
+// focus and the selection where they were, and CodeMirror still folds or
+// unfolds on the click.
 
 import { EditorView, ViewPlugin } from "@codemirror/view";
 
@@ -36,14 +39,16 @@ const shiftPressFromOutside = EditorView.domEventHandlers({
 
 /** Put the cursor at the start of the line of a pressed line number, or
  *  extend the selection to there on a Shift+press in the focused editor, and
- *  focus the editor (see the header). CodeMirror's handlers see presses on
- *  its content only, so this listens on its scroll container, which holds
- *  the gutters. */
-const lineNumberPresses = ViewPlugin.define((view) => {
+ *  focus the editor. On a press on another gutter, keep focus and the
+ *  selection where they were (see the header). CodeMirror's handlers see
+ *  presses on its content only, so this listens on its scroll container,
+ *  which holds the gutters. */
+const gutterPresses = ViewPlugin.define((view) => {
   const press = (event: MouseEvent): void => {
     const { target } = event;
-    if (event.button !== 0 || !(target instanceof Element) || !target.closest(".cm-lineNumbers")) return;
+    if (event.button !== 0 || !(target instanceof Element) || !target.closest(".cm-gutters")) return;
     event.preventDefault();
+    if (!target.closest(".cm-lineNumbers")) return;
     const { from } = view.lineBlockAtHeight(event.clientY - view.documentTop);
     const anchor = event.shiftKey && view.hasFocus ? view.state.selection.main.anchor : from;
     // A code block in the document passes its selection on to the document
@@ -56,5 +61,5 @@ const lineNumberPresses = ViewPlugin.define((view) => {
 });
 
 /** CodeMirror extensions for a Shift+press from outside the editor and a
- *  press on a line number (see the header). */
-export const codeMirrorPresses = [shiftPressFromOutside, lineNumberPresses];
+ *  press on a gutter (see the header). */
+export const codeMirrorPresses = [shiftPressFromOutside, gutterPresses];

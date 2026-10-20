@@ -122,31 +122,6 @@ describe("shiftPressesAsClicks", () => {
     expect(document.activeElement).toBe(document.body);
     expect(press(target)).toBe(false);
   });
-
-  it("leaves the selection when the CodeMirror editor whose content has focus holds the press, as on a fold arrow", () => {
-    const { element, target } = setUp();
-    element.innerHTML = [
-      '<div class="cm-editor"><div class="cm-scroller">',
-      '<div class="cm-gutters"><div class="cm-gutter cm-foldGutter"><div class="cm-gutterElement"><span>⌄</span></div></div></div>',
-      '<div class="cm-content" contenteditable="true" tabindex="0"><div class="cm-line"># One</div></div>',
-      "</div></div>",
-    ].join("");
-    element.append(target);
-    const content = element.querySelector<HTMLElement>(".cm-content")!;
-    content.focus();
-    document.getSelection()!.collapse(content.querySelector(".cm-line")!.firstChild, 5);
-    expect(press(element.querySelector(".cm-foldGutter span")!)).toBe(true);
-    expect(press(target)).toBe(false);
-  });
-
-  it("drops the selection for a press elsewhere in the document view while a button in it has focus", () => {
-    const { element, target } = setUp();
-    element.innerHTML = '<div class="ProseMirror" contenteditable="true"><p>Text</p><div contenteditable="false"><button>Copy</button></div></div>';
-    element.querySelector(".ProseMirror")!.append(target);
-    element.querySelector("button")!.focus();
-    document.getSelection()!.collapse(element.querySelector("p")!.firstChild, 2);
-    expect(press(target)).toBe(false);
-  });
 });
 
 describe("pagePressesKeepFocus", () => {
