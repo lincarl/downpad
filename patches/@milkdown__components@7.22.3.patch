@@ -1,5 +1,5 @@
 diff --git a/lib/link-tooltip/index.js b/lib/link-tooltip/index.js
-index beb0075e791ec3ab70ea3372fd126b452d820581..6e1eb926a16f15ca3c4a99ac422cf0525f9b509a 100644
+index beb0075e791ec3ab70ea3372fd126b452d820581..8e5ba3e57166265ef1e83676cae5bfcf6da58b49 100644
 --- a/lib/link-tooltip/index.js
 +++ b/lib/link-tooltip/index.js
 @@ -463,9 +463,14 @@ function findMarkPosition(mark, node, doc, from, to) {
@@ -20,13 +20,15 @@ index beb0075e791ec3ab70ea3372fd126b452d820581..6e1eb926a16f15ca3c4a99ac422cf052
    const node = view.state.doc.nodeAt(pos);
    if (!node) return;
    const mark = node.marks.find(
-@@ -477,6 +482,19 @@ function shouldShowPreviewWhenHover(ctx, view, event) {
+@@ -477,6 +482,21 @@ function shouldShowPreviewWhenHover(ctx, view, event) {
    return { show: true, pos, node, mark };
  }
  
 +// md-easy patch: the range of the link that `mark` makes at `pos`, the run
-+// of nodes around it in its block that all carry the mark. Milkdown writes
-+// such a run as one link.
++// of nodes around it in its block that all carry the mark. The document view
++// shows such a run as one link, with one URL after it. The run can also be
++// two links to the same address with nothing between them, such as one in
++// bold right after another, which Edit and Remove then change together.
 +function linkRange(doc, pos, mark) {
 +  const $pos = doc.resolve(pos);
 +  const { parent } = $pos;
@@ -40,7 +42,7 @@ index beb0075e791ec3ab70ea3372fd126b452d820581..6e1eb926a16f15ca3c4a99ac422cf052
  keepAlive(h);
  const PreviewLink = defineComponent({
    props: {
-@@ -663,16 +681,11 @@ function configureLinkPreviewTooltip(ctx) {
+@@ -663,16 +683,11 @@ function configureLinkPreviewTooltip(ctx) {
      if (state.mode === "edit") return;
      const result = shouldShowPreviewWhenHover(ctx, view, event);
      if (result) {
