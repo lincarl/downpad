@@ -18,10 +18,12 @@
 // a link's start where text comes before, set the link as stored marks
 // without moving the caret, and draw the tail on the link's side. And typing
 // over selected link text keeps the link, as ProseMirror gives typed text the
-// marks across the selection. Typing or deleting there keeps the caret on the
-// link's side while it stays in its text block. A move of the caret ends it,
-// and so does deleting the link's whole text, so text typed where the link
-// was is plain, as after any deletion of a link's whole text.
+// marks across the selection. Typing there keeps the caret on the link's
+// side while it stays in its text block, and so does deleting the link's own
+// text with Backspace or Delete. A move of the caret ends it. So does
+// deleting the text on the other side of the caret, or the link's whole
+// text, which leave no link in the marks the caret's next text gets, so the
+// tail shows the plain side again.
 //
 // Stored marks stay in the state while the caret rests at a link's edge.
 // ProseMirror would give them to text that the browser changes elsewhere,
@@ -117,10 +119,12 @@ function typedOverLink(tr: Transaction, before: EditorState, $caret: ResolvedPos
  * The caret position on a link's side after `tr`, given `side` before it.
  * Stored marks with a link set at the link's edge without moving the caret,
  * as by the virtual cursor's Left at its end or Right at its start, put the
- * caret there, and so does typing over selected link text. Typing or
- * deleting there, or a change elsewhere, keeps it there while the caret stays
- * in its text block and the link is still beside it. A move of the caret,
- * other stored marks, or deleting the link's whole text end it.
+ * caret there, and so does typing over selected link text. Typing there, or
+ * a change elsewhere, keeps it there while the caret stays in its text block
+ * and the marks for the caret's next text still hold a link beside it, as
+ * after Backspace or Delete takes some of the link's own text. A move of the
+ * caret or other stored marks end it, and so does deleting the text on the
+ * other side of the caret or the link's whole text.
  */
 function linkSide(tr: Transaction, side: number | null, before: EditorState, after: EditorState): number | null {
   const $caret = caretOf(after);
