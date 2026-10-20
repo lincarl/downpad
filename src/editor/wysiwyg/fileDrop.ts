@@ -45,7 +45,7 @@ export function dropPosition(view: Pick<EditorView, "dom" | "state" | "nodeDOM">
   const { top, bottom } = view.dom.getBoundingClientRect();
   if (y < top) return 0;
   if (y > bottom) return view.state.doc.content.size;
-  return dropEdge(view, x, y);
+  return dropEdge(view, x, y)?.pos ?? null;
 }
 
 /** Whether a node is an empty paragraph, a line with nothing typed on it. */

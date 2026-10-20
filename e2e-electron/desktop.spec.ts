@@ -3737,6 +3737,40 @@ test("a block dragged by its handle onto a tall table while the page scrolls goe
   await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", ...fillers, "Move me.", table, "End."].join("\n\n") + "\n");
 });
 
+test("a block dragged beside a table goes in where the pointer is, where the drop line shows, after the page scrolled under the still pointer", async () => {
+  const file = path.join(directory, "block-drag-still.md");
+  const fillers = Array.from({ length: 20 }, (_, index) => `Filler ${index + 1}.`);
+  const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";
+  await writeFile(file, ["Intro.", "Move me.", table, "End.", ...fillers].join("\n\n") + "\n");
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  await startBlockDrag(editor.locator("p", { hasText: "Move me." }));
+  // Left of the table, at the top of row a2, where the edge nearest the
+  // pointer is between rows a1 and a2.
+  const tableBox = (await editor.locator(".milkdown-table-block").boundingBox())!;
+  const a2 = (await editor.locator("td", { hasText: "a2" }).boundingBox())!;
+  const point = { x: tableBox.x - 25, y: a2.y + 4 };
+  await page.mouse.move(point.x, point.y, { steps: 10 });
+  await page.mouse.move(point.x + 1, point.y);
+  await expect.poll(dropLineY).not.toBeNull();
+  // Scroll the page under the still pointer until the lower half of "End."
+  // is under it. Crepe's drop indicator kept the edge between the rows for
+  // the same point, so the drop cut the table in two, and its line stayed
+  // where it was on the screen.
+  const end = editor.locator("p", { hasText: /^End\.$/ });
+  const endBox = (await end.boundingBox())!;
+  await page.locator(".editor-area").evaluate((area, delta) => {
+    area.scrollTop += delta;
+  }, endBox.y + endBox.height * 0.75 - point.y);
+  const scrolled = (await end.boundingBox())!;
+  expect(scrolled.y + scrolled.height / 2).toBeLessThan(point.y);
+  expect(scrolled.y + scrolled.height).toBeGreaterThan(point.y);
+  await expect.poll(dropLineY).toBeCloseTo(scrolled.y + scrolled.height, 0);
+  await page.mouse.up();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", table, "End.", "Move me.", ...fillers].join("\n\n") + "\n");
+});
+
 test("text from another app dropped on a table cell goes in below the table, where the drop line shows", async () => {
   const file = path.join(directory, "text-drop-table.md");
   const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";

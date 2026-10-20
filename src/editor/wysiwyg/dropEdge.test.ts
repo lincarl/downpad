@@ -85,11 +85,12 @@ const nodeOf = (type: string, text?: string) => (node: Node) =>
 const isRow = (node: Node) => node.type.spec.tableRole === "row";
 
 /** Lay out the page: each paragraph outside the table in turn, 20px high with
- *  10px between, then the table, starting 10px below the last of them, with a
- *  row every 40px from 40px in from the left. The cells and the paragraphs in
- *  them keep jsdom's empty box at the page's top left, far from every drop. */
-function layOut(view: EditorView, before: string[], after: string[]): { top: number; bottom: number } {
-  let y = 100;
+ *  10px between, from `start` down, then the table, starting 10px below the
+ *  last of them, with a row every 40px from 40px in from the left. The cells
+ *  and the paragraphs in them keep jsdom's empty box at the page's top left,
+ *  far from every drop. */
+function layOut(view: EditorView, before: string[], after: string[], start = 100): { top: number; bottom: number } {
+  let y = start;
   for (const text of before) {
     place(view, nodeOf("paragraph", text), [[y, y + 20]]);
     y += 30;
@@ -218,6 +219,21 @@ describe("something dragged within the document", () => {
     expect(editor!.getMarkdown()).toBe(`Intro.\n\n${TABLE}\nEnd.\n\nMove me.\n`);
   });
 
+  it("goes in at the edge under the pointer at the drop after the page scrolled under the still pointer", async () => {
+    const view = await open(`Move me.\n\nIntro.\n\n${TABLE}\nEnd.\n\nAfter.\n`);
+    layOut(view, ["Move me.", "Intro."], ["End.", "After."]);
+    dragBlock(view, "Move me.");
+    // Left of the table, at the top of the "1 | 2" row. The drop indicator
+    // finds the edge between the header row and that row there.
+    view.dom.dispatchEvent(dragEvent("dragover", 10, 204));
+    // The page scrolls 100px under the still pointer, which brings the lower
+    // half of "End.", now from 190px to 210px, under it. The indicator kept
+    // the edge it found before, between the table's rows, for the same point.
+    layOut(view, ["Move me.", "Intro."], ["End.", "After."], 0);
+    drop(view, view.dom, 10, 204);
+    expect(editor!.getMarkdown()).toBe(`Intro.\n\n${TABLE}\nEnd.\n\nMove me.\n\nAfter.\n`);
+  });
+
   it("goes in as text of its own line below a table when selected text is dropped on a cell", async () => {
     const view = await open(`Intro with WORD here.\n\n${TABLE}\nEnd.\n`);
     layOut(view, ["Intro with WORD here."], ["End."]);
@@ -278,6 +294,20 @@ describe("the drop indicator", () => {
     view.dragging = null;
     // Files from the desktop, which the app puts in at the line.
     expect(dragOver(cellParagraph("4"), 300, 238, { Files: "" })).toMatchObject({ pos: after });
+  });
+
+  it("moves its line to the edge under a still pointer once the page scrolls under it", async () => {
+    const view = await open(`Move me.\n\nIntro.\n\n${TABLE}\nEnd.\n\nAfter.\n`);
+    const { top } = layOut(view, ["Move me.", "Intro."], ["End.", "After."]);
+    dragBlock(view, "Move me.");
+    // Left of the table, at the top of the "1 | 2" row, in the table's upper half.
+    expect(dragOver(view.dom, 10, 204)).toMatchObject({ pos: positionOf(view, nodeOf("table")), line: { p1: { y: top } } });
+    // The page scrolls 100px, which brings the lower half of "End.", now from
+    // 190px to 210px, under the pointer.
+    layOut(view, ["Move me.", "Intro."], ["End.", "After."], 0);
+    document.dispatchEvent(new Event("scroll"));
+    const after = positionOf(view, nodeOf("paragraph", "After."));
+    expect(crepeOf(editor!).editor.ctx.get(dropIndicatorState.key)).toMatchObject({ pos: after, line: { p1: { x: 0, y: 210 }, p2: { x: 600, y: 210 } } });
   });
 
   it("hides its line over the upper half of a table right below the dragged block, which a drop leaves where it is", async () => {

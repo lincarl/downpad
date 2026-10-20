@@ -43,7 +43,7 @@ import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
 import { tableCellClicks } from "./tableCellClicks";
-import { dropBesideTable, tableDropIndicator } from "./dropEdge";
+import { dropAtEdge, tableDropIndicator } from "./dropEdge";
 import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
@@ -290,14 +290,16 @@ export class WysiwygEditor {
     // A click in a table cell places the caret instead of selecting the cell.
     // Must follow the Table feature so this view replaces Crepe's.
     this.crepe.editor.use(tableCellClicks);
-    // A block or text dropped on or beside a table goes in above or below it,
-    // never between its rows or cells. As a prop of the view itself, the drop
+    // A dropped block or text goes in at the edge under the pointer as the page
+    // is at the drop, and on or beside a table above or below it, never
+    // between its rows or cells. As a prop of the view itself, the drop
     // handler runs before the drop indicator's. The plugin moves the
-    // indicator's line to that edge, so it must follow the Cursor feature.
+    // indicator's line to that table edge, so it must follow the Cursor
+    // feature.
     this.crepe.editor.config((ctx) => {
       ctx.update(editorViewOptionsCtx, (prev) => ({
         ...prev,
-        handleDrop: (view, event, slice, moved) => dropBesideTable(view, event, slice, moved) || (prev.handleDrop?.(view, event, slice, moved) ?? false),
+        handleDrop: (view, event, slice, moved) => dropAtEdge(view, event, slice, moved) || (prev.handleDrop?.(view, event, slice, moved) ?? false),
       }));
     });
     this.crepe.editor.use(tableDropIndicator);

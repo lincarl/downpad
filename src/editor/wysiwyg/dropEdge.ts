@@ -6,8 +6,14 @@
 // out into a new table. So a drop whose nearest edge is inside a table goes in
 // above or below the whole table, at the table's edge nearer the pointer, and
 // the indicator draws its line there. That holds for blocks and text dragged
-// within the document, text dragged in from elsewhere (`dropBesideTable`,
+// within the document, text dragged in from elsewhere (`dropAtEdge`,
 // `tableDropIndicator`), and dropped files (fileDrop.ts).
+//
+// Crepe's indicator also finds the edge for a drop again only once the pointer
+// has moved, so after the page scrolled under a still pointer it put the drop
+// in at the edge that had been under the pointer before the scroll, such as
+// one between a table's rows. So md-easy finds the edge for every drop itself,
+// from the page as it is at the drop (`dropAtEdge`).
 
 import { dropIndicatorState, type DropIndicatorState } from "@milkdown/kit/plugin/cursor";
 import type { Slice } from "@milkdown/kit/prose/model";
@@ -18,63 +24,72 @@ import { $prose } from "@milkdown/kit/utils";
 /** The line the drop indicator draws, from one viewport point to another. */
 type Line = NonNullable<DropIndicatorState>["line"];
 
+/** A place where a drop goes in, as a document position at a block edge, with
+ *  the line the drop indicator draws there. */
+interface Edge {
+  pos: number;
+  line: Line;
+}
+
 /** The parts of the editor's view that find a block edge on the page. */
 type LaidOut = Pick<EditorView, "state" | "nodeDOM">;
+
+/** The line along the top or bottom edge of a block's box on the page. */
+const lineAt = ({ left, right }: DOMRect, y: number): Line => ({ p1: { x: left, y }, p2: { x: right, y } });
 
 /**
  * The block edge nearest a viewport point, as Crepe's drop indicator picks it:
  * the top or bottom edge of any block, lists, tables and their parts included,
  * by the distance from the point to the nearer end of the edge. On a tie the
- * earlier position wins. Returns the document position at that edge, or null
- * when no block is rendered.
+ * earlier position wins. Null when no block is rendered.
  */
-export function nearestBlockEdge(view: LaidOut, x: number, y: number): number | null {
-  const nearest = { pos: -1, distance: Infinity };
-  const consider = (pos: number, left: number, right: number, edge: number): void => {
-    const distance = Math.min(Math.abs(x - left), Math.abs(x - right)) + Math.abs(y - edge);
-    if (distance < nearest.distance || (distance === nearest.distance && pos < nearest.pos)) {
-      Object.assign(nearest, { pos, distance });
+export function nearestBlockEdge(view: LaidOut, x: number, y: number): Edge | null {
+  const nearest: { edge: Edge | null; distance: number } = { edge: null, distance: Infinity };
+  const consider = (pos: number, box: DOMRect, edgeY: number): void => {
+    const distance = Math.min(Math.abs(x - box.left), Math.abs(x - box.right)) + Math.abs(y - edgeY);
+    if (distance < nearest.distance || (distance === nearest.distance && pos < (nearest.edge?.pos ?? Infinity))) {
+      Object.assign(nearest, { edge: { pos, line: lineAt(box, edgeY) }, distance });
     }
   };
   view.state.doc.descendants((node, pos) => {
     const dom = view.nodeDOM(pos);
     if (dom instanceof HTMLElement) {
-      const { top, bottom, left, right } = dom.getBoundingClientRect();
-      consider(pos, left, right, top);
-      consider(pos + node.nodeSize, left, right, bottom);
+      const box = dom.getBoundingClientRect();
+      consider(pos, box, box.top);
+      consider(pos + node.nodeSize, box, box.bottom);
     }
     // A text block's children are inline, so only containers are searched.
     return !node.isTextblock;
   });
-  return nearest.pos < 0 ? null : nearest.pos;
+  return nearest.edge;
 }
 
 /**
  * Where a drop goes in instead of at `pos` when `pos` is inside a table: before
  * the table or after it, at whichever of its top and bottom edges is nearer the
- * viewport height `y`, with the line the drop indicator draws at that edge.
- * Null when `pos` is not inside a table, or the table is not rendered.
+ * viewport height `y`. Null when `pos` is not inside a table, or the table is
+ * not rendered.
  */
-export function tableEdge(view: LaidOut, pos: number, y: number): { pos: number; line: Line } | null {
+export function tableEdge(view: LaidOut, pos: number, y: number): Edge | null {
   const $pos = view.state.doc.resolve(pos);
   for (let depth = $pos.depth; depth > 0; depth -= 1) {
     if ($pos.node(depth).type.spec.tableRole !== "table") continue;
     const dom = view.nodeDOM($pos.before(depth));
     if (!(dom instanceof HTMLElement)) return null;
-    const { top, bottom, left, right } = dom.getBoundingClientRect();
-    const above = y < (top + bottom) / 2;
-    const edge = above ? top : bottom;
-    return { pos: above ? $pos.before(depth) : $pos.after(depth), line: { p1: { x: left, y: edge }, p2: { x: right, y: edge } } };
+    const box = dom.getBoundingClientRect();
+    const above = y < (box.top + box.bottom) / 2;
+    return { pos: above ? $pos.before(depth) : $pos.after(depth), line: lineAt(box, above ? box.top : box.bottom) };
   }
   return null;
 }
 
-/** The block edge where a drop at a viewport point goes in: the one nearest
- *  the point (`nearestBlockEdge`), or for an edge inside a table, the table's
- *  nearer edge (`tableEdge`). Null when no block is rendered. */
-export function dropEdge(view: LaidOut, x: number, y: number): number | null {
-  const pos = nearestBlockEdge(view, x, y);
-  return pos === null ? null : (tableEdge(view, pos, y)?.pos ?? pos);
+/** The block edge where a drop at a viewport point goes in, found from the
+ *  page as it is now: the one nearest the point (`nearestBlockEdge`), or for
+ *  an edge inside a table, the table's nearer edge (`tableEdge`). Null when
+ *  no block is rendered. */
+export function dropEdge(view: LaidOut, x: number, y: number): Edge | null {
+  const nearest = nearestBlockEdge(view, x, y);
+  return nearest && (tableEdge(view, nearest.pos, y) ?? nearest);
 }
 
 /** Where the last step of a transaction ends its change, in the new document. */
@@ -102,21 +117,22 @@ function backInPlace(view: EditorView, pos: number): boolean {
 }
 
 /**
- * ProseMirror `handleDrop` for a drop whose nearest block edge is inside a
- * table. It puts the dropped content in above or below the table, where
- * `tableDropIndicator` has the indicator draw its line, instead of where
- * Crepe's indicator would put it, between the table's rows or cells. Moved
- * content leaves where it was, and content moved right beside itself stays
- * there. The content and the selection after it are as at any other edge.
- * The edge of a tall table can be far from the pointer, out of view, so the
- * page then scrolls to show what went in. Returns false for a drop elsewhere,
- * which Crepe's indicator takes, and for a drop with nothing to put in, such
- * as a row dragged by its handle.
+ * ProseMirror `handleDrop` that puts dropped content in at the block edge where
+ * a drop at the pointer goes in (`dropEdge`), found from the page as it is at
+ * the drop. For an edge inside a table that is above or below the table, where
+ * `tableDropIndicator` has the indicator draw its line, not between the
+ * table's rows or cells. Crepe's indicator would put it in at the edge it found
+ * when the pointer last moved, which is stale after the page scrolled under a
+ * still pointer. Moved content leaves where it was, and content moved right
+ * beside itself stays there. The content and the selection after it are as
+ * Crepe's indicator leaves them. The page scrolls to show what went in when it
+ * is out of view, as it can be at the far edge of a tall table.
+ * Returns false for a drop with nothing to put in, such as a row dragged by
+ * its handle, and where no block is rendered.
  */
-export function dropBesideTable(view: EditorView, event: DragEvent, slice: Slice, move: boolean): boolean {
+export function dropAtEdge(view: EditorView, event: DragEvent, slice: Slice, move: boolean): boolean {
   if (!slice.content.size) return false;
-  const nearest = nearestBlockEdge(view, event.clientX, event.clientY);
-  const edge = nearest === null ? null : tableEdge(view, nearest, event.clientY);
+  const edge = dropEdge(view, event.clientX, event.clientY);
   if (!edge) return false;
   if (move && backInPlace(view, edge.pos)) return true;
   const dragged = draggedBlock(view);
@@ -176,22 +192,50 @@ function dropsAtLine(view: EditorView, event: DragEvent): boolean {
  * As Crepe's indicator does for its own edges, it hides the line where a move
  * would leave the dragged block where it is. Use it after Crepe's Cursor
  * feature, so its listener runs after the indicator's own and moves the line
- * the indicator just drew. It moves only a line the indicator shows, so while
- * the page scrolls under a still pointer, when the indicator hides its line,
- * no line shows here either.
+ * the indicator just drew. Crepe's indicator finds its edge again only once
+ * the pointer moves, so when the page scrolls under a still pointer, this
+ * plugin moves the line to the edge where a drop at the pointer now goes in
+ * (`dropEdge`). It moves only a line the indicator shows.
  */
 export const tableDropIndicator = $prose(
   (ctx) =>
     new Plugin({
       view(view) {
-        const onDragOver = (event: DragEvent): void => {
+        /** Where the pointer last dragged something over the document, and
+         *  whether a drop there goes in at the line. Cleared by the drop. */
+        let pointer: { x: number; y: number; atLine: boolean } | null = null;
+        /** Move the shown line to `edge`, or hide it where a move would leave
+         *  the dragged block where it is. */
+        const showAt = (edge: Edge): void => {
           const shown = ctx.get(dropIndicatorState.key);
-          if (!shown || !dropsAtLine(view, event)) return;
-          const edge = tableEdge(view, shown.pos, event.clientY);
-          if (edge) ctx.set(dropIndicatorState.key, view.dragging?.move && backInPlace(view, edge.pos) ? null : { ...shown, ...edge });
+          if (shown) ctx.set(dropIndicatorState.key, view.dragging?.move && backInPlace(view, edge.pos) ? null : { ...shown, ...edge });
+        };
+        const onDragOver = (event: DragEvent): void => {
+          pointer = { x: event.clientX, y: event.clientY, atLine: dropsAtLine(view, event) };
+          const shown = ctx.get(dropIndicatorState.key);
+          const edge = shown && pointer.atLine ? tableEdge(view, shown.pos, event.clientY) : null;
+          if (edge) showAt(edge);
+        };
+        const onScroll = (): void => {
+          const edge = pointer?.atLine ? dropEdge(view, pointer.x, pointer.y) : null;
+          if (edge) showAt(edge);
+        };
+        const onDrop = (): void => {
+          pointer = null;
         };
         view.dom.addEventListener("dragover", onDragOver);
-        return { destroy: () => view.dom.removeEventListener("dragover", onDragOver) };
+        view.dom.addEventListener("drop", onDrop);
+        // Scroll events do not bubble, but a listener on the document in the
+        // capture phase hears those of every scrolled element.
+        const { ownerDocument } = view.dom;
+        ownerDocument.addEventListener("scroll", onScroll, true);
+        return {
+          destroy: () => {
+            view.dom.removeEventListener("dragover", onDragOver);
+            view.dom.removeEventListener("drop", onDrop);
+            ownerDocument.removeEventListener("scroll", onScroll, true);
+          },
+        };
       },
     }),
 );
