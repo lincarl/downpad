@@ -196,8 +196,12 @@ function backInPlace(view: EditorView, pos: number): boolean {
  * calls it for a drop on a code block, which ProseMirror never hears. Moved
  * content leaves where it was, and content moved right beside itself stays
  * there. The content and the selection after it are as ProseMirror leaves
- * them. The page scrolls to show what went in when it is out of view, as it
- * can be at the far edge of a tall table. Returns false for a drop with
+ * them, but the view takes focus once the selection is set, where ProseMirror
+ * focuses it first. A moved code block's view focuses its code when the block
+ * is selected, so the next key went into the code instead of replacing the
+ * block, as it does after a click on the block's handle. The page scrolls to
+ * show what went in when it is out of view, as it can be at the far edge of a
+ * tall table. Returns false for a drop with
  * nothing to put in, such as a row dragged by its handle, and where no block
  * is rendered.
  */
@@ -225,8 +229,8 @@ export function dropAtEdge(view: EditorView, event: DragEvent, slice: Slice, mov
     const $end = tr.doc.resolve(changeEnd(tr));
     tr.setSelection(view.someProp("createSelectionBetween", (create) => create(view, $pos, $end)) ?? TextSelection.between($pos, $end));
   }
-  view.focus();
   view.dispatch(tr.setMeta("uiEvent", "drop").scrollIntoView());
+  view.focus();
   return true;
 }
 

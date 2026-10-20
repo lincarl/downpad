@@ -10,7 +10,9 @@
 // itself. It selects from the selection's anchor to the position under the
 // pointer, or to the side of the image pressed, and follows the pointer until
 // the button is released, scrolling the document as Chromium's own drag
-// selection does.
+// selection does. Beside a block's text, such as in the document's side
+// padding, the selection runs to the start or end of the line at the
+// pointer's height, as Chromium's does (nearestBlock.ts).
 //
 // While the document view does not have focus, such as when a code block, the
 // Markdown pane or the find card has it, the selection to extend is not the
@@ -70,6 +72,7 @@ import { NodeSelection, Plugin, Selection, TextSelection } from "@milkdown/kit/p
 import { CellSelection } from "@milkdown/kit/prose/tables";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { isImageNode } from "./imageView";
+import { positionNear } from "./nearestBlock";
 
 /** The position a Shift+press at `event` selects to, or null to leave the
  *  press to the browser. A press on an inline node such as an image or a
@@ -100,7 +103,7 @@ function pressedPosition(view: EditorView, event: MouseEvent, focused: boolean):
 /** Set `selection` in the view, then focus it. Focusing first would move
  *  focus back into a code block that holds the selection, since focusing the
  *  view puts the browser's selection where ProseMirror's is. */
-function selectThenFocus(view: EditorView, selection: Selection): void {
+export function selectThenFocus(view: EditorView, selection: Selection): void {
   view.dispatch(view.state.tr.setSelection(selection).setMeta("pointer", true));
   view.focus();
 }
@@ -124,7 +127,7 @@ function shiftPressFromOutside(view: EditorView, event: MouseEvent): boolean {
 
 /** Whether a plain click selects `node` as a whole, as for a rule or an
  *  image on its own line. */
-function selectedOnClick(node: ProseNode): boolean {
+export function selectedOnClick(node: ProseNode): boolean {
   return node.isAtom && NodeSelection.isSelectable(node);
 }
 
@@ -180,14 +183,68 @@ function scrollerOf(element: Element): Element | null {
   return null;
 }
 
-/** Select from `anchor` to `head`, and then to the position under the
- *  pointer until the mouse button is released, as Chromium's own drag
- *  selection follows the pointer. While the pointer is above or below the
- *  document's scroll container, the container scrolls each frame by as far
- *  as the pointer is outside it, as Chromium scrolls, and the selection
- *  follows to the container's edge. Following stops once the selection is no
- *  longer a text selection, as when prosemirror-tables takes the drag over
- *  to select the cells it crosses, and when the window loses focus.
+/** Call `to` with the point under the pointer on each move until the mouse
+ *  button is released, the window loses focus or `to` returns false, and
+ *  with `endOnEscape` until Esc is pressed. While the pointer is above or
+ *  below the document's scroll container, the container scrolls each frame
+ *  by as far as the pointer is outside it, as Chromium's drag selection
+ *  scrolls, and `to` gets the point at the container's edge. A point outside
+ *  the document view comes moved to the view's edge, since it has no
+ *  position in the document. */
+export function followPointer(view: EditorView, to: (left: number, top: number) => boolean, { endOnEscape = false } = {}): void {
+  const root = view.dom.ownerDocument;
+  const win = root.defaultView;
+  const scroller = scrollerOf(view.dom);
+  let pointer: { left: number; top: number } | null = null;
+  let frame = 0;
+  const follow = (): void => {
+    frame = 0;
+    if (!pointer || view.isDestroyed) return end();
+    const dom = view.dom.getBoundingClientRect();
+    let { left, top } = pointer;
+    if (scroller) {
+      const box = scroller.getBoundingClientRect();
+      const outside = top < box.top ? top - box.top : top > box.bottom ? top - box.bottom : 0;
+      if (outside) {
+        scroller.scrollTop += outside;
+        top = Math.min(Math.max(top, box.top + 1), box.bottom - 1);
+        frame = win?.requestAnimationFrame(follow) ?? 0;
+      }
+    }
+    left = Math.min(Math.max(left, dom.left + 1), dom.right - 1);
+    top = Math.min(Math.max(top, dom.top + 1), dom.bottom - 1);
+    if (!to(left, top)) end();
+  };
+  const move = (moved: MouseEvent): void => {
+    if (!(moved.buttons & 1)) return end();
+    pointer = { left: moved.clientX, top: moved.clientY };
+    if (!frame) follow();
+  };
+  const key = (pressed: KeyboardEvent): void => {
+    if (pressed.key === "Escape") end();
+  };
+  const end = (): void => {
+    if (frame) win?.cancelAnimationFrame(frame);
+    frame = 0;
+    root.removeEventListener("mousemove", move);
+    root.removeEventListener("mouseup", end);
+    root.removeEventListener("keydown", key, true);
+    win?.removeEventListener("blur", end);
+  };
+  root.addEventListener("mousemove", move);
+  root.addEventListener("mouseup", end);
+  if (endOnEscape) root.addEventListener("keydown", key, true);
+  win?.addEventListener("blur", end);
+}
+
+/** Select from `anchor` to `head`, and then to the position at the pointer
+ *  until the mouse button is released, as Chromium's own drag selection
+ *  follows the pointer (`followPointer`). That position is the one
+ *  `positionNear` finds, so beside a line, such as in the document's side
+ *  padding or left of a list item's text, it is the line's start or end, as
+ *  Chromium has it. Following stops once the selection is no longer a text
+ *  selection, as when prosemirror-tables takes the drag over to select the
+ *  cells it crosses, and when the window loses focus.
  *
  *  The anchor stays where the press found it, also when another plugin
  *  changes the selection in between. prosemirror-tables makes a selection
@@ -211,46 +268,12 @@ export function dragSelect(view: EditorView, anchor: number, head: number): void
     if (!next.eq(state.selection)) view.dispatch(state.tr.setSelection(next).setMeta("pointer", true));
   };
   extend(head);
-  const root = view.dom.ownerDocument;
-  const win = root.defaultView;
-  const scroller = scrollerOf(view.dom);
-  let pointer: { left: number; top: number } | null = null;
-  let frame = 0;
-  const follow = (): void => {
-    frame = 0;
-    if (!pointer || view.isDestroyed || !(view.state.selection instanceof TextSelection)) return end();
-    const dom = view.dom.getBoundingClientRect();
-    let { left, top } = pointer;
-    if (scroller) {
-      const box = scroller.getBoundingClientRect();
-      const outside = top < box.top ? top - box.top : top > box.bottom ? top - box.bottom : 0;
-      if (outside) {
-        scroller.scrollTop += outside;
-        top = Math.min(Math.max(top, box.top + 1), box.bottom - 1);
-        frame = win?.requestAnimationFrame(follow) ?? 0;
-      }
-    }
-    // A point outside the document has no position in it.
-    left = Math.min(Math.max(left, dom.left + 1), dom.right - 1);
-    top = Math.min(Math.max(top, dom.top + 1), dom.bottom - 1);
-    const at = view.posAtCoords({ left, top });
-    if (at) extend(at.pos);
-  };
-  const move = (moved: MouseEvent): void => {
-    if (!(moved.buttons & 1)) return end();
-    pointer = { left: moved.clientX, top: moved.clientY };
-    if (!frame) follow();
-  };
-  const end = (): void => {
-    if (frame) win?.cancelAnimationFrame(frame);
-    frame = 0;
-    root.removeEventListener("mousemove", move);
-    root.removeEventListener("mouseup", end);
-    win?.removeEventListener("blur", end);
-  };
-  root.addEventListener("mousemove", move);
-  root.addEventListener("mouseup", end);
-  win?.addEventListener("blur", end);
+  followPointer(view, (left, top) => {
+    if (!(view.state.selection instanceof TextSelection)) return false;
+    const at = positionNear(view, left, top);
+    if (at !== null) extend(at);
+    return true;
+  });
 }
 
 /** Milkdown plugin that puts a ProseMirror plugin for presses from outside

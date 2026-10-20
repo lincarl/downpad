@@ -10,3 +10,15 @@ if (typeof Range !== "undefined" && typeof Range.prototype.getClientRects !== "f
     getBoundingClientRect: () => new DOMRect(),
   });
 }
+
+// jsdom has no ResizeObserver. The document view watches its own width to hide
+// Crepe's block handle (blockHandle.ts), so every test that builds the real
+// editor needs one. jsdom has no layout, so no size ever changes, and this
+// observer never calls back.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+}

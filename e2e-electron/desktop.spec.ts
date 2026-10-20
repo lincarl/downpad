@@ -1539,6 +1539,105 @@ test("the block handle's add button from a code block puts the next key in the n
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "First line.", "a", "Last line."].join("\n\n") + "\n");
 });
 
+test("after a press or drag on the block handle from anywhere, the next key replaces the block it selected or moved", async () => {
+  const file = path.join(directory, "block-handle-focus.md");
+  const code = (name: string) => "```js\nconst " + name + " = 1;\n```";
+  await writeFile(file, ["First.", code("alpha"), "Move me.", "Drop back.", "Leave me.", code("moved"), "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const codeBlocks = documentView.locator(".milkdown-code-block");
+  // The handle takes no focus, so Chromium moved focus to the page on the
+  // press, and only a release on the handle itself brought it back. From a
+  // code block, Chromium starts no drag on a Shift+press, which extends a
+  // selection, so a Shift+drag only selects the block, as a click on the
+  // handle does, and the next key was lost.
+  const line = (await codeBlocks.first().locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(codeBlocks.first().locator(".cm-content")).toBeFocused();
+  await page.keyboard.down("Shift");
+  await startBlockDrag(documentView.locator("p", { hasText: "Move me." }));
+  const last = await centerOf(documentView.locator("p", { hasText: "Last line." }));
+  await page.mouse.move(last.x, last.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("A");
+  // A code block moved by its handle took focus in its code, so the next key
+  // went into the code.
+  await startBlockDrag(codeBlocks.last());
+  const first = (await documentView.locator("p", { hasText: "First." }).boundingBox())!;
+  await page.mouse.move(first.x + 20, first.y + 2, { steps: 10 });
+  await page.mouse.move(first.x + 21, first.y + 2);
+  await page.mouse.up();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("B");
+  // From the find card, a drag that drops the block back where it was.
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  const back = documentView.locator("p", { hasText: "Drop back." });
+  await startBlockDrag(back);
+  const middle = await centerOf(back);
+  await page.mouse.move(middle.x, middle.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("C");
+  // From the split's Markdown pane, a drag that ends outside the document.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await startBlockDrag(documentView.locator("p", { hasText: "Leave me." }));
+  const strip = (await page.locator(".tabstrip").boundingBox())!;
+  await page.mouse.move(strip.x + strip.width * 0.6, strip.y + strip.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("D");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["B", "First.", code("alpha"), "A", "C", "D", "Last line."].join("\n\n") + "\n");
+});
+
+test("the block handle hides when the document changes width, so a click on a bullet or a task's box right after a switch of view reaches it", async () => {
+  const file = path.join(directory, "block-handle-resize.md");
+  await writeFile(file, ["First line.", "- one\n- two\n- three", "Middle line.", "- [ ] task a\n- [ ] task b", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const handle = page.locator(".milkdown-block-handle");
+  /** The list item whose text starts with `text`. */
+  const item = (text: string) => documentView.locator(".milkdown-list-item-block", { has: page.locator("p", { hasText: new RegExp(`^${text}`) }) });
+  /** Show the block handle beside the item that starts with `text` in the
+   *  Document view and switch to the Split view. Returns the center of the
+   *  item's bullet or task box, which lies under the handle's place from
+   *  before the switch. */
+  const switchBeside = async (text: string) => {
+    await page.getByRole("radio", { name: "Document", exact: true }).click();
+    const paragraph = (await item(text).locator("p").boundingBox())!;
+    const middle = paragraph.y + paragraph.height / 2;
+    await page.mouse.move(paragraph.x + 20, middle);
+    await expect.poll(async () => {
+      const box = await handle.boundingBox();
+      return (await handle.getAttribute("data-show")) === "true" && !!box && Math.abs(box.y + box.height / 2 - middle) < 8;
+    }).toBe(true);
+    await page.getByRole("radio", { name: "Split", exact: true }).click();
+    const label = await centerOf(item(text).locator(".label-wrapper"));
+    const box = (await handle.boundingBox())!;
+    expect(label.x > box.x && label.x < box.x + box.width && label.y > box.y && label.y < box.y + box.height).toBe(true);
+    return label;
+  };
+  // Crepe's handle stayed where it was after the switch, and then slid into
+  // place on the next pointer move, so it took the click on the bullet. It
+  // selected its item, and the next key replaced the item.
+  const bullet = await switchBeside("two");
+  await page.mouse.click(bullet.x, bullet.y);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  // On a task's box, the task stayed open and the next key replaced it. The
+  // box toggles the task, and the caret stays where it was.
+  const box = await switchBeside("task b");
+  await page.mouse.click(box.x, box.y);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("b");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["First line.", "- one\n- abtwo\n- three", "Middle line.", "- [ ] task a\n- [x] task b", "Last line."].join("\n\n") + "\n");
+});
+
 test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {
   const file = path.join(directory, "page-presses.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
@@ -1576,6 +1675,290 @@ test("a press on the page around the document leaves focus where it was, and Shi
   await page.keyboard.type("d");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;b\n```", "First line.c", "Last line.a"].join("\n\n") + "\n");
+});
+
+test("a click in the document's side padding beside a block puts the caret on the line at its height, or selects an image there", async () => {
+  const file = path.join(directory, "side-padding-clicks.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  const code = (text: string) => "```js\n" + text + "\n```";
+  const math = (text: string) => `$$\n${text}\n$$`;
+  const diagram = (text: string) => "```mermaid\n" + text + "\n```";
+  const table = (cell: string) => `| Head A | Head B |\n| ------ | ------ |\n| x1     | ${cell.padEnd(6)} |`;
+  const blocks = [code("const alpha = 1;\nconst beta = 2;"), "Some words here.", math("E = mc^2"), diagram("graph TD; A-->B;"), "![Bar](bar.svg)", table("y1"), "- one\n- two", "Last line."];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const codeBlocks = documentView.locator(".milkdown-code-block");
+  const image = documentView.locator(".milkdown-image-block");
+  await expect(codeBlocks.nth(1).locator(".katex")).toBeVisible();
+  await expect(codeBlocks.nth(2).locator(".mermaid-preview svg")).toBeVisible();
+  await expect.poll(() => image.locator("img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** Click in the document view's side padding at the height `part` of the
+   *  way down `target`, 8px from the text column on the left, which is clear
+   *  of the block handle, or 10px from the view's edge on the right. */
+  const clickBeside = async (target: Locator, side: "left" | "right", part = 0.5, modifiers: "Shift"[] = []) => {
+    await target.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    const view = (await documentView.boundingBox())!;
+    const padding = await documentView.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+    const box = (await target.boundingBox())!;
+    const x = side === "left" ? view.x + padding - 8 : view.x + view.width - 10;
+    await page.mouse.move(x, box.y + box.height * part);
+    for (const key of modifiers) await page.keyboard.down(key);
+    await page.mouse.down();
+    await page.mouse.up();
+    for (const key of modifiers) await page.keyboard.up(key);
+  };
+  // Chromium put the caret before or after the whole code block, and from
+  // there in the nearest text. At the start of the document, with text
+  // selected, that was nowhere, and the next key was lost. The text is the
+  // last line, so its toolbar shows away from the code block.
+  await selectText("Last line.");
+  await clickBeside(codeBlocks.nth(0).locator(".cm-line").nth(1), "left");
+  await expect(codeBlocks.nth(0).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("a");
+  // Right of the code, from the find card, also with Shift held.
+  await clickOn("Some words here.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await clickBeside(codeBlocks.nth(0).locator(".cm-line").nth(0), "right", 0.5, ["Shift"]);
+  await expect(codeBlocks.nth(0).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  // Beside a formula's or a diagram's preview, the nearest line of its code.
+  await clickBeside(codeBlocks.nth(1).locator(".preview"), "left");
+  await expect(codeBlocks.nth(1).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("c");
+  await clickBeside(codeBlocks.nth(2).locator(".preview"), "right", 0.75);
+  await expect(codeBlocks.nth(2).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("d");
+  // An image on its own line takes no caret, so the click selects it.
+  await clickBeside(image, "left");
+  await expect(documentView).toBeFocused();
+  await expect(image).toHaveClass(/\bselected\b/);
+  await page.keyboard.type("e");
+  // The line of the row's last cell, and of a list item. From the split's
+  // Markdown pane, Chromium put the caret beside a list item at the start of
+  // the document.
+  await clickBeside(documentView.locator("td", { hasText: "y1" }), "right");
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("f");
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await clickBeside(documentView.locator("li", { hasText: "two" }), "left");
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("g");
+  await page.keyboard.press("ControlOrMeta+s");
+  const edited = [code("const alpha = 1;b\naconst beta = 2;"), "Some words here.", math("cE = mc^2"), diagram("graph TD; A-->B;d"), "e", table("y1f"), "- one\n- gtwo", "Last line."];
+  await expect.poll(() => readFile(file, "utf8")).toBe(edited.join("\n\n") + "\n");
+});
+
+/** The x of a point in the document view's side padding, 8px from the text
+ *  column on the left, which is clear of the block handle, or 10px from the
+ *  view's edge on the right. */
+async function besideX(side: "left" | "right"): Promise<number> {
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const view = (await documentView.boundingBox())!;
+  const padding = await documentView.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+  return side === "left" ? view.x + padding - 8 : view.x + view.width - 10;
+}
+
+/** The first text node in `target`, as its text and the offsets where each
+ *  of its display lines starts and ends, with the middle of each line's
+ *  height. */
+function textLines(target: Locator): Promise<{ text: string; lines: { start: number; end: number; y: number }[] }> {
+  return target.evaluate((element) => {
+    const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const text = node.textContent!;
+    const range = document.createRange();
+    const lines: { start: number; end: number; y: number }[] = [];
+    for (let index = 0; index < text.length; index++) {
+      range.setStart(node, index);
+      range.setEnd(node, index + 1);
+      const box = range.getClientRects()[0];
+      if (!box) continue;
+      const y = box.top + box.height / 2;
+      const line = lines.at(-1);
+      if (line && Math.abs(line.y - y) < box.height / 2) line.end = index + 1;
+      else lines.push({ start: index, end: index + 1, y });
+    }
+    return { text, lines };
+  });
+}
+
+test("a drag from the document's side padding selects to the line beside or under the pointer, and a click there that moves a few pixels only puts the caret", async () => {
+  const file = path.join(directory, "side-padding-drags.md");
+  const words = (text: string, times: number) => Array.from({ length: times }, () => text).join(" ");
+  const items = Array.from({ length: 30 }, (_, index) => `- Item ${index + 1} ` + words("has words that wrap over lines.", 5));
+  await writeFile(file, [
+    "> " + words("Quote words wrap over the lines.", 18),
+    "| Head A | Head B |\n| --- | --- |\n| x1 | " + words("Cell words wrap.", 16) + " |",
+    items.join("\n"),
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const quote = documentView.locator("blockquote p");
+  const cell = documentView.locator("td").last();
+  const item = (index: number) => documentView.locator("li").nth(index).locator("p");
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  /** Collapse the whitespace of a selection that crosses lines or blocks. */
+  const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+  const left = await besideX("left");
+  const right = await besideX("right");
+  /** Scroll `target` into the middle of the view and read its lines. */
+  const linesIn = async (target: Locator) => {
+    await target.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    return textLines(target);
+  };
+  /** Press at `x` and `y`, move to `to` with the button held and release. */
+  const drag = async (x: number, y: number, to: { x: number; y: number }) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: Math.max(1, Math.round(Math.abs(to.y - y) / 8)) });
+    await page.mouse.up();
+  };
+  /** Type a character and expect it in line `line` of `target`'s text as
+   *  `linesIn` read it, with no text replaced. Backspace then takes it out. */
+  const typeInLine = async (target: Locator, before: Awaited<ReturnType<typeof textLines>>, line: number) => {
+    await page.keyboard.type("9");
+    const after = await target.evaluate((element) => element.textContent!);
+    const at = after.indexOf("9");
+    expect(after.slice(0, at) + after.slice(at + 1)).toBe(before.text);
+    expect(at).toBeGreaterThanOrEqual(before.lines[line]!.start);
+    expect(at).toBeLessThanOrEqual(before.lines[line]!.end);
+    await page.keyboard.press("Backspace");
+  };
+  // ProseMirror gave the end of the quote's paragraph for a point beside
+  // its middle line, so a move of a pixel after the press selected the rest
+  // of the paragraph, and the next key replaced it.
+  let lines = await linesIn(quote);
+  expect(lines.lines.length).toBeGreaterThanOrEqual(8);
+  await drag(right, lines.lines[4]!.y, { x: right - 1, y: lines.lines[4]!.y + 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(quote, lines, 4);
+  // Left of the quote's text, over its bar, it gave the paragraph's start.
+  const view = (await documentView.boundingBox())!;
+  const column = view.x + await documentView.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+  await drag(column - 2, lines.lines[3]!.y, { x: column + 3, y: lines.lines[3]!.y + 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(quote, lines, 3);
+  // A drag beside the lines selects from the end of one to the end of
+  // another, and one into the text to the pointer.
+  await drag(right, lines.lines[1]!.y, { x: right, y: lines.lines[3]!.y });
+  expect(flat(await selected())).toBe(flat(lines.text.slice(lines.lines[1]!.end, lines.lines[3]!.end)));
+  const into = await quote.evaluate((element, offset) => {
+    const range = document.createRange();
+    range.setStart(element.firstChild!, offset);
+    range.setEnd(element.firstChild!, offset + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * 0.25, y: box.top + box.height / 2 };
+  }, lines.lines[5]!.start + 3);
+  await drag(right, lines.lines[2]!.y, into);
+  expect(flat(await selected())).toBe(flat(lines.text.slice(lines.lines[2]!.end, lines.lines[5]!.start + 3)));
+  // Beside a table row, the lines of its last cell.
+  lines = await linesIn(cell);
+  expect(lines.lines.length).toBeGreaterThanOrEqual(3);
+  await drag(right, lines.lines[1]!.y, { x: right - 2, y: lines.lines[1]!.y + 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(cell, lines, 1);
+  await drag(right, lines.lines[0]!.y, { x: right, y: lines.lines[2]!.y });
+  expect(flat(await selected())).toBe(flat(lines.text.slice(lines.lines[0]!.end, lines.lines[2]!.end)));
+  // Left of a list item, ProseMirror gave the position before its
+  // paragraph, so the selection ended in the item before.
+  lines = await linesIn(item(1));
+  await drag(left, lines.lines[1]!.y, { x: left + 2, y: lines.lines[1]!.y - 1 });
+  expect(await selected()).toBe("");
+  await typeInLine(item(1), lines, 1);
+  const next = await textLines(item(2));
+  await drag(left, lines.lines[0]!.y, { x: left, y: next.lines[1]!.y });
+  expect(flat(await selected())).toBe(flat(lines.text + " " + next.text.slice(0, next.lines[1]!.start)));
+  // The document scrolls while the pointer is below it, and the selection
+  // runs to the start of the line beside the pointer at its bottom edge.
+  const area = page.locator(".editor-area");
+  const areaBox = (await area.boundingBox())!;
+  await item(2).evaluate((element) => element.scrollIntoView({ block: "start" }));
+  const scrolled = await area.evaluate((element) => element.scrollTop);
+  await page.mouse.move(left, (await textLines(item(2))).lines[0]!.y);
+  await page.mouse.down();
+  await page.mouse.move(left, areaBox.y + areaBox.height + 8, { steps: 5 });
+  await expect.poll(() => area.evaluate((element) => element.scrollTop)).toBeGreaterThan(scrolled + areaBox.height / 2);
+  await page.mouse.up();
+  // A caret at a soft wrap draws at the end of the line above, so the head
+  // is found by its offset among the line starts.
+  const head = await page.evaluate(() => {
+    const selection = document.getSelection()!;
+    const items = [...document.querySelectorAll(".milkdown .ProseMirror li")];
+    return { item: items.findIndex((element) => element.contains(selection.focusNode)), offset: selection.focusOffset };
+  });
+  lines = await textLines(item(head.item));
+  const line = lines.lines.find((each) => each.start === head.offset);
+  expect(line).toBeDefined();
+  expect(Math.abs(line!.y - (areaBox.y + areaBox.height))).toBeLessThan((lines.lines[1]!.y - lines.lines[0]!.y) * 1.5);
+});
+
+test("a drag from the document's side padding beside a code block selects in its code until the button is released, Esc is pressed or the window loses focus", async () => {
+  const file = path.join(directory, "side-padding-code-drags.md");
+  const code = (lines: string[]) => "```js\n" + lines.join("\n") + "\n```";
+  await writeFile(file, ["Intro line.", code(["const alpha = 1;", "const beta = 2;", "const gamma = 3;", "const delta = 4;"]), "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const lines = page.locator(".milkdown .ProseMirror .cm-line");
+  await expect(lines).toHaveCount(4);
+  const content = page.locator(".milkdown .ProseMirror .cm-content");
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  const left = await besideX("left");
+  const right = await besideX("right");
+  /** The middle of the height of line `index` of the code. */
+  const middle = async (index: number) => {
+    const box = (await lines.nth(index).boundingBox())!;
+    return box.y + box.height / 2;
+  };
+  // The press beside the code put the cursor there, but nothing followed the
+  // pointer, so a drag from beside the second line into the third selected
+  // nothing, and the next key went in at the start of the second line.
+  await page.mouse.move(left, await middle(1));
+  await page.mouse.down();
+  const into = await lines.nth(2).evaluate((line) => {
+    const range = document.createRange();
+    const node = document.createTreeWalker(line, NodeFilter.SHOW_TEXT).nextNode()!;
+    range.setStart(node, 4);
+    range.setEnd(node, 5);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * 0.75, y: box.top + box.height / 2 };
+  });
+  await page.mouse.move(into.x, into.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(content).toBeFocused();
+  expect(await selected()).toBe("const beta = 2;\nconst");
+  await page.keyboard.type("X");
+  // A press that moves a pixel only puts the cursor at the end of the line.
+  await page.mouse.move(right, await middle(0));
+  await page.mouse.down();
+  await page.mouse.move(right - 1, (await middle(0)) + 1);
+  await page.mouse.up();
+  expect(await selected()).toBe("");
+  await page.keyboard.type("Y");
+  // Esc, which collapses the code's selection, ends the drag, so a move
+  // after it selects nothing again.
+  await page.mouse.move(left, await middle(2));
+  await page.mouse.down();
+  await page.mouse.move(left, await middle(1), { steps: 3 });
+  expect(await selected()).toBe("X gamma = 3;\n");
+  await page.keyboard.press("Escape");
+  await page.mouse.move(left, await middle(0), { steps: 3 });
+  await page.mouse.up();
+  expect(await selected()).toBe("");
+  await page.keyboard.type("Z");
+  // So does the window losing focus. Playwright keeps the page focused, so
+  // the test sends the window's blur event itself.
+  await page.mouse.move(left, await middle(2));
+  await page.mouse.down();
+  await page.mouse.move(left, await middle(1), { steps: 3 });
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.mouse.move(left, await middle(0), { steps: 3 });
+  await page.mouse.up();
+  expect(await selected()).toBe("ZX gamma = 3;\n");
+  await page.keyboard.type("W");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro line.", code(["const alpha = 1;Y", "Wconst delta = 4;"]), "Last line."].join("\n\n") + "\n");
 });
 
 /** The point `fraction` of the way across the character at `index` of the
@@ -1683,13 +2066,24 @@ test("the buttons that add a table's row or column put the next key in the new l
   const table = documentView.locator("table.children");
   const a1Cell = table.locator("td").filter({ hasText: "a1" });
   /** Follow the border right of a1, or below it, to its add button, and
-   *  click the button. */
+   *  click the button. Crepe shows the line's handle from a throttled
+   *  pointer move, which a busy machine can drop for the last moves into the
+   *  narrow zone at the border, so the moves there repeat until it shows. */
   const clickAdd = async (axis: "col" | "row") => {
-    const a1 = (await a1Cell.boundingBox())!;
     const handle = page.locator(`[data-role="${axis === "col" ? "y" : "x"}-line-drag-handle"]`);
-    if (axis === "col") await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
-    else await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
-    await expect(handle).toHaveAttribute("data-show", "true");
+    let a1 = (await a1Cell.boundingBox())!;
+    await expect(async () => {
+      a1 = (await a1Cell.boundingBox())!;
+      // Each try starts inside the cell, so the pointer moves into the zone.
+      if (axis === "col") {
+        await page.mouse.move(a1.x + a1.width - 15, a1.y + a1.height / 2);
+        await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
+      } else {
+        await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 15);
+        await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
+      }
+      await expect(handle).toHaveAttribute("data-show", "true", { timeout: 1000 });
+    }).toPass();
     const plus = await centerOf(handle.locator(".add-button"));
     if (axis === "col") await page.mouse.move(a1.x + a1.width - 2, plus.y, { steps: 10 });
     else await page.mouse.move(plus.x + 2, a1.y + a1.height - 2, { steps: 10 });
