@@ -36,6 +36,7 @@ import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
 import { shiftClicks } from "./shiftClicks";
+import { listLabelClicks } from "./listLabelClicks";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
@@ -53,6 +54,7 @@ import {
 } from "./findEngine";
 import { codeBlockFindHighlights } from "./findReveal";
 import { codeBlockClicks } from "./codeBlockClicks";
+import { codeBlockFocus } from "./codeBlockFocus";
 import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
@@ -64,6 +66,7 @@ import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } f
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
+import { toolbarBlur } from "./toolbarBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import { linkEdges } from "./linkEdges";
 import {
@@ -234,8 +237,10 @@ export class WysiwygEditor {
       defaultValue: split.body,
       featureConfigs: {
         // Render ```mermaid code blocks as diagrams below the source (§5.2),
-        // show the find card's matches inside code blocks (§5.13), and add a
-        // cursor on Ctrl or Cmd+click only in a block that has focus.
+        // show the find card's matches inside code blocks (§5.13), add a
+        // cursor on Ctrl or Cmd+click only in a block that has focus, put the
+        // cursor at a Shift+click in a block that does not, and at the start
+        // of a line on a press on its line number.
         [Crepe.Feature.CodeMirror]: {
           renderPreview: renderMermaidPreview,
           extensions: [codeBlockFindHighlights, codeBlockClicks],
@@ -279,9 +284,13 @@ export class WysiwygEditor {
     this.crepe.editor.use(copyWithoutTrailingLine);
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.
     this.crepe.editor.use(linkViewPlugin(context));
-    // Shift+click and Shift+drag on link text and images, and from outside
-    // the document (§5.5, §5.6).
+    // Shift+click and Shift+drag on link text and images, and presses from
+    // outside the document (§5.5, §5.6).
     this.crepe.editor.use(shiftClicks);
+    // A press on a list item's bullet or number puts the caret at its text.
+    this.crepe.editor.use(listLabelClicks);
+    // Focus leaves a code block once the document's selection has left it.
+    this.crepe.editor.use(codeBlockFocus);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
     // Show missing inline images as missing too, and keep missing images in
@@ -318,8 +327,10 @@ export class WysiwygEditor {
     this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Tab that the editor does not use, or Esc then Tab, moves focus out.
     this.crepe.editor.use(tabExit);
-    // Focus that leaves the document closes the slash menu.
+    // Focus that leaves the document closes the slash menu and hides the
+    // selection toolbar.
     this.crepe.editor.use(slashMenuBlur);
+    this.crepe.editor.use(toolbarBlur);
     // Read `$` and `~` as math and strikethrough only where Markdown tools do,
     // so prices stay text. Must follow the LaTeX feature.
     this.crepe.editor.use(mathDelimiters);
@@ -682,6 +693,16 @@ export class WysiwygEditor {
           this.composition = { id: ++this.compositions, cell: event.target };
         });
         panel.addEventListener("compositionend", () => (this.composition = null));
+        // A press on the table outside its keys, values and buttons, such as
+        // on its caption or in the blank space around them, leaves focus
+        // where it was. Chromium moved focus to the page, and the next key
+        // went nowhere. Each key and value carries data-part
+        // (FrontmatterPanel), and a press on one, also a read-only one, stays
+        // with the browser, so its text can be selected.
+        panel.addEventListener("mousedown", (event) => {
+          const { target } = event;
+          if (event.button === 0 && target instanceof Element && !target.closest("button, [data-part]")) event.preventDefault();
+        });
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);
       }

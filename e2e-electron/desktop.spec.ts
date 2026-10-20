@@ -1089,6 +1089,546 @@ test("Shift+click from the find card or the Markdown pane beside or below a tabl
   ].join("\n\n") + "\n");
 });
 
+/** Shift+click `point`. */
+async function shiftClickAt(point: { x: number; y: number }): Promise<void> {
+  await page.keyboard.down("Shift");
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up("Shift");
+}
+
+/** Put the caret at the end of the split's Markdown pane's line that reads
+ *  `text`. */
+async function caretInMarkdown(text: string): Promise<void> {
+  await page.locator(".editor-pane-raw .cm-line").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).click();
+  await page.keyboard.press("End");
+  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+}
+
+test("Shift+click from the find card, the Markdown pane or a code block on a code block's toolbar, edge or preview is a plain click there", async () => {
+  const file = path.join(directory, "shift-click-code-tools.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "```\nconst beta = 2;\n```", "```mermaid\ngraph TD; A-->B;\n```", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const blocks = page.locator(".milkdown .ProseMirror .milkdown-code-block");
+  await expect(blocks.nth(2).locator(".preview svg")).toBeVisible();
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** The middle of `block`'s toolbar, between its language and Copy buttons. */
+  const toolbar = async (block: Locator) => {
+    const language = (await block.locator(".language-button").boundingBox())!;
+    const copy = (await block.locator(".copy-button").boundingBox())!;
+    return { x: (language.x + language.width + copy.x) / 2, y: language.y + language.height / 2 };
+  };
+  // A plain click on a code block's toolbar, edge or preview puts the cursor
+  // at the end of its code. From the find card, Chromium focused the document
+  // at its old caret instead, at the end of the last line.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await shiftClickAt(await toolbar(blocks.nth(0)));
+  await expect(blocks.nth(0).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("a");
+  // From the split's Markdown pane, Chromium extended the pane's selection
+  // to its start, and the next key replaced the Markdown before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  // The press is right of the code's last line. Below a line, Chromium on
+  // Windows puts a click's caret at the point of the line nearest to it.
+  const edge = (await blocks.nth(1).boundingBox())!;
+  await shiftClickAt({ x: edge.x + edge.width - 24, y: edge.y + edge.height - 3 });
+  await expect(blocks.nth(1).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  // From another code block, Chromium selected that block's code from its
+  // cursor to the end, and the next key replaced the code.
+  const line = (await blocks.nth(0).locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(blocks.nth(0).locator(".cm-content")).toBeFocused();
+  await shiftClickAt(await centerOf(blocks.nth(2).locator(".preview")));
+  await expect(blocks.nth(2).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("c");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;a\n```", "```\nconst beta = 2;b\n```", "```mermaid\ngraph TD; A-->B;c\n```", "Last line."].join("\n\n") + "\n");
+});
+
+test("a click or Shift+click on a list item's bullet puts the caret at the start of its text, also from the find card, the Markdown pane or a code block", async () => {
+  const file = path.join(directory, "bullet-clicks.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "- one\n- two\n- three\n- four\n- five", "| A | B |\n| --- | --- |\n| x1 | y1 |", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const selectedCells = documentView.locator(".selectedCell");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** The bullet of the list item whose text starts with `text`. */
+  const bullet = (text: string) => documentView.locator(".milkdown-list-item-block", { has: page.locator("p", { hasText: new RegExp(`^${text}`) }) }).locator(".label-wrapper");
+  /** Click the bullet of the item that starts with `text`, and type `typed`.
+   *  Crepe's block handle follows the pointer only every 200 ms and slides
+   *  into place, so right after a switch of view it can still lie over a
+   *  bullet. A locator's click waits until the press reaches the bullet. */
+  const clickBullet = async (text: string, shift: boolean, typed: string) => {
+    await bullet(text).click({ modifiers: shift ? ["Shift"] : [] });
+    await expect(documentView).toBeFocused();
+    await page.keyboard.type(typed);
+  };
+  // A bullet is a drawing with no place for a caret, so Chromium put the
+  // caret of a plain click there at the start of the document.
+  await clickOn("Last line.", -1, 0.75);
+  await clickBullet("one", false, "A");
+  // From the find card, a Shift+click focused the document without a caret,
+  // and the next key was lost.
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await clickBullet("two", true, "B");
+  // With cells selected, prosemirror-tables took the Shift+click, kept a cell
+  // selected and focus in the find card, where the next key went.
+  await clickOn("x1", 1, 0.5);
+  await shiftClickAt(await pointOn("y1", 1, 0.5));
+  await expect(selectedCells).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  const findText = await find.inputValue();
+  await clickBullet("three", true, "C");
+  await expect(selectedCells).toHaveCount(0);
+  await expect(find).toHaveValue(findText);
+  // From the split's Markdown pane, a plain click put the caret at the start
+  // of the document too, and a Shift+click put none.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await clickBullet("four", false, "D");
+  await caretInMarkdown("Last line.");
+  await clickBullet("five", true, "E");
+  // From a code block, focus stayed in the block, which a Shift+click
+  // selected to its end, so the next key replaced the code.
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  await clickBullet("Aone", true, "F");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "- FAone\n- Btwo\n- Cthree\n- Dfour\n- Efive", "| A | B |\n| --- | --- |\n| x1 | y1 |", "Last line."].join("\n\n") + "\n");
+});
+
+test("Shift+click from the find card or the Markdown pane on a rule or an image on its own line selects it as a click does, and so does a click from a code block", async () => {
+  const file = path.join(directory, "shift-click-rule-image.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "Above.", "---", "![Bar](bar.svg)", "Middle.", "---", "![Bar](bar.svg)", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const rules = documentView.locator("hr");
+  const images = documentView.locator(".milkdown-image-block");
+  await expect(images).toHaveCount(2);
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).locator("img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  // From the find card, a Shift+click on a rule or an image focused the
+  // document and left its selection as it was, so the next key went to its
+  // old caret or was lost. A click selects the rule or the image.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await shiftClickAt(await centerOf(rules.first()));
+  await expect(documentView).toBeFocused();
+  await expect(rules.first()).toHaveClass(/ProseMirror-selectednode/);
+  await page.keyboard.type("a");
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await shiftClickAt(await centerOf(images.first().locator("img")));
+  await expect(documentView).toBeFocused();
+  await expect(images.first()).toHaveClass(/selected/);
+  await page.keyboard.type("b");
+  // From a code block, ProseMirror selected the image, but focus went back
+  // into the code block, and the next key went into the code.
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  const last = await centerOf(images.last().locator("img"));
+  await page.mouse.click(last.x, last.y);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("c");
+  // From the split's Markdown pane, Chromium extended the pane's selection
+  // to its start, and the next key replaced the Markdown before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await shiftClickAt(await centerOf(rules.last()));
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "Above.", "a", "b", "Middle.", "d", "c", "Last line."].join("\n\n") + "\n");
+});
+
+test("Shift+click on a code block's code or a frontmatter cell from elsewhere puts the caret at the click", async () => {
+  const file = path.join(directory, "shift-click-code-frontmatter.md");
+  await writeFile(file, "---\ntitle: Survey\n---\n\n```\nconst alpha = 1;\nconst beta = 2;\n```\n\nLast line.\n");
+  await launch(file);
+  const table = page.locator(".frontmatter-table");
+  await expect(table).toBeVisible();
+  const code = page.locator(".milkdown .ProseMirror .cm-content");
+  /** The point `fraction` of the way across the character at `index` of
+   *  the frontmatter cell that reads `text`. */
+  const pointInCell = (text: string, index: number, fraction: number) =>
+    table.locator(".frontmatter-edit", { hasText: new RegExp(`^${text}$`) }).evaluate((cell, [index, fraction]) => {
+      const range = document.createRange();
+      range.setStart(cell.firstChild!, index);
+      range.setEnd(cell.firstChild!, index + 1);
+      const box = range.getBoundingClientRect();
+      return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+    }, [index, fraction] as const);
+  // CodeMirror selected from the block's own cursor, at its start, to the
+  // click, and the next key replaced the code before the click.
+  await clickOn("Last line.", -1, 0.75);
+  await shiftClickAt(await pointOn("const beta = 2;", 6, 0.25));
+  await expect(code).toBeFocused();
+  await page.keyboard.type("x");
+  // From the document, Chromium extended its selection to the start of the
+  // body, and the next key replaced the body. Each click on the last line is
+  // at another place, so none of them counts as a double-click.
+  await clickOn("Last line.", 0, 0.25);
+  await page.keyboard.press("End");
+  await shiftClickAt(await pointInCell("title", 2, 0.25));
+  await page.keyboard.type("z");
+  // From the split's Markdown pane, Chromium extended the pane's selection
+  // to its start, and the next key replaced the Markdown before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await shiftClickAt(await pointInCell("Survey", 3, 0.25));
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntiztle: Suryvey\n---\n\n```\nconst alpha = 1;\nconst xbeta = 2;\n```\n\nLast line.\n");
+});
+
+test("a click or Shift+click on the frontmatter table's caption or beside the table leaves focus where it was", async () => {
+  const file = path.join(directory, "frontmatter-caption-click.md");
+  await writeFile(file, "---\ntitle: Survey\n---\n\nFirst line.\n\nLast line.\n");
+  await launch(file);
+  const table = page.locator(".frontmatter-table");
+  await expect(table).toBeVisible();
+  // Chromium moved focus to the page, and the next key was lost.
+  await clickOn("Last line.", -1, 0.75);
+  const wrap = (await page.locator(".frontmatter-table-wrap").boundingBox())!;
+  const box = (await table.boundingBox())!;
+  await page.mouse.click((box.x + box.width + wrap.x + wrap.width) / 2, box.y + box.height / 2);
+  await expect(page.locator(".milkdown .ProseMirror")).toBeFocused();
+  await page.keyboard.type("a");
+  // From the split's Markdown pane, a Shift+click on the caption extended the
+  // pane's selection to its start, and the next key replaced the Markdown
+  // before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("First line.");
+  await shiftClickAt(await centerOf(page.locator(".frontmatter-tab")));
+  await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: Survey\n---\n\nFirst line.b\n\nLast line.a\n");
+});
+
+/** The point `fraction` of the way across the character at `index` of the
+ *  first text in `element`. */
+function pointInText(element: Locator, index: number, fraction: number): Promise<{ x: number; y: number }> {
+  return element.evaluate((element, [index, fraction]) => {
+    const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(node, index);
+    range.setEnd(node, index + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+  }, [index, fraction] as const);
+}
+
+/** The text of the browser's selection. */
+function selectedText(): Promise<string> {
+  return page.evaluate(() => document.getSelection()!.toString());
+}
+
+test("Shift+click extends a selection in read-only frontmatter text, also while nothing has focus", async () => {
+  const file = path.join(directory, "frontmatter-read-only-comment.md");
+  await writeFile(file, "---\n# First comment second comment\n---\n\nBody line.\n");
+  await launch(file);
+  const comment = page.locator(".frontmatter-raw .frontmatter-code");
+  await expect(comment).toBeVisible();
+  // While nothing had focus, the listener that has the browser take a
+  // Shift+press from an editor as a plain click dropped every selection, so
+  // the Shift+click only moved the caret.
+  const start = await pointInText(comment, 4, 0.25);
+  await page.mouse.click(start.x, start.y);
+  await shiftClickAt(await pointInText(comment, 19, 0.25));
+  await expect.poll(selectedText).toBe("rst comment sec");
+});
+
+test("a double-click selects the text of a read-only key in the frontmatter table", async () => {
+  const file = path.join(directory, "frontmatter-read-only-key.md");
+  await writeFile(file, "---\ntitle: Survey\ncomplex:\n  - first item\n  - second item\n---\n\nBody line.\n");
+  await launch(file);
+  const key = page.locator(".frontmatter-table th.frontmatter-key", { hasText: /^complex$/ });
+  await expect(key).toBeVisible();
+  // The table kept focus where it was on every press on a read-only key, so
+  // a double-click there selected nothing.
+  await clickOn("Body line.", -1, 0.75);
+  const point = await pointInText(key, 3, 0.5);
+  await page.mouse.dblclick(point.x, point.y);
+  await expect.poll(selectedText).toBe("complex");
+});
+
+test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
+  const file = path.join(directory, "block-handle-add-from-code.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  // Show the handle of the first paragraph and click its add button, once
+  // Crepe has moved the handle beside the paragraph from the code block.
+  const paragraph = await centerOf(documentView.locator("p", { hasText: "First line." }));
+  await page.mouse.move(paragraph.x, paragraph.y, { steps: 4 });
+  const add = page.locator(".milkdown-block-handle[data-show=true] .operation-item").first();
+  let button = { x: 0, y: 0 };
+  await expect.poll(async () => {
+    button = await centerOf(add);
+    return Math.abs(button.y - paragraph.y) < 8;
+  }).toBe(true);
+  await page.mouse.move(button.x, button.y, { steps: 6 });
+  await page.mouse.click(button.x, button.y);
+  // Crepe focused the document before it put the paragraph in, which put
+  // focus back into the code block, so the next key went into the code.
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "First line.", "a", "Last line."].join("\n\n") + "\n");
+});
+
+test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {
+  const file = path.join(directory, "page-presses.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  // Chromium moved focus to the page on a press beside the document's column
+  // or below its last line, and the next key was lost, also when the
+  // document or a code block had focus.
+  await clickOn("Last line.", -1, 0.75);
+  const area = (await page.locator("#document-editor-panel").boundingBox())!;
+  await page.mouse.click(area.x + 10, area.y + area.height / 2);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  const column = (await page.locator(".editor-column").boundingBox())!;
+  await page.mouse.click(column.x + 40, column.y + column.height - 20);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  // From the split's Markdown pane, Chromium extended the pane's selection to
+  // its start on a Shift+click beside the document pane's text, or on the
+  // empty part of the tab strip, and the next key replaced the Markdown
+  // before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("First line.");
+  const pane = (await page.locator(".editor-pane-wysiwyg").boundingBox())!;
+  await shiftClickAt({ x: pane.x + 10, y: pane.y + pane.height / 2 });
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("c");
+  const strip = (await page.locator(".tabstrip").boundingBox())!;
+  await shiftClickAt({ x: strip.x + strip.width * 0.6, y: strip.y + strip.height / 2 });
+  await expect(markdown).not.toBeFocused();
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;b\n```", "First line.c", "Last line.a"].join("\n\n") + "\n");
+});
+
+/** The point `fraction` of the way across the character at `index` of the
+ *  split's Markdown pane's line that reads `text`. */
+function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
+  return page.locator(".editor-pane-raw .cm-line").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).evaluate((line, [index, fraction]) => {
+    const node = document.createTreeWalker(line, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(node, index);
+    range.setEnd(node, index + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+  }, [index, fraction] as const);
+}
+
+test("a press on a line number puts the cursor at the start of its line in a code block and the Markdown pane, and Shift+click from the document into the Markdown pane puts it at the click", async () => {
+  const file = path.join(directory, "line-numbers.md");
+  await writeFile(file, ["```\nconst alpha = 1;\nconst beta = 2;\n```", "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const code = documentView.locator(".cm-content");
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  /** The middle of the line number that reads `number` in `editor`. */
+  const lineNumber = (editor: Locator, number: number) => centerOf(editor.locator(".cm-lineNumbers .cm-gutterElement").filter({ hasText: new RegExp(`^${number}$`) }));
+  // Chromium focused CodeMirror's scroll container, which takes no keys, so
+  // the next key was lost.
+  await clickOn("Last line.", -1, 0.75);
+  const second = await lineNumber(documentView, 2);
+  await page.mouse.click(second.x, second.y);
+  await expect(code).toBeFocused();
+  await page.keyboard.type("a");
+  // From the find card, a Shift+click there is a plain click.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  await shiftClickAt(await lineNumber(documentView, 1));
+  await expect(code).toBeFocused();
+  await page.keyboard.type("b");
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("First line.");
+  const markdownPane = page.locator(".editor-pane-raw");
+  const last = await lineNumber(markdownPane, 8);
+  await page.mouse.click(last.x, last.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("c");
+  // From the document, CodeMirror selected from the pane's own cursor, here
+  // at the start of the last line, to the click, and the next key replaced
+  // the Markdown in between.
+  await clickOn("First line.", -1, 0.75);
+  await shiftClickAt(await pointInMarkdown("First line.", 3, 0.25));
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
+});
+
+test("a click or Shift+click on the fold gutter in the Markdown view folds a section on its arrow and leaves focus and the cursor where they were", async () => {
+  const file = path.join(directory, "fold-arrows.md");
+  await writeFile(file, ["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three."].join("\n\n") + "\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  const placeholders = page.locator(".editor-pane-raw .cm-foldPlaceholder");
+  const activeLine = page.locator(".editor-pane-raw .cm-activeLine");
+  /** The middle of the fold gutter beside the line that reads `text`, on its
+   *  fold arrow if it has one. */
+  const inFoldGutter = (text: string) =>
+    page.locator(".editor-pane-raw").evaluate((pane, text) => {
+      const line = [...pane.querySelectorAll(".cm-line")].find((element) => element.textContent === text)!.getBoundingClientRect();
+      const gutter = pane.querySelector(".cm-foldGutter")!.getBoundingClientRect();
+      return { x: gutter.left + gutter.width / 2, y: line.top + line.height / 2 };
+    }, text);
+  // The handler for presses on line numbers took presses on fold arrows too.
+  // A Shift+click there selected from the cursor to the start of the
+  // heading's line, and the next key replaced the Markdown in between.
+  await caretInMarkdown("Text three.");
+  await shiftClickAt(await inFoldGutter("# One"));
+  await expect(placeholders).toHaveCount(1);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("X");
+  await expect(activeLine).toHaveText("Text three.X");
+  // A click there moved the cursor to the heading's line. Before that
+  // handler, Chromium focused CodeMirror's scroll container, and the next key
+  // was lost.
+  const second = await inFoldGutter("# Two");
+  await page.mouse.click(second.x, second.y);
+  await expect(placeholders).toHaveCount(2);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("Y");
+  // On a Shift+click beside a line without an arrow, Chromium selected from
+  // the cursor to the start of the Markdown, and the next key replaced it.
+  await shiftClickAt(await inFoldGutter("Text three.XY"));
+  await expect(placeholders).toHaveCount(2);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("Z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.XYZ"].join("\n\n") + "\n");
+});
+
+test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {
+  const file = path.join(directory, "table-add-focus.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "| Name | Notes |\n| --- | --- |\n| a1 | b1 |", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const table = documentView.locator("table.children");
+  const a1Cell = table.locator("td").filter({ hasText: "a1" });
+  /** Follow the border right of a1, or below it, to its add button, and
+   *  click the button. */
+  const clickAdd = async (axis: "col" | "row") => {
+    const a1 = (await a1Cell.boundingBox())!;
+    const handle = page.locator(`[data-role="${axis === "col" ? "y" : "x"}-line-drag-handle"]`);
+    if (axis === "col") await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
+    else await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
+    await expect(handle).toHaveAttribute("data-show", "true");
+    const plus = await centerOf(handle.locator(".add-button"));
+    if (axis === "col") await page.mouse.move(a1.x + a1.width - 2, plus.y, { steps: 10 });
+    else await page.mouse.move(plus.x + 2, a1.y + a1.height - 2, { steps: 10 });
+    await page.mouse.move(plus.x, plus.y, { steps: 2 });
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+  // The button took focus, and the table was drawn again without it, so
+  // focus went to the page and the next key was lost.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  await clickAdd("col");
+  await expect(table.locator(".selectedCell")).toHaveCount(2);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("x");
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  await clickAdd("row");
+  await expect(table.locator("tr")).toHaveCount(3);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "| Name | x  | Notes |\n| ---- | :- | ----- |\n| a1   |    | b1    |\n| y    |    |       |", "Last line."].join("\n\n") + "\n");
+});
+
+test("the selection toolbar hides once focus moves to the split's Markdown pane", async () => {
+  const file = path.join(directory, "toolbar-blur.md");
+  await writeFile(file, "First line.\n\nLast line.\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const toolbar = page.locator(".milkdown-toolbar");
+  await selectText("First line.");
+  await expect(toolbar).toHaveAttribute("data-show", "true");
+  // Crepe decides only when the document changes, so the toolbar stayed over
+  // the document and a click on it formatted the document's selection.
+  await caretInMarkdown("Last line.");
+  await expect(toolbar).toHaveAttribute("data-show", "false");
+  await expect(toolbar).toBeHidden();
+  await selectText("First line.");
+  await expect(toolbar).toHaveAttribute("data-show", "true");
+});
+
+test("a click on a task's box from the find card, the Markdown pane or a code block toggles it and puts the caret at the start of its text", async () => {
+  const file = path.join(directory, "task-box-focus.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "- [ ] task open", "Middle one.", "Middle two.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  /** Move the pointer onto the task's box, as a user does, so Crepe's block
+   *  handle, where it shows, moves beside the task first, and click it. */
+  const clickBox = async () => {
+    const box = (await documentView.locator(".milkdown-list-item-block .label-wrapper").boundingBox())!;
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(point.x + 60, point.y);
+    await page.mouse.move(point.x, point.y, { steps: 5 });
+    await expect.poll(() => page.locator(".milkdown-block-handle").evaluate((handle, left) => getComputedStyle(handle).opacity === "0" || handle.getBoundingClientRect().right <= left, box.x)).toBe(true);
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+  // Crepe focused the document at its old selection, out of sight while
+  // focus was elsewhere, and the next key replaced it.
+  await selectText("Last line.");
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  await clickBox();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  // From a code block, focus went back into the block, and the next key
+  // replaced the selected code.
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await page.keyboard.press("Shift+Home");
+  await clickBox();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("b");
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await clickBox();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("c");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "- [x] cbatask open", "Middle one.", "Middle two.", "Last line."].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);

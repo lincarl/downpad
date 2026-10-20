@@ -39,7 +39,8 @@ export interface FrontmatterPanelProps {
  * remains the source of truth; this component only projects the table model and
  * reports the minimally rewritten block to WysiwygEditor for serialization.
  * Each cell that shows text carries data-line and data-part, so find can
- * highlight its matches there (frontmatterFind.ts).
+ * highlight its matches there (frontmatterFind.ts), and so WysiwygEditor can
+ * keep focus where it was on a press outside these cells and the buttons.
  */
 export function FrontmatterPanel({ block, focus, onBlockChange }: FrontmatterPanelProps) {
   const table = parseFrontmatterTable(block);
