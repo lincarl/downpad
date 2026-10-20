@@ -3,8 +3,13 @@
 // shown in a muted suffix after the link text, middle-truncated, with the full
 // URL as its title. It also opens a link in the browser on Ctrl/Cmd-click. In
 // "text-only" mode no suffix is drawn (traditional rendering); Ctrl-click still
-// opens. A click opens the link of the image or the text under the pointer,
-// never the next one.
+// opens. A click opens the link of the image, the text or the suffix under the
+// pointer, never the next one.
+//
+// A Ctrl/Cmd-click that opens no link acts as a plain click. ProseMirror
+// selects the block under the pointer as a node on a click with that modifier
+// (Cmd on macOS, Ctrl elsewhere), and the block around it on the next one, so
+// the next key replaced a whole paragraph, heading or list.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
 // so it never becomes part of the document or the serialized markdown. It is
@@ -41,7 +46,7 @@
 // open itself is delegated to the app via ctx.openMarkdownFile.
 
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { AddMarkStep, RemoveMarkStep } from "@milkdown/kit/prose/transform";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -207,6 +212,38 @@ function clickedHref(view: EditorView, event: MouseEvent): string | null {
   return link && view.dom.contains(link) ? hrefAt(view.state.doc, view.posAtDOM(link, 0)) : null;
 }
 
+/** The href of the link whose URL suffix is under the pointer, or null. The
+ *  suffix takes no pointer events, so a click on it targets the block around
+ *  it, and the pointer is matched against the suffixes in that block. */
+function suffixHref(view: EditorView, event: MouseEvent): string | null {
+  const block = event.target instanceof Element && view.dom.contains(event.target) ? event.target : null;
+  for (const suffix of block?.querySelectorAll<HTMLElement>(".md-link-url") ?? []) {
+    const box = suffix.getBoundingClientRect();
+    const over = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+    // The suffix sits right after the last character of its link.
+    if (over) return hrefAt(view.state.doc, view.posAtDOM(suffix, 0) - 1);
+  }
+  return null;
+}
+
+/** Handle a Ctrl/Cmd-click that opens no link as ProseMirror handles a plain
+ *  click, at `pos`. That leaves the caret where the browser put it, selects
+ *  an image or other leaf node under the pointer, and, as ProseMirror does
+ *  for Chromium, moves a hidden node selection near the pointer, since
+ *  Chromium can report no change for a click at its hidden caret. */
+function clickAsPlain(view: EditorView, pos: number, event: MouseEvent): true {
+  const { doc, selection } = view.state;
+  const inside = view.posAtCoords({ left: event.clientX, top: event.clientY })?.inside ?? -1;
+  const leaf = inside >= 0 ? doc.nodeAt(inside) : null;
+  let next: Selection | null = null;
+  if (leaf?.isAtom && NodeSelection.isSelectable(leaf)) next = NodeSelection.create(doc, inside);
+  else if (!selection.visible && Math.min(Math.abs(pos - selection.from), Math.abs(pos - selection.to)) <= 2) next = Selection.near(doc.resolve(pos));
+  if (!next) return true;
+  if (!view.hasFocus()) view.focus();
+  if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
+  return true;
+}
+
 function openExternally(href: string): void {
   if (isElectron()) {
     void desktopBridge().openExternal(href).catch(() => {});
@@ -240,10 +277,10 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
     },
     props: {
       decorations: suffixesFor,
-      handleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
+      handleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
         if (!(event.ctrlKey || event.metaKey)) return false;
-        const href = clickedHref(view, event);
-        if (!href) return false;
+        const href = clickedHref(view, event) ?? suffixHref(view, event);
+        if (!href) return clickAsPlain(view, pos, event);
         event.preventDefault();
         openExternally(href);
         return true;

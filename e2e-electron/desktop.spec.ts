@@ -468,6 +468,68 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   await expect(page).toHaveTitle("two.md — md-easy");
 });
 
+test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", async () => {
+  const file = path.join(directory, "ctrl-click-plain.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "Before the link [docs](https://example.com/docs) after the link.",
+    "# Plain heading",
+    "- outer item\n  - inner item with words\n  - another inner",
+    "Text ![Bar](bar.svg) more words.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  const image = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
+  await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  const ctrlClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+  };
+  /** The selected text, and the element ProseMirror selected as a node. */
+  const selection = () => page.evaluate(() => ({
+    text: document.getSelection()!.toString(),
+    node: document.querySelector(".ProseMirror .ProseMirror-selectednode")?.tagName ?? null,
+  }));
+  // ProseMirror selected the paragraph, heading or list item under the
+  // pointer as a node, so the next key replaced all of it.
+  await ctrlClick(await pointOn(" after the link.", 3, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("a");
+  await ctrlClick(await pointOn("Plain heading", 2, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("b");
+  // A second Ctrl or Cmd+click inside a selected node selected the node around it.
+  await ctrlClick(await pointOn("inner item with words", 2, 0.25));
+  await ctrlClick(await pointOn("inner item with words", 17, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("c");
+  // On an image it selects the image, as a plain click does, also the
+  // second time. Right after the selected image it puts the caret there,
+  // where Chromium can report no change of the selection.
+  const box = (await image.boundingBox())!;
+  await ctrlClick({ x: box.x + box.width * 0.3, y: box.y + box.height / 2 });
+  await ctrlClick({ x: box.x + box.width * 0.7, y: box.y + box.height / 2 });
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await ctrlClick(await pointOn(" more words.", 0, 0.3));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Before the link [docs](https://example.com/docs) afater the link.",
+    "# Plbain heading",
+    "- outer item\n  - inner item with wcords\n  - another inner",
+    "Text ![Bar](bar.svg)d more words.",
+  ].join("\n\n") + "\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([]);
+});
+
 test("text typed, composed or pasted right after a link goes after it", async () => {
   const file = path.join(directory, "after-link.md");
   await writeFile(file, [
@@ -715,7 +777,7 @@ test("the caret at a link's end is drawn after its URL, and before it on the lin
   expect(Math.abs(caret - right)).toBeLessThanOrEqual(2);
 });
 
-test("a click on the URL shown after a link puts the caret at the link's end", async () => {
+test("a click on the URL shown after a link puts the caret at the link's end, and Ctrl or Cmd+click opens that link", async () => {
   const file = path.join(directory, "click-url.md");
   const blocks = [
     "Intro [one](https://example.com/1)",
@@ -724,6 +786,7 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
     "A [four](https://example.com/4)s and more.",
     "- item [five](https://example.com/5)\n- second",
     "B [six](https://example.com/6) and then more.",
+    "C [seven](https://example.com/7)[eight](https://example.com/8) end.",
   ];
   await writeFile(file, blocks.join("\n\n") + "\n");
   await launch(file);
@@ -735,7 +798,7 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
     };
   });
   const urls = page.locator(".milkdown .ProseMirror .md-link-url");
-  await expect(urls).toHaveCount(6);
+  await expect(urls).toHaveCount(8);
   /** Click `fraction` of the way across the URL shown after link `index`. */
   const clickUrl = async (index: number, fraction: number) => {
     const box = (await urls.nth(index).boundingBox())!;
@@ -748,14 +811,14 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
     await page.keyboard.type(typed);
   }
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe([
+  const edited = [
     "Intro [one](https://example.com/1)a",
     "Intro [two](https://example.com/2)b",
     "Intro [three](https://example.com/3)c",
     "A [four](https://example.com/4)ds and more.",
     "- item [five](https://example.com/5)e\n- second",
-    blocks[5],
-  ].join("\n\n") + "\n");
+  ];
+  await expect.poll(() => readFile(file, "utf8")).toBe([...edited, ...blocks.slice(5)].join("\n\n") + "\n");
   // Shift+click on the URL extends the selection to the link's end.
   await clickOn(" and then more.", 10, 0.25);
   await page.keyboard.down("Shift");
@@ -763,14 +826,19 @@ test("a click on the URL shown after a link puts the caret at the link's end", a
   await page.keyboard.up("Shift");
   await page.keyboard.press("ControlOrMeta+c");
   await expect.poll(clipboardText).toBe(" and then ");
-  // The URL is not part of the link, so Ctrl or Cmd+click on it opens
-  // nothing. The link itself opens last, so anything the URL opened is in by then.
-  for (const click of [() => clickUrl(5, 0.5), () => clickOn("six", 1, 0.5)]) {
+  // Ctrl or Cmd+click on the URL opens the link before it, also when another
+  // link follows right after it. It opened nothing and selected the whole
+  // paragraph, so the next key replaced it. Now the caret goes to the end of
+  // the link, as on a plain click on the URL.
+  for (const index of [6, 5]) {
     await page.keyboard.down("ControlOrMeta");
-    await click();
+    await clickUrl(index, 0.5);
     await page.keyboard.up("ControlOrMeta");
   }
-  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/7", "https://example.com/6"]);
+  await page.keyboard.type("f");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([...edited, "B [six](https://example.com/6)f and then more.", blocks[6]].join("\n\n") + "\n");
 });
 
 test("a change the browser makes inside a link while the caret rests at its end keeps the link", async () => {
