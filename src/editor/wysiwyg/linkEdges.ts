@@ -92,7 +92,7 @@ function linkSide(tr: Transaction, side: number | null, before: EditorState, aft
 
 /** The caret position when the caret is on a link's side at its edge, where
  *  typing goes into the link, or null. */
-export function linkSideCaret(state: EditorState): number | null {
+function linkSideCaret(state: EditorState): number | null {
   const side = linkSideKey.getState(state) ?? null;
   return side !== null && side === caretOf(state)?.pos ? side : null;
 }

@@ -603,7 +603,7 @@ test("Left at a link's end where text follows types into the link", async () => 
 
 test("the caret at a link's end is drawn after its URL, and before it on the link's side", async () => {
   const file = path.join(directory, "link-caret.md");
-  await writeFile(file, "Intro [link](https://example.com/a)\n\nA [link](https://example.com/b)s and more.\n");
+  await writeFile(file, "Intro [link](https://example.com/a)\n\nA [link](https://example.com/b)s and more.\n\nTwo [one](https://example.com/1)[two](https://example.com/2) end\n");
   await launch(file);
   /** Where the virtual cursor draws the caret, and the edges of the URL
    *  shown after the link of paragraph `index`, in pixels. */
@@ -636,6 +636,17 @@ test("the caret at a link's end is drawn after its URL, and before it on the lin
     const { caret, left } = await measure(1);
     return caret - left;
   }).toBeLessThanOrEqual(0);
+  // Between two links, Right keeps the caret in place on the second link's
+  // side, where typed text joins that link after the first link's URL.
+  await clickOn("one", -1, 0.75);
+  await expect.poll(async () => {
+    const { caret, right } = await measure(2);
+    return Math.abs(caret - right);
+  }).toBeLessThanOrEqual(2);
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".prosemirror-virtual-cursor")).toHaveClass(/prosemirror-virtual-cursor-right/);
+  const { caret, right } = await measure(2);
+  expect(Math.abs(caret - right)).toBeLessThanOrEqual(2);
 });
 
 test("a click on the URL shown after a link puts the caret at the link's end", async () => {

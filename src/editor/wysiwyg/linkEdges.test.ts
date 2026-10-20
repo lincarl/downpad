@@ -239,6 +239,18 @@ describe("the URL shown after a link", () => {
     expect(suffixSide(view, end)).toBe(1);
   });
 
+  it("is drawn before a caret that types into the link right after it", { timeout: 60_000 }, async () => {
+    const { editor, view } = await open("Two [one](https://e.com/1)[two](https://e.com/2) end\n");
+    const end = at(view, "one");
+    caret(view, end);
+    // The virtual cursor's Right there sets the next link as stored marks
+    // without moving the caret.
+    view.dispatch(view.state.tr.setStoredMarks(view.state.doc.resolve(end + 1).marks()));
+    expect(suffixSide(view, end)).toBe(-1);
+    type(view, "x");
+    expect(editor.getMarkdown()).toBe("Two [one](https://e.com/1)[xtwo](https://e.com/2) end\n");
+  });
+
   it("stays after a selection that ends at the link's end", { timeout: 60_000 }, async () => {
     const { view } = await open("Intro [link](https://e.com/a)\n");
     const end = at(view, "link");

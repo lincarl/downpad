@@ -26,9 +26,10 @@
 // kept the composition, but Chromium then lost the caret when a composition
 // there was emptied, and the next one went in at the paragraph's start.
 //
-// A plain caret at a link's end, where typed text goes outside the link
-// (linkEdges.ts), is drawn after the suffix, where that text shows. A caret
-// there on the link's side, where typed text joins the link, and a selection
+// A caret at a link's end is drawn after the suffix when text typed there
+// goes outside the link, such as at a plain caret (linkEdges.ts) or into a
+// link right after it, because that text shows after the suffix. A caret
+// there that types into the link, as on the link's side, and a selection
 // that ends there stay before the suffix. Drawing the suffix before a
 // selection's end made Chromium type over the selection outside the <a>,
 // which ProseMirror read as taking the link off the retyped text.
@@ -47,7 +48,6 @@ import { isElectron } from "../../ipc/env";
 import { desktopBridge } from "../../ipc/bridge";
 import { resolveMarkdownLinkTarget } from "../../images/pathResolve";
 import type { WysiwygContext } from "./context";
-import { linkSideCaret } from "./linkEdges";
 
 export const linkUrlKey = new PluginKey<LinkUrlState>("md-easy-link-url");
 
@@ -155,17 +155,19 @@ interface LinkUrlState {
   decorations: DecorationSet;
 }
 
-/** The suffixes of `state`, with the suffix at a plain caret at a link's end
- *  drawn after the caret, where text typed there goes (see the header). */
+/** The suffixes of `state`. The suffix at a caret is drawn before the caret,
+ *  unless text typed there joins the suffix's link (see the header). */
 function suffixesFor(state: EditorState): DecorationSet | undefined {
   const set = linkUrlKey.getState(state)?.decorations;
   const { selection } = state;
-  const caret = selection instanceof TextSelection && selection.empty ? selection.head : null;
-  if (!set || caret === null || linkSideCaret(state) === caret) return set;
-  const [suffix] = set.find(caret, caret, (spec: { key?: string }) => !!spec.key?.startsWith(SUFFIX_KEY));
+  const $caret = selection instanceof TextSelection ? selection.$cursor : null;
+  if (!set || !$caret) return set;
+  const [suffix] = set.find($caret.pos, $caret.pos, (spec: { key?: string }) => !!spec.key?.startsWith(SUFFIX_KEY));
   if (!suffix) return set;
   const spec = suffix.spec as { key: string; href: string };
-  const after = Decoration.widget(caret, makeSuffix(spec.href), { ...spec, side: -1, key: `${spec.key}:after` });
+  const typed = state.storedMarks ?? $caret.marks();
+  if (typed.some((mark) => mark.type.name === "link" && mark.attrs.href === spec.href)) return set;
+  const after = Decoration.widget($caret.pos, makeSuffix(spec.href), { ...spec, side: -1, key: `${spec.key}:after` });
   return set.remove([suffix]).add(state.doc, [after]);
 }
 
