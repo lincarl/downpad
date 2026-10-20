@@ -51,6 +51,7 @@ import {
   type FindOptions,
 } from "./findEngine";
 import { codeBlockFindHighlights } from "./findReveal";
+import { codeBlockClicks } from "./codeBlockClicks";
 import { findChangeListener } from "./findChanges";
 import { DocumentFind } from "./documentFind";
 import type { WysiwygContext } from "./context";
@@ -231,11 +232,12 @@ export class WysiwygEditor {
       // split.body === initial when there is no frontmatter.
       defaultValue: split.body,
       featureConfigs: {
-        // Render ```mermaid code blocks as diagrams below the source (§5.2), and
-        // show the find card's matches inside code blocks (§5.13).
+        // Render ```mermaid code blocks as diagrams below the source (§5.2),
+        // show the find card's matches inside code blocks (§5.13), and add a
+        // cursor on Ctrl or Cmd+click only in a block that has focus.
         [Crepe.Feature.CodeMirror]: {
           renderPreview: renderMermaidPreview,
-          extensions: [codeBlockFindHighlights],
+          extensions: [codeBlockFindHighlights, codeBlockClicks],
         },
         // Display linked images + missing-image placeholder/relocate (§5.5).
         [Crepe.Feature.ImageBlock]: imageConfig,

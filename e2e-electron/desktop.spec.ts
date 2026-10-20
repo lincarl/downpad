@@ -620,6 +620,31 @@ test("Ctrl or Cmd+click inside a selection puts the caret where it lands", async
   expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
 });
 
+test("Ctrl or Cmd+click in a code block adds a cursor only once the block has focus", async () => {
+  const file = path.join(directory, "ctrl-click-code.md");
+  await writeFile(file, ["Intro line here.", "```\nconst code = 1;\nlet other = 2;\n```", "Outro line."].join("\n\n") + "\n");
+  await launch(file);
+  const block = page.locator(".milkdown .ProseMirror .milkdown-code-block");
+  await expect(block.locator(".cm-line")).toHaveCount(2);
+  const ctrlClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+  };
+  await clickOn("Intro line here.", 3, 0.25);
+  // CodeMirror added a cursor to the one at the block's start, which the user
+  // had not put there, so typing went in at both.
+  await ctrlClick(await pointOn("let other = 2;", 6, 0.25));
+  await expect(block.locator(".cm-cursor")).toHaveCount(1);
+  await page.keyboard.type("q");
+  // In the block that has focus, it still adds a cursor.
+  await ctrlClick(await pointOn("const code = 1;", 6, 0.25));
+  await expect(block.locator(".cm-cursor")).toHaveCount(2);
+  await page.keyboard.type("w");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro line here.", "```\nconst wcode = 1;\nlet otqwher = 2;\n```", "Outro line."].join("\n\n") + "\n");
+});
+
 test("Shift+click or Shift+drag on a link's text extends the selection", async () => {
   const file = path.join(directory, "shift-click-link.md");
   await writeFile(file, [
