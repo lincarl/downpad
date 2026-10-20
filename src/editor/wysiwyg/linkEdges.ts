@@ -10,6 +10,8 @@
 // for text put in at the caret, such as typed text, an input method's
 // composition, a paste of plain text or a command's insert. The virtual
 // cursor draws its tail from them too, so the tail shows the plain side.
+// Deleting a link's whole text stores the link for the caret left where it
+// was, inside the text around it, and the caret gets the marks there instead.
 //
 // Two cases keep typing in the link, on the link's side (`linkSide`). Where
 // text follows a link, the virtual cursor's Left at the link's end sets the
@@ -29,11 +31,11 @@ import { Mark, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { $prose } from "@milkdown/kit/utils";
 
-/** The link in `marks` that starts or ends at `$pos`, so text put in there
- *  would join it from one side, or null. A link on both sides of `$pos` is
- *  one the position is inside. */
+/** The link in `marks` that `$pos` is not inside, so text put in there would
+ *  join it from one side or start it anew, or null. A link on both sides of
+ *  `$pos` is one the position is inside. Such a link starts or ends at
+ *  `$pos`, or is no longer there at all, as after its whole text was deleted. */
 function edgeLink($pos: ResolvedPos, marks: readonly Mark[]): Mark | null {
-  if ($pos.textOffset > 0) return null;
   const link = $pos.doc.type.schema.marks.link?.isInSet(marks);
   if (!link) return null;
   const { nodeBefore, nodeAfter } = $pos;
@@ -48,7 +50,7 @@ function caretOf(state: EditorState): ResolvedPos | null {
 }
 
 /** The marks that text put in at the caret of `state` gets, without a link
- *  that starts or ends there, or null when they hold no such link. */
+ *  the caret is not inside, or null when they hold no such link. */
 function plainMarksAt(state: EditorState): readonly Mark[] | null {
   const $cursor = caretOf(state);
   if (!$cursor) return null;

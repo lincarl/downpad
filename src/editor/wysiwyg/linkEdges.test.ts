@@ -144,6 +144,20 @@ describe("text put in at a link's edge", () => {
     expect(editor.getMarkdown()).toBe("Intro [lin](https://e.com/a)x\n");
   });
 
+  it.each([
+    ["in a line", "A [link](https://e.com/s) b.\n", "A xy b.\n"],
+    ["between letters", "a[link](https://e.com/s)b\n", "axyb\n"],
+    ["at the end of a paragraph", "Intro [link](https://e.com/a)\n", "Intro xy\n"],
+  ])("is plain where a link's whole text was deleted %s", { timeout: 60_000 }, async (_where, markdown, expected) => {
+    const { editor, view } = await open(markdown);
+    select(view, at(view, "link", true), at(view, "link"));
+    // As Backspace, Delete and Ctrl+X do, which store the deleted text's marks.
+    view.dispatch(view.state.tr.deleteSelection());
+    type(view, "x");
+    type(view, "y");
+    expect(editor.getMarkdown()).toBe(expected);
+  });
+
   it("is plain for a paste and for Ctrl+B at the end of a link", { timeout: 60_000 }, async () => {
     const { editor, view } = await open("Intro [link](https://e.com/a)\n\nNext [two](https://e.com/2)\n");
     caret(view, at(view, "link"));

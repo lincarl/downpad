@@ -394,6 +394,16 @@ async function clickOn(text: string, index: number, fraction: number): Promise<v
   await page.mouse.click(point.x, point.y);
 }
 
+/** Select the first text node that reads `text` from its end with the
+ *  keyboard, as a double-click on Windows would also select a space after
+ *  it. ProseMirror reads a selection when the browser reports it, which can
+ *  come after a key pressed right away, so this has it read it now. */
+async function selectText(text: string): Promise<void> {
+  await clickOn(text, -1, 0.75);
+  for (let i = 0; i < text.length; i++) await page.keyboard.press("Shift+ArrowLeft");
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+}
+
 test("Ctrl or Cmd+click and double-click on either half of a character follow only that character's link", async () => {
   const file = path.join(directory, "text-links.md");
   await writeFile(path.join(directory, "two.md"), "# Two\n");
@@ -585,6 +595,22 @@ test("an input method's composition right after a link goes in once", async () =
   await compose(["か", "かな"], "かな");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe([...composed, "Text only [five](https://example.com/5)かな"].join("\n\n") + "\n");
+});
+
+test("text typed where a link's whole text was deleted is plain", async () => {
+  const file = path.join(directory, "deleted-link.md");
+  await writeFile(file, "A [link](https://example.com/a) b.\n\nC [text](https://example.com/c) d.\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(2);
+  // ProseMirror keeps the deleted text's link for the next character typed.
+  await selectText("link");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("xy");
+  await selectText("text");
+  await page.keyboard.press("ControlOrMeta+x");
+  await page.keyboard.type("zw");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("A xy b.\n\nC zw d.\n");
 });
 
 test("Left at a link's end where text follows types into the link", async () => {
