@@ -115,10 +115,12 @@ describe("a selected block that the page moves to the start of the document", ()
   const code = (name: string) => "```js\nconst " + name + " = 1;\n```";
   const markdown = ["# Head", code("a"), "![Pic](pic.png)", code("b")].join("\n\n") + "\n";
 
-  /** Open the document, focus it and select its image, as a click does, then
-   *  let the time pass in which ProseMirror's own check after focus runs. */
-  async function selectImage(): Promise<{ view: EditorView; image: number; heading: Text }> {
-    const view = await mount(markdown, true);
+  /** Open `source`, focus it and select its image, as a click does, then let
+   *  the time pass in which ProseMirror's own check after focus runs. `start`
+   *  is the node at whose start Chromium puts the caret when it moves the
+   *  selection, the heading's text or, before a rule, the document. */
+  async function selectImage(source = markdown): Promise<{ view: EditorView; image: number; start: Node }> {
+    const view = await mount(source, true);
     let image = -1;
     view.state.doc.descendants((node, pos) => {
       if (node.type.name === "image-block") image = pos;
@@ -126,7 +128,7 @@ describe("a selected block that the page moves to the start of the document", ()
     view.dom.focus();
     view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, image)));
     await vi.advanceTimersByTimeAsync(500);
-    return { view, image, heading: view.dom.querySelector("h1")!.firstChild as Text };
+    return { view, image, start: view.dom.querySelector("h1")?.firstChild ?? view.dom };
   }
 
   /** Press `key` on the editor without a default action, as jsdom has none. */
@@ -134,28 +136,28 @@ describe("a selected block that the page moves to the start of the document", ()
     view.dom.dispatchEvent(new KeyboardEvent("keydown", { key, keyCode, bubbles: true, cancelable: true }));
   }
 
-  /** Move the DOM selection to the start of the heading, as Chromium does,
-   *  and report it after `wait` ms. */
-  async function moveToStart(heading: Text, wait = 20): Promise<void> {
-    document.getSelection()!.collapse(heading, 0);
+  /** Move the DOM selection to the start of `node`, as Chromium does, and
+   *  report it after `wait` ms. */
+  async function moveToStart(node: Node, wait = 20): Promise<void> {
+    document.getSelection()!.collapse(node, 0);
     await vi.advanceTimersByTimeAsync(wait);
     document.dispatchEvent(new Event("selectionchange"));
     await settle();
   }
 
   it("keeps the block selected when the move came with no input", async () => {
-    const { view, image, heading } = await selectImage();
-    await moveToStart(heading);
+    const { view, image, start } = await selectImage();
+    await moveToStart(start);
     expect(view.state.selection).toBeInstanceOf(NodeSelection);
     expect(view.state.selection.from).toBe(image);
     expect(document.getSelection()!.anchorNode).toBe(view.dom);
   });
 
   it("keeps the block selected for a key that comes before ProseMirror reads the move, and the key replaces it", async () => {
-    const { view, heading } = await selectImage();
+    const { view, start } = await selectImage();
     // Chromium moves the selection right before the key's events, and
     // reports the move while they are handled.
-    document.getSelection()!.collapse(heading, 0);
+    document.getSelection()!.collapse(start, 0);
     keydown(view, "Q", 81);
     document.dispatchEvent(new Event("selectionchange"));
     await settle();
@@ -164,18 +166,28 @@ describe("a selected block that the page moves to the start of the document", ()
     expect(editor!.getMarkdown()).toBe(["# Head", code("a"), "Q", code("b")].join("\n\n") + "\n");
   });
 
+  it("keeps the block selected when the page moves the selection before a rule at the start", async () => {
+    const { view, image, start } = await selectImage(["---", code("a"), "![Pic](pic.png)", code("b")].join("\n\n") + "\n");
+    expect(view.state.doc.firstChild!.type.name).toBe("hr");
+    // ProseMirror reads the caret before the rule as a gap cursor, not a
+    // caret in the first text.
+    await moveToStart(start);
+    expect(view.state.selection).toBeInstanceOf(NodeSelection);
+    expect(view.state.selection.from).toBe(image);
+  });
+
   it("keeps the block selected after Shift on its own", async () => {
-    const { view, image, heading } = await selectImage();
+    const { view, image, start } = await selectImage();
     keydown(view, "Shift", 16);
-    await moveToStart(heading);
+    await moveToStart(start);
     expect(view.state.selection.from).toBe(image);
     expect(view.state.selection).toBeInstanceOf(NodeSelection);
   });
 
   it("takes a move after a key the browser handles, such as Page Up", async () => {
-    const { view, heading } = await selectImage();
+    const { view, start } = await selectImage();
     keydown(view, "PageUp", 33);
-    await moveToStart(heading);
+    await moveToStart(start);
     expect(view.state.selection).toBeInstanceOf(TextSelection);
     expect(view.state.selection.from).toBe(1);
   });

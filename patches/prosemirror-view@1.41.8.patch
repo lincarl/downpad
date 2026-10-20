@@ -1,8 +1,8 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e193f75f39 100644
+index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..e7760ea46ba2f8a1682bfa42be12f65035058cad 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -2317,6 +2317,20 @@ function hasFocusAndSelection(view) {
+@@ -2317,6 +2317,23 @@ function hasFocusAndSelection(view) {
    if (view.editable && !view.hasFocus()) return false;
    return hasSelection(view);
  }
@@ -15,15 +15,18 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
 +// is such a selection, so the next key went to the start of the document. A
 +// move there is Chromium's when no input that can move the selection, a
 +// click, a touch or a key other than a modifier, came since ProseMirror put
-+// its selection in the DOM. The selection then goes back.
++// its selection in the DOM. The selection then goes back. ProseMirror reads
++// the start of the document as a caret in its first text, or as a gap cursor
++// before a block that takes no caret, such as a horizontal rule, so a
++// selection that starts at or before the first text is at the start.
 +function pageReset(view, domSel) {
-+  var readSel;
-+  return !(view.state.selection instanceof prosemirrorState.TextSelection) && view.input.selectionMoves == view.domObserver.selectionMoves && selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) && readSel.eq(prosemirrorState.Selection.findFrom(view.state.doc.resolve(0), 1, true));
++  var readSel, firstText;
++  return !(view.state.selection instanceof prosemirrorState.TextSelection) && view.input.selectionMoves == view.domObserver.selectionMoves && selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) && readSel.from <= ((firstText = prosemirrorState.Selection.findFrom(view.state.doc.resolve(0), 1, true)) ? firstText.from : 0);
 +}
  function hasSelection(view) {
    var sel = view.domSelectionRange();
    if (!sel.anchorNode) return false;
-@@ -2910,6 +2924,9 @@ var InputState = _createClass(function InputState() {
+@@ -2910,6 +2927,9 @@ var InputState = _createClass(function InputState() {
    };
    this.lastSelectionOrigin = null;
    this.lastSelectionTime = 0;
@@ -33,7 +36,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
    this.lastIOSEnter = 0;
    this.lastIOSEnterFallbackTimeout = -1;
    this.lastFocus = 0;
-@@ -2944,10 +2961,15 @@ function initInput(view) {
+@@ -2944,10 +2964,15 @@ function initInput(view) {
    });
    ensureListeners(view);
  }
@@ -49,7 +52,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
  function destroyInput(view) {
    view.domObserver.stop();
    for (var type in view.input.eventHandlers) view.dom.removeEventListener(type, view.input.eventHandlers[type]);
-@@ -2980,6 +3002,10 @@ editHandlers.keydown = function (view, _event) {
+@@ -2980,6 +3005,10 @@ editHandlers.keydown = function (view, _event) {
    var event = _event;
    view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
    if (inOrNearComposition(view, event)) return;
@@ -60,7 +63,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
    view.input.lastKeyCode = event.keyCode;
    view.input.lastKeyCodeTime = Date.now();
    if (android && chrome && event.keyCode == 13) return;
-@@ -3000,7 +3026,7 @@ editHandlers.keydown = function (view, _event) {
+@@ -3000,7 +3029,7 @@ editHandlers.keydown = function (view, _event) {
    }) || captureKeyDown(view, event)) {
      event.preventDefault();
    } else {
@@ -69,7 +72,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
    }
  };
  editHandlers.keyup = function (view, event) {
-@@ -3563,8 +3589,12 @@ handlers.focus = function (view) {
+@@ -3563,8 +3592,12 @@ handlers.focus = function (view) {
      view.dom.classList.add("ProseMirror-focused");
      view.domObserver.start();
      view.focused = true;
@@ -83,7 +86,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
      }, 20);
    }
  };
-@@ -4232,6 +4262,9 @@ var DOMObserver = function () {
+@@ -4232,6 +4265,9 @@ var DOMObserver = function () {
      this.flushingSoon = -1;
      this.observer = null;
      this.currentSelection = new SelectionState();
@@ -93,7 +96,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
      this.onCharData = null;
      this.suppressingSelectionUpdates = false;
      this.lastChangedTextNode = null;
-@@ -4341,6 +4374,7 @@ var DOMObserver = function () {
+@@ -4341,6 +4377,7 @@ var DOMObserver = function () {
      key: "setCurSelection",
      value: function setCurSelection() {
        this.currentSelection.set(this.view.domSelectionRange());
@@ -101,7 +104,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
      }
    }, {
      key: "ignoreSelectionChange",
-@@ -4460,6 +4494,9 @@ var DOMObserver = function () {
+@@ -4460,6 +4497,9 @@ var DOMObserver = function () {
          selectionToDOM(view);
          this.currentSelection.set(sel);
          view.scrollToSelection();
@@ -112,10 +115,10 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..36003c34c7aff9c80cf32e3a5ded66e1
          if (from > -1) {
            view.docView.markDirty(from, to);
 diff --git a/dist/index.js b/dist/index.js
-index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7a80bbcf7 100644
+index 2f19364145a8bb8c0f44c738d58271c76078e6f9..981f169d289ee4f2734c1804078b5804c59eb15f 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -2385,6 +2385,23 @@ function hasFocusAndSelection(view) {
+@@ -2385,6 +2385,26 @@ function hasFocusAndSelection(view) {
          return false;
      return hasSelection(view);
  }
@@ -128,18 +131,21 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
 +// is such a selection, so the next key went to the start of the document. A
 +// move there is Chromium's when no input that can move the selection, a
 +// click, a touch or a key other than a modifier, came since ProseMirror put
-+// its selection in the DOM. The selection then goes back.
++// its selection in the DOM. The selection then goes back. ProseMirror reads
++// the start of the document as a caret in its first text, or as a gap cursor
++// before a block that takes no caret, such as a horizontal rule, so a
++// selection that starts at or before the first text is at the start.
 +function pageReset(view, domSel) {
-+    let readSel;
++    let readSel, firstText;
 +    return !(view.state.selection instanceof TextSelection) &&
 +        view.input.selectionMoves == view.domObserver.selectionMoves &&
 +        selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) &&
-+        readSel.eq(Selection.findFrom(view.state.doc.resolve(0), 1, true));
++        readSel.from <= ((firstText = Selection.findFrom(view.state.doc.resolve(0), 1, true)) ? firstText.from : 0);
 +}
  function hasSelection(view) {
      let sel = view.domSelectionRange();
      if (!sel.anchorNode)
-@@ -3063,6 +3080,9 @@ class InputState {
+@@ -3063,6 +3083,9 @@ class InputState {
          this.lastClick = { time: 0, x: 0, y: 0, type: "", button: 0 };
          this.lastSelectionOrigin = null;
          this.lastSelectionTime = 0;
@@ -149,7 +155,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
          this.lastIOSEnter = 0;
          this.lastIOSEnterFallbackTimeout = -1;
          this.lastFocus = 0;
-@@ -3098,10 +3118,15 @@ function initInput(view) {
+@@ -3098,10 +3121,15 @@ function initInput(view) {
          view.dom.addEventListener("input", () => null);
      ensureListeners(view);
  }
@@ -166,7 +172,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
  function destroyInput(view) {
      view.domObserver.stop();
      for (let type in view.input.eventHandlers)
-@@ -3143,6 +3168,11 @@ editHandlers.keydown = (view, _event) => {
+@@ -3143,6 +3171,11 @@ editHandlers.keydown = (view, _event) => {
      view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
      if (inOrNearComposition(view, event))
          return;
@@ -178,7 +184,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
      view.input.lastKeyCode = event.keyCode;
      view.input.lastKeyCodeTime = Date.now();
      // Suppress enter key events on Chrome Android, because those tend
-@@ -3170,7 +3200,7 @@ editHandlers.keydown = (view, _event) => {
+@@ -3170,7 +3203,7 @@ editHandlers.keydown = (view, _event) => {
          event.preventDefault();
      }
      else {
@@ -187,7 +193,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
      }
  };
  editHandlers.keyup = (view, event) => {
-@@ -3816,8 +3846,13 @@ handlers.focus = view => {
+@@ -3816,8 +3849,13 @@ handlers.focus = view => {
          view.dom.classList.add("ProseMirror-focused");
          view.domObserver.start();
          view.focused = true;
@@ -202,7 +208,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
                  selectionToDOM(view);
          }, 20);
      }
-@@ -4581,6 +4616,9 @@ class DOMObserver {
+@@ -4581,6 +4619,9 @@ class DOMObserver {
          this.flushingSoon = -1;
          this.observer = null;
          this.currentSelection = new SelectionState;
@@ -212,7 +218,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
          this.onCharData = null;
          this.suppressingSelectionUpdates = false;
          this.lastChangedTextNode = null;
-@@ -4677,6 +4715,7 @@ class DOMObserver {
+@@ -4677,6 +4718,7 @@ class DOMObserver {
      }
      setCurSelection() {
          this.currentSelection.set(this.view.domSelectionRange());
@@ -220,7 +226,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..2f7837bd1a6a67c726eca0e7a03320a7
      }
      ignoreSelectionChange(sel) {
          if (!sel.focusNode)
-@@ -4771,6 +4810,10 @@ class DOMObserver {
+@@ -4771,6 +4813,10 @@ class DOMObserver {
              this.currentSelection.set(sel);
              view.scrollToSelection();
          }
