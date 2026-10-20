@@ -311,6 +311,85 @@ test("Shift+click on a missing image chip extends the selection to it", async ()
   expect(await app!.evaluate(() => Reflect.get(globalThis, "dialogs"))).toBe(0);
 });
 
+test("a key typed over an image or code block selected between images and code blocks replaces it", async () => {
+  // Chromium cannot show a selected block between two blocks that take no
+  // caret, and moves such a selection to the start of the document whenever
+  // the page takes focus. Playwright focuses the page before each key and
+  // mouse event it sends, as the window does when it is activated again.
+  const file = path.join(directory, "between-blocks.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const code = (name: string) => `\`\`\`js\nconst ${name} = 1;\n\`\`\``;
+  const blocks = [
+    "# Blocks",
+    code("one"),
+    "![Shown](pic.svg)",
+    code("two"),
+    "![Gone](missing.png)",
+    code("three"),
+    "Arrow from here.",
+    "![Near](pic.svg)",
+    "![Far](far.png)",
+    code("four"),
+    "![Top](pic.svg)",
+    code("five"),
+    "![Bottom](pic.svg)",
+    "Last line.",
+  ];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  // A click on a missing image opens a file dialog. Cancel it.
+  await app!.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
+  });
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-block");
+  await expect(images).toHaveCount(6);
+  /** Type the capital `letter` with Shift, save, and expect it in the file
+   *  in place of `block`. Shift on its own also gives Chromium a chance to
+   *  move the selection before ProseMirror reads the letter. */
+  const typeOver = async (letter: string, block: string) => {
+    await page.keyboard.press(`Shift+Key${letter}`);
+    await page.keyboard.press("ControlOrMeta+s");
+    blocks[blocks.indexOf(block)] = letter;
+    await expect.poll(() => readFile(file, "utf8")).toBe(blocks.join("\n\n") + "\n");
+  };
+  // Each step replaces a block below the ones the later steps select, so
+  // their neighbours stay as they are.
+  // A code block between two images, which its handle selects.
+  const five = page.locator(".milkdown .ProseMirror .milkdown-code-block").filter({ hasText: "const five" });
+  await five.scrollIntoViewIfNeeded();
+  const fiveBox = (await five.boundingBox())!;
+  await page.mouse.move(fiveBox.x + 10, fiveBox.y + fiveBox.height / 2);
+  const grip = page.locator(".milkdown-block-handle .operation-item").last();
+  await expect.poll(async () => {
+    const box = await grip.boundingBox();
+    return !!box && box.y < fiveBox.y + fiveBox.height && box.y + box.height > fiveBox.y;
+  }).toBe(true);
+  const gripBox = (await grip.boundingBox())!;
+  await page.mouse.click(gripBox.x + gripBox.width / 2, gripBox.y + gripBox.height / 2);
+  await typeOver("D", code("five"));
+  // A missing image after another image, which Right selects from the line
+  // before them, after the first image and the gap between the two.
+  await page.locator(".milkdown .ProseMirror > p", { hasText: "Arrow from here." }).scrollIntoViewIfNeeded();
+  await clickOn("Arrow from here.", -1, 0.75);
+  await page.keyboard.press("End");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+  await expect(images.nth(3)).toHaveClass(/\bselected\b/);
+  await typeOver("C", "![Far](far.png)");
+  // A missing image between code blocks, which a click selects.
+  await images.nth(1).click();
+  await expect(images.nth(1)).toHaveClass(/\bselected\b/);
+  await typeOver("B", "![Gone](missing.png)");
+  // An image between code blocks stays selected when the selection moves
+  // with no key or click, as on a mouse move here.
+  await images.first().click();
+  await expect(images.first()).toHaveClass(/\bselected\b/);
+  const shownBox = (await images.first().boundingBox())!;
+  await page.mouse.move(shownBox.x + 4, shownBox.y + 4);
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+  await expect(images.first()).toHaveClass(/\bselected\b/);
+  await typeOver("A", "![Shown](pic.svg)");
+});
+
 test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
   const file = path.join(directory, "image-links.md");
   // An image wide enough to click either half of.
