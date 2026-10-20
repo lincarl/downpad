@@ -43,7 +43,7 @@ import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
 import { tableCellClicks } from "./tableCellClicks";
-import { dropAtEdge, tableDropIndicator } from "./dropEdge";
+import { dropAtEdge, dropsBesideBlocks } from "./dropEdge";
 import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
@@ -291,18 +291,18 @@ export class WysiwygEditor {
     // Must follow the Table feature so this view replaces Crepe's.
     this.crepe.editor.use(tableCellClicks);
     // A dropped block or text goes in at the edge under the pointer as the page
-    // is at the drop, and on or beside a table above or below it, never
-    // between its rows or cells. As a prop of the view itself, the drop
-    // handler runs before the drop indicator's. The plugin moves the
-    // indicator's line to that table edge, so it must follow the Cursor
-    // feature.
+    // is at the drop, and on or beside a table or on a code block above or
+    // below it, never between a table's rows or cells or into the code. As a
+    // prop of the view itself, the drop handler runs before the drop
+    // indicator's. The plugin takes drops on code blocks and moves the
+    // indicator's line to those edges, so it must follow the Cursor feature.
     this.crepe.editor.config((ctx) => {
       ctx.update(editorViewOptionsCtx, (prev) => ({
         ...prev,
         handleDrop: (view, event, slice, moved) => dropAtEdge(view, event, slice, moved) || (prev.handleDrop?.(view, event, slice, moved) ?? false),
       }));
     });
-    this.crepe.editor.use(tableDropIndicator);
+    this.crepe.editor.use(dropsBesideBlocks);
     // Look up local image URLs before the first render, so none starts raw.
     this.crepe.editor.use(preloadImages(imageConfig.preload));
     // WYSIWYG find/replace search state + decorations (§5.13).

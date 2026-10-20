@@ -3794,6 +3794,94 @@ test("a block copied by its handle onto the upper half of the table right below 
   await expect.poll(() => readFile(file, "utf8")).toBe(`Intro.\n\nCopy me.\n\nCopy me.\n\n${table}\n\nEnd.\n`);
 });
 
+test("a block dragged by its handle onto a code block, math block or diagram goes in above or below it, where the drop line shows", async () => {
+  const file = path.join(directory, "block-drag-code.md");
+  const code = "```js\nconst x = 1;\nconst y = 2;\nconst z = 3;\n```";
+  const math = "$$\nE = mc^2\n$$";
+  const diagram = "```mermaid\ngraph TD\n  A --> B\n```";
+  await writeFile(file, ["Intro.", "First.", code, "Second.", math, diagram, "Third.", "End."].join("\n\n") + "\n");
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  const blocks = editor.locator(".milkdown-code-block");
+  await expect(blocks.nth(1).locator(".katex")).toBeVisible();
+  await expect(blocks.nth(2).locator(".mermaid-preview svg")).toBeVisible();
+  // Crepe's code block view kept every drag event from ProseMirror. Its
+  // CodeMirror editor put the text of a block dropped on the code into the
+  // code, and the block stayed where it was. Over the toolbar or a preview,
+  // nothing took the drop.
+  const drags: { text: string; block: Locator; part: number }[] = [
+    // The last line of the code, in the block's lower half.
+    { text: "First.", block: blocks.nth(0), part: 0.75 },
+    // The math block's lower half.
+    { text: "Second.", block: blocks.nth(1), part: 0.75 },
+    // The diagram's code, in its upper half.
+    { text: "Third.", block: blocks.nth(2), part: 0.15 },
+  ];
+  for (const { text, block, part } of drags) {
+    await block.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await startBlockDrag(editor.locator("p", { hasText: text }));
+    const box = (await block.boundingBox())!;
+    const point = { x: box.x + box.width / 2, y: box.y + box.height * part };
+    await page.mouse.move(point.x, point.y, { steps: 10 });
+    await page.mouse.move(point.x + 1, point.y);
+    const edge = part < 0.5 ? box.y : box.y + box.height;
+    await expect.poll(dropLineY).toBeCloseTo(edge, 0);
+    await page.mouse.up();
+    await expect(editor.locator("p", { hasText: text })).toHaveCount(1);
+  }
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", code, "First.", math, "Second.", "Third.", diagram, "End."].join("\n\n") + "\n");
+});
+
+test("selected text dragged onto a code block goes in below it, and text from another app goes into the code", async () => {
+  const file = path.join(directory, "text-drag-code.md");
+  await writeFile(file, "Intro with WORD here.\n\n```js\nconst x = 1;\nconst y = 2;\nconst z = 3;\n```\n\nEnd.\n");
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  const block = editor.locator(".milkdown-code-block");
+  const word = await editor.locator("p", { hasText: "WORD" }).evaluate((paragraph) => {
+    const text = paragraph.firstChild!;
+    const start = text.textContent!.indexOf("WORD");
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(text, start + 4);
+    const { x, y, width, height, right } = range.getBoundingClientRect();
+    return { x: x + width / 2, y: y + height / 2, end: right };
+  });
+  // Select the word from its end with the keyboard. A press right after a
+  // double click would be a triple click, which selects the paragraph.
+  await page.mouse.click(word.end, word.y);
+  for (let i = 0; i < "WORD".length; i++) await page.keyboard.press("Shift+ArrowLeft");
+  await expect.poll(() => page.evaluate(() => getSelection()?.toString())).toBe("WORD");
+  await page.mouse.move(word.x, word.y);
+  await page.mouse.down();
+  await page.mouse.move(word.x + 6, word.y + 4, { steps: 3 });
+  // Onto the last line of the code, in the block's lower half. CodeMirror put
+  // a copy of the word into the code, and the word stayed in the paragraph.
+  const last = await centerOf(block.locator(".cm-line", { hasText: "const z" }));
+  await page.mouse.move(last.x, last.y, { steps: 10 });
+  await page.mouse.move(last.x + 1, last.y);
+  const box = (await block.boundingBox())!;
+  await expect.poll(dropLineY).toBeCloseTo(box.y + box.height, 0);
+  await page.mouse.up();
+  await expect(editor.locator("p", { hasText: /^WORD$/ })).toHaveCount(1);
+  // Text from another app, through Chromium's drag emulation, still goes into
+  // the code at the pointer, here at the end of a line.
+  const line = (await block.locator(".cm-line", { hasText: "const y" }).boundingBox())!;
+  const point = { x: line.x + line.width - 10, y: line.y + line.height / 2 };
+  const cdp = await page.context().newCDPSession(page);
+  const data = { items: [{ mimeType: "text/plain", data: " // from another app" }], dragOperationsMask: 1 };
+  await cdp.send("Input.dispatchDragEvent", { type: "dragEnter", x: point.x, y: point.y - 2, data });
+  await cdp.send("Input.dispatchDragEvent", { type: "dragOver", x: point.x, y: point.y - 2, data });
+  await cdp.send("Input.dispatchDragEvent", { type: "dragOver", x: point.x, y: point.y, data });
+  await cdp.send("Input.dispatchDragEvent", { type: "drop", x: point.x, y: point.y, data });
+  await cdp.detach();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "Intro with  here.\n\n```js\nconst x = 1;\nconst y = 2; // from another app\nconst z = 3;\n```\n\nWORD\n\nEnd.\n",
+  );
+});
+
 test("text from another app dropped on a table cell goes in below the table, where the drop line shows", async () => {
   const file = path.join(directory, "text-drop-table.md");
   const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";

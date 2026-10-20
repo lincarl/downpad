@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-// A block or text dragged within the document and dropped on or beside a table
-// goes in above or below the whole table, and the drop indicator draws its line
-// there. Crepe's table view kept a drop on a cell from ProseMirror, and Crepe's
-// indicator put a drop beside the table between its rows or cells. These tests
-// use the real editor and ProseMirror's own drop handling, with a laid-out page,
-// which jsdom cannot measure, given to its blocks.
+// A block or text dragged within the document and dropped on or beside a table,
+// or on a code block, goes in above or below the whole table or code block, and
+// the drop indicator draws its line there. Crepe's table view kept a drop on a
+// cell from ProseMirror, Crepe's indicator put a drop beside the table between
+// its rows or cells, and Crepe's code block view left a drop on it to its
+// CodeMirror editor. These tests use the real editor and ProseMirror's own drop
+// handling, with a laid-out page, which jsdom cannot measure, given to its
+// blocks.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -106,6 +108,34 @@ function layOut(view: EditorView, before: string[], after: string[], start = 100
   return { top, bottom: top + 120 };
 }
 
+const CODE = "```js\nconst x = 1;\n```\n";
+
+/** Lay out the page as `layOut` does, with a code block from 120px high in
+ *  place of the table. */
+function layOutCode(view: EditorView, before: string[], after: string[]): { top: number; bottom: number } {
+  let y = 100;
+  for (const text of before) {
+    place(view, nodeOf("paragraph", text), [[y, y + 20]]);
+    y += 30;
+  }
+  const top = y;
+  place(view, nodeOf("code_block"), [[top, top + 120]]);
+  y = top + 130;
+  for (const text of after) {
+    place(view, nodeOf("paragraph", text), [[y, y + 20]]);
+    y += 30;
+  }
+  return { top, bottom: top + 120 };
+}
+
+/** The element that shows the code of the document's code block. jsdom never
+ *  reports the block on screen, so Crepe shows its code without CodeMirror. */
+function codeElement(): HTMLElement {
+  const code = document.querySelector<HTMLElement>(".milkdown-code-block code");
+  if (!code) throw new Error("No code block");
+  return code;
+}
+
 /** The position before the first node that `matches`. */
 function positionOf(view: EditorView, matches: (node: Node) => boolean): number {
   let found = -1;
@@ -161,6 +191,13 @@ function dragEvent(type: string, x: number, y: number, data: Record<string, stri
 function drop(view: EditorView, target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit): void {
   vi.spyOn(view, "posAtCoords").mockReturnValue({ pos: view.posAtDOM(target, 0), inside: -1 });
   target.dispatchEvent(dragEvent("drop", x, y, data, keys));
+}
+
+/** Drag over `target` at a viewport point, carrying `data`, with the keys
+ *  `keys` held, and return where the drop indicator then shows. */
+function dragOver(target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit) {
+  target.dispatchEvent(dragEvent("dragover", x, y, data, keys));
+  return crepeOf(editor!).editor.ctx.get(dropIndicatorState.key);
 }
 
 /** The paragraph element of the cell that holds `text`. */
@@ -244,6 +281,49 @@ describe("something dragged within the document", () => {
   });
 });
 
+describe("something dragged within the document onto a code block", () => {
+  it("goes in below the code block from its lower half, where the drop line shows, and leaves where it was", async () => {
+    const view = await open(`Move me.\n\nIntro.\n\n${CODE}\nEnd.\n`);
+    // The code block from 160px to 280px.
+    const { bottom } = layOutCode(view, ["Move me.", "Intro."], ["End."]);
+    dragBlock(view, "Move me.");
+    // Crepe's code block view kept every drag event from ProseMirror, and its
+    // CodeMirror editor took the drop into the code.
+    const enter = dragEvent("dragenter", 300, 250);
+    codeElement().dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    const code = positionOf(view, nodeOf("code_block"));
+    const after = code + view.state.doc.nodeAt(code)!.nodeSize;
+    expect(dragOver(codeElement(), 300, 250)).toMatchObject({ pos: after, line: { p1: { x: 0, y: bottom }, p2: { x: 600, y: bottom } } });
+    // The drop moves the block the drag holds, also once the selection is
+    // elsewhere.
+    view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+    drop(view, codeElement(), 300, 250);
+    expect(editor!.getMarkdown()).toBe(`Intro.\n\n${CODE}\nMove me.\n\nEnd.\n`);
+    expect(view.dragging).toBeNull();
+  });
+
+  it("goes in above the code block as text of its own line when selected text is dropped on its upper half", async () => {
+    const view = await open(`Intro with WORD here.\n\n${CODE}\nEnd.\n`);
+    // The code block from 130px to 250px.
+    const { top } = layOutCode(view, ["Intro with WORD here."], ["End."]);
+    dragWord(view, "WORD");
+    expect(dragOver(codeElement(), 300, 160)).toMatchObject({ pos: positionOf(view, nodeOf("code_block")), line: { p1: { y: top } } });
+    drop(view, codeElement(), 300, 160);
+    expect(editor!.getMarkdown()).toBe(`Intro with  here.\n\nWORD\n\n${CODE}\nEnd.\n`);
+  });
+
+  it("leaves text from another app to the code block's own editor, with no drop line", async () => {
+    const view = await open(`Intro.\n\n${CODE}\nEnd.\n`);
+    layOutCode(view, ["Intro."], ["End."]);
+    const enter = dragEvent("dragenter", 300, 200, EXTERNAL);
+    codeElement().dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(false);
+    expect(dragOver(codeElement(), 300, 200, EXTERNAL)).toBeNull();
+    expect(view.state.doc.textContent).toBe("Intro.const x = 1;End.");
+  });
+});
+
 describe("text dragged in from another app", () => {
   it("has its dragenter on a table cell cancelled, so the browser never drops it into the cell itself", async () => {
     await open(`Intro.\n\n${TABLE}`);
@@ -275,13 +355,6 @@ describe("a table", () => {
 });
 
 describe("the drop indicator", () => {
-  /** Drag over `target` at a viewport point, carrying `data`, with the keys
-   *  `keys` held, and return where the indicator then shows. */
-  function dragOver(target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit) {
-    target.dispatchEvent(dragEvent("dragover", x, y, data, keys));
-    return crepeOf(editor!).editor.ctx.get(dropIndicatorState.key);
-  }
-
   it("draws its line at a table's nearer edge for a block or files dragged onto the table or beside it", async () => {
     const view = await open(`Move me.\n\nIntro.\n\n${TABLE}\nEnd.\n`);
     const { top, bottom } = layOut(view, ["Move me.", "Intro."], ["End."]);
