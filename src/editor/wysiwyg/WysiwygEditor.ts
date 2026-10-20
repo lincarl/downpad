@@ -279,8 +279,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(copyWithoutTrailingLine);
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.
     this.crepe.editor.use(linkViewPlugin(context));
-    // Shift+click and Shift+drag on link text and images, and from outside
-    // the document (§5.5, §5.6).
+    // Shift+click and Shift+drag on link text and images, and presses from
+    // outside the document (§5.5, §5.6).
     this.crepe.editor.use(shiftClicks);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
