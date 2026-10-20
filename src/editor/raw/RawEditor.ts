@@ -2,6 +2,7 @@
 // canonical markdown string; raw edits are written back verbatim (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
+import { isolateHistory } from "@codemirror/commands";
 import { ChangeSet, EditorSelection, EditorState, type Text } from "@codemirror/state";
 import {
   SearchQuery,
@@ -13,7 +14,7 @@ import {
   search,
   setSearchQuery,
 } from "@codemirror/search";
-import { base64Collapse, dropOutsidePayload, inBase64Payload } from "./base64Collapse";
+import { base64Collapse, dropOutsidePayload, inBase64Payload, paragraphPlace } from "./base64Collapse";
 import { differingRuns, type Run } from "../differingRuns";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
@@ -428,6 +429,20 @@ export class RawEditor {
     return target;
   }
 
+  /** Aim a file at the caret as a paragraph of its own after the block that
+   *  holds the caret (`paragraphPlace`), for a file meant for the document
+   *  view whose place there is gone. Unlike text put in at the caret, it never
+   *  joins the line, a heading or the frontmatter there. Returns the target
+   *  for `insertText`, which the pane keeps in step with edits until
+   *  `releaseDropTarget`, or null without an editor. */
+  blockTargetAtCaret(): DropTarget | null {
+    if (!this.view) return null;
+    const { state } = this.view;
+    const target: DropTarget = { pos: paragraphPlace(state, state.selection.main.to), newBlock: true };
+    this.dropTargets.add(target);
+    return target;
+  }
+
   /** Stop keeping a drop target in step, once the files of its drop are in. */
   releaseDropTarget(target: DropTarget): void {
     this.dropTargets.delete(target);
@@ -444,7 +459,8 @@ export class RawEditor {
    *  file, right after this one, which the pane keeps in step with edits
    *  until `releaseDropTarget`. For text that went in at the caret it is a
    *  new target, so the next file follows this one even while the caret
-   *  stays before it. Null without an editor. */
+   *  stays before it. The text is an undo step of its own, never joined with
+   *  typing right before or after it. Null without an editor. */
   insertText(text: string, target: DropTarget | null = null, moveCaret = true): DropTarget | null {
     if (!this.view || !text) return null;
     const aimed = target && this.dropTargets.has(target) ? target : null;
@@ -457,15 +473,18 @@ export class RawEditor {
     this.view.dispatch({
       changes: { from: at, insert: before + text + after },
       ...(moveCaret ? { selection: { anchor: end } } : {}),
+      annotations: isolateHistory.of("full"),
     });
     // The next file of the drop goes in after this one, in a block of its own.
     if (aimed?.newBlock) aimed.pos = end;
     return next;
   }
 
-  /** Make the change that puts a file dropped on the split's document pane
-   *  into this pane's text while the user types here (§5.4). It is reported,
-   *  mirrored and undone like typing. The change is made line by line
+  /** Make the change that puts a file dropped on the document pane into
+   *  this pane's text while the user types here in the split, or while the
+   *  document pane is hidden behind the Markdown view (§5.4). It is reported
+   *  and mirrored like typing, and undone as a step of its own, apart from
+   *  the typing around it. The change is made line by line
    *  (`dropEditChanges`), so a caret in a line whose text stays keeps its
    *  place in that text, such as in a list item that only gets a new number,
    *  and follows it to its new line, such as at the start of the item the
@@ -476,7 +495,11 @@ export class RawEditor {
     const { state } = this.view;
     const { changes, mapPos } = dropEditChanges(state.doc, edit);
     const ranges = state.selection.ranges.map((range) => EditorSelection.range(mapPos(range.anchor), mapPos(range.head)));
-    this.view.dispatch({ changes, selection: EditorSelection.create(ranges, state.selection.mainIndex) });
+    this.view.dispatch({
+      changes,
+      selection: EditorSelection.create(ranges, state.selection.mainIndex),
+      annotations: isolateHistory.of("full"),
+    });
   }
 
   /**

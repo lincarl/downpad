@@ -1,17 +1,18 @@
-// Files dropped from the desktop (spec §5.4). Each dropped Markdown file opens
-// in a tab. Other dropped files go into the document they were dropped on, an
-// image as an image and any other file as a link to its copy in the
-// attachments folder. EditorHost decides where in that document each file
-// goes, and holds a file back while its document is behind another tab. A
-// file that cannot be read or stored is left out, and the drop's other files
-// still go in.
+// Files dropped from the desktop (spec §5.4), and images pasted into the
+// document view (§5.5). Each dropped Markdown file opens in a tab. Other
+// dropped files go into the document they were dropped on, an image as an
+// image and any other file as a link to its copy in the attachments folder. A
+// pasted image goes in the same way, at the caret where it was pasted.
+// EditorHost decides where in that document each file goes, and holds a file
+// back while its document is behind another tab. A file that cannot be read
+// or stored is left out, and the drop's other files still go in.
 
 import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
+import { lookUpImages } from "../editor/wysiwyg/imageView";
 import type { FileService } from "../files/FileService";
-import { sameFilePath } from "../files/pathIdentity";
-import { resolveImageSrc } from "../images/imageStore";
-import { dirName, isRemoteOrData } from "../images/pathResolve";
+import { resolveImageSrc, storeBesideDocument, type ImageStoreContext } from "../images/imageStore";
 import { readImageBytes, writeAttachment } from "../ipc/commands";
+import type { ImageBytes } from "../ipc/contracts";
 import { baseName, classifyDrop } from "../paste/dropHandler";
 import { mdImage, mdLink } from "../paste/mdLink";
 import type { Store } from "../state/store";
@@ -19,7 +20,7 @@ import type { Store } from "../state/store";
 export interface FileDropDependencies {
   store: Store;
   files: Pick<FileService, "newDocument" | "openPath" | "save" | "untilPathSettled">;
-  editorHost: Pick<EditorHost, "aimDrop" | "insertDropped" | "releaseDrop" | "untilInFront">;
+  editorHost: Pick<EditorHost, "aimDrop" | "aimPaste" | "insertDropped" | "releaseDrop" | "untilInFront" | "untilTurn">;
   /** Show the active tab's document in the editor, leaving the Recent view. */
   showActiveDoc(): Promise<void>;
 }
@@ -37,7 +38,9 @@ export class FileDropCoordinator {
    * logged and left out, and the others still go in. A file only goes into
    * the document in front, so those files go in first and the Markdown files
    * open once they are in. A new tab would otherwise put the document behind
-   * it while they are read. If the document goes behind another tab before
+   * it while they are read. Those files go in after the files of earlier
+   * drops and pastes into the document, so a slow earlier file holds back
+   * the Markdown files too. If the document goes behind another tab before
    * then, its files wait until it is shown again, and the Markdown files open
    * at once rather than wait with them. Call this while handling the drop
    * event, because it reads where the files go from `point` before it first
@@ -57,6 +60,28 @@ export class FileDropCoordinator {
       for (const path of markdown) await this.openMarkdown(path);
     }
     await inserted;
+  }
+
+  /**
+   * Put images pasted into a tab's document view in at the caret where they
+   * were pasted (§5.5), in the order they were pasted, as the files of a drop
+   * away from the text go in. They go in after the files of every earlier
+   * paste or drop into the document, even if they are stored first
+   * (`EditorHost.insertDropped`). Each waits while its document is behind
+   * another tab, and goes into the view shown once it is stored, at the
+   * caret there if the place it was pasted is gone, such as after the
+   * document view was rebuilt. An untitled document asks where to save it
+   * for an image stored in the attachments folder once it is in front, and
+   * nothing goes in if the user cancels. Call this while handling the paste
+   * event, because it reads the caret before it first awaits.
+   */
+  async pasteImages(tabId: string, files: readonly File[]): Promise<void> {
+    const drop = this.dependencies.editorHost.aimPaste(tabId);
+    if (!drop) return;
+    await this.insertEach(drop, files, (file) => file.name, async (file) => {
+      const image = { bytes: new Uint8Array(await file.arrayBuffer()), mime: file.type || "image/png" };
+      await this.embedImage(image, drop, file.name);
+    });
   }
 
   /** Aim a drop's files that are not Markdown files at the document they were
@@ -80,13 +105,22 @@ export class FileDropCoordinator {
    *  file that cannot be read or stored, such as one deleted since the drop,
    *  is logged and left out, and the files after it still go in. */
   private async insertFiles(paths: string[], drop: FileDrop): Promise<void> {
+    await this.insertEach(drop, paths, baseName, async (path) => {
+      if (classifyDrop(path) === "image") await this.embedImage(await readImageBytes(path), drop, baseName(path));
+      else await this.attachDroppedFile(path, drop);
+    });
+  }
+
+  /** Put each file of a drop or paste into its document with `insert`, in
+   *  order, and end the drop. A file that cannot be read or stored is logged
+   *  by its `name` and left out, and the files after it still go in. */
+  private async insertEach<T>(drop: FileDrop, files: readonly T[], name: (file: T) => string, insert: (file: T) => Promise<void>): Promise<void> {
     try {
-      for (const path of paths) {
+      for (const file of files) {
         try {
-          if (classifyDrop(path) === "image") await this.embedDroppedImage(path, drop);
-          else await this.attachDroppedFile(path, drop);
+          await insert(file);
         } catch (error) {
-          console.error(`md-easy: could not insert ${baseName(path)}`, error);
+          console.error(`md-easy: could not insert ${name(file)}`, error);
         }
       }
     } finally {
@@ -133,20 +167,21 @@ export class FileDropCoordinator {
     return this.dependencies.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
   }
 
-  /** Save the document a drop went to, if it is untitled, which asks where.
-   *  Only the document in front can be saved, so for a drop on a document
-   *  that is behind another tab by now, this waits until that document is
-   *  shown again. Resolves true once the document has a path, or false if the
-   *  user cancels or the document is closed first. */
+  /** Save the document a drop or paste went to, if it is untitled, which
+   *  asks where. Only the document in front can be saved, so for a document
+   *  that is behind another tab by now, this waits until it is shown again.
+   *  Resolves true once the document has a path, or false if the user
+   *  cancels or the document is closed first. */
   private async saveDropDocument(drop: FileDrop): Promise<boolean> {
     if (this.tabFilePath(drop.tabId)) return true;
     if (!(await this.dependencies.editorHost.untilInFront(drop))) return false;
     return this.tabFilePath(drop.tabId) !== null || (await this.dependencies.files.save());
   }
 
-  /** Log that a dropped file went nowhere because its document was closed. */
-  private warnNotInserted(path: string): void {
-    console.warn(`md-easy: ${baseName(path)} was not inserted, because the document it was dropped on was closed`);
+  /** Log that a dropped or pasted file, by its name, went nowhere because its
+   *  document was closed. */
+  private warnNotInserted(name: string): void {
+    console.warn(`md-easy: ${name} was not inserted, because its document was closed`);
   }
 
   /** Whether a tab is still open. */
@@ -154,80 +189,70 @@ export class FileDropCoordinator {
     return this.dependencies.store.get().tabs.some((tab) => tab.id === tabId);
   }
 
-  /** Embed a dropped image where its drop goes in. An image stored in the
-   *  attachments folder goes beside the document where it is saved as the
-   *  image goes in (`storeBesideDocument`). */
-  private async embedDroppedImage(path: string, drop: FileDrop): Promise<void> {
-    const { bytes, mime } = await readImageBytes(path);
-    const src = await this.storeBesideDocument(drop, (getFilePath) =>
-      resolveImageSrc(bytes, mime, {
+  /** The document a drop or paste went to, as `storeBesideDocument` needs
+   *  it: its saved path, and the wait for a Save As of it that is under way.
+   *  That wait first waits for the drops and pastes into the document before
+   *  this one to end (`EditorHost.untilTurn`), so the file is stored, and
+   *  stored again after a Save As to another folder, only once the files
+   *  before it are in. After that, the file goes in at once, or waits while
+   *  the document is behind another tab, where it cannot be saved. Either
+   *  way a link from its path still holds when the file goes in. */
+  private dropDocument(drop: FileDrop): Pick<ImageStoreContext, "getFilePath" | "untilPathSettled"> {
+    const { editorHost, files } = this.dependencies;
+    return {
+      getFilePath: () => this.tabFilePath(drop.tabId),
+      untilPathSettled: async () => {
+        await editorHost.untilTurn(drop);
+        await files.untilPathSettled(drop.tabId);
+      },
+    };
+  }
+
+  /** Embed a dropped or pasted image, by its `name`, where its drop or paste
+   *  goes in. An image stored in the attachments folder goes beside the
+   *  document where it is saved as the image goes in (`resolveImageSrc`),
+   *  and its URL is looked up before it goes in, so it shows from its first
+   *  render (`lookUpImages`). */
+  private async embedImage({ bytes, mime }: ImageBytes, drop: FileDrop, name: string): Promise<void> {
+    const src = await resolveImageSrc(
+      bytes,
+      mime,
+      {
+        ...this.dropDocument(drop),
         getSettings: () => this.dependencies.store.get().settings,
-        getFilePath,
         requestSave: () => this.saveDropDocument(drop),
-      }),
+      },
+      (stored, filePath) => lookUpImages([stored], filePath),
     );
-    if (src) await this.insertDropped(drop, mdImage("", src), path);
-    else if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
+    if (src) await this.insertDropped(drop, mdImage("", src), name);
+    else if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
   }
 
   /** Copy a dropped file into the attachments folder beside the document it
-   *  was dropped on, and link it where its drop goes in. */
+   *  was dropped on (`storeBesideDocument`), and link it where its drop goes
+   *  in. */
   private async attachDroppedFile(path: string, drop: FileDrop): Promise<void> {
     // Non-image files always go to attachments (§5.7), which needs a saved doc.
+    const name = baseName(path);
     if (!(await this.saveDropDocument(drop))) {
-      if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
+      if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
       return;
     }
     const { bytes } = await readImageBytes(path);
-    const name = baseName(path);
-    const link = await this.storeBesideDocument(drop, async (getFilePath) => {
+    const link = await storeBesideDocument(this.dropDocument(drop), async (getFilePath) => {
       const filePath = getFilePath();
       if (!filePath) return null;
       return writeAttachment(filePath, this.dependencies.store.get().settings.attachmentsFolderName, name, bytes);
     });
-    if (link) await this.insertDropped(drop, mdLink(name, link), path);
-    else if (!this.hasTab(drop.tabId)) this.warnNotInserted(path);
+    if (link) await this.insertDropped(drop, mdLink(name, link), name);
+    else if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
   }
 
-  /**
-   * Store a dropped file with `store` and resolve the link it gives the file,
-   * or null if it stored nothing. `store` writes the file beside the document
-   * path that `getFilePath` gives right before the write, and the link leads
-   * from there. A Save As of the document that is under way, its dialog open
-   * or its file being written, finishes first, so the file goes beside the
-   * document where it is saved then. If the document is saved in another
-   * folder while the file is written, the file is stored again beside it
-   * there, so its link always leads from the document's own folder. The copy
-   * in the old folder stays. While the document is behind another tab it
-   * cannot be saved, so the link still holds when the file goes in.
-   */
-  private async storeBesideDocument(
-    drop: FileDrop,
-    store: (getFilePath: () => string | null) => Promise<string | null>,
-  ): Promise<string | null> {
-    const { files } = this.dependencies;
-    for (;;) {
-      await files.untilPathSettled(drop.tabId);
-      // `store` sets this as it reads the path to write beside.
-      let storedBeside: string | null = null;
-      const link = await store(() => (storedBeside = this.tabFilePath(drop.tabId)));
-      await files.untilPathSettled(drop.tabId);
-      if (!link || isRemoteOrData(link) || !this.movedFrom(drop, storedBeside)) return link;
-    }
-  }
-
-  /** Whether the document a drop went to is saved in a folder other than the
-   *  one `filePath` is in. */
-  private movedFrom(drop: FileDrop, filePath: string | null): boolean {
-    const now = this.tabFilePath(drop.tabId);
-    return filePath !== null && now !== null && !sameFilePath(dirName(now), dirName(filePath));
-  }
-
-  /** Insert a dropped file's Markdown into the document it was dropped on,
-   *  once that document is in front. If the document is closed first, it gets
-   *  nothing and no other document gets it instead. A copy in the attachments
-   *  folder stays there. */
-  private async insertDropped(drop: FileDrop, markdown: string, path: string): Promise<void> {
-    if (!(await this.dependencies.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(path);
+  /** Insert a dropped or pasted file's Markdown into its document, once that
+   *  document is in front. If the document is closed first, it gets nothing
+   *  and no other document gets it instead. A copy in the attachments folder
+   *  stays there. */
+  private async insertDropped(drop: FileDrop, markdown: string, name: string): Promise<void> {
+    if (!(await this.dependencies.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(name);
   }
 }

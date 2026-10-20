@@ -9,7 +9,7 @@
 import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
 import { GapCursor } from "@milkdown/kit/prose/gapcursor";
-import { Slice, type Fragment, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
+import { Fragment, Slice, type Node, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Selection, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { Transform, dropPoint } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -68,6 +68,19 @@ function inTable($pos: ResolvedPos): boolean {
     if ($pos.node(depth).type.spec.tableRole) return true;
   }
   return false;
+}
+
+/**
+ * Where blocks aimed at `pos` go in: there, or above or below a table that
+ * holds `pos`, since a table holds only rows and cells. That is the side
+ * `pos` is nearer to, where Crepe puts a block dropped there (`dropPoint`).
+ * Without `content`, it is the place for any block, such as a pasted image
+ * that is not read yet.
+ */
+export function blockEdge(doc: Node, pos: number, content?: Fragment): number {
+  if (!inTable(doc.resolve(pos))) return pos;
+  const blocks = content ?? Fragment.from(doc.type.schema.nodes.paragraph.create());
+  return dropPoint(doc, pos, new Slice(blocks, 0, 0)) ?? pos;
 }
 
 /**
@@ -143,14 +156,23 @@ function beforeListItem($pos: ResolvedPos, content: Fragment): number | null {
 function placeBlocks(tr: Transaction, target: DropTarget, doc: Node): boolean {
   const { content } = doc;
   const slice = new Slice(content, 0, 0);
-  let pos = target.pos;
-  if (inTable(tr.doc.resolve(pos))) pos = dropPoint(tr.doc, pos, slice) ?? pos;
+  const pos = blockEdge(tr.doc, target.pos, content);
   const $pos = tr.doc.resolve(pos);
   const { parent, nodeBefore, nodeAfter } = $pos;
   const index = $pos.index();
   const listItem = listItemAt($pos, content, target.listItems === true);
   if (isEmptyParagraph(nodeAfter) && parent.canReplace(index, index + 1, content)) {
-    tr.replaceWith(pos, pos + nodeAfter.nodeSize, content);
+    // The blocks go in before the empty line, which is then taken out, so a
+    // target at this edge, such as that of an image pasted here after this
+    // one, maps past them. Put in the line's place, they would leave that
+    // target before them.
+    if (parent.canReplace(index, index, content)) {
+      tr.insert(pos, content);
+      const line = tr.mapping.map(pos);
+      tr.delete(line, line + nodeAfter.nodeSize);
+    } else {
+      tr.replaceWith(pos, pos + nodeAfter.nodeSize, content);
+    }
   } else if (isEmptyParagraph(nodeBefore) && parent.canReplace(index - 1, index, content)) {
     tr.replaceWith(pos - nodeBefore.nodeSize, pos, content);
   } else if (listItem) {

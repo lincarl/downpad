@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import { Store } from "../state/store";
 import { hasUnsavedChanges, type AppState } from "../state/types";
+import type { WysiwygContext } from "./wysiwyg/context";
 
 interface Deferred {
   promise: Promise<void>;
@@ -25,6 +26,8 @@ const fakeEditors = vi.hoisted(() => ({
   destroyCalls: 0,
   /** The text and serializer bullet each document pane was built with, in order. */
   mounted: [] as Array<{ markdown: string; bullet: string }>,
+  /** What each document pane was given of the app, in order. */
+  contexts: [] as WysiwygContext[],
   /** Runs as each document pane starts to build, to simulate an edit then. */
   duringMount: null as (() => void) | null,
   /** What the document pane writes, its own form of the tab's text or typing. */
@@ -85,9 +88,11 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
       markdown: string,
       cb: { onChange(markdown: string): void; onFindChange?(): void },
       style: { bullet: string },
+      context: WysiwygContext,
     ): Promise<void> {
       fakeEditors.mountCalls += 1;
       fakeEditors.mounted.push({ markdown, bullet: style.bullet });
+      fakeEditors.contexts.push(context);
       fakeEditors.events.push(`build ${markdown}`);
       fakeEditors.duringMount?.();
       this.root = root;
@@ -121,6 +126,13 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
     releaseDropTarget(target: { pos: number }): void {
       fakeEditors.heldTargets.delete(target);
+    }
+
+    /** Like the real editor, aim pasted images at the caret. */
+    caretTarget(): { pos: number } {
+      const target = { pos: 5 };
+      fakeEditors.heldTargets.add(target);
+      return target;
     }
 
     /** Like the real editor with the find card's current match in the
@@ -208,6 +220,11 @@ vi.mock("./raw/RawEditor", () => ({
     dropTargetAt(x: number, y: number): { pos: number } {
       fakeEditors.rawDroppedAt = [x, y];
       return { pos: 3 };
+    }
+
+    /** Like the real editor, aim a file at the caret as a paragraph of its own. */
+    blockTargetAtCaret(): { pos: number; newBlock: boolean } {
+      return { pos: 0, newBlock: true };
     }
 
     releaseDropTarget(): void {}
@@ -302,6 +319,7 @@ beforeEach(() => {
   fakeEditors.mountCalls = 0;
   fakeEditors.destroyCalls = 0;
   fakeEditors.mounted = [];
+  fakeEditors.contexts = [];
   fakeEditors.duringMount = null;
   fakeEditors.markdown = "document pane's form";
   fakeEditors.pending = false;
@@ -1055,6 +1073,133 @@ describe("EditorHost changes while a document pane builds", () => {
   });
 });
 
+describe("EditorHost image storage", () => {
+  it("gives a document pane its tab's path, and no path once the tab is closed", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/docs/notes.md" });
+    const host = new EditorHost(document.createElement("div"), store);
+    await host.reloadActiveDoc();
+    const context = fakeEditors.contexts[0]!;
+
+    // Another tab in front leaves the pane its own document's path.
+    store.addTab({ ...store.get().doc, filePath: "/other/other.md" });
+    expect(context.getFilePath()).toBe("/docs/notes.md");
+    // An image stored for the pane after its tab closed never goes beside
+    // the document in front then.
+    store.closeTab("tab-1");
+    expect(context.getFilePath()).toBeNull();
+    await host.dispose();
+  });
+});
+
+describe("EditorHost pasted images", () => {
+  it("hands images pasted into a document pane to the app with the pane's tab, and puts them in at its caret, as unsaved until the paste ends", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    const pasted: Array<[string, File[]]> = [];
+    host.setPasteHandler((tabId, files) => pasted.push([tabId, files]));
+    await host.reloadActiveDoc();
+    const image = new File([], "image.png", { type: "image/png" });
+
+    fakeEditors.contexts[0]!.pasteImages?.([image]);
+    expect(pasted).toEqual([["tab-1", [image]]]);
+    const paste = host.aimPaste("tab-1")!;
+    expect(hasUnsavedChanges(store.get().tabs[0]!)).toBe(true);
+    expect(await host.insertDropped(paste, "![](attachments/img.png)")).toBe(true);
+
+    // The caret's place the pane gave when the image was pasted.
+    expect(fakeEditors.insertedAt).toEqual({ pos: 5 });
+    // The pane takes focus with the caret after the image.
+    expect(root.querySelector(".editor-pane-wysiwyg")!.contains(document.activeElement)).toBe(true);
+    host.releaseDrop(paste);
+    expect(store.get().tabs[0]!.filesPending).toBe(false);
+    expect(fakeEditors.heldTargets.size).toBe(0);
+    root.remove();
+    await host.dispose();
+  });
+
+  it("puts an image pasted before a switch to the Markdown view where it was pasted, through the Markdown pane, so typing there afterwards counts", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const paste = host.aimPaste("tab-1")!;
+    await host.setLayout("markdown");
+
+    expect(await host.insertDropped(paste, "![](attachments/img.png)")).toBe(true);
+    host.releaseDrop(paste);
+    fakeEditors.rawChange!(`${fakeEditors.rawText} Typed.`);
+
+    // At the caret's place in the hidden document pane, and the matching
+    // place in the Markdown source, rather than at the Markdown view's caret.
+    expect(fakeEditors.insertedInto).toBe(root.querySelector(".editor-pane-wysiwyg"));
+    expect(fakeEditors.insertedAt).toEqual({ pos: 5 });
+    expect(fakeEditors.rawEdit).toEqual({ from: 17, to: 17, insert: "\n\n![](attachments/img.png)", assoc: -1 });
+    expect(store.get().doc.markdown).toBe("original markdown\n\n![](attachments/img.png) Typed.");
+    await host.dispose();
+  });
+
+  it("puts each image of a paste before a switch to the Markdown view where it was pasted, until the user edits there", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const paste = host.aimPaste("tab-1")!;
+    await host.setLayout("markdown");
+
+    expect(await host.insertDropped(paste, "![](a.png)")).toBe(true);
+    expect(await host.insertDropped(paste, "![](b.png)")).toBe(true);
+
+    // The second image goes in at its place too. Without the mirror after
+    // the first image's source change, the Markdown pane's report of that
+    // change would leave the hidden document pane behind the text, and the
+    // second image would go in at the Markdown pane's caret.
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    expect(fakeEditors.rawEdit).toEqual({ from: 29, to: 29, insert: "\n\n![](b.png)", assoc: -1 });
+    expect(store.get().doc.markdown).toBe("original markdown\n\n![](a.png)\n\n![](b.png)");
+    // An edit in the Markdown view leaves the document pane behind.
+    fakeEditors.rawChange!(`${fakeEditors.rawText} Typed.`);
+    expect(await host.insertDropped(paste, "![](c.png)")).toBe(true);
+    expect(fakeEditors.rawInsertedAt).toEqual({ pos: 0, newBlock: true });
+    host.releaseDrop(paste);
+    await host.dispose();
+  });
+
+  it("has the hidden document pane report an image pasted before a switch to the Markdown view at once when the source has no place for it", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const paste = host.aimPaste("tab-1")!;
+    await host.setLayout("markdown");
+    fakeEditors.findsSource = false;
+
+    expect(await host.insertDropped(paste, "![](attachments/img.png)")).toBe(true);
+    host.releaseDrop(paste);
+    // Typing right after the image went in.
+    fakeEditors.rawChange!(`${fakeEditors.rawText} Typed.`);
+
+    // A report after typing paused would come once the typing left the
+    // document pane behind, and be dropped with the image.
+    expect(store.get().doc.markdown).toBe("document pane's form\n\n![](attachments/img.png) Typed.");
+    await host.dispose();
+  });
+
+  it("aims no paste at a tab whose document pane is not shown", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    host.initLayout("markdown");
+    await host.reloadActiveDoc();
+
+    expect(host.aimPaste("tab-1")).toBeNull();
+    expect(host.aimPaste("tab-2")).toBeNull();
+    expect(store.get().tabs[0]!.filesPending).toBeFalsy();
+    await host.dispose();
+  });
+});
+
 describe("EditorHost file drops", () => {
   it("aims a drop on the page around the document, and puts one elsewhere in the window at the caret", async () => {
     const page = document.createElement("div");
@@ -1232,8 +1377,10 @@ describe("EditorHost file drops", () => {
     // The document pane puts the file at a block edge, away from the typing.
     const text = root.querySelector(".editor-pane-wysiwyg")!.appendChild(document.createElement("textarea"));
     typeIn(text);
-    await host.insertDropped(host.aimDrop({ clientX: 40, clientY: 120, target: text })!, "[a.csv](attachments/a.csv)");
+    const onDocument = host.aimDrop({ clientX: 40, clientY: 120, target: text })!;
+    await host.insertDropped(onDocument, "[a.csv](attachments/a.csv)");
     expect(fakeEditors.movedCaret).toBe(true);
+    host.releaseDrop(onDocument);
 
     // A Markdown pane puts it into a line, where typing would go on after it.
     await host.setLayout("markdown");
@@ -1283,6 +1430,94 @@ describe("EditorHost file drops", () => {
     expect(fakeEditors.insertedInto).toBe(first);
     expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
     await host.dispose();
+  });
+
+  it.each([
+    ["pasted", (host: EditorHost) => host.aimPaste("tab-1")!],
+    ["dropped", (host: EditorHost, root: HTMLElement) => host.aimDrop({ clientX: 40, clientY: 120, target: root.querySelector(".editor-pane-wysiwyg") })!],
+  ])("puts the image of a later drop or paste into a document in after those %s there before it, even when it is stored first", async (_kind, aim) => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const first = aim(host, root);
+    const second = aim(host, root);
+    const inserted: string[] = [];
+    const insert = (drop: ReturnType<typeof aim>, markdown: string) =>
+      host.insertDropped(drop, markdown).then((ok) => {
+        inserted.push(markdown);
+        host.releaseDrop(drop);
+        return ok;
+      });
+
+    // The second image is stored first.
+    const later = insert(second, "![](b.png)");
+    expect(await settled(later)).toBe(false);
+    expect(fakeEditors.insertedInto).toBeNull();
+    expect(await insert(first, "![](a.png)")).toBe(true);
+
+    expect(await later).toBe(true);
+    expect(inserted).toEqual(["![](a.png)", "![](b.png)"]);
+    expect(store.get().tabs[0]!.filesPending).toBe(false);
+    await host.dispose();
+  });
+
+  it("puts the file of a later drop away from the text after the file an earlier one put in at the caret, while they are under way together", async () => {
+    const root = document.createElement("div");
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    const first = host.aimDrop()!;
+    const second = host.aimDrop()!;
+
+    expect(await host.insertDropped(first, "![](a.png)")).toBe(true);
+    expect(fakeEditors.insertedAt).toBeNull();
+    const afterFirst = [...fakeEditors.heldTargets].at(-1)!;
+    host.releaseDrop(first);
+    // The caret is still before the first file.
+    expect(await host.insertDropped(second, "![](b.png)")).toBe(true);
+    expect(fakeEditors.insertedAt).toBe(afterFirst);
+    host.releaseDrop(second);
+    expect(fakeEditors.heldTargets.has(afterFirst)).toBe(false);
+
+    // A drop made once those have ended goes in at the caret.
+    const third = host.aimDrop()!;
+    expect(await host.insertDropped(third, "![](c.png)")).toBe(true);
+    expect(fakeEditors.insertedAt).toBeNull();
+    host.releaseDrop(third);
+    await host.dispose();
+  });
+
+  it("puts the images of a later paste after those an earlier paste put in at the Markdown view's caret once their place was gone", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const first = host.aimPaste("tab-1")!;
+    const second = host.aimPaste("tab-1")!;
+    await host.setLayout("markdown");
+    // An edit in the Markdown view leaves the document pane behind.
+    fakeEditors.rawChange!(`${fakeEditors.rawText} Typed.`);
+
+    expect(await host.insertDropped(first, "![](a.png)")).toBe(true);
+    const atCaret = fakeEditors.rawInsertedAt;
+    expect(atCaret).toEqual({ pos: 0, newBlock: true });
+    host.releaseDrop(first);
+    expect(await host.insertDropped(second, "![](b.png)")).toBe(true);
+    expect(fakeEditors.rawInsertedAt).toBe(atCaret);
+    host.releaseDrop(second);
+    await host.dispose();
+  });
+
+  it("lets a later drop's file go nowhere once the host is disposed while an earlier drop of its document is under way", async () => {
+    const root = document.createElement("div");
+    const host = new EditorHost(root, makeStore());
+    await host.reloadActiveDoc();
+    host.aimDrop();
+    const later = host.insertDropped(host.aimDrop()!, "[b.csv](attachments/b.csv)");
+    expect(await settled(later)).toBe(false);
+
+    await host.dispose();
+    expect(await later).toBe(false);
   });
 
   it("records that files are on their way into a document from its first drop until its last drop ends", async () => {
@@ -1376,9 +1611,10 @@ describe("EditorHost file drops", () => {
     await showFirstTab(store, host);
 
     expect(await inserted).toBe(true);
-    // At the caret of the Markdown view, the pane being edited.
+    // At the caret of the Markdown view, the pane being edited, as a
+    // paragraph of its own, so it never joins a line or a heading there.
     expect(fakeEditors.insertedInto).toBeNull();
-    expect(fakeEditors.rawInsertedAt).toBeNull();
+    expect(fakeEditors.rawInsertedAt).toEqual({ pos: 0, newBlock: true });
     await host.dispose();
   });
 
@@ -1449,7 +1685,7 @@ describe("EditorHost file drops", () => {
     await host.dispose();
   });
 
-  it("puts a file dropped on a pane that a layout switch hid into the pane shown now", async () => {
+  it("puts a file dropped on a document pane that a layout switch hid in at its drop point, through the Markdown pane shown now", async () => {
     const root = document.createElement("div");
     const store = makeStore();
     const host = new EditorHost(root, store);
@@ -1460,10 +1696,30 @@ describe("EditorHost file drops", () => {
     await host.setLayout("markdown");
 
     expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+    fakeEditors.rawChange!(`${fakeEditors.rawText} Typed.`);
 
-    // The hidden document pane would leave the Markdown pane, and its edits, behind.
-    expect(fakeEditors.insertedInto).toBeNull();
-    expect(store.get().doc.markdown).toBe("original markdown[a.csv](attachments/a.csv)");
+    expect(fakeEditors.insertedAt).toEqual({ pos: 7 });
+    expect(store.get().doc.markdown).toBe("original markdown\n\n[a.csv](attachments/a.csv) Typed.");
+    await host.dispose();
+  });
+
+  it("puts a file dropped on a Markdown pane that a layout switch hid in at its drop point, and the document pane shown takes it", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    const line = root.querySelector(".editor-pane-raw")!.appendChild(document.createElement("div"));
+    const drop = host.aimDrop({ clientX: 40, clientY: 20, target: line })!;
+    await host.setLayout("document");
+
+    expect(await host.insertDropped(drop, "[a.csv](attachments/a.csv)")).toBe(true);
+    fakeEditors.wysiwygChange!("typed in the document");
+
+    expect(fakeEditors.rawInsertedAt).toEqual({ pos: 3 });
+    expect(fakeEditors.mirrored).toBe("original markdown[a.csv](attachments/a.csv)");
+    // The document pane holds the file, so its next edit counts.
+    expect(store.get().doc.markdown).toBe("typed in the document");
     await host.dispose();
   });
 
@@ -1555,6 +1811,20 @@ describe("EditorHost flush", () => {
     host.flush();
 
     expect(store.get().doc).toMatchObject({ markdown: "original markdown", isDirty: false });
+    await host.dispose();
+  });
+
+  it("gives the Markdown view a change the hidden document pane reports, so typing there afterwards counts", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    await host.reloadActiveDoc();
+    await host.setLayout("markdown");
+
+    // An image the upload input or Replace image stored lands in the hidden pane.
+    fakeEditors.wysiwygChange!("original markdown\n\n![](attachments/img.png)\n");
+    fakeEditors.rawChange!(`${fakeEditors.rawText}Typed.`);
+
+    expect(store.get().doc.markdown).toBe("original markdown\n\n![](attachments/img.png)\nTyped.");
     await host.dispose();
   });
 

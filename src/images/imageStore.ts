@@ -6,10 +6,20 @@
 // Per the agreed behaviour, base64 embedding works even in an untitled buffer
 // (no folder needed); only the attachment path requires a saved file, hence the
 // "need-save" outcome.
+//
+// `storeBesideDocument` keeps a file written to the attachments folder beside
+// its document when a Save As moves the document meanwhile. Images stored as
+// files and other dropped files both go through it. An embedded image does not
+// depend on where its document is saved, so it never waits for a Save As.
+// Only pasted and dropped files wait for a Save As under way first
+// (FileDropCoordinator), because EditorHost puts them into the view shown
+// once they are stored.
 
 import type { Settings } from "../state/types";
+import { sameFilePath } from "../files/pathIdentity";
 import { writeAttachment as writeAttachmentIpc } from "../ipc/commands";
 import { attachmentFileName } from "./attachments";
+import { dirName, isRemoteOrData } from "./pathResolve";
 
 export type StorageDecision = "embed" | "attachment" | "need-save";
 
@@ -88,12 +98,53 @@ export async function storeImage(
 /** What `resolveImageSrc` needs from the app, without coupling to the Store. */
 export interface ImageStoreContext {
   getSettings(): Settings;
-  /** The document's saved path. Read right before each try to store the
-   *  image, so an image written to the attachments folder goes beside the
-   *  path it gave last. */
+  /** The document's saved path, or null while it has none. Read right before
+   *  each try to store the image, so an image written to the attachments
+   *  folder goes beside the path it gave last. */
   getFilePath(): string | null;
   /** Prompt-and-save an untitled buffer; resolves true once it has a path. */
   requestSave(): Promise<boolean>;
+  /** Resolve once no save that can give the document a new path is under
+   *  way, with its dialog open or its file being written
+   *  (`FileService.untilPathSettled`). Pasted and dropped files wait for this
+   *  (FileDropCoordinator). Omit it where the image goes into the editor that
+   *  asked for it, as for the document view's upload input and Replace
+   *  image. That editor can be rebuilt or dropped from memory during a long
+   *  wait, which loses the image (§5.5). */
+  untilPathSettled?(): Promise<void>;
+}
+
+/**
+ * Store a file beside a document with `store`, and resolve the link `store`
+ * gives it, or null if it stored nothing. `store` writes the file beside the
+ * document path that the `getFilePath` it is passed gives right before the
+ * write, and the link leads from there. With `untilPathSettled`, a Save As
+ * of the document that is under way, its dialog open or its file being
+ * written, finishes first, so the file goes beside the document where it is
+ * saved then. Pasted and dropped files use that wait, and images uploaded or
+ * replaced in the document view leave it out (§5.4, §5.5). Either way, if the
+ * document is saved in another folder while the file is written, the file is
+ * stored again beside it there, so its link leads from the document's own
+ * folder. The copy in the old folder stays.
+ */
+export async function storeBesideDocument(
+  doc: Pick<ImageStoreContext, "getFilePath" | "untilPathSettled">,
+  store: (getFilePath: () => string | null) => Promise<string | null>,
+): Promise<string | null> {
+  for (;;) {
+    await doc.untilPathSettled?.();
+    // `store` sets this as it reads the path to write beside.
+    let storedBeside: string | null = null;
+    const link = await store(() => (storedBeside = doc.getFilePath()));
+    await doc.untilPathSettled?.();
+    if (!link || isRemoteOrData(link) || !movedFrom(storedBeside, doc.getFilePath())) return link;
+  }
+}
+
+/** Whether a document saved at `now` is in a folder other than the one
+ *  `filePath` is in. False when either is not saved. */
+function movedFrom(filePath: string | null, now: string | null): boolean {
+  return filePath !== null && now !== null && !sameFilePath(dirName(now), dirName(filePath));
 }
 
 /**
@@ -101,16 +152,35 @@ export interface ImageStoreContext {
  * untitled-buffer case: if the image must go to attachments but there's no
  * saved path yet, prompt a save and retry once. Returns null if the user
  * cancels the save (nothing is inserted).
+ *
+ * An embedded image does not depend on where the document is saved, so it
+ * never waits. An image written to the attachments folder goes beside the
+ * document where it is saved once it is written (`storeBesideDocument`).
+ * `beforeInsert` runs for it with the document path it was written beside,
+ * such as to look up its URL before it goes in. It runs before the check that
+ * the document is still in that folder, so if a Save As moves the document
+ * meanwhile, the image is written again and `beforeInsert` runs again.
  */
 export async function resolveImageSrc(
   bytes: Uint8Array,
   mime: string,
   ctx: ImageStoreContext,
+  beforeInsert?: (src: string, filePath: string) => Promise<void>,
 ): Promise<string | null> {
-  let result = await storeImage({ bytes, mime, settings: ctx.getSettings(), filePath: ctx.getFilePath() });
-  if (result.decision === "need-save") {
-    if (!(await ctx.requestSave())) return null;
-    result = await storeImage({ bytes, mime, settings: ctx.getSettings(), filePath: ctx.getFilePath() });
-  }
-  return result.src ?? null;
+  // Without a path, storeImage writes nothing, and embeds what it can.
+  const embedded = await storeImage({ bytes, mime, settings: ctx.getSettings(), filePath: null });
+  if (embedded.decision === "embed") return embedded.src ?? null;
+  return storeBesideDocument(ctx, async (getFilePath) => {
+    // The document path the image is written beside.
+    let filePath = getFilePath();
+    let result = await storeImage({ bytes, mime, settings: ctx.getSettings(), filePath });
+    if (result.decision === "need-save") {
+      if (!(await ctx.requestSave())) return null;
+      filePath = getFilePath();
+      result = await storeImage({ bytes, mime, settings: ctx.getSettings(), filePath });
+    }
+    if (!result.src) return null;
+    if (filePath && !isRemoteOrData(result.src)) await beforeInsert?.(result.src, filePath);
+    return result.src;
+  });
 }

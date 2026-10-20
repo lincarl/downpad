@@ -65,6 +65,7 @@ import { slashMenuBlur } from "./slashMenuBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import { linkEdges } from "./linkEdges";
 import {
+  blockEdge,
   dropPosition,
   insertAtSelection,
   insertBlocksAt,
@@ -459,6 +460,27 @@ export class WysiwygEditor {
     return target;
   }
 
+  /** Aim images pasted into this editor at the block edge at the caret
+   *  (§5.5), where a file dropped away from the text goes in at a caret
+   *  (`insertAtSelection`). That is after any selected text or block, which
+   *  an image never replaces, and before or after the line's block from the
+   *  start of a line or anywhere else in it, so the line is never split. In
+   *  a table, which cannot hold an image, it is the edge above or below the
+   *  table where the image goes in (`blockEdge`). The edge is fixed when the
+   *  image is pasted, so each image pasted there later goes in after the
+   *  ones before it. Returns the target for `insertMarkdown`, or null without
+   *  an editor. The editor keeps the target in step with edits until
+   *  `releaseDropTarget`. */
+  caretTarget(): DropTarget | null {
+    const target = this.withView(({ state: { doc, selection } }): DropTarget => {
+      const { $to } = selection;
+      if (!$to.parent.inlineContent) return { pos: blockEdge(doc, $to.pos) };
+      return { pos: blockEdge(doc, $to.parentOffset === 0 ? $to.before() : $to.after()) };
+    }, null);
+    if (target) this.dropTargets.add(target);
+    return target;
+  }
+
   /** Stop keeping a drop target in step, once the files of its drop are in. */
   releaseDropTarget(target: DropTarget): void {
     this.dropTargets.delete(target);
@@ -499,7 +521,8 @@ export class WysiwygEditor {
    * `insertMarkdown` does but leaving the caret, and return the change to
    * `source`, the Markdown this pane shows, that puts the file in the same
    * place (§5.4). The split's Markdown pane makes that change while the user
-   * types there. This pane's own report would write the block the file joins
+   * types there, and so does the Markdown view while this pane is hidden
+   * behind it. This pane's own report would write the block the file joins
    * in its own form under their caret. Null when the pane cannot tell where
    * the file goes in the source, or nothing went in.
    *
@@ -532,7 +555,8 @@ export class WysiwygEditor {
    * Mirror an edit made in the other split pane into the document (§6.1). The
    * frontmatter block is re-split (and its table re-rendered, added, or
    * removed as the source gains/loses a `---` block) and the blocks of Crepe's
-   * body that differ are replaced (`mirrorMarkdown`). Both changes are one
+   * body that differ are replaced (`mirrorMarkdown`), unless the document is
+   * still the one the body gave it (`replaceBody`). Both changes are one
    * transaction, so an undo here takes back the block and the body together.
    * Positions outside the changed blocks keep their place, such as the caret
    * and the targets of drops, through the sync and its undo and redo. The user
@@ -580,12 +604,27 @@ export class WysiwygEditor {
   }
 
   /** Replace the blocks of Crepe's body that differ from `body` and remember
-   *  its source (see `setMarkdown`). A body this pane's document already
-   *  came from, with nothing to change, as after a split drop
-   *  (`insertMarkdownWithSource`), leaves the editor as it is, so it adds no
-   *  undo step that changes nothing. */
+   *  its source (see `setMarkdown`). The body this pane's document came from,
+   *  while the document is still the one it gave, as after a split drop
+   *  (`insertMarkdownWithSource`), leaves the editor's blocks as they are, so
+   *  it adds no undo step that changes nothing. Its parse can differ from
+   *  those blocks where the text does not show it, such as a list item that
+   *  a dropped image went into, which the source reads as loose and the
+   *  document holds as tight. Replacing that item would move the places of
+   *  later files in it to its end. */
   private replaceBody(body: string): void {
     if (!this.crepe) return;
+    const kept = this.withView(({ state }) => {
+      const baseline = baselineOf(state) ?? this.baseline;
+      return baseline?.source === body && baseline.holds(state.doc);
+    }, false);
+    if (kept) {
+      this.withView((view) => {
+        const tr = setFrontmatter(view.state, view.state.tr, { block: this.frontmatterBlock, separator: this.frontmatterSeparator });
+        if (tr.steps.length) view.dispatch(tr);
+      }, undefined);
+      return;
+    }
     try {
       // The frontmatter block and the blank lines after it, which setMarkdown
       // has just stored, and the new body's baseline go in the same

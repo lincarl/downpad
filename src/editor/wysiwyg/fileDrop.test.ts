@@ -469,6 +469,39 @@ describe("the source change for a file dropped on the split's document pane", ()
     expect(dropInSource(opened, source, 300, 169)).toBe(changed.replace("LINK", LINK_A));
   });
 
+  // An image in an item makes the source's list loose, which the item in the
+  // document is not. A mirror that replaced the item would move the second
+  // image's place, which is in the item, after the list.
+  it.each([
+    ["a list", "- one\n- two\n\nAfter.\n", "two", "- one\n- two\n\n  IMAGE\n\n  IMAGE_B\n\nAfter.\n"],
+    ["a nested list", "- outer\n  - inner\n\nAfter.\n", "inner", "- outer\n  - inner\n\n    IMAGE\n\n    IMAGE_B\n\nAfter.\n"],
+  ])("keeps the next image's place in an item of %s when the source change is mirrored back", async (_which, source, item, changed) => {
+    const opened = await open(source);
+    const view = viewOf(opened);
+    let end = -1;
+    view.state.doc.descendants((node, pos) => {
+      if (block("paragraph", item)(node)) end = pos + node.nodeSize - 1;
+    });
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+    const first = opened.caretTarget()!;
+    const second = opened.caretTarget()!;
+
+    let text = source;
+    for (const [markdown, target] of [[IMAGE, first], [IMAGE_B, second]] as const) {
+      const edit = opened.insertMarkdownWithSource(markdown, target, text);
+      if (!edit) throw new Error("No source change");
+      text = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
+      // The Markdown pane's report of the change comes back as a mirror.
+      opened.setMarkdown(text);
+    }
+
+    const expected = changed.replace("IMAGE_B", IMAGE_B).replace("IMAGE", IMAGE);
+    expect(text).toBe(expected);
+    expect(opened.getMarkdown()).toBe(expected);
+    opened.releaseDropTarget(first);
+    opened.releaseDropTarget(second);
+  });
+
   it("finds no source change where the file would go into a code block that is not closed yet", async () => {
     const source = "Intro.\n\nMiddle.\n\n```js\nlet a = 1;";
     const opened = await open(source);
@@ -715,5 +748,90 @@ describe("a file dropped away from the document text", () => {
     opened.insertMarkdown(LINK_A);
 
     expect(opened.getMarkdown()).toBe(`First line.\n\n${IMAGE}\n\n${LINK_A}\n\nSecond line.\n`);
+  });
+});
+
+describe("images pasted at the caret", () => {
+  it("go in after the line where the caret was when they were pasted, in paste order, after edits elsewhere", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    // Inside "First line.", which the image does not split.
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6)));
+    const target = opened.caretTarget()!;
+    // The user goes on typing in the next line while the images are stored.
+    view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+    type(opened, " More.");
+
+    let next = opened.insertMarkdown(IMAGE, target, false);
+    next = opened.insertMarkdown(IMAGE_B, next, false);
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${IMAGE}\n\n${IMAGE_B}\n\nSecond line. More.\n`);
+    opened.releaseDropTarget(next!);
+  });
+
+  it("pasted one after the other at one caret go in in paste order while the first is still stored", async () => {
+    const opened = await open("First line.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, "First line.".length + 1)));
+    const first = opened.caretTarget()!;
+    const second = opened.caretTarget()!;
+
+    opened.insertMarkdown(IMAGE, first, false);
+    opened.insertMarkdown(IMAGE_B, second, false);
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${IMAGE}\n\n${IMAGE_B}\n\nSecond line.\n`);
+    opened.releaseDropTarget(first);
+    opened.releaseDropTarget(second);
+  });
+
+  // A table cell cannot hold an image, so the images go in beside the table.
+  // Last in the document, they take the empty line Crepe keeps below a table
+  // or a code block.
+  it.each([
+    ["a table cell", "| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter.\n", "2", "| a | b |\n|---|---|\n| 1 | 2 |\n\nIMAGES\n\nAfter.\n"],
+    ["the first table cell", "Before.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n", "a", "Before.\n\nIMAGES\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"],
+    ["a table cell, last in the document", "Before.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n", "2", "Before.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nIMAGES\n"],
+    ["a code block, last in the document", "Before.\n\n```\ncode\n```\n", "code", "Before.\n\n```\ncode\n```\n\nIMAGES\n"],
+  ])("pasted one after the other at the end of %s go in in paste order while the first is still stored", async (_where, source, text, changed) => {
+    const opened = await open(source);
+    const view = viewOf(opened);
+    let end = -1;
+    view.state.doc.descendants((node, pos) => {
+      if (end < 0 && node.isTextblock && node.textContent === text) end = pos + node.nodeSize - 1;
+    });
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+    const first = opened.caretTarget()!;
+    const second = opened.caretTarget()!;
+
+    opened.insertMarkdown(IMAGE, first, false);
+    opened.insertMarkdown(IMAGE_B, second, false);
+
+    expect(opened.getMarkdown()).toBe(changed.replace("IMAGES", `${IMAGE}\n\n${IMAGE_B}`));
+    opened.releaseDropTarget(first);
+    opened.releaseDropTarget(second);
+  });
+
+  it("go in after a selected image, not over it", async () => {
+    const opened = await open(`First line.\n\n${IMAGE}\n\nSecond line.\n`);
+    const view = viewOf(opened);
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, view.state.doc.child(0).nodeSize)));
+
+    opened.insertMarkdown(IMAGE_B, opened.caretTarget());
+
+    expect(opened.getMarkdown()).toBe(`First line.\n\n${IMAGE}\n\n${IMAGE_B}\n\nSecond line.\n`);
+  });
+
+  it("go in after the line of a selected inline image, not inside the line", async () => {
+    const opened = await open("Hello ![a](pic.png) world.\n\nSecond line.\n");
+    const view = viewOf(opened);
+    let inline = -1;
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name === "image") inline = pos;
+    });
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, inline)));
+
+    opened.insertMarkdown(IMAGE_B, opened.caretTarget());
+
+    expect(opened.getMarkdown()).toBe(`Hello ![a](pic.png) world.\n\n${IMAGE_B}\n\nSecond line.\n`);
   });
 });

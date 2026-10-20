@@ -160,8 +160,9 @@ export class FileService {
 
   /** Resolve once no save that can give a tab's document a new path is under
    *  way, with its dialog open or its file being written. That is a Save As,
-   *  or a save that asks where to save an untitled document. A file dropped
-   *  on the document waits for this before it is written beside it (§5.4). */
+   *  or a save that asks where to save an untitled document. A file pasted
+   *  or dropped into the document waits for this before it is written beside
+   *  it (§5.4, §5.5, `storeBesideDocument`). */
   async untilPathSettled(tabId: string): Promise<void> {
     const moves = (request: SaveRequest): boolean =>
       request.tabId === tabId && (request.saveAs || request.expectedPath === null);

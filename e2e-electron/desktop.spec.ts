@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { WebPreferences } from "electron";
@@ -2006,23 +2006,38 @@ async function csvFile(name: string): Promise<string> {
 }
 
 /** Hold each request for a main process command, such as `read_image_bytes`,
- *  until `releaseHeld`, as for a large file or one on a slow share. Electron
- *  keeps the handlers of ipcMain.handle in `_invokeHandlers`, and a handler
- *  on the window's own `ipc` runs in their place. */
-async function holdCommand(command: string): Promise<void> {
-  await app!.evaluate(({ BrowserWindow, ipcMain }, held) => {
+ *  until `releaseHeld`, as for a large file or one on a slow share. With
+ *  `first`, only that many of the first requests wait, and the main process
+ *  answers the later ones at once (`passedAnswered`). Electron keeps the
+ *  handlers of ipcMain.handle in `_invokeHandlers`, and a handler on the
+ *  window's own `ipc` runs in their place. */
+async function holdCommand(command: string, { first }: { first?: number } = {}): Promise<void> {
+  await app!.evaluate(({ BrowserWindow, ipcMain }, [held, limit]) => {
     type Handler = (event: unknown, ...args: unknown[]) => unknown;
     const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
     const release = new Promise((resolve) => Reflect.set(globalThis, "releaseHeld", resolve));
+    let asked = 0;
     BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, name, ...args) => {
       if (name !== held) return invoke(event, name, ...args);
+      asked += 1;
+      if (limit !== null && asked > limit) {
+        const passed = await invoke(event, name, ...args);
+        Reflect.set(globalThis, "passedAnswered", Number(Reflect.get(globalThis, "passedAnswered") ?? 0) + 1);
+        return passed;
+      }
       Reflect.set(globalThis, "heldAsked", true);
       await release;
       const answer = await invoke(event, name, ...args);
       Reflect.set(globalThis, "heldAnswered", true);
       return answer;
     });
-  }, command);
+  }, [command, first ?? null] as const);
+}
+
+/** How many requests that `holdCommand` let go on without waiting the main
+ *  process has answered. */
+async function passedAnswered(): Promise<number> {
+  return app!.evaluate(() => Number(Reflect.get(globalThis, "passedAnswered") ?? 0));
 }
 
 /** Resolve once the main process has sent the app its answer to the
@@ -2253,6 +2268,582 @@ test("an image dropped on a document that is saved in another folder while the i
   expect(await readFile(path.join(path.dirname(saved), link))).toEqual(await readFile(path.join(directory, "pixel.png")));
 });
 
+/** A 16 by 16 PNG, which the system clipboard takes as an image. */
+const clipboardPng = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGM4ISdHEmIY1TCqYfhqAADkYgQQ60fIxgAAAABJRU5ErkJggg==";
+/** A 24 by 24 PNG, told apart from `clipboardPng` by its width. */
+const widerPng = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAAAH0lEQVR42mNQaLhAFcQwatCoQaMGjRo0atCoQQNvEABwyDwuqHdCUQAAAABJRU5ErkJggg==";
+
+/** Put a PNG, `clipboardPng` unless `png` gives another in base64, alone on
+ *  the system clipboard, as a screenshot tool does, and paste it at the end
+ *  of `line`. */
+async function pasteImageAtEnd(line: Locator, png = clipboardPng): Promise<void> {
+  await app!.evaluate(({ clipboard, ClipboardItem }, image) =>
+    clipboard.write([new ClipboardItem({ "image/png": new Blob([Buffer.from(image, "base64")], { type: "image/png" }) })]),
+  png);
+  await line.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("ControlOrMeta+v");
+}
+
+/** The width of each PNG a saved document shows, embedded or in its
+ *  attachments folder, in the order the document shows them. */
+async function imageWidths(file: string): Promise<number[]> {
+  const sources = [...(await readFile(file, "utf8")).matchAll(/!\[\]\(([^)]+)\)/g)].map((match) => match[1]!);
+  const images = await Promise.all(sources.map((src) => {
+    const embedded = /^data:image\/png;base64,(.+)$/.exec(src);
+    return embedded ? Buffer.from(embedded[1]!, "base64") : readFile(path.join(path.dirname(file), src));
+  }));
+  return images.map((image) => image.readUInt32BE(16));
+}
+
+/** Whether every image `images` matches has loaded. */
+function allLoaded(images: Locator): Promise<boolean> {
+  return images.evaluateAll((elements) =>
+    elements.length > 0 && elements.every((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0));
+}
+
+test("an image pasted into a document whose Save As ends after the image is written is written again beside it there", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  await holdCommand("write_attachment");
+  await pasteImageAtEnd(page.locator(".ProseMirror p", { hasText: "First line." }));
+  await untilHeld();
+  // The user starts Save As while the image is written, and is still in its
+  // dialog when the write ends.
+  const answerSave = await holdSaveDialog(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "saveAsked") === true)).toBe(true);
+  await releaseHeld();
+  await untilHeldAnswered();
+  await answerSave();
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await expect.poll(() => allLoaded(page.locator(".ProseMirror .milkdown-image-block img"))).toBe(true);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\n$/);
+  // The link leads to a copy beside the document where it is saved, and the
+  // copy written beside its old place stays.
+  const link = /\]\(([^)]+)\)/.exec(await readFile(saved, "utf8"))![1]!;
+  expect(await exists(path.join(path.dirname(saved), link))).toBe(true);
+  expect(await readdir(path.join(path.dirname(original), "attachments"))).toHaveLength(1);
+});
+
+test("an image pasted into a document while a Save As of it is written goes beside it where it is saved", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  // The Save As is written slowly, as to a network share.
+  await holdCommand("write_file");
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await untilHeld();
+  await pasteImageAtEnd(page.locator(".ProseMirror p", { hasText: "First line." }));
+  // Give the paste the time it would take to write the image beside the old place.
+  await page.waitForTimeout(500);
+  expect(await exists(path.join(path.dirname(original), "attachments"))).toBe(false);
+  await releaseHeld();
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await expect.poll(() => allLoaded(page.locator(".ProseMirror .milkdown-image-block img"))).toBe(true);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\n$/);
+  const link = /\]\(([^)]+)\)/.exec(await readFile(saved, "utf8"))![1]!;
+  expect(await exists(path.join(path.dirname(saved), link))).toBe(true);
+  expect(await exists(path.join(path.dirname(original), "attachments"))).toBe(false);
+});
+
+test("an image pasted into a document that is closed while a Save As of it is written asks first, and saves no other document", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "original", "notes.md");
+  const other = path.join(directory, "original", "other.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await writeFile(other, "Other line.\n");
+  await launch(original);
+  const tab = (name: RegExp) => page.getByRole("tab", { name });
+  // Another document has an edit that is not saved, which Save would write.
+  await chooseOpen(other);
+  await typeAtEnd(page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "Other line." }), " Not saved.");
+  await tab(/notes\.md/).click();
+  const first = page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "First line." });
+  await expect(first).toBeVisible();
+  const errors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  page.on("pageerror", (error) => errors.push(error.message));
+  // Record the unsaved-changes prompts and answer Discard.
+  await app!.evaluate(({ dialog }) => {
+    const prompts: string[] = [];
+    Object.assign(globalThis, { prompts });
+    dialog.showMessageBox = async (...args: unknown[]) => {
+      prompts.push(String((args.at(-1) as { message?: unknown }).message));
+      return { response: 1, checkboxChecked: false };
+    };
+  });
+  // The Save As is written slowly, as to a network share.
+  await holdCommand("write_file");
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await untilHeld();
+  await pasteImageAtEnd(first);
+  // The image waits for the Save As, and its document counts as unsaved.
+  await expect(tab(/notes\.md/).locator(".tab-dot")).toBeVisible();
+  // On Linux a middle click also pastes the selection into the document.
+  await tab(/notes\.md/).locator(".tab-close").click();
+  await expect(tab(/notes\.md/)).toHaveCount(0);
+  expect(await app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([
+    '"notes.md" has unsaved changes. Discard them?',
+  ]);
+  // A save of an untitled document would ask where to save it.
+  await app!.evaluate(({ dialog }) => {
+    dialog.showSaveDialog = async () => {
+      Reflect.set(globalThis, "saveAskedAfterClose", true);
+      return { canceled: true, filePath: "" };
+    };
+  });
+  await releaseHeld();
+  await expect.poll(() => exists(saved)).toBe(true);
+  // Give the image the time it would take to be written and saved for.
+  await page.waitForTimeout(1000);
+  expect(await readFile(other, "utf8")).toBe("Other line.\n");
+  await expect(tab(/other\.md/).locator(".tab-dot")).toBeVisible();
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "saveAskedAfterClose") === true)).toBe(false);
+  expect(await exists(path.join(path.dirname(original), "attachments"))).toBe(false);
+  expect(await exists(path.join(path.dirname(saved), "attachments"))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+for (const [when, held] of [
+  ["while a Save As of its document is written", "write_file"],
+  ["while it is written", "write_attachment"],
+] as const) {
+  test(`an image pasted ${when} goes in where it was pasted after a switch to the Markdown view, and typing there afterwards is saved`, async () => {
+    await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+    const original = path.join(directory, "notes.md");
+    const saved = held === "write_file" ? path.join(directory, "saved.md") : original;
+    await writeFile(original, "First line.\n\nSecond line.\n");
+    await launch(original);
+    const first = page.locator(".ProseMirror p", { hasText: "First line." });
+    await expect(first).toBeVisible();
+    // Written slowly, as to a network share.
+    await holdCommand(held);
+    if (held === "write_file") {
+      await chooseSave(saved);
+      await page.keyboard.press("ControlOrMeta+Shift+s");
+      await untilHeld();
+    }
+    await pasteImageAtEnd(first);
+    if (held === "write_attachment") await untilHeld();
+    await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-dot")).toBeVisible();
+    await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+    const source = page.locator(".cm-content");
+    await source.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await releaseHeld();
+    // The hidden document view takes the image where it was pasted, and the
+    // Markdown view makes the matching change. Before, the document view took
+    // it alone and left this view behind the document's text, which dropped
+    // the typing below from the save.
+    await expect(source).toContainText("![](attachments/img-");
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.type("\n\nThird line.");
+    await page.keyboard.press("ControlOrMeta+s");
+    await expect.poll(() => readFile(saved, "utf8")).toMatch(/^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\n\n\nThird line\.$/);
+    const link = /\]\(([^)]+)\)/.exec(await readFile(saved, "utf8"))![1]!;
+    expect(await exists(path.join(path.dirname(saved), link))).toBe(true);
+  });
+}
+
+for (const [start, opening] of [
+  ["a heading", "# Title\n\n"],
+  ["frontmatter", "---\ntitle: Notes\n---\n\n"],
+] as const) {
+  test(`an image pasted into a document that starts with ${start} keeps its place after a switch to the Markdown view`, async () => {
+    await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+    const file = path.join(directory, "notes.md");
+    await writeFile(file, `${opening}First line.\n\nSecond line.\n`);
+    await launch(file);
+    const first = page.locator(".ProseMirror p", { hasText: "First line." });
+    await expect(first).toBeVisible();
+    await holdCommand("write_attachment");
+    await pasteImageAtEnd(first);
+    await untilHeld();
+    // The user switches without a click in the Markdown view, so its caret is
+    // still at the start of the text.
+    await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+    const source = page.locator(".cm-content");
+    await expect(source).toBeVisible();
+    await releaseHeld();
+    await expect(source).toContainText("![](attachments/img-");
+    await page.keyboard.press("ControlOrMeta+s");
+    // At the Markdown view's caret, the image would have joined the heading's
+    // line or come before the frontmatter, and turned either into text.
+    await expect.poll(() => readFile(file, "utf8")).toMatch(/img-/);
+    expect((await readFile(file, "utf8")).replace(/attachments\/img-[^)]+\.png/, "IMG")).toBe(`${opening}First line.\n\n![](IMG)\n\nSecond line.\n`);
+  });
+}
+
+test("the images of a drop on the document all keep their place after a switch to the Markdown view while they are read", async () => {
+  const file = path.join(directory, "notes.md");
+  await writeFile(file, "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n");
+  await launch(file);
+  const second = page.locator(".ProseMirror p", { hasText: "Second paragraph." });
+  await expect(second).toBeVisible();
+  await holdCommand("read_image_bytes");
+  await dropBelow(second, [await pngFile("narrow.png", clipboardPng), await pngFile("wide.png", widerPng)]);
+  await untilHeld();
+  // The user switches without a click in the Markdown view, so its caret is
+  // still at the start of the text.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const source = page.locator(".cm-content");
+  await expect(source).toBeVisible();
+  await releaseHeld();
+  await expect.poll(async () => (await source.textContent())?.match(/!\[\]\(data:/g)?.length ?? 0).toBe(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(/data:/);
+  // Both go in after the second paragraph. If the first image's own source
+  // change left the document view behind the text, the second would go in
+  // at the Markdown view's caret, after the first paragraph.
+  expect((await readFile(file, "utf8")).replace(/data:image\/png;base64,[^)]+/g, "IMG")).toBe(
+    "First paragraph.\n\nSecond paragraph.\n\n![](IMG)\n\n![](IMG)\n\nThird paragraph.\n",
+  );
+  expect(await imageWidths(file)).toEqual([16, 24]);
+});
+
+for (const kind of ["pasted", "dropped"] as const) {
+  for (const markdownView of [false, true]) {
+    test(`an image ${kind} where an earlier one still waits to be written goes in after it${markdownView ? ", also after a switch to the Markdown view" : ""}`, async () => {
+      await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+      const file = path.join(directory, "notes.md");
+      await writeFile(file, "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n");
+      await launch(file);
+      const second = page.locator(".ProseMirror p", { hasText: "Second paragraph." });
+      await expect(second).toBeVisible();
+      // The first image is written slowly, as to a network share, and the
+      // second at once.
+      await holdCommand("write_attachment", { first: 1 });
+      const put = async (png: string, name: string): Promise<void> => {
+        if (kind === "pasted") await pasteImageAtEnd(second, png);
+        else await dropBelow(second, [await pngFile(name, png)]);
+      };
+      await put(clipboardPng, "narrow.png");
+      await untilHeld();
+      await put(widerPng, "wide.png");
+      // Give the second image the time it would take to be written and go in.
+      // It waits for the first, which would otherwise go in after it, and is
+      // written only once the first is in.
+      await page.waitForTimeout(1000);
+      await expect(page.locator(".ProseMirror .milkdown-image-block")).toHaveCount(0);
+      expect(await passedAnswered()).toBe(0);
+      const source = page.locator(".cm-content");
+      if (markdownView) {
+        await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+        await expect(source).toBeVisible();
+      }
+      await releaseHeld();
+      if (markdownView) await expect.poll(async () => (await source.textContent())?.match(/!\[\]\(attachments\//g)?.length ?? 0).toBe(2);
+      else await expect(page.locator(".ProseMirror .milkdown-image-block")).toHaveCount(2);
+      await page.keyboard.press("ControlOrMeta+s");
+      await expect.poll(() => readFile(file, "utf8")).toMatch(/img-/);
+      expect((await readFile(file, "utf8")).replace(/attachments\/img-[^)]+\.png/g, "IMG")).toBe(
+        "First paragraph.\n\nSecond paragraph.\n\n![](IMG)\n\n![](IMG)\n\nThird paragraph.\n",
+      );
+      expect(await imageWidths(file)).toEqual([16, 24]);
+    });
+  }
+}
+
+test("images pasted into a list item before a switch to the Markdown view both go into the item", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const file = path.join(directory, "notes.md");
+  await writeFile(file, "- one\n- two\n\nAfter.\n");
+  await launch(file);
+  const item = page.locator(".ProseMirror li p").filter({ hasText: /^two$/ });
+  await expect(item).toBeVisible();
+  await holdCommand("write_attachment");
+  await pasteImageAtEnd(item);
+  await untilHeld();
+  await pasteImageAtEnd(item, widerPng);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const source = page.locator(".cm-content");
+  await expect(source).toBeVisible();
+  await releaseHeld();
+  await expect.poll(async () => (await source.textContent())?.match(/!\[\]\(attachments\//g)?.length ?? 0).toBe(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(/img-.*img-/s);
+  // The mirror of the first image's change must not rewrite the item, which
+  // would put the second image after the list.
+  expect((await readFile(file, "utf8")).replace(/attachments\/img-[^)]+\.png/g, "IMG")).toBe(
+    "- one\n- two\n\n  ![](IMG)\n\n  ![](IMG)\n\nAfter.\n",
+  );
+  expect(await imageWidths(file)).toEqual([16, 24]);
+});
+
+test("images pasted before a switch to the Markdown view that both go in at its caret keep their paste order", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const file = path.join(directory, "notes.md");
+  await writeFile(file, "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n");
+  await launch(file);
+  const second = page.locator(".ProseMirror p", { hasText: "Second paragraph." });
+  await expect(second).toBeVisible();
+  await holdCommand("write_attachment");
+  await pasteImageAtEnd(second);
+  await untilHeld();
+  await pasteImageAtEnd(second, widerPng);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const source = page.locator(".cm-content");
+  await expect(source).toBeVisible();
+  // Typing in the Markdown view leaves the document view behind, so both
+  // images lose their place and go in at the caret, which stays before them.
+  await page.locator(".cm-line", { hasText: "First paragraph." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("X");
+  await releaseHeld();
+  await expect.poll(async () => (await source.textContent())?.match(/!\[\]\(attachments\//g)?.length ?? 0).toBe(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(/img-.*img-/s);
+  expect((await readFile(file, "utf8")).replace(/attachments\/img-[^)]+\.png/g, "IMG")).toBe(
+    "First paragraph.X\n\n![](IMG)\n\n![](IMG)\n\nSecond paragraph.\n\nThird paragraph.\n",
+  );
+  expect(await imageWidths(file)).toEqual([16, 24]);
+});
+
+test("images dropped one after another away from the text go in at the caret in drop order while the user clicks there again", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const file = path.join(directory, "notes.md");
+  await writeFile(file, "First paragraph.\n\nSecond paragraph.\n");
+  await launch(file);
+  const first = page.locator(".ProseMirror p", { hasText: "First paragraph." });
+  await expect(first).toBeVisible();
+  const toolbar = page.getByRole("button", { name: "Save", exact: true });
+  await holdCommand("write_attachment");
+  await first.click();
+  await page.keyboard.press("End");
+  await dropFiles(toolbar, [await pngFile("narrow.png", clipboardPng)]);
+  await untilHeld();
+  // The click leaves the caret before the first image once it is in.
+  await first.click();
+  await page.keyboard.press("End");
+  await dropFiles(toolbar, [await pngFile("wide.png", widerPng)]);
+  await releaseHeld();
+  await expect(page.locator(".ProseMirror .milkdown-image-block")).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(/img-.*img-/s);
+  expect((await readFile(file, "utf8")).replace(/attachments\/img-[^)]+\.png/g, "IMG")).toBe(
+    "First paragraph.\n\n![](IMG)\n\n![](IMG)\n\nSecond paragraph.\n",
+  );
+  expect(await imageWidths(file)).toEqual([16, 24]);
+});
+
+test("an image pasted while an earlier one is written goes beside the document where a Save As meanwhile puts it", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "original", "notes.md");
+  const saved = path.join(directory, "moved", "notes.md");
+  await mkdir(path.dirname(original));
+  await mkdir(path.dirname(saved));
+  await writeFile(original, "First paragraph.\n\nSecond paragraph.\n");
+  await launch(original);
+  const first = page.locator(".ProseMirror p", { hasText: "First paragraph." });
+  await expect(first).toBeVisible();
+  await holdCommand("write_attachment", { first: 1 });
+  await pasteImageAtEnd(first);
+  await untilHeld();
+  await pasteImageAtEnd(first, widerPng);
+  await page.waitForTimeout(500);
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("tab", { name: /notes\.md/ })).toHaveAttribute("title", saved);
+  await releaseHeld();
+  await expect(page.locator(".ProseMirror .milkdown-image-block")).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/img-.*img-/s);
+  // Both links lead from the new folder. The second image would otherwise
+  // be written beside the old one while it waited for the first.
+  const links = [...(await readFile(saved, "utf8")).matchAll(/!\[\]\(([^)]+)\)/g)].map((match) => match[1]!);
+  expect(await Promise.all(links.map((link) => exists(path.join(path.dirname(saved), link))))).toEqual([true, true]);
+  expect(await imageWidths(saved)).toEqual([16, 24]);
+  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveCount(0);
+});
+
+test("an image chosen in an image block's upload input while it is written goes into the Markdown view shown by then, and typing there afterwards is saved", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const file = path.join(directory, "notes.md");
+  await writeFile(file, "First line.\n\n![]()\n\nSecond line.\n");
+  await launch(file);
+  const upload = page.locator(".milkdown-image-block input[type=file]");
+  await expect(upload).toHaveCount(1);
+  await holdCommand("write_attachment");
+  await upload.setInputFiles(await pngFile("pixel.png"));
+  await untilHeld();
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const source = page.locator(".cm-content");
+  await source.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await releaseHeld();
+  // The hidden document view takes the image, and the Markdown view takes the
+  // document's text from it. Otherwise the Markdown view would lag the text,
+  // and the typing below would be left out of the save.
+  await expect(source).toContainText("![](attachments/img-");
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type("Typed after upload.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toContain("Typed after upload.");
+  expect(await readFile(file, "utf8")).toMatch(/^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\nTyped after upload\.$/);
+});
+
+test("an image pasted while a Save As of its document is written goes in after an edit in the Markdown view rebuilt the document view", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const original = path.join(directory, "notes.md");
+  const saved = path.join(directory, "saved.md");
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await launch(original);
+  const first = page.locator(".ProseMirror p", { hasText: "First line." });
+  await expect(first).toBeVisible();
+  await holdCommand("write_file");
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await untilHeld();
+  await pasteImageAtEnd(first);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.locator(".cm-content").click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type("\nThird line.\n");
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "Third line." })).toBeVisible();
+  await releaseHeld();
+  // The document view that took the paste was rebuilt for the edit, and the
+  // image goes in at the new one's caret.
+  await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block img")).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8")).toMatch(/!\[\]\(attachments\/img-[^)]+\.png\)/);
+  const text = await readFile(saved, "utf8");
+  expect(text.replace(/!\[\]\(attachments\/img-[^)]+\.png\)\n\n/, "")).toBe("First line.\n\nSecond line.\n\nThird line.\n");
+  const link = /\]\(([^)]+)\)/.exec(text)![1]!;
+  expect(await exists(path.join(path.dirname(saved), link))).toBe(true);
+});
+
+test("an image pasted into a document whose editor is dropped from memory while the image is written goes in once the document is shown again", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\nmaxRetainedTabEditors = 1\n");
+  const original = path.join(directory, "notes.md");
+  const other = path.join(directory, "other.md");
+  await writeFile(original, "First line.\n\nSecond line.\n");
+  await writeFile(other, "Other line.\n");
+  await launch(original);
+  await holdCommand("write_attachment");
+  await pasteImageAtEnd(page.locator(".ProseMirror p", { hasText: "First line." }));
+  await untilHeld();
+  await chooseOpen(other);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p", { hasText: "Other line." })).toBeVisible();
+  // Only the tab in front keeps its editor.
+  await expect(page.locator(".ProseMirror p", { hasText: "First line." })).toHaveCount(0);
+  await releaseHeld();
+  await untilHeldAnswered();
+  // The image waits for its document, which shows as unsaved meanwhile.
+  await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-dot")).toBeVisible();
+  await page.getByRole("tab", { name: /notes\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block img")).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(original, "utf8")).toMatch(/!\[\]\(attachments\/img-[^)]+\.png\)/);
+  const text = await readFile(original, "utf8");
+  expect(text.replace(/!\[\]\(attachments\/img-[^)]+\.png\)\n\n/, "")).toBe("First line.\n\nSecond line.\n");
+  expect(await readFile(other, "utf8")).toBe("Other line.\n");
+});
+
+test("an image pasted into an untitled document whose save the user cancels puts nothing in", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const other = path.join(directory, "other.md");
+  await writeFile(other, "Other line.\n");
+  await launch(other);
+  await expect(page.locator(".ProseMirror p")).toHaveText("Other line.");
+  const line = await newDocumentLine();
+  await line.click();
+  await page.keyboard.type("First line.");
+  // The image needs a folder beside the document, so it asks where to save.
+  await app!.evaluate(({ dialog }) => {
+    dialog.showSaveDialog = async () => {
+      Reflect.set(globalThis, "saveAsked", true);
+      return { canceled: true, filePath: "" };
+    };
+  });
+  await pasteImageAtEnd(line);
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "saveAsked") === true)).toBe(true);
+  // Give the paste the time it would take to put an image in.
+  await page.waitForTimeout(500);
+  // Crepe's upload plugin put in an image without a src, which showed its
+  // upload input and was saved as ![]().
+  await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block")).toHaveCount(0);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".cm-content")).toContainText("First line.");
+  await expect(page.locator(".cm-content")).not.toContainText("![");
+});
+
+test("an image pasted or dropped as a file starts at its own URL, with no failed load or missing-image flash", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nembedImagesAsBase64 = false\n");
+  const file = path.join(directory, "inserted-images.md");
+  await writeFile(file, "First line.\n\nSecond line.\n");
+  await launch(file);
+  // The observer below needs the document's editor.
+  await expect(page.locator(".ProseMirror p", { hasText: "First line." })).toBeVisible();
+  const problems: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") problems.push(message.text()); });
+  page.on("requestfailed", (request) => problems.push(`${request.url()} ${request.failure()?.errorText}`));
+  // Answer each question about an image's URL 300 ms late, as a busy machine
+  // or a slow share might. Electron keeps the handlers of ipcMain.handle in
+  // `_invokeHandlers`, and a handler on the window's own `ipc` runs in their place.
+  await app!.evaluate(({ BrowserWindow, ipcMain }) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const imageUrl = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:image-url")!;
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", async (event, ...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return imageUrl(event, ...args);
+    });
+  });
+  // Record every src an image in the document takes, and whether one ever
+  // shows as missing.
+  await page.evaluate(() => {
+    const root = document.querySelector(".milkdown .ProseMirror")!;
+    const seen = { sources: [] as string[], missing: false };
+    const note = (src: string | null): void => {
+      if (src && !seen.sources.includes(src)) seen.sources.push(src);
+    };
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.target instanceof HTMLImageElement) note(record.target.getAttribute("src"));
+        for (const added of record.addedNodes) {
+          if (added instanceof Element) [added, ...added.querySelectorAll("img")].forEach((element) => element instanceof HTMLImageElement && note(element.getAttribute("src")));
+        }
+      }
+      if (root.querySelector(".md-image-missing")) seen.missing = true;
+    }).observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["src", "class"] });
+    Reflect.set(window, "imageHistory", seen);
+  });
+  const images = page.locator(".ProseMirror .milkdown-image-block img");
+  await pasteImageAtEnd(page.locator(".ProseMirror p", { hasText: "First line." }));
+  await expect(images).toHaveCount(1);
+  await expect.poll(() => allLoaded(images)).toBe(true);
+  await dropBelow(page.locator(".ProseMirror p", { hasText: "Second line." }), [await pngFile("pixel.png")]);
+  await expect(images).toHaveCount(2);
+  await expect.poll(() => allLoaded(images)).toBe(true);
+  const history = await page.evaluate(() => Reflect.get(window, "imageHistory") as { sources: string[]; missing: boolean });
+  // A raw path would be looked up next to md-easy's own page and fail there.
+  expect(history.sources).toHaveLength(2);
+  expect(history.sources.every((src) => src.startsWith("md-easy-file:"))).toBe(true);
+  expect(history.missing).toBe(false);
+  expect(problems).toEqual([]);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(
+    /^First line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n\nSecond line\.\n\n!\[\]\(attachments\/img-[^)]+\.png\)\n$/,
+  );
+});
+
 test("a file dropped on the split's document pane while the Markdown pane has focus goes in at the drop point and keeps the source as written", async () => {
   // The document view would write this heading and these bullets another way.
   const text = "First line.\n\nSecond line.\n\nTitle\n=====\n\n* Alpha\n* Beta\n";
@@ -2312,10 +2903,11 @@ test("a formula typed last in the document pane is kept by the split's Markdown 
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. a $x$ raw b $y$\n");
 });
 
-/** A one-pixel PNG to drop, written as `name`, returning its path. */
-async function pngFile(name: string): Promise<string> {
+/** A PNG to drop, one pixel unless `png` gives another in base64, written as
+ *  `name`, returning its path. */
+async function pngFile(name: string, png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII="): Promise<string> {
   const file = path.join(directory, name);
-  await writeFile(file, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
+  await writeFile(file, Buffer.from(png, "base64"));
   return file;
 }
 

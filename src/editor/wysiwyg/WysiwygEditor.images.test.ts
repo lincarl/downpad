@@ -2,8 +2,9 @@
 // Crepe's image views render a node's raw src until proxyDomURL answers, and
 // Chromium looks a raw relative src up next to md-easy's own page. These tests
 // use the real editor to check that local images start at the URL they show,
-// that a late answer never replaces a newer one, and that a relocated image
-// shows the file it is pointed at.
+// that a late answer never replaces a newer one, that a relocated image shows
+// the file it is pointed at, that an image stored as a file through the upload
+// input goes beside its document, and that the app takes pasted images.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -15,6 +16,8 @@ import { serializerStyleFromSettings } from "../../state/types";
 const native = vi.hoisted(() => ({
   convertFileSrc: vi.fn<(path: string) => Promise<string | null>>(),
   openDialog: vi.fn<() => Promise<string | null>>(),
+  /** Gives the image's link from the document, as the main process does. */
+  writeAttachment: vi.fn<(docPath: string, folder: string, name: string) => Promise<string>>(),
 }));
 vi.mock("../../ipc/env", () => ({ isElectron: () => true }));
 vi.mock("../../ipc/bridge", async (importOriginal) => ({
@@ -22,8 +25,13 @@ vi.mock("../../ipc/bridge", async (importOriginal) => ({
   convertFileSrc: native.convertFileSrc,
 }));
 vi.mock("../../ipc/dialogs", () => ({ openDialog: native.openDialog }));
+vi.mock("../../ipc/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../ipc/commands")>()),
+  writeAttachment: native.writeAttachment,
+}));
 
 import { WysiwygEditor } from "./WysiwygEditor";
+import type { WysiwygContext } from "./context";
 import { forgetImageAnswers } from "./imageView";
 
 // Crepe's code block view watches whether it is on screen, which jsdom cannot tell.
@@ -32,6 +40,16 @@ vi.stubGlobal("IntersectionObserver", class {
   unobserve(): void {}
   disconnect(): void {}
 });
+
+/** jsdom has no ClipboardEvent or DragEvent, which Crepe's upload plugin, the
+ *  one that takes an image pasted alone, checks a paste for. */
+class ClipboardEventStub extends Event {
+  constructor(type: string, readonly clipboardData: Pick<DataTransfer, "files" | "items" | "getData">) {
+    super(type, { bubbles: true, cancelable: true });
+  }
+}
+vi.stubGlobal("ClipboardEvent", ClipboardEventStub);
+vi.stubGlobal("DragEvent", class extends Event {});
 
 const DOCUMENT = "![Block](pic.png)\n\nInline ![inline](pic.png) and ![gone](gone.png).\n";
 
@@ -51,6 +69,8 @@ beforeEach(() => {
   });
   native.convertFileSrc.mockReset();
   native.openDialog.mockReset();
+  native.writeAttachment.mockReset();
+  native.writeAttachment.mockImplementation(async (_docPath, folder) => `${folder}/img.png`);
   forgetImageAnswers();
 });
 
@@ -61,8 +81,13 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** Start mounting the document editor on `markdown`, saved at /docs/a.md. */
-function start(markdown: string, onChange: (markdown: string) => void = () => {}): { root: HTMLElement; mounting: Promise<void> } {
+/** Start mounting the document editor on `markdown`, saved at /docs/a.md
+ *  unless `context` says otherwise. */
+function start(
+  markdown: string,
+  onChange: (markdown: string) => void = () => {},
+  context: Partial<WysiwygContext> = {},
+): { root: HTMLElement; mounting: Promise<void> } {
   const root = document.createElement("div");
   document.body.append(root);
   editor = new WysiwygEditor();
@@ -70,13 +95,15 @@ function start(markdown: string, onChange: (markdown: string) => void = () => {}
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => "/docs/a.md",
     requestSave: async () => false,
+    ...context,
   });
   return { root, mounting };
 }
 
-/** Mount the document editor on `markdown`, saved at /docs/a.md. */
-async function open(markdown: string, onChange?: (markdown: string) => void): Promise<HTMLElement> {
-  const { root, mounting } = start(markdown, onChange);
+/** Mount the document editor on `markdown`, saved at /docs/a.md unless
+ *  `context` says otherwise. */
+async function open(markdown: string, onChange?: (markdown: string) => void, context?: Partial<WysiwygContext>): Promise<HTMLElement> {
+  const { root, mounting } = start(markdown, onChange, context);
   await mounting;
   return root;
 }
@@ -138,6 +165,105 @@ describe("the first render", () => {
 
     // Milkdown would write the line break as a backslash.
     expect(editor!.getMarkdown()).toBe(opened);
+  });
+});
+
+/** A PNG image file, as a screenshot or an image chosen in a file dialog. */
+const pngFile = (): File => new File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "image/png" });
+
+/** A FileList holding `files`. */
+const fileList = (files: File[]): FileList =>
+  Object.assign([...files], { item: (index: number) => files[index] ?? null }) as unknown as FileList;
+
+/** Paste a PNG image at the caret, as Ctrl+V does with a screenshot alone on
+ *  the clipboard, or with `text` too. */
+function pasteImage(root: HTMLElement, text = ""): void {
+  const clipboard = {
+    files: fileList([pngFile()]),
+    items: [] as unknown as DataTransferItemList,
+    getData: (type: string) => (type === "text/plain" ? text : ""),
+  };
+  root.querySelector(".ProseMirror")!.dispatchEvent(new ClipboardEventStub("paste", clipboard));
+}
+
+/** Choose a PNG image in the upload input of the empty image block. */
+function uploadImage(root: HTMLElement): void {
+  const input = root.querySelector<HTMLInputElement>(".milkdown-image-block input[type=file]")!;
+  Object.defineProperty(input, "files", { value: fileList([pngFile()]), configurable: true });
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+describe("an image stored as a file through the upload input", () => {
+  /** The settings that store every image as a file. */
+  const asFiles = { getSettings: () => ({ ...DEFAULT_SETTINGS, embedImagesAsBase64: false }) };
+  /** A document with an empty image block, which shows the upload input. */
+  const EMPTY_IMAGE = "First line.\n\n![]()\n";
+
+  it("starts at its own URL", { timeout: 60_000 }, async () => {
+    let answer: (url: string) => void = () => {};
+    native.convertFileSrc.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const root = await open(EMPTY_IMAGE, undefined, asFiles);
+
+    uploadImage(root);
+    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/attachments/img.png"));
+    // The image goes in once the main process answers.
+    expect(sources(root)).toEqual([]);
+    answer("md-easy-file://img");
+
+    await vi.waitFor(() => expect(sources(root)).toEqual(["md-easy-file://img"]));
+    // The raw path would be requested next to md-easy's own page.
+    expect(shownSources).not.toContain("attachments/img.png");
+    expect(editor!.getMarkdown()).toContain("![](attachments/img.png)");
+  });
+
+  it("is written and looked up again beside the document when a Save As moves it while the image is looked up", { timeout: 60_000 }, async () => {
+    let answerFirst: (url: string) => void = () => {};
+    native.convertFileSrc.mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)));
+    native.convertFileSrc.mockImplementation(async (path) => `md-easy-file://${path}`);
+    let filePath = "/docs/a.md";
+    const root = await open(EMPTY_IMAGE, undefined, { ...asFiles, getFilePath: () => filePath });
+
+    uploadImage(root);
+    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/attachments/img.png"));
+    // A Save As into another folder ends before the main process answers.
+    filePath = "/moved/a.md";
+    answerFirst("md-easy-file:///docs/attachments/img.png");
+
+    await vi.waitFor(() => expect(sources(root)).toEqual(["md-easy-file:///moved/attachments/img.png"]));
+    expect(native.writeAttachment).toHaveBeenCalledTimes(2);
+    expect(native.writeAttachment).toHaveBeenLastCalledWith("/moved/a.md", "attachments", expect.stringMatching(/^img-/), expect.any(Uint8Array));
+    expect(shownSources).not.toContain("attachments/img.png");
+  });
+});
+
+describe("a pasted image", () => {
+  it("goes to the app at once, and Crepe's upload plugin puts nothing into the editor", { timeout: 60_000 }, async () => {
+    const pasteImages = vi.fn<(files: File[]) => void>();
+    const root = await open("First line.\n", undefined, {
+      getSettings: () => ({ ...DEFAULT_SETTINGS, embedImagesAsBase64: false }),
+      pasteImages,
+    });
+
+    pasteImage(root);
+    expect(pasteImages).toHaveBeenCalledOnce();
+    expect(pasteImages.mock.calls[0]![0].map((file) => [file.name, file.type])).toEqual([["image.png", "image/png"]]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // No upload placeholder, no image without a src, and no file written.
+    expect(root.textContent).not.toContain("Upload in progress");
+    expect(root.querySelector(".milkdown-image-block")).toBeNull();
+    expect(editor!.getMarkdown()).toBe("First line.\n");
+    expect(native.writeAttachment).not.toHaveBeenCalled();
+  });
+
+  it("with plain text goes to Milkdown's clipboard plugin, which pastes the text", { timeout: 60_000 }, async () => {
+    const pasteImages = vi.fn<(files: File[]) => void>();
+    const root = await open("First line.\n", undefined, { pasteImages });
+
+    pasteImage(root, "Pasted text.");
+
+    expect(pasteImages).not.toHaveBeenCalled();
+    expect(editor!.getMarkdown()).toContain("Pasted text.");
   });
 });
 

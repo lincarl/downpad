@@ -47,8 +47,9 @@ export function inBase64Payload(doc: Text, from: number, to: number): boolean {
   return payloadRanges(doc).some(([start, end]) => from < end && to > start);
 }
 
-/** How long a drop on image data may wait for the Markdown view to finish
- *  reading the text's structure. */
+/** How long a drop on image data, or a file put in as a paragraph of its
+ *  own, may wait for the Markdown view to finish reading the text's
+ *  structure. */
 const PARSE_BUDGET_MS = 200;
 
 /**
@@ -67,21 +68,56 @@ const PARSE_BUDGET_MS = 200;
  * time, the file goes in after the line.
  */
 export function dropOutsidePayload(state: EditorState, pos: number): { pos: number; newBlock: boolean } {
-  const { doc } = state;
-  const payload = payloadRanges(doc).find(([start, end]) => pos >= start && pos <= end);
+  const payload = payloadRanges(state.doc).find(([start, end]) => pos >= start && pos <= end);
   if (!payload) return { pos, newBlock: false };
   const [start, end] = payload;
+  const { block, link } = blockAt(state, start);
+  if (link) return { pos: link.to, newBlock: false };
+  return { pos: besideBlock(state, block, end), newBlock: true };
+}
+
+/**
+ * Where a file put in as a paragraph of its own (`newBlock`) goes for a caret
+ * at `pos`: after the top-level block that holds the caret, also at either
+ * end of it, so the file never joins a line, a heading, a list or the
+ * frontmatter, nor goes between the lines of a `$$` formula. Before that
+ * block when it is the last one and takes in text after it, as for
+ * `dropOutsidePayload`, such as math that is not closed yet. The Markdown
+ * view's syntax tree reads display math as the document view does
+ * (`markdownSource`).
+ */
+export function paragraphPlace(state: EditorState, pos: number): number {
+  return besideBlock(state, blockAt(state, pos, 1).block ?? blockAt(state, pos, -1).block, pos);
+}
+
+/** A node of the Markdown view's syntax tree. */
+type SyntaxNode = NonNullable<ReturnType<typeof ensureSyntaxTree>>["topNode"];
+
+/** The top-level block of the text's syntax tree that holds `pos`, and the
+ *  outermost Markdown image or link there. Each is null where there is none,
+ *  and the block is null without the text's structure in time. At an edge of
+ *  a node, `side` 1 finds the node that starts there, and -1 the one that
+ *  ends there. */
+function blockAt(state: EditorState, pos: number, side: 1 | -1 = 1): { block: SyntaxNode | null; link: SyntaxNode | null } {
   // `resolve` stays in the Markdown tree, out of the HTML parsed inside it.
-  let node = ensureSyntaxTree(state, doc.length, PARSE_BUDGET_MS)?.resolve(start, 1) ?? null;
-  let link: typeof node = null;
+  let node = ensureSyntaxTree(state, state.doc.length, PARSE_BUDGET_MS)?.resolve(pos, side) ?? null;
+  let link: SyntaxNode | null = null;
   while (node?.parent?.parent) {
     if (node.name === "Image" || node.name === "Link") link = node;
     node = node.parent;
   }
-  if (link) return { pos: link.to, newBlock: false };
-  if (!node?.parent) return { pos: doc.lineAt(end).to, newBlock: true };
-  if (!node.nextSibling && takesInTextAfter(state, node.from)) return { pos: doc.lineAt(node.from).from, newBlock: true };
-  return { pos: doc.lineAt(node.to).to, newBlock: true };
+  return { block: node?.parent ? node : null, link };
+}
+
+/** Where a paragraph of its own goes beside a top-level `block`: at the end
+ *  of its last line, or at the start of its first line when it is the last
+ *  block and takes in text after it. Without a block, at the end of the line
+ *  at `pos`. */
+function besideBlock(state: EditorState, block: SyntaxNode | null, pos: number): number {
+  const { doc } = state;
+  if (!block) return doc.lineAt(pos).to;
+  if (!block.nextSibling && takesInTextAfter(state, block.from)) return doc.lineAt(block.from).from;
+  return doc.lineAt(block.to).to;
 }
 
 /** Whether the last top-level block, which starts at `from`, would take in a

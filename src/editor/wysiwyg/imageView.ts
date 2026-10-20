@@ -7,7 +7,7 @@
 //      images render inline. A local image that cannot be loaded gets an empty
 //      data: URL, which fails at once, so the image shows as missing. Answers
 //      are kept for the window, so an image asked about before (see
-//      preloadImages.ts) shows its URL from its first render.
+//      lookUpImages and preloadImages.ts) shows its URL from its first render.
 //   2. onImageLoadError — when an image fails to load, show it as missing: an
 //      image block as a placeholder with the broken icon and its path, an inline
 //      image as a chip in its line with the icon and its path. A click on either
@@ -332,12 +332,52 @@ function lookUp(path: string): string | Lookup {
   return lookup;
 }
 
+/** The absolute path md-easy asks about for an image src in a document saved
+ *  at `filePath`, or null when the src is not a local image. Outside Electron
+ *  every src is shown as it is. */
+function localImagePath(src: string, filePath: string | null): string | null {
+  return isElectron() ? resolveImagePath(src, filePath) : null;
+}
+
+/**
+ * Ask the main process about the local images among `srcs`, in a document
+ * saved at `filePath`, before their views exist, so each view shows its
+ * image's URL from its first render. Crepe's views render a raw src until an
+ * asynchronous answer arrives, and Chromium looks a relative one up next to
+ * md-easy's own page, which fails and can show the image as missing for a
+ * moment. preloadImages calls this before a document's first render, and a
+ * pasted or dropped image waits for it before it goes in.
+ *
+ * Settles once every answer is in, or each lookup still running was sent
+ * ANSWER_WAIT_MS ago. A lookup sent earlier, such as by another editor, is
+ * waited for only that long from when it was sent, so a slow path holds back
+ * one first render, not every rebuild of the document editor.
+ */
+export async function lookUpImages(srcs: readonly string[], filePath: string | null): Promise<void> {
+  const lookups = new Set<Lookup>();
+  for (const src of srcs) {
+    const path = localImagePath(src, filePath);
+    const known = path ? lookUp(path) : null;
+    if (known && typeof known !== "string") lookups.add(known);
+  }
+  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  const waitFor = (lookup: Lookup): Promise<unknown> =>
+    Promise.race([
+      lookup.answer,
+      new Promise((resolve) => timers.push(setTimeout(resolve, lookup.waitUntil - performance.now()))),
+    ]);
+  try {
+    await Promise.all([...lookups].map(waitFor));
+  } finally {
+    timers.forEach(clearTimeout);
+  }
+}
+
 /** Crepe ImageBlock feature config: render linked images + missing-image UX. */
 export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
   /** The absolute path md-easy asks about for an image src, or null when the src
    *  is not a local image. Outside Electron every src is shown as it is. */
-  const localPath = (src: string): string | null =>
-    isElectron() ? resolveImagePath(src, ctx.getFilePath()) : null;
+  const localPath = (src: string): string | null => localImagePath(src, ctx.getFilePath());
   /** Forget the answer about an image src, so its next view asks again. */
   const forget = (src: string): void => {
     const path = localPath(src);
@@ -368,16 +408,21 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
     return shown.paths.has(path);
   };
   return {
-    // Storage hook for pasted/dropped/uploaded image *files* (§5.5). Crepe's
-    // upload pipeline calls this for the image's `src`; its default returns a
-    // `blob:` object URL, which is session-scoped and would land in the saved
-    // markdown (dead on reload). Route through our store so the src is a base64
-    // data URI (embed) or an attachments path instead — the form we persist.
+    // Storage hook for uploaded image *files* (§5.5). Crepe calls this for the
+    // `src` of an image chosen in an image block's upload input. Its upload
+    // plugin would also call it for an image pasted alone on the clipboard,
+    // but md-easy's smart paste takes those first (pasteHandler.ts). Its
+    // default returns a `blob:` object URL, which is session-scoped and would
+    // land in the saved markdown (dead on reload). Route through our store so
+    // the src is a base64 data URI (embed) or an attachments path instead, the
+    // form we persist. An image stored as a file is asked about before it goes
+    // in (`lookUpImages`), so its view shows the image from its first render.
     onUpload: async (file: File): Promise<string> => {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const src = await resolveImageSrc(bytes, file.type || "image/png", ctx);
+      const src = await resolveImageSrc(bytes, file.type || "image/png", ctx, (stored, filePath) => lookUpImages([stored], filePath));
       // null = user cancelled the prompt-to-save for an attachment; leave the
-      // src empty so nothing dangling (a blob URL) is written.
+      // src empty so nothing dangling (a blob URL) is written. The upload
+      // input then leaves the image block empty.
       return src ?? "";
     },
     /** Map a Markdown image src to a URL the page can load, for block and inline
@@ -391,8 +436,10 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
      *  that answer at once. Crepe's image views render the raw src until an
      *  asynchronous answer arrives, and Chromium requests a relative one next to
      *  md-easy's own page. preloadImages asks about a document's images before
-     *  its first render for this reason. Answers last until a document is opened
-     *  or reloaded, so a missing image that appears meanwhile shows then.
+     *  its first render for this reason, and a pasted or dropped image is asked
+     *  about before it goes in (`lookUpImages`). Answers last until a document
+     *  is opened or reloaded, so a missing image that appears meanwhile shows
+     *  then.
      *
      *  Crepe shows an asynchronous answer whenever it arrives, even if the view's
      *  src has changed since. An answer for a path no image in the document shows
@@ -405,30 +452,9 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
       if (typeof known === "string") return known;
       return known.answer.then((shownUrl) => (stillShown(path) ? shownUrl : new Promise<string>(() => {})));
     },
-    /** Ask about images before their views exist (preloadImages). Settles once
-     *  every answer is in, or each lookup still running was sent ANSWER_WAIT_MS
-     *  ago. A lookup another editor sent earlier is waited for only that long
-     *  from when it was sent, so a slow path holds back one first render, not
-     *  every rebuild of the document editor. */
-    preload: async (srcs: readonly string[]): Promise<void> => {
-      const lookups = new Set<Lookup>();
-      for (const src of srcs) {
-        const path = localPath(src);
-        const known = path ? lookUp(path) : null;
-        if (known && typeof known !== "string") lookups.add(known);
-      }
-      const timers: Array<ReturnType<typeof setTimeout>> = [];
-      const waitFor = (lookup: Lookup): Promise<unknown> =>
-        Promise.race([
-          lookup.answer,
-          new Promise((resolve) => timers.push(setTimeout(resolve, lookup.waitUntil - performance.now()))),
-        ]);
-      try {
-        await Promise.all([...lookups].map(waitFor));
-      } finally {
-        timers.forEach(clearTimeout);
-      }
-    },
+    /** Ask about the document's images before their views exist
+     *  (preloadImages), as `lookUpImages` does. */
+    preload: (srcs: readonly string[]): Promise<void> => lookUpImages(srcs, ctx.getFilePath()),
     onImageLoadError: (event: Event): void => markMissing(event, viewRef, { forget, names }),
   };
 }

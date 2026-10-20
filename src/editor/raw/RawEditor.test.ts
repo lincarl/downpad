@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { undo } from "@codemirror/commands";
 import { Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { RawEditor, dropEditChanges } from "./RawEditor";
@@ -58,6 +59,43 @@ describe("RawEditor.insertText", () => {
     typeOver(editor, "!");
 
     expect(editor.getText()).toBe("First line.![a.csv](attachments/a.csv)[b.csv](attachments/b.csv)\nSecond line.\n");
+  });
+
+  it("puts a file in as an undo step of its own, apart from the typing right before and after it", () => {
+    const editor = mountWithCaret("First line.", "\n");
+    const { view } = editor as unknown as { view: EditorView };
+    const typeKeys = (text: string): void => view.dispatch({ ...view.state.replaceSelection(text), userEvent: "input.type" });
+
+    typeKeys(" Typed.");
+    editor.insertText("![](attachments/a.png)", null, false);
+    typeKeys(" More.");
+
+    undo(view);
+    expect(editor.getText()).toBe("First line. Typed.![](attachments/a.png)\n");
+    undo(view);
+    expect(editor.getText()).toBe("First line. Typed.\n");
+  });
+});
+
+describe("RawEditor.blockTargetAtCaret", () => {
+  const IMAGE = "![](attachments/a.png)";
+
+  it.each([
+    ["a heading the text starts with", "", "# Title\n\nFirst line.\n", `# Title\n\n${IMAGE}\n\nFirst line.\n`],
+    ["the frontmatter", "", "---\ntitle: Notes\n---\n\nFirst line.\n", `---\ntitle: Notes\n---\n\n${IMAGE}\n\nFirst line.\n`],
+    ["the middle of a line", "First", " line.\n\nSecond line.\n", `First line.\n\n${IMAGE}\n\nSecond line.\n`],
+    ["the end of a list", "- One\n- Two", "\n\nAfter.\n", `- One\n- Two\n\n${IMAGE}\n\nAfter.\n`],
+    ["a code fence not closed yet", "First line.\n\n```js\ncode", "", `First line.\n\n${IMAGE}\n\n\`\`\`js\ncode`],
+    ["display math with a blank line", "First line.\n\n$$\na+b", "\n\nc+d\n$$\n\nAfter.\n", `First line.\n\n$$\na+b\n\nc+d\n$$\n\n${IMAGE}\n\nAfter.\n`],
+    ["display math right below a paragraph's line", "Intro.\n$$\na+b", "\n\nc+d\n$$\nAfter.\n", `Intro.\n$$\na+b\n\nc+d\n$$\n\n${IMAGE}\n\nAfter.\n`],
+    ["display math not closed yet", "First line.\n\n$$\na+b", "\n\nc+d\n", `First line.\n\n${IMAGE}\n\n$$\na+b\n\nc+d\n`],
+  ])("puts a file in after the block that holds a caret in %s, as a paragraph of its own", (_where, before, after, expected) => {
+    const editor = mountWithCaret(before, after);
+
+    const target = editor.blockTargetAtCaret()!;
+    editor.insertText(IMAGE, target, false);
+
+    expect(editor.getText()).toBe(expected);
   });
 });
 

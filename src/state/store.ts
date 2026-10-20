@@ -92,8 +92,9 @@ export class Store {
     });
   }
 
-  /** Record whether files dropped on a tab's document are still on their way
-   *  into it (§5.4). No-op for an unknown id. */
+  /** Record whether files dropped on a tab's document, or images pasted into
+   *  it, are still on their way into it (§5.4, §5.5). No-op for an unknown
+   *  id. */
   setFilesPending(tabId: string, pending: boolean): void {
     this.set((s) => {
       if (!s.tabs.some((t) => t.id === tabId)) return {};
