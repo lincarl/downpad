@@ -66,6 +66,7 @@ import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } f
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
+import { toolbarBlur } from "./toolbarBlur";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import { linkEdges } from "./linkEdges";
 import {
@@ -326,8 +327,10 @@ export class WysiwygEditor {
     this.crepe.editor.use(searchMilkdownPlugin(() => cb.onFindScroll?.()));
     // Tab that the editor does not use, or Esc then Tab, moves focus out.
     this.crepe.editor.use(tabExit);
-    // Focus that leaves the document closes the slash menu.
+    // Focus that leaves the document closes the slash menu and hides the
+    // selection toolbar.
     this.crepe.editor.use(slashMenuBlur);
+    this.crepe.editor.use(toolbarBlur);
     // Read `$` and `~` as math and strikethrough only where Markdown tools do,
     // so prices stay text. Must follow the LaTeX feature.
     this.crepe.editor.use(mathDelimiters);

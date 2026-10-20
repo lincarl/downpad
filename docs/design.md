@@ -77,6 +77,8 @@ Chromium does not extend the selection on a Shift+click whose press lands on a l
 
 A press on the page around the editors, such as beside the document's column, in a split pane's margin or below the end of the document view or the Markdown view, lands on no editor. Chromium moved focus to the page there, and the next key was lost, also when the document had focus. A Shift+press there from the Markdown pane extended the pane's selection to its start. A listener on the editor area cancels a press whose target holds an editor, the document view or a CodeMirror editor, but lies outside it, so focus and the caret stay where they were. A press inside an editor, or on another element such as the frontmatter table or the split's divider, is left as it was. The frontmatter table cancels a press beside its cells itself.
 
+Crepe's selection toolbar decides whether to show only when the document view updates, and a move of focus is none. After text was selected in the document and a click moved focus to the split's Markdown pane, the toolbar stayed over the document, covered the text under it and took clicks, which formatted the document's selection while the next key went to the Markdown pane. md-easy hides the toolbar when the view loses focus to anything but the toolbar. Crepe shows it again on the next change of the selection while the view has focus.
+
 ## Interface design
 
 The interface follows the look of [Mervin PDF](https://github.com/lincarl/mervin-pdf). Dark mode uses Mervin's "Nord" chrome and light mode its "Cool slate" chrome.

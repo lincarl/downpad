@@ -1478,6 +1478,23 @@ test("the buttons that add a table's row or column put the next key in the new l
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "| Name | x  | Notes |\n| ---- | :- | ----- |\n| a1   |    | b1    |\n| y    |    |       |", "Last line."].join("\n\n") + "\n");
 });
 
+test("the selection toolbar hides once focus moves to the split's Markdown pane", async () => {
+  const file = path.join(directory, "toolbar-blur.md");
+  await writeFile(file, "First line.\n\nLast line.\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const toolbar = page.locator(".milkdown-toolbar");
+  await selectText("First line.");
+  await expect(toolbar).toHaveAttribute("data-show", "true");
+  // Crepe decides only when the document changes, so the toolbar stayed over
+  // the document and a click on it formatted the document's selection.
+  await caretInMarkdown("Last line.");
+  await expect(toolbar).toHaveAttribute("data-show", "false");
+  await expect(toolbar).toBeHidden();
+  await selectText("First line.");
+  await expect(toolbar).toHaveAttribute("data-show", "true");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);
