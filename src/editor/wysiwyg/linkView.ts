@@ -6,10 +6,14 @@
 // opens. A click opens the link of the image, the text or the suffix under the
 // pointer, never the next one.
 //
-// A Ctrl/Cmd-click that opens no link acts as a plain click. ProseMirror
-// selects the block under the pointer as a node on a click with that modifier
-// (Cmd on macOS, Ctrl elsewhere), and the block around it on the next one, so
-// the next key replaced a whole paragraph, heading or list.
+// A Ctrl/Cmd-click gets the selection a plain click there gets, whether or
+// not it opens a link, except that only one that opens no link selects an
+// image under the pointer. ProseMirror selects the block under the pointer
+// as a node on a click with that modifier (Cmd on macOS, Ctrl elsewhere),
+// and the block around it on the next one, so the next key replaced a whole
+// paragraph, heading or list. Taking the click from ProseMirror also cancels
+// the browser's handling of the release, which is where Chromium puts the
+// caret for a click inside a selection, so the plugin puts it there itself.
 //
 // Shift+click on link text extends the selection, as on other text. Chromium
 // does not extend the selection when the mouse goes down on a link, even in
@@ -231,22 +235,29 @@ function suffixHref(view: EditorView, event: MouseEvent): string | null {
   return null;
 }
 
-/** Handle a Ctrl/Cmd-click that opens no link as ProseMirror handles a plain
- *  click, at `pos`. That leaves the caret where the browser put it, selects
- *  an image or other leaf node under the pointer, and, as ProseMirror does
- *  for Chromium, moves a hidden node selection near the pointer, since
- *  Chromium can report no change for a click at its hidden caret. */
-function clickAsPlain(view: EditorView, pos: number, event: MouseEvent): true {
+/** Give a Ctrl/Cmd-click at `pos` the selection a plain click there gets.
+ *  handleClick takes every such click, so ProseMirror selects no block, and
+ *  ProseMirror then cancels the browser's handling of the release. Chromium
+ *  keeps a selection that the press lands inside, as the press could start a
+ *  drag, and puts the caret at the click on the release. So a click inside a
+ *  selection, such as selected text, a block the block handle selected or
+ *  the whole document, gets the caret here. So does a click next to a hidden
+ *  selection, such as a selected image, as ProseMirror does for a plain
+ *  click, since Chromium can report no change for a click at its hidden
+ *  caret. With `selectLeaf`, a click on an image or other leaf node selects
+ *  it. Anywhere else the caret stays where the browser put it on the press. */
+function clickAsPlain(view: EditorView, pos: number, event: MouseEvent, selectLeaf: boolean): void {
   const { doc, selection } = view.state;
-  const inside = view.posAtCoords({ left: event.clientX, top: event.clientY })?.inside ?? -1;
+  const inside = selectLeaf ? (view.posAtCoords({ left: event.clientX, top: event.clientY })?.inside ?? -1) : -1;
   const leaf = inside >= 0 ? doc.nodeAt(inside) : null;
+  const within = !selection.empty && selection.from <= pos && pos <= selection.to;
+  const nearHidden = !selection.visible && Math.min(Math.abs(pos - selection.from), Math.abs(pos - selection.to)) <= 2;
   let next: Selection | null = null;
   if (leaf?.isAtom && NodeSelection.isSelectable(leaf)) next = NodeSelection.create(doc, inside);
-  else if (!selection.visible && Math.min(Math.abs(pos - selection.from), Math.abs(pos - selection.to)) <= 2) next = Selection.near(doc.resolve(pos));
-  if (!next) return true;
+  else if (within || nearHidden) next = Selection.near(doc.resolve(pos));
+  if (!next) return;
   if (!view.hasFocus()) view.focus();
   if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
-  return true;
 }
 
 /** Extend the selection to a Shift+click on link text, and on to the
@@ -322,10 +333,13 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
       decorations: suffixesFor,
       handleClick(view: EditorView, pos: number, event: MouseEvent): boolean {
         if (!(event.ctrlKey || event.metaKey)) return false;
+        // The link is found before the selection changes, since a caret
+        // at a link's end draws its URL again.
         const href = clickedHref(view, event) ?? suffixHref(view, event);
-        if (!href) return clickAsPlain(view, pos, event);
-        event.preventDefault();
-        openExternally(href);
+        // A click that opens a link leaves an image under the pointer
+        // unselected, so the next key cannot replace it.
+        clickAsPlain(view, pos, event, !href);
+        if (href) openExternally(href);
         return true;
       },
       handleDOMEvents: {

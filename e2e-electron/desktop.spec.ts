@@ -492,11 +492,14 @@ test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", asy
     await page.mouse.click(point.x, point.y);
     await page.keyboard.up("ControlOrMeta");
   };
-  /** The selected text, and the element ProseMirror selected as a node. */
+  /** The selected text, and the element ProseMirror marks as selected as a
+   *  node. Crepe's inline image marks itself with the class "selected"
+   *  instead, which `selectedImage` finds. */
   const selection = () => page.evaluate(() => ({
     text: document.getSelection()!.toString(),
     node: document.querySelector(".ProseMirror .ProseMirror-selectednode")?.tagName ?? null,
   }));
+  const selectedImage = page.locator(".milkdown .ProseMirror .milkdown-image-inline.selected");
   // ProseMirror selected the paragraph, heading or list item under the
   // pointer as a node, so the next key replaced all of it.
   await ctrlClick(await pointOn(" after the link.", 3, 0.25));
@@ -515,9 +518,12 @@ test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", asy
   // where Chromium can report no change of the selection.
   const box = (await image.boundingBox())!;
   await ctrlClick({ x: box.x + box.width * 0.3, y: box.y + box.height / 2 });
+  await expect(selectedImage).toHaveCount(1);
   await ctrlClick({ x: box.x + box.width * 0.7, y: box.y + box.height / 2 });
+  await expect(selectedImage).toHaveCount(1);
   await expect.poll(selection).toEqual({ text: "", node: null });
   await ctrlClick(await pointOn(" more words.", 0, 0.3));
+  await expect(selectedImage).toHaveCount(0);
   await expect.poll(selection).toEqual({ text: "", node: null });
   await page.keyboard.type("d");
   await page.keyboard.press("ControlOrMeta+s");
@@ -528,6 +534,90 @@ test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", asy
     "Text ![Bar](bar.svg)d more words.",
   ].join("\n\n") + "\n");
   expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual([]);
+});
+
+test("Ctrl or Cmd+click inside a selection puts the caret where it lands", async () => {
+  const file = path.join(directory, "ctrl-click-selection.md");
+  await writeFile(file, [
+    "Selected words here.",
+    "First paragraph with plain words.",
+    "Second paragraph with more words.",
+    "B [six](https://example.com/6) and then more.",
+    "Last paragraph here.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Object.assign(globalThis, { opened });
+    shell.openExternal = async (url) => {
+      opened.push(url);
+    };
+  });
+  await expect(page.locator(".milkdown .ProseMirror .md-link-url")).toHaveCount(1);
+  const ctrlClick = async (point: { x: number; y: number }) => {
+    await page.keyboard.down("ControlOrMeta");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("ControlOrMeta");
+  };
+  /** The selected text, and the element ProseMirror selected as a node. */
+  const selection = () => page.evaluate(() => ({
+    text: document.getSelection()!.toString(),
+    node: document.querySelector(".ProseMirror .ProseMirror-selectednode")?.tagName ?? null,
+  }));
+  // Chromium keeps a selection that a press lands inside, and puts the caret
+  // there on the release, which ProseMirror cancelled, so the next key
+  // replaced the whole selection.
+  await selectText("Selected words here.");
+  await expect.poll(selection).toEqual({ text: "Selected words here.", node: null });
+  await ctrlClick(await pointOn("Selected words here.", 3, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("a");
+  // A paragraph the block handle selected.
+  const block = page.locator(".milkdown .ProseMirror > p").filter({ hasText: "First paragraph" });
+  const blockBox = (await block.boundingBox())!;
+  await page.mouse.move(blockBox.x + 10, blockBox.y + blockBox.height / 2);
+  const grip = page.locator(".milkdown-block-handle .operation-item").last();
+  await expect.poll(async () => {
+    const box = await grip.boundingBox();
+    return !!box && box.y < blockBox.y + blockBox.height && box.y + box.height > blockBox.y;
+  }).toBe(true);
+  const gripBox = (await grip.boundingBox())!;
+  await page.mouse.move(gripBox.x + gripBox.width / 2, gripBox.y + gripBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect.poll(async () => (await selection()).node).toBe("P");
+  await ctrlClick(await pointOn("First paragraph with plain words.", 6, 0.25));
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("b");
+  // The whole document, with Ctrl or Cmd still held from Ctrl or Cmd+A.
+  const point = await pointOn("Second paragraph with more words.", 7, 0.25);
+  await page.keyboard.down("ControlOrMeta");
+  await page.keyboard.press("a");
+  await expect.poll(async () => (await selection()).text).toContain("Last paragraph here.");
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up("ControlOrMeta");
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("c");
+  // Ctrl or Cmd+click on the URL after a link opens the link and puts the
+  // caret at the link's end, also inside a selection.
+  await clickOn("B ", 0, 0.25);
+  await page.keyboard.down("Shift");
+  await clickOn(" and then more.", 10, 0.25);
+  await page.keyboard.up("Shift");
+  await expect.poll(selection).toEqual({ text: "B six and then ", node: null });
+  const url = (await page.locator(".milkdown .ProseMirror .md-link-url").boundingBox())!;
+  await ctrlClick({ x: url.x + url.width / 2, y: url.y + url.height / 2 });
+  await expect.poll(selection).toEqual({ text: "", node: null });
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Selaected words here.",
+    "First bparagraph with plain words.",
+    "Second cparagraph with more words.",
+    "B [six](https://example.com/6)d and then more.",
+    "Last paragraph here.",
+  ].join("\n\n") + "\n");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/6"]);
 });
 
 test("Shift+click or Shift+drag on a link's text extends the selection", async () => {
