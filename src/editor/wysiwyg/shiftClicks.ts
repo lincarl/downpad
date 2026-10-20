@@ -29,6 +29,19 @@
 // focused document, so a Shift+drag from there selects from the press, and
 // selects cells across a table, as a plain drag does.
 //
+// The press goes on to Chromium, which extends the selection from that caret
+// to the point where a plain click puts the caret. The two have to be the
+// same, or the next key replaces the text between them. For a press beside or
+// below a block's text, such as in a table cell's padding, ProseMirror gives
+// the position before or after the block, while Chromium puts the caret in
+// the nearest text. The first caret after the end of a cell is in the next
+// cell, so prosemirror-tables selected the cells from there to the one
+// pressed, and the next key replaced their text. Left of a cell's text and
+// below its last line, the caret went to the start of the line, and Chromium
+// extended the selection to its end. For a press between blocks the caret
+// therefore goes where Chromium puts the caret of a plain click, as
+// ProseMirror reads it.
+//
 // With focus in the document, prosemirror-tables selects cells on a
 // Shift+click into another cell, or while cells are selected.
 
@@ -65,20 +78,32 @@ function pressedPosition(view: EditorView, event: MouseEvent, focused: boolean):
   return found.pos;
 }
 
-/** Put the caret at a Shift+press from outside the document view, and
- *  focus the view (see the header). It returns false, so the press goes on
- *  to the other plugins, ProseMirror and the browser as one in the focused
- *  view with the caret at the press. Focusing first would move focus back
- *  into a code block that holds the selection, since focusing the view puts
- *  the browser's selection where ProseMirror's is. */
+/** Put the caret at a Shift+press from outside the document view, or where
+ *  a plain click puts it for a press between blocks, and focus the view (see
+ *  the header). It returns false, so the press goes on to the other plugins,
+ *  ProseMirror and the browser as one in the focused view with the caret at
+ *  the press. Focusing first would move focus back into a code block that
+ *  holds the selection, since focusing the view puts the browser's selection
+ *  where ProseMirror's is. */
 function shiftPressFromOutside(view: EditorView, event: MouseEvent): boolean {
   if (!event.shiftKey || event.button !== 0 || view.hasFocus()) return false;
-  const head = pressedPosition(view, event, false);
-  if (head === null) return false;
-  const $head = view.state.doc.resolve(head);
+  const pressed = pressedPosition(view, event, false);
+  if (pressed === null) return false;
+  const { doc } = view.state;
+  const head = doc.resolve(pressed).parent.inlineContent ? pressed : clickCaret(view, event) ?? pressed;
+  const $head = doc.resolve(head);
   view.dispatch(view.state.tr.setSelection(TextSelection.between($head, $head)).setMeta("pointer", true));
   view.focus();
   return false;
+}
+
+/** The position of the caret that Chromium puts at a plain click at
+ *  `event`, read as ProseMirror reads the caret of a click, or null when it
+ *  is outside the document view. */
+function clickCaret(view: EditorView, event: MouseEvent): number | null {
+  const caret = view.dom.ownerDocument.caretPositionFromPoint?.(event.clientX, event.clientY);
+  if (!caret || !view.dom.contains(caret.offsetNode)) return null;
+  return view.posAtDOM(caret.offsetNode, caret.offset, 1);
 }
 
 /** Extend the selection on a Shift+press on link text or on an image in a

@@ -1003,6 +1003,89 @@ test("Shift+click in the document from the find card or the Markdown pane puts t
   ].join("\n\n") + "\n");
 });
 
+test("Shift+click from the find card or the Markdown pane beside or below a table cell's text puts the caret where a plain click does", async () => {
+  const file = path.join(directory, "shift-click-cell-space.md");
+  // The note wraps, so its row is taller than the line of "epsilon".
+  const note = "a note long enough to wrap onto more than one line in its cell, both in the Document view and in the document pane of the split view, whose cells are narrower still";
+  await writeFile(file, [
+    `| Head A | Head B |\n| --- | --- |\n| alpha | beta |\n| gamma | delta |\n| epsilon | ${note} |\n| eta | zeta |`,
+    "First line.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const selectedCells = documentView.locator(".selectedCell");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** Shift+click the cell that reads `text`, `inset` pixels from its left
+   *  edge, or from its right edge when negative, and `y` of the way down,
+   *  then type `typed`. Within 8 pixels of a cell's edge, Crepe shows the
+   *  button that adds a row or column under the pointer, so the presses stay
+   *  11 pixels in, which is still in the cell's 16-pixel padding. */
+  const shiftClickCell = async (text: string, inset: number, y: number, typed: string) => {
+    const box = (await documentView.locator("td, th").filter({ hasText: new RegExp(`^${text}$`) }).boundingBox())!;
+    await page.keyboard.down("Shift");
+    await page.mouse.click(inset >= 0 ? box.x + inset : box.x + box.width + inset, box.y + box.height * y);
+    await page.keyboard.up("Shift");
+    await expect(documentView).toBeFocused();
+    await expect(selectedCells).toHaveCount(0);
+    await page.keyboard.type(typed);
+  };
+  /** Leave the document for the find card. */
+  const toFind = async () => {
+    await page.keyboard.press("ControlOrMeta+f");
+    await expect(find).toBeFocused();
+  };
+  // A press right of or below a cell's text gave the position after the
+  // cell's paragraph. The caret went to the start of the next cell, so
+  // prosemirror-tables selected the cells from there to the one pressed, and
+  // the next key replaced their text. For the last column that took the
+  // cells up to the start of the next row.
+  await clickOn("First line.", 2, 0.25);
+  await toFind();
+  await shiftClickCell("gamma", -11, 0.5, "A");
+  await toFind();
+  await shiftClickCell("delta", -11, 0.5, "B");
+  await toFind();
+  await shiftClickCell("epsilon", -11, 0.6, "C");
+  // After the table's last cell the caret went past the table, and Chromium
+  // extended the selection from there back to the click, over the cell's text.
+  await toFind();
+  await shiftClickCell("zeta", -11, 0.5, "D");
+  await toFind();
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  /** Leave the document for the end of the Markdown pane's last line of text. */
+  const toMarkdown = async () => {
+    await page.locator(".editor-pane-raw .cm-line").filter({ hasText: /^Last/ }).click();
+    await page.keyboard.press("End");
+    await expect(markdown).toBeFocused();
+  };
+  await toMarkdown();
+  await shiftClickCell("Head B", -11, 0.5, "E");
+  // A plain click left of a cell's text, below its last line, puts the caret
+  // at the end of that line. The caret went before the cell's paragraph, at
+  // the start of the line, so the next key replaced the cell's text.
+  await toMarkdown();
+  await shiftClickCell("epsilonC", 11, 0.6, "F");
+  await page.keyboard.press("ControlOrMeta+s");
+  // Milkdown pads the columns of a table it writes, here to the note's width.
+  const second = (text: string) => text.padEnd(note.length);
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    [
+      `| Head A    | ${second("Head BE")} |`,
+      `| --------- | ${"-".repeat(note.length)} |`,
+      `| alpha     | ${second("beta")} |`,
+      `| gammaA    | ${second("deltaB")} |`,
+      `| epsilonCF | ${note} |`,
+      `| eta       | ${second("zetaD")} |`,
+    ].join("\n"),
+    "First line.",
+    "Last line.",
+  ].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);
