@@ -53,11 +53,12 @@
 // block's toolbar focuses the code block. Chromium extends only a selection
 // there is, so `shiftPressesAsClicks` drops the browser's selection once the
 // press's handlers are done, and Chromium then handles the press as a plain
-// click. ProseMirror still sees the Shift key, so this plugin does what a
-// plain click does where ProseMirror decides. It selects a rule or an image
-// on its own line, and it gives up a cell selection for a caret, so
-// prosemirror-tables leaves the press alone. A press on a list item's bullet
-// or number is in listLabelClicks.ts.
+// click. The frontmatter table above the document uses the same. ProseMirror
+// still sees the Shift key, so this plugin does what a plain click does where
+// ProseMirror decides. It selects a rule or an image on its own line, and it
+// gives up a cell selection for a caret, so prosemirror-tables leaves the
+// press alone. A press on a list item's bullet or number is in
+// listLabelClicks.ts, and one on a code block's code in codeBlockClicks.ts.
 //
 // With focus in the document, prosemirror-tables selects cells on a
 // Shift+click into another cell, or while cells are selected.

@@ -1249,6 +1249,46 @@ test("Shift+click from the find card or the Markdown pane on a rule or an image 
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "Above.", "a", "b", "Middle.", "d", "c", "Last line."].join("\n\n") + "\n");
 });
 
+test("Shift+click on a code block's code or a frontmatter cell from elsewhere puts the caret at the click", async () => {
+  const file = path.join(directory, "shift-click-code-frontmatter.md");
+  await writeFile(file, "---\ntitle: Survey\n---\n\n```\nconst alpha = 1;\nconst beta = 2;\n```\n\nLast line.\n");
+  await launch(file);
+  const table = page.locator(".frontmatter-table");
+  await expect(table).toBeVisible();
+  const code = page.locator(".milkdown .ProseMirror .cm-content");
+  /** The point `fraction` of the way across the character at `index` of
+   *  the frontmatter cell that reads `text`. */
+  const pointInCell = (text: string, index: number, fraction: number) =>
+    table.locator(".frontmatter-edit", { hasText: new RegExp(`^${text}$`) }).evaluate((cell, [index, fraction]) => {
+      const range = document.createRange();
+      range.setStart(cell.firstChild!, index);
+      range.setEnd(cell.firstChild!, index + 1);
+      const box = range.getBoundingClientRect();
+      return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+    }, [index, fraction] as const);
+  // CodeMirror selected from the block's own cursor, at its start, to the
+  // click, and the next key replaced the code before the click.
+  await clickOn("Last line.", -1, 0.75);
+  await shiftClickAt(await pointOn("const beta = 2;", 6, 0.25));
+  await expect(code).toBeFocused();
+  await page.keyboard.type("x");
+  // From the document, Chromium extended its selection to the start of the
+  // body, and the next key replaced the body. Each click on the last line is
+  // at another place, so none of them counts as a double-click.
+  await clickOn("Last line.", 0, 0.25);
+  await page.keyboard.press("End");
+  await shiftClickAt(await pointInCell("title", 2, 0.25));
+  await page.keyboard.type("z");
+  // From the split's Markdown pane, Chromium extended the pane's selection
+  // to its start, and the next key replaced the Markdown before the caret.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await shiftClickAt(await pointInCell("Survey", 3, 0.25));
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntiztle: Suryvey\n---\n\n```\nconst alpha = 1;\nconst xbeta = 2;\n```\n\nLast line.\n");
+});
+
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
   const file = path.join(directory, "block-handle-add-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");

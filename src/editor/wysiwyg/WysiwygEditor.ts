@@ -35,7 +35,7 @@ import { stringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
-import { shiftClicks } from "./shiftClicks";
+import { shiftClicks, shiftPressesAsClicks } from "./shiftClicks";
 import { listLabelClicks } from "./listLabelClicks";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
@@ -236,8 +236,9 @@ export class WysiwygEditor {
       defaultValue: split.body,
       featureConfigs: {
         // Render ```mermaid code blocks as diagrams below the source (§5.2),
-        // show the find card's matches inside code blocks (§5.13), and add a
-        // cursor on Ctrl or Cmd+click only in a block that has focus.
+        // show the find card's matches inside code blocks (§5.13), add a
+        // cursor on Ctrl or Cmd+click only in a block that has focus, and put
+        // the cursor at a Shift+click in a block that does not.
         [Crepe.Feature.CodeMirror]: {
           renderPreview: renderMermaidPreview,
           extensions: [codeBlockFindHighlights, codeBlockClicks],
@@ -688,6 +689,9 @@ export class WysiwygEditor {
           this.composition = { id: ++this.compositions, cell: event.target };
         });
         panel.addEventListener("compositionend", () => (this.composition = null));
+        // A Shift+click on a cell from another editor puts the caret at the
+        // click, as a plain click does.
+        shiftPressesAsClicks(panel);
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);
       }
