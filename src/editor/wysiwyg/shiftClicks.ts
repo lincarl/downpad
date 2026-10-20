@@ -100,7 +100,7 @@ function pressedPosition(view: EditorView, event: MouseEvent, focused: boolean):
 /** Set `selection` in the view, then focus it. Focusing first would move
  *  focus back into a code block that holds the selection, since focusing the
  *  view puts the browser's selection where ProseMirror's is. */
-function selectThenFocus(view: EditorView, selection: Selection): void {
+export function selectThenFocus(view: EditorView, selection: Selection): void {
   view.dispatch(view.state.tr.setSelection(selection).setMeta("pointer", true));
   view.focus();
 }
@@ -124,7 +124,7 @@ function shiftPressFromOutside(view: EditorView, event: MouseEvent): boolean {
 
 /** Whether a plain click selects `node` as a whole, as for a rule or an
  *  image on its own line. */
-function selectedOnClick(node: ProseNode): boolean {
+export function selectedOnClick(node: ProseNode): boolean {
   return node.isAtom && NodeSelection.isSelectable(node);
 }
 

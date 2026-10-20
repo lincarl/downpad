@@ -1578,6 +1578,81 @@ test("a press on the page around the document leaves focus where it was, and Shi
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;b\n```", "First line.c", "Last line.a"].join("\n\n") + "\n");
 });
 
+test("a click in the document's side padding beside a block puts the caret on the line at its height, or selects an image there", async () => {
+  const file = path.join(directory, "side-padding-clicks.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  const code = (text: string) => "```js\n" + text + "\n```";
+  const math = (text: string) => `$$\n${text}\n$$`;
+  const diagram = (text: string) => "```mermaid\n" + text + "\n```";
+  const table = (cell: string) => `| Head A | Head B |\n| ------ | ------ |\n| x1     | ${cell.padEnd(6)} |`;
+  const blocks = [code("const alpha = 1;\nconst beta = 2;"), "Some words here.", math("E = mc^2"), diagram("graph TD; A-->B;"), "![Bar](bar.svg)", table("y1"), "- one\n- two", "Last line."];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const codeBlocks = documentView.locator(".milkdown-code-block");
+  const image = documentView.locator(".milkdown-image-block");
+  await expect(codeBlocks.nth(1).locator(".katex")).toBeVisible();
+  await expect(codeBlocks.nth(2).locator(".mermaid-preview svg")).toBeVisible();
+  await expect.poll(() => image.locator("img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** Click in the document view's side padding at the height `part` of the
+   *  way down `target`, 8px from the text column on the left, which is clear
+   *  of the block handle, or 10px from the view's edge on the right. */
+  const clickBeside = async (target: Locator, side: "left" | "right", part = 0.5, modifiers: "Shift"[] = []) => {
+    await target.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    const view = (await documentView.boundingBox())!;
+    const padding = await documentView.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+    const box = (await target.boundingBox())!;
+    const x = side === "left" ? view.x + padding - 8 : view.x + view.width - 10;
+    await page.mouse.move(x, box.y + box.height * part);
+    for (const key of modifiers) await page.keyboard.down(key);
+    await page.mouse.down();
+    await page.mouse.up();
+    for (const key of modifiers) await page.keyboard.up(key);
+  };
+  // Chromium put the caret before or after the whole code block, and from
+  // there in the nearest text. At the start of the document, with text
+  // selected, that was nowhere, and the next key was lost. The text is the
+  // last line, so its toolbar shows away from the code block.
+  await selectText("Last line.");
+  await clickBeside(codeBlocks.nth(0).locator(".cm-line").nth(1), "left");
+  await expect(codeBlocks.nth(0).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("a");
+  // Right of the code, from the find card, also with Shift held.
+  await clickOn("Some words here.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await clickBeside(codeBlocks.nth(0).locator(".cm-line").nth(0), "right", 0.5, ["Shift"]);
+  await expect(codeBlocks.nth(0).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("b");
+  // Beside a formula's or a diagram's preview, the nearest line of its code.
+  await clickBeside(codeBlocks.nth(1).locator(".preview"), "left");
+  await expect(codeBlocks.nth(1).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("c");
+  await clickBeside(codeBlocks.nth(2).locator(".preview"), "right", 0.75);
+  await expect(codeBlocks.nth(2).locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("d");
+  // An image on its own line takes no caret, so the click selects it.
+  await clickBeside(image, "left");
+  await expect(documentView).toBeFocused();
+  await expect(image).toHaveClass(/\bselected\b/);
+  await page.keyboard.type("e");
+  // The line of the row's last cell, and of a list item. From the split's
+  // Markdown pane, Chromium put the caret beside a list item at the start of
+  // the document.
+  await clickBeside(documentView.locator("td", { hasText: "y1" }), "right");
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("f");
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await clickBeside(documentView.locator("li", { hasText: "two" }), "left");
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("g");
+  await page.keyboard.press("ControlOrMeta+s");
+  const edited = [code("const alpha = 1;b\naconst beta = 2;"), "Some words here.", math("cE = mc^2"), diagram("graph TD; A-->B;d"), "e", table("y1f"), "- one\n- gtwo", "Last line."];
+  await expect.poll(() => readFile(file, "utf8")).toBe(edited.join("\n\n") + "\n");
+});
+
 /** The point `fraction` of the way across the character at `index` of the
  *  split's Markdown pane's line that reads `text`. */
 function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
