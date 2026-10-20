@@ -11,7 +11,7 @@
 // Chromium moves a selection it cannot show, such as a selected image between
 // two code blocks, to the start of the document whenever the page is focused,
 // also while it has focus already. The patch puts the block's selection back
-// when no input that can move the selection came since ProseMirror set it.
+// when no input moved the selection since ProseMirror set it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -132,8 +132,8 @@ describe("a selected block that the page moves to the start of the document", ()
   }
 
   /** Press `key` on the editor without a default action, as jsdom has none. */
-  function keydown(view: EditorView, key: string, keyCode: number): void {
-    view.dom.dispatchEvent(new KeyboardEvent("keydown", { key, keyCode, bubbles: true, cancelable: true }));
+  function keydown(view: EditorView, key: string, keyCode: number, init: KeyboardEventInit = {}): void {
+    view.dom.dispatchEvent(new KeyboardEvent("keydown", { key, keyCode, bubbles: true, cancelable: true, ...init }));
   }
 
   /** Move the DOM selection to the start of `node`, as Chromium does, and
@@ -171,6 +171,17 @@ describe("a selected block that the page moves to the start of the document", ()
     expect(view.state.doc.firstChild!.type.name).toBe("hr");
     // ProseMirror reads the caret before the rule as a gap cursor, not a
     // caret in the first text.
+    await moveToStart(start);
+    expect(view.state.selection).toBeInstanceOf(NodeSelection);
+    expect(view.state.selection.from).toBe(image);
+  });
+
+  it("keeps the block selected after a key that moves nothing, such as Ctrl+C", async () => {
+    const { view, image, start } = await selectImage();
+    keydown(view, "Control", 17, { ctrlKey: true });
+    keydown(view, "c", 67, { ctrlKey: true });
+    // The key's event is over and left the selection where it was.
+    await settle();
     await moveToStart(start);
     expect(view.state.selection).toBeInstanceOf(NodeSelection);
     expect(view.state.selection.from).toBe(image);
