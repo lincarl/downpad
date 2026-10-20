@@ -36,6 +36,7 @@ import { smartPastePlugin } from "./pasteHandler";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
 import { shiftClicks } from "./shiftClicks";
+import { listLabelClicks } from "./listLabelClicks";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
@@ -282,6 +283,8 @@ export class WysiwygEditor {
     // Shift+click and Shift+drag on link text and images, and presses from
     // outside the document (§5.5, §5.6).
     this.crepe.editor.use(shiftClicks);
+    // A press on a list item's bullet or number puts the caret at its text.
+    this.crepe.editor.use(listLabelClicks);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
     // Show missing inline images as missing too, and keep missing images in

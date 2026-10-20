@@ -1146,6 +1146,60 @@ test("Shift+click from the find card, the Markdown pane or a code block on a cod
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;a\n```", "```\nconst beta = 2;b\n```", "```mermaid\ngraph TD; A-->B;c\n```", "Last line."].join("\n\n") + "\n");
 });
 
+test("a click or Shift+click on a list item's bullet puts the caret at the start of its text, also from the find card, the Markdown pane or a code block", async () => {
+  const file = path.join(directory, "bullet-clicks.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "- one\n- two\n- three\n- four\n- five", "| A | B |\n| --- | --- |\n| x1 | y1 |", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const selectedCells = documentView.locator(".selectedCell");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  /** The middle of the bullet of the list item whose text starts with `text`. */
+  const bullet = (text: string) => centerOf(documentView.locator(".milkdown-list-item-block", { has: page.locator("p", { hasText: new RegExp(`^${text}`) }) }).locator(".label-wrapper"));
+  /** Click the bullet of the item that starts with `text`, and type `typed`. */
+  const clickBullet = async (text: string, shift: boolean, typed: string) => {
+    const point = await bullet(text);
+    if (shift) await shiftClickAt(point);
+    else await page.mouse.click(point.x, point.y);
+    await expect(documentView).toBeFocused();
+    await page.keyboard.type(typed);
+  };
+  // A bullet is a drawing with no place for a caret, so Chromium put the
+  // caret of a plain click there at the start of the document.
+  await clickOn("Last line.", -1, 0.75);
+  await clickBullet("one", false, "A");
+  // From the find card, a Shift+click focused the document without a caret,
+  // and the next key was lost.
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await clickBullet("two", true, "B");
+  // With cells selected, prosemirror-tables took the Shift+click, kept a cell
+  // selected and focus in the find card, where the next key went.
+  await clickOn("x1", 1, 0.5);
+  await shiftClickAt(await pointOn("y1", 1, 0.5));
+  await expect(selectedCells).toHaveCount(2);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  const findText = await find.inputValue();
+  await clickBullet("three", true, "C");
+  await expect(selectedCells).toHaveCount(0);
+  await expect(find).toHaveValue(findText);
+  // From the split's Markdown pane, a plain click put the caret at the start
+  // of the document too, and a Shift+click put none.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await clickBullet("four", false, "D");
+  await caretInMarkdown("Last line.");
+  await clickBullet("five", true, "E");
+  // From a code block, focus stayed in the block, which a Shift+click
+  // selected to its end, so the next key replaced the code.
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  await clickBullet("Aone", true, "F");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "- FAone\n- Btwo\n- Cthree\n- Dfour\n- Efive", "| A | B |\n| --- | --- |\n| x1 | y1 |", "Last line."].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);

@@ -56,7 +56,8 @@
 // click. ProseMirror still sees the Shift key, so this plugin does what a
 // plain click does where ProseMirror decides. It selects a rule or an image
 // on its own line, and it gives up a cell selection for a caret, so
-// prosemirror-tables leaves the press alone.
+// prosemirror-tables leaves the press alone. A press on a list item's bullet
+// or number is in listLabelClicks.ts.
 //
 // With focus in the document, prosemirror-tables selects cells on a
 // Shift+click into another cell, or while cells are selected.
@@ -225,7 +226,7 @@ function scrollerOf(element: Element): Element | null {
  *  text typed just before. The anchor then becomes that of the selection,
  *  which ProseMirror moved along with the change, as Chromium's drag
  *  selection goes on from where such a key left the caret. */
-function dragSelect(view: EditorView, anchor: number, head: number): void {
+export function dragSelect(view: EditorView, anchor: number, head: number): void {
   let doc = view.state.doc;
   const extend = (to: number): void => {
     const { state } = view;
