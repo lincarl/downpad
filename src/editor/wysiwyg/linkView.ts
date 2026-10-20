@@ -263,19 +263,20 @@ function clickAsPlain(view: EditorView, pos: number, event: MouseEvent, selectLe
 /** Extend the selection to a Shift+click on link text, and on to the
  *  pointer while the button stays down, as Chromium does for a Shift+click
  *  or Shift+drag on other text. Chromium put a caret at the click instead
- *  (see the header). A press on an image inside a link is left alone, and
- *  so is a drag another handler takes over, such as prosemirror-tables'
- *  selection of the cells the pointer crosses. prosemirror-tables runs
- *  first and takes a Shift+click into another cell itself. Unlike
- *  Chromium's drag selection, the drag does not scroll the document when
- *  the pointer leaves it. */
+ *  (see the header). The press is left to the browser while the document
+ *  does not have focus, such as when a code block, the Markdown pane or the
+ *  find card has it, since the selection to extend is not the one the user
+ *  sees. A press on an image inside a link is left alone too, and so is a
+ *  drag another handler takes over, such as prosemirror-tables' selection of
+ *  the cells the pointer crosses. prosemirror-tables runs first and takes a
+ *  Shift+click into another cell itself. Unlike Chromium's drag selection,
+ *  the drag does not scroll the document when the pointer leaves it. */
 function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
-  if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element)) return false;
+  if (!event.shiftKey || event.button !== 0 || !(event.target instanceof Element) || !view.hasFocus()) return false;
   const link = event.target.closest("a");
   const found = link && view.dom.contains(link) ? view.posAtCoords({ left: event.clientX, top: event.clientY }) : null;
   if (!found || (found.inside >= 0 && view.state.doc.nodeAt(found.inside)?.isInline)) return false;
   event.preventDefault();
-  view.focus();
   const { anchor } = view.state.selection;
   const extend = (head: number): void => {
     const { doc, selection } = view.state;

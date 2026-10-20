@@ -687,6 +687,24 @@ test("Shift+click or Shift+drag on a link's text extends the selection", async (
   ].join("\n\n") + "\n");
 });
 
+test("Shift+click on a link's text while a code block has focus puts the caret there", async () => {
+  const file = path.join(directory, "shift-click-from-code.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "Then [docs](https://example.com/docs) after the link."].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror .cm-line")).toHaveCount(1);
+  await clickOn("const alpha = 1;", 3, 0.25);
+  // The selection to extend was the code block's, which the user does not
+  // see in the document, and focus stayed in the block, so the next key went
+  // in there.
+  await page.keyboard.down("Shift");
+  await clickOn("docs", 2, 0.25);
+  await page.keyboard.up("Shift");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains("ProseMirror") ?? false)).toBe(true);
+  await page.keyboard.type("z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "Then [dozcs](https://example.com/docs) after the link."].join("\n\n") + "\n");
+});
+
 test("text typed, composed or pasted right after a link goes after it", async () => {
   const file = path.join(directory, "after-link.md");
   await writeFile(file, [
