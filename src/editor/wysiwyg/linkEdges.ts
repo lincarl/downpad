@@ -19,7 +19,9 @@
 // without moving the caret, and draw the tail on the link's side. And typing
 // over selected link text keeps the link, as ProseMirror gives typed text the
 // marks across the selection. Typing or deleting there keeps the caret on the
-// link's side while it stays in its text block. A move of the caret ends it.
+// link's side while it stays in its text block. A move of the caret ends it,
+// and so does deleting the link's whole text, so text typed where the link
+// was is plain, as after any deletion of a link's whole text.
 //
 // Stored marks stay in the state while the caret rests at a link's edge.
 // ProseMirror would give them to text that the browser changes elsewhere,
@@ -47,6 +49,15 @@ function edgeLink($pos: ResolvedPos, marks: readonly Mark[]): Mark | null {
   const { nodeBefore, nodeAfter } = $pos;
   const inside = !!nodeBefore && !!nodeAfter && !!link.isInSet(nodeBefore.marks) && !!link.isInSet(nodeAfter.marks);
   return inside ? null : link;
+}
+
+/** Whether the link in `marks` is on either side of `$pos`. After a link's
+ *  whole text was deleted, the marks stored for the caret still hold it, but
+ *  neither side does. */
+function linkBeside($pos: ResolvedPos, marks: readonly Mark[]): boolean {
+  const link = $pos.doc.type.schema.marks.link?.isInSet(marks);
+  const { nodeBefore, nodeAfter } = $pos;
+  return !!link && [nodeBefore, nodeAfter].some((node) => !!node && !!link.isInSet(node.marks));
 }
 
 /** The caret of `state`, or null for a selection that is not a text caret. */
@@ -83,7 +94,8 @@ function typedOverLink(tr: Transaction, before: EditorState, $caret: ResolvedPos
  * as by the virtual cursor's Left at its end or Right at its start, put the
  * caret there, and so does typing over selected link text. Typing or
  * deleting there, or a change elsewhere, keeps it there while the caret stays
- * in its text block. A move of the caret, or other stored marks, end it.
+ * in its text block and the link is still beside it. A move of the caret,
+ * other stored marks, or deleting the link's whole text end it.
  */
 function linkSide(tr: Transaction, side: number | null, before: EditorState, after: EditorState): number | null {
   const $caret = caretOf(after);
@@ -91,7 +103,8 @@ function linkSide(tr: Transaction, side: number | null, before: EditorState, aft
   if (tr.docChanged) {
     if (typedOverLink(tr, before, $caret)) return $caret.pos;
     const sameBlock = tr.mapping.map(before.selection.$head.start()) === $caret.start();
-    return side !== null && tr.mapping.map(side) === $caret.pos && sameBlock ? $caret.pos : null;
+    const kept = side !== null && tr.mapping.map(side) === $caret.pos && sameBlock;
+    return kept && linkBeside($caret, after.storedMarks ?? $caret.marks()) ? $caret.pos : null;
   }
   if (tr.selectionSet) return null;
   if (!tr.storedMarksSet) return side;

@@ -82,8 +82,15 @@ function type(view: EditorView, text: string): void {
 /** Set the marks of the text before the caret as stored marks without moving
  *  it, as the virtual cursor's Left does at a link's end where text follows. */
 function leftToLinkSide(view: EditorView): void {
-  const { $head } = view.state.selection;
-  view.dispatch(view.state.tr.setStoredMarks(view.state.doc.resolve($head.pos - 1).marks()));
+  view.dispatch(view.state.tr.setStoredMarks(view.state.selection.$head.nodeBefore!.marks));
+}
+
+/** Delete the character before the caret as ProseMirror reads a Backspace
+ *  from the browser, keeping the deleted text's marks for the caret. */
+function backspace(view: EditorView): void {
+  const end = view.state.selection.head;
+  const { doc } = view.state;
+  view.dispatch(view.state.tr.delete(end - 1, end).ensureMarks(doc.resolve(end - 1).marksAcross(doc.resolve(end)) ?? []));
 }
 
 /** The side of the URL suffix drawn at `pos`, as the editor draws it now. */
@@ -136,11 +143,8 @@ describe("text put in at a link's edge", () => {
 
   it("is plain after Backspace takes the link's last character", { timeout: 60_000 }, async () => {
     const { editor, view } = await open("Intro [link](https://e.com/a)\n");
-    const end = at(view, "link");
-    caret(view, end);
-    // ProseMirror reads the browser's deletion and keeps the deleted text's marks.
-    const { doc } = view.state;
-    view.dispatch(view.state.tr.delete(end - 1, end).ensureMarks(doc.resolve(end - 1).marksAcross(doc.resolve(end)) ?? []));
+    caret(view, at(view, "link"));
+    backspace(view);
     type(view, "x");
     expect(editor.getMarkdown()).toBe("Intro [lin](https://e.com/a)x\n");
   });
@@ -157,6 +161,32 @@ describe("text put in at a link's edge", () => {
     type(view, "x");
     type(view, "y");
     expect(editor.getMarkdown()).toBe(expected);
+  });
+
+  it.each([
+    ["typed over the link's text", "A [word](https://e.com/s) b.\n", (view: EditorView) => {
+      select(view, at(view, "word", true), at(view, "word"));
+      type(view, "x");
+    }, "A y b.\n"],
+    ["moved to by the virtual cursor's Left", "A [x](https://e.com/s)s more.\n", (view: EditorView) => {
+      caret(view, at(view, "x"));
+      leftToLinkSide(view);
+    }, "A ys more.\n"],
+  ])("is plain where the link's whole text was deleted on the link's side %s", { timeout: 60_000 }, async (_how, markdown, toLinkSide, expected) => {
+    const { editor, view } = await open(markdown);
+    toLinkSide(view);
+    backspace(view);
+    type(view, "y");
+    expect(editor.getMarkdown()).toBe(expected);
+  });
+
+  it("joins the link after Backspace on the link's side leaves some of its text", { timeout: 60_000 }, async () => {
+    const { editor, view } = await open("A [word](https://e.com/s)s more.\n");
+    caret(view, at(view, "word"));
+    leftToLinkSide(view);
+    backspace(view);
+    type(view, "y");
+    expect(editor.getMarkdown()).toBe("A [wory](https://e.com/s)s more.\n");
   });
 
   it("is plain for a paste and for Ctrl+B at the end of a link", { timeout: 60_000 }, async () => {

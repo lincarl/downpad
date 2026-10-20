@@ -597,9 +597,9 @@ test("an input method's composition right after a link goes in once", async () =
 
 test("text typed where a link's whole text was deleted is plain", async () => {
   const file = path.join(directory, "deleted-link.md");
-  await writeFile(file, "A [link](https://example.com/a) b.\n\nC [text](https://example.com/c) d.\n");
+  await writeFile(file, "A [link](https://example.com/a) b.\n\nC [text](https://example.com/c) d.\n\nE [word](https://example.com/e) f.\n\nG [h](https://example.com/g)s more.\n");
   await launch(file);
-  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(2);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(4);
   // ProseMirror keeps the deleted text's link for the next character typed.
   await selectText("link");
   await page.keyboard.press("Backspace");
@@ -607,8 +607,22 @@ test("text typed where a link's whole text was deleted is plain", async () => {
   await selectText("text");
   await page.keyboard.press("ControlOrMeta+x");
   await page.keyboard.type("zw");
+  // On the link's side, after typing over the link's text and after Left at
+  // its end, the link came back for the next character.
+  await selectText("word");
+  await page.keyboard.type("q");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("r");
+  await clickOn("s more.", 0, 0.75);
+  // Read the click's caret before the keys, which would otherwise act on the
+  // caret left in the line above.
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("t");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("A xy b.\n\nC zw d.\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("A xy b.\n\nC zw d.\n\nE r f.\n\nG ts more.\n");
 });
 
 test("plain text dropped on a link does not take the link", async () => {
