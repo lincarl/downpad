@@ -37,6 +37,13 @@
 // this view therefore closes a stale menu only once the press and its click
 // are over.
 //
+// The buttons that add a row or a column took focus on the press, as buttons
+// do. Their click adds the row or column and selects it, and the table is
+// drawn again for its menu, without the button that had focus, so focus went
+// to the page and the next key was lost. This view keeps focus where it was
+// on a press on such a button and focuses the document after its click, so
+// the next key goes to the new row or column, as after a click on a handle.
+//
 // Crepe's view also keeps every drag event in the table from ProseMirror, and
 // cancels dragover there but not dragenter. Chromium sends only a dragenter
 // when the element under the pointer changes, as it does on every update while
@@ -84,6 +91,9 @@ class CaretTableView extends TableNodeView {
     super(...args);
     // In the capture phase, before Crepe's buttons act on the press.
     this.dom.addEventListener("pointerdown", this.startPress, true);
+    // In the bubble phase, after the button's own click has added the line.
+    this.dom.addEventListener("mousedown", this.keepFocusOnAdd);
+    this.dom.addEventListener("click", this.focusAfterAdd);
   }
 
   override destroy(): void {
@@ -100,6 +110,18 @@ class CaretTableView extends TableNodeView {
     this.pressOnHandle = true;
     window.addEventListener("pointerup", this.endPress, true);
     window.addEventListener("pointercancel", this.endPress, true);
+  };
+
+  /** Keep focus where it was on a press on a button that adds a row or a
+   *  column (see the header). */
+  private readonly keepFocusOnAdd = (event: MouseEvent): void => {
+    if (event.target instanceof Element && event.target.closest(".add-button")) event.preventDefault();
+  };
+
+  /** Focus the document once a button has added a row or a column and
+   *  selected it (see the header). */
+  private readonly focusAfterAdd = (event: MouseEvent): void => {
+    if (event.target instanceof Element && event.target.closest(".add-button")) this.view.focus();
   };
 
   /** Close the menus the press left stale once its click is over. The click
@@ -175,9 +197,10 @@ class CaretTableView extends TableNodeView {
 }
 
 /** Crepe's table node view with a click in a cell placing the caret, the
- *  drop of a block or text left to ProseMirror (`editorTakesDrag`), and the
+ *  drop of a block or text left to ProseMirror (`editorTakesDrag`), the
  *  cells kept while only the selection in the table changes, unless
- *  it becomes a whole row or column. Use it after Crepe's Table feature, whose
+ *  it becomes a whole row or column, and focus in the document after a
+ *  button adds a row or column. Use it after Crepe's Table feature, whose
  *  settings the view reads, so it replaces Crepe's view. */
 export const tableCellClicks = $view(
   tableSchema.node,

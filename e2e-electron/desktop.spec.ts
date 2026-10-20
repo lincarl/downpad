@@ -1436,6 +1436,48 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
 });
 
+test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {
+  const file = path.join(directory, "table-add-focus.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "| Name | Notes |\n| --- | --- |\n| a1 | b1 |", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const table = documentView.locator("table.children");
+  const a1Cell = table.locator("td").filter({ hasText: "a1" });
+  /** Follow the border right of a1, or below it, to its add button, and
+   *  click the button. */
+  const clickAdd = async (axis: "col" | "row") => {
+    const a1 = (await a1Cell.boundingBox())!;
+    const handle = page.locator(`[data-role="${axis === "col" ? "y" : "x"}-line-drag-handle"]`);
+    if (axis === "col") await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
+    else await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
+    await expect(handle).toHaveAttribute("data-show", "true");
+    const plus = await centerOf(handle.locator(".add-button"));
+    if (axis === "col") await page.mouse.move(a1.x + a1.width - 2, plus.y, { steps: 10 });
+    else await page.mouse.move(plus.x + 2, a1.y + a1.height - 2, { steps: 10 });
+    await page.mouse.move(plus.x, plus.y, { steps: 2 });
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+  // The button took focus, and the table was drawn again without it, so
+  // focus went to the page and the next key was lost.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  await clickAdd("col");
+  await expect(table.locator(".selectedCell")).toHaveCount(2);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("x");
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await expect(documentView.locator(".cm-content")).toBeFocused();
+  await clickAdd("row");
+  await expect(table.locator("tr")).toHaveCount(3);
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "| Name | x  | Notes |\n| ---- | :- | ----- |\n| a1   |    | b1    |\n| y    |    |       |", "Last line."].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);
