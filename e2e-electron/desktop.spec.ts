@@ -838,10 +838,11 @@ test("a Shift+drag from a link's text scrolls the document while the pointer is 
   expect(await scrollTop()).toBe(released);
 });
 
-test("a Shift+drag from a link's text goes on from the selection's anchor after the document changes", async () => {
+test("a Shift+drag from a link's text keeps its anchor, and goes on from the selection's anchor after the document changes", async () => {
   const file = path.join(directory, "shift-drag-edit.md");
   await writeFile(file, [
     "Start [anchor](https://example.com/a) here and more words.",
+    "| Head A | Head B |\n| --- | --- |\n| one |  |",
     "Typed here and then [link](https://example.com/l) after it.",
     "End line near the end.",
   ].join("\n\n") + "\n");
@@ -850,12 +851,28 @@ test("a Shift+drag from a link's text goes on from the selection's anchor after 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  // prosemirror-tables turns a selection that ends at the start of a cell
+  // into one of the paragraph it starts in, which moved the anchor to the
+  // paragraph's start for the rest of the drag.
+  await clickOn(" here and more words.", 3, 0.25);
+  let point = await pointOn("anchor", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  const empty = (await page.locator(".milkdown .ProseMirror td").nth(1).boundingBox())!;
+  await page.mouse.move(empty.x + empty.width / 2, empty.y + empty.height / 2, { steps: 4 });
+  await expect.poll(selected).toBe("Start anchor here and more words.");
+  point = await pointOn(" here and more words.", 15, 0.5);
+  await page.mouse.move(point.x, point.y, { steps: 4 });
+  await expect.poll(selected).toBe("re and more ");
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
   // A typed closing `~~` becomes strikethrough once the caret leaves it, here
   // on the press, which takes the four tildes out. The drag went on from a
   // position four characters past the caret.
   await clickOn("Typed here and then ", 9, 0.75);
   await page.keyboard.type(" ~~struck~~");
-  let point = await pointOn("link", 2, 0.25);
+  point = await pointOn("link", 2, 0.25);
   await page.keyboard.down("Shift");
   await page.mouse.move(point.x, point.y);
   await page.mouse.down();

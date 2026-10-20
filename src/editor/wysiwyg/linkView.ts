@@ -276,16 +276,26 @@ function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
   const found = link && view.dom.contains(link) ? view.posAtCoords({ left: event.clientX, top: event.clientY }) : null;
   if (!found || (found.inside >= 0 && view.state.doc.nodeAt(found.inside)?.isInline)) return false;
   event.preventDefault();
-  // Each step extends from the anchor the selection has then, which
-  // ProseMirror moves along with every change to the document. That can be
-  // a key pressed while the button is down, such as Backspace, or a change
-  // made along with the selection, such as strikethrough made of text typed
-  // just before. An anchor kept from the press could lie past the end of
-  // the document after such a change.
+  // The anchor stays where the press found it, also when another plugin
+  // changes the selection in between. prosemirror-tables makes a selection
+  // that ends at the start of a cell select the paragraph it starts in, and
+  // an anchor taken from that selection stayed at the paragraph's start for
+  // the rest of the drag. A change to the document moves positions, though.
+  // It can be a key pressed while the button is down, such as Backspace, or
+  // a change made along with the selection, such as strikethrough made of
+  // text typed just before. The anchor then becomes that of the selection,
+  // which ProseMirror moved along with the change, as Chromium's drag
+  // selection goes on from where such a key left the caret.
+  let { doc } = view.state;
+  let { anchor } = view.state.selection;
   const extend = (head: number): void => {
-    const { doc, selection } = view.state;
-    const next = TextSelection.between(selection.$anchor, doc.resolve(head));
-    if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
+    const { state } = view;
+    if (state.doc !== doc) {
+      doc = state.doc;
+      anchor = state.selection.anchor;
+    }
+    const next = TextSelection.between(doc.resolve(anchor), doc.resolve(head));
+    if (!next.eq(state.selection)) view.dispatch(state.tr.setSelection(next).setMeta("pointer", true));
   };
   extend(found.pos);
   followDrag(view, extend);
