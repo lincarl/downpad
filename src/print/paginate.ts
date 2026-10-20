@@ -19,6 +19,9 @@
 // Wherever a block or a piece of one has to fit a page, the margin it takes at
 // the top of the page counts: its own top margin collapsed with those of the
 // first blocks inside it and of the containers around it (leadingMargin).
+//
+// A heading prints on the page of the block after it, or of that block's first
+// piece, when the two fit a page together (packBoxes).
 
 /** Rebuilt-from-lines code blocks lose inline highlight markup; see splitPre. */
 const CODE_LINE_CLASS = "print-code-line";
@@ -50,15 +53,23 @@ export function splitIntoPages(flow: HTMLElement, contentHeightPx: number): Elem
  * `outer` holds the margins of the containers around the items that collapse
  * with the first item's, as leadingMargin describes. An element taller than
  * the limit gets a group to itself rather than an empty page before it.
+ *
+ * A heading goes in the group of the item after it whenever the two fit a
+ * group together (packBoxes), so a page does not end with a heading whose
+ * text starts on the next page.
  */
 export function packByHeight<T extends HTMLElement>(items: T[], maxHeightPx: number, outer: number[] = []): T[][] {
   const boxes = items.map((el) => ({
     top: el.offsetTop,
     height: el.offsetHeight,
     marginTop: leadingMargin(el, outer),
+    keepWithNext: HEADING_TAGS.has(el.tagName),
   }));
   return packBoxes(boxes, maxHeightPx).map((group) => group.map((i) => items[i]));
 }
+
+/** Headings, which print on the page of the block after them (packBoxes). */
+const HEADING_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 
 /** One laid-out item's vertical extent, as the packer sees it. */
 interface Box {
@@ -69,6 +80,8 @@ interface Box {
    * ordinary flow blocks need this; derived line boxes have no margin.
    */
   marginTop?: number;
+  /** Whether the item goes on the page of the item after it, as a heading does. */
+  keepWithNext?: boolean;
 }
 
 /**
@@ -76,28 +89,60 @@ interface Box {
  * has to *derive* an item's height can still use it — see splitCodeMirror, where
  * a source line is as tall as the taller of the text and its gutter number.
  * Returns groups of indices into `boxes`.
+ *
+ * Items go on the current page while they fit and start a new page when they
+ * do not. A run of `keepWithNext` items, such as a heading or a heading and
+ * its subheading, goes on the page with the item after the run, so a heading
+ * that does not fit above the start of its text moves to the next page with
+ * it, as a word processor keeps a heading with the next paragraph. A run that
+ * cannot share an empty page with the item after it, such as a heading before
+ * a piece of a split paragraph that fills a page, is packed item by item
+ * instead, since moving it would leave a page holding nothing but the run.
  */
 function packBoxes(boxes: Box[], maxHeightPx: number): number[][] {
   const pages: number[][] = [];
   let current: number[] = [];
   let origin = 0;
-  boxes.forEach((box, index) => {
-    const bottom = box.top + box.height;
-    if (!current.length) {
-      origin = box.top - (box.marginTop ?? 0);
-      current.push(index);
-      return;
+  for (let first = 0; first < boxes.length; ) {
+    const last = keptTogether(boxes, first, maxHeightPx);
+    if (!current.length || bottomOf(boxes, first, last) - origin > maxHeightPx) {
+      if (current.length) pages.push(current);
+      current = [];
+      origin = topOf(boxes[first]);
     }
-    if (bottom - origin <= maxHeightPx) {
-      current.push(index);
-      return;
-    }
-    pages.push(current);
-    current = [index];
-    origin = box.top - (box.marginTop ?? 0);
-  });
+    for (let index = first; index <= last; index++) current.push(index);
+    first = last + 1;
+  }
   if (current.length) pages.push(current);
   return pages.length ? pages : [[]];
+}
+
+/**
+ * The last of the boxes that go on one page with `boxes[first]`: the box
+ * after the run of `keepWithNext` boxes that `first` starts, when the run and
+ * that box fit an empty page together, or `first` itself. A box inside a run
+ * starts none, so a run that cannot move whole is packed as it always was.
+ */
+function keptTogether(boxes: Box[], first: number, maxHeightPx: number): number {
+  if (!boxes[first].keepWithNext || boxes[first - 1]?.keepWithNext) return first;
+  let next = first + 1;
+  while (next < boxes.length && boxes[next].keepWithNext) next++;
+  if (next === boxes.length) return first;
+  return bottomOf(boxes, first, next) - topOf(boxes[first]) <= maxHeightPx ? next : first;
+}
+
+/** Where a page that starts with `box` begins: above the margin the box takes there. */
+function topOf(box: Box): number {
+  return box.top - (box.marginTop ?? 0);
+}
+
+/** The lowest bottom edge of boxes `first` to `last`. */
+function bottomOf(boxes: Box[], first: number, last: number): number {
+  let bottom = -Infinity;
+  for (let index = first; index <= last; index++) {
+    bottom = Math.max(bottom, boxes[index].top + boxes[index].height);
+  }
+  return bottom;
 }
 
 /**
@@ -278,7 +323,7 @@ function splittableIn(block: HTMLElement): HTMLElement | null {
 const SPLITTABLE_TAGS = new Set(["TABLE", "UL", "OL", "PRE"]);
 
 /** Blocks of inline content, split between the lines they wrap onto (splitText). */
-const TEXT_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
+const TEXT_TAGS = new Set(["P", ...HEADING_TAGS]);
 
 /**
  * Blocks that hold other blocks, split between them (splitContainer). Checked

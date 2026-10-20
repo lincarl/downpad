@@ -3982,6 +3982,57 @@ test("a heading with the URL shown after its link continues on the next sheet at
   expect(printed.join("")).toBe("API (https://example.com/d…umentation/reference)");
 });
 
+test("a printed heading starts the next sheet with its text rather than ending a sheet", async () => {
+  // A report of short sections. The paginator measured height only, so at 7
+  // of the 11 sheet breaks on A4 a heading fit at the foot of a sheet and its
+  // text started the next one.
+  const file = path.join(directory, "sections.md");
+  const words = "the quick brown fox jumps over a lazy dog while the editor keeps every line in place".split(" ");
+  const sentence = (count: number, seed: number): string =>
+    Array.from({ length: count }, (_, index) => words[(index * 7 + seed) % words.length]).join(" ");
+  const blocks = ["# Quarterly report"];
+  for (let section = 1; section <= 36; section++) {
+    blocks.push(`## Section ${section}`);
+    for (let paragraph = 0; paragraph <= section % 3; paragraph++) {
+      blocks.push(`Body ${section}.${paragraph + 1}: ${sentence(18 + ((section * 13 + paragraph * 29) % 70), section + paragraph)}.`);
+    }
+    if (section % 5 === 0) blocks.push(`### Detail ${section}`, "- point one\n- point two");
+  }
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Quarterly report");
+  const documentText = await page.locator(".milkdown .ProseMirror").evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  await expect(page.locator(".print-workspace")).toBeVisible();
+
+  for (const [paper, widthPx] of [["a4", 794], ["letter", 816]] as const) {
+    await page.getByLabel("Paper size", { exact: true }).selectOption(paper);
+    // Each sheet's blocks, once the sheets are laid out on this paper.
+    const read = () => page.locator(".print-page").evaluateAll((sheets, width) => {
+      if (Math.round((sheets[0] as HTMLElement).offsetWidth) !== width) return null;
+      return sheets.map((sheet) => {
+        const body = sheet.querySelector<HTMLElement>(".print-page-body")!;
+        const flow = Array.from(sheet.querySelectorAll(".print-flow > *"));
+        return {
+          headings: flow.map((block) => /^H[1-6]$/.test(block.tagName)),
+          text: flow.map((block) => block.textContent).join("").replace(/\s+/g, ""),
+          overflow: body.scrollHeight - body.clientHeight,
+        };
+      });
+    }, widthPx);
+    await expect.poll(read).not.toBeNull();
+    const sheets = (await read())!;
+    expect(sheets.length, paper).toBeGreaterThan(10);
+    // No sheet but the last ends with a heading, and none holds only headings.
+    const endsWithHeading = sheets.slice(0, -1).flatMap((sheet, index) => (sheet.headings.at(-1) ? [index + 1] : []));
+    expect(endsWithHeading, `${paper}: sheets that end with a heading`).toEqual([]);
+    for (const sheet of sheets) expect(sheet.headings).toContain(false);
+    // Every character prints once, in order, and every sheet holds its blocks.
+    expect(sheets.map((sheet) => sheet.text).join("")).toBe(documentText);
+    for (const sheet of sheets) expect(sheet.overflow).toBeLessThanOrEqual(0);
+  }
+});
+
 test("the Markdown version continues a source line taller than a page on the next pages", async () => {
   const file = path.join(directory, "long-lines.md");
   // The nested quotes overflow the Markdown parser's stack, so the file prints as
