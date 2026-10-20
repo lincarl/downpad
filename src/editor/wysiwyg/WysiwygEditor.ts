@@ -21,7 +21,7 @@ import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
 import { $prose } from "@milkdown/kit/utils";
 import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
-import { dropIndicatorState } from "@milkdown/kit/plugin/cursor";
+import { dropIndicatorPlugin } from "@milkdown/kit/plugin/cursor";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -43,7 +43,7 @@ import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
 import { tableCellClicks } from "./tableCellClicks";
-import { dropAtEdge, dropsBesideBlocks } from "./dropEdge";
+import { codeBlockDrops, dropAtEdge, dropLine } from "./dropEdge";
 import { preloadImages } from "./preloadImages";
 import {
   searchMilkdownPlugin,
@@ -293,16 +293,18 @@ export class WysiwygEditor {
     // A dropped block or text goes in at the edge under the pointer as the page
     // is at the drop, and on or beside a table or on a code block above or
     // below it, never between a table's rows or cells or into the code. As a
-    // prop of the view itself, the drop handler runs before the drop
-    // indicator's. The plugin takes drops on code blocks and moves the
-    // indicator's line to those edges, so it must follow the Cursor feature.
+    // prop of the view itself, the drop handler runs before any plugin's. The
+    // drop line marks that edge during the drag, in place of the line of
+    // Crepe's drop indicator plugin, which `mount` removes, and code blocks
+    // leave their drops to the editor.
     this.crepe.editor.config((ctx) => {
       ctx.update(editorViewOptionsCtx, (prev) => ({
         ...prev,
         handleDrop: (view, event, slice, moved) => dropAtEdge(view, event, slice, moved) || (prev.handleDrop?.(view, event, slice, moved) ?? false),
       }));
     });
-    this.crepe.editor.use(dropsBesideBlocks);
+    this.crepe.editor.use(dropLine);
+    this.crepe.editor.use(codeBlockDrops);
     // Look up local image URLs before the first render, so none starts raw.
     this.crepe.editor.use(preloadImages(imageConfig.preload));
     // WYSIWYG find/replace search state + decorations (§5.13).
@@ -366,8 +368,10 @@ export class WysiwygEditor {
       // Keep even a synchronous create/config failure inside this lifecycle's
       // cleanup path. First drop Crepe's indent plugin, which types four spaces
       // on Tab that Markdown saves as `&#x20;`. Lists, tables and code blocks
-      // have their own Tab keys.
-      createPromise = crepe.editor.remove(indentPlugin).then(() => crepe.create()).then(() => undefined);
+      // have their own Tab keys. Also drop Crepe's drop indicator plugin, whose
+      // line md-easy draws itself (`dropLine`), and whose drops `dropAtEdge`
+      // puts in. Its state and the element that draws its line stay.
+      createPromise = crepe.editor.remove([indentPlugin, dropIndicatorPlugin]).then(() => crepe.create()).then(() => undefined);
       this.createPromise = createPromise;
       await createPromise;
     } catch (err) {
@@ -443,8 +447,8 @@ export class WysiwygEditor {
   }
 
   /** Aim a file drop at a viewport point (§5.4). The files go in at the block
-   *  edge nearest the point, which Crepe's drop indicator marked during the
-   *  drag, or at the start or end for a point above or below the document.
+   *  edge the drop line marked at the point during the drag, or at the start
+   *  or end for a point above or below the document.
    *  Returns the target for `insertMarkdown`, or null without an editor. The
    *  editor keeps the target in step with edits until `releaseDropTarget`. */
   dropTargetAt(x: number, y: number): DropTarget | null {
@@ -458,16 +462,6 @@ export class WysiwygEditor {
   /** Stop keeping a drop target in step, once the files of its drop are in. */
   releaseDropTarget(target: DropTarget): void {
     this.dropTargets.delete(target);
-  }
-
-  /** Hide Crepe's drop indicator. The app takes file drops before Crepe sees
-   *  them, so Crepe never hides it itself. */
-  hideDropIndicator(): void {
-    try {
-      this.crepe?.editor.action((ctx) => ctx.set(dropIndicatorState.key, null));
-    } catch {
-      // Editor not ready or torn down; it has no indicator to hide.
-    }
   }
 
   /** Insert markdown for a dropped file (§5.4). With the target of a drop on

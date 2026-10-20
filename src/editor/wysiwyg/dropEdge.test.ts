@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // A block or text dragged within the document and dropped on or beside a table,
 // or on a code block, goes in above or below the whole table or code block, and
-// the drop indicator draws its line there. Crepe's table view kept a drop on a
-// cell from ProseMirror, Crepe's indicator put a drop beside the table between
-// its rows or cells, and Crepe's code block view left a drop on it to its
+// the drop line marks that place. Crepe's table view kept a drop on a cell from
+// ProseMirror, Crepe's drop indicator put a drop beside the table between its
+// rows or cells, and Crepe's code block view left a drop on it to its
 // CodeMirror editor. These tests use the real editor and ProseMirror's own drop
 // handling, with a laid-out page, which jsdom cannot measure, given to its
 // blocks.
@@ -86,12 +86,14 @@ const nodeOf = (type: string, text?: string) => (node: Node) =>
 /** Whether a node is a row of a table. */
 const isRow = (node: Node) => node.type.spec.tableRole === "row";
 
-/** Lay out the page: each paragraph outside the table in turn, 20px high with
- *  10px between, from `start` down, then the table, starting 10px below the
- *  last of them, with a row every 40px from 40px in from the left. The cells
- *  and the paragraphs in them keep jsdom's empty box at the page's top left,
- *  far from every drop. */
+/** Lay out the page: the editor's box from 20px above `start` to 300px below
+ *  it, each paragraph outside the table in turn, 20px high with 10px between,
+ *  from `start` down, then the table, starting 10px below the last of them,
+ *  with a row every 40px from 40px in from the left. The cells and the
+ *  paragraphs in them keep jsdom's empty box at the page's top left, far from
+ *  every drop. A smaller `start` scrolls the page that much further down. */
 function layOut(view: EditorView, before: string[], after: string[], start = 100): { top: number; bottom: number } {
+  vi.spyOn(view.dom, "getBoundingClientRect").mockReturnValue(box(start - 20, start + 300));
   let y = start;
   for (const text of before) {
     place(view, nodeOf("paragraph", text), [[y, y + 20]]);
@@ -177,8 +179,8 @@ const DRAGGED = { "text/html": "", "text/plain": "" };
 const EXTERNAL = { "text/plain": "EXTERNAL" };
 
 /** A drag event of `type` at a viewport point, carrying `data` by type, with
- *  the keys `keys` held. */
-function dragEvent(type: string, x: number, y: number, data: Record<string, string> = DRAGGED, keys: EventModifierInit = {}): DragEvent {
+ *  the keys `keys` held, and for a dragleave the element the drag goes to. */
+function dragEvent(type: string, x: number, y: number, data: Record<string, string> = DRAGGED, keys: MouseEventInit = {}): DragEvent {
   const event = new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, ...keys });
   const dataTransfer = { types: Object.keys(data), files: [], getData: (format: string) => data[format] ?? "", setData: () => {}, clearData: () => {}, dropEffect: "move" };
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
@@ -188,16 +190,26 @@ function dragEvent(type: string, x: number, y: number, data: Record<string, stri
 /** Drop what is dragged, or `data`, on `target` at a viewport point, with the
  *  keys `keys` held. jsdom cannot find the document position under a point,
  *  so it is the start of `target`'s node. */
-function drop(view: EditorView, target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit): void {
+function drop(view: EditorView, target: Element, x: number, y: number, data?: Record<string, string>, keys?: MouseEventInit): void {
   vi.spyOn(view, "posAtCoords").mockReturnValue({ pos: view.posAtDOM(target, 0), inside: -1 });
   target.dispatchEvent(dragEvent("drop", x, y, data, keys));
 }
 
 /** Drag over `target` at a viewport point, carrying `data`, with the keys
  *  `keys` held, and return where the drop indicator then shows. */
-function dragOver(target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit) {
+function dragOver(target: Element, x: number, y: number, data?: Record<string, string>, keys?: MouseEventInit) {
   target.dispatchEvent(dragEvent("dragover", x, y, data, keys));
-  return crepeOf(editor!).editor.ctx.get(dropIndicatorState.key);
+  return dropLine();
+}
+
+/** Where the drop line shows, or null while it is hidden. */
+const dropLine = () => crepeOf(editor!).editor.ctx.get(dropIndicatorState.key);
+
+/** The element of the paragraph outside a table that holds `text`. */
+function paragraph(view: EditorView, text: string): HTMLElement {
+  const dom = view.nodeDOM(positionOf(view, nodeOf("paragraph", text)));
+  if (!(dom instanceof HTMLElement)) throw new Error(`No paragraph holds "${text}"`);
+  return dom;
 }
 
 /** The paragraph element of the cell that holds `text`. */
@@ -354,7 +366,7 @@ describe("a table", () => {
   });
 });
 
-describe("the drop indicator", () => {
+describe("the drop line", () => {
   it("draws its line at a table's nearer edge for a block or files dragged onto the table or beside it", async () => {
     const view = await open(`Move me.\n\nIntro.\n\n${TABLE}\nEnd.\n`);
     const { top, bottom } = layOut(view, ["Move me.", "Intro."], ["End."]);
@@ -381,7 +393,78 @@ describe("the drop indicator", () => {
     layOut(view, ["Move me.", "Intro."], ["End.", "After."], 0);
     document.dispatchEvent(new Event("scroll"));
     const after = positionOf(view, nodeOf("paragraph", "After."));
-    expect(crepeOf(editor!).editor.ctx.get(dropIndicatorState.key)).toMatchObject({ pos: after, line: { p1: { x: 0, y: 210 }, p2: { x: 600, y: 210 } } });
+    expect(dropLine()).toMatchObject({ pos: after, line: { p1: { x: 0, y: 210 }, p2: { x: 600, y: 210 } } });
+  });
+
+  it("stays at the edge under a still pointer, without measuring the page again, when the page scrolls another element under it", async () => {
+    const view = await open(`Move me.\n\nIntro.\n\n${TABLE}\nEnd.\n\nAfter.\n`);
+    const { top } = layOut(view, ["Move me.", "Intro."], ["End.", "After."]);
+    const table = positionOf(view, nodeOf("table"));
+    const afterTable = table + view.state.doc.nodeAt(table)!.nodeSize;
+    dragBlock(view, "Move me.");
+    // On the "2" cell, in the table's upper half.
+    expect(dragOver(cellParagraph("2"), 300, 205)).toMatchObject({ pos: table, line: { p1: { y: top } } });
+    // The page scrolls 100px, which brings "End.", now from 190px to 210px,
+    // under the pointer. The nearest edge there is the table's last row's
+    // bottom, at 180px, so the line goes below the table.
+    layOut(view, ["Move me.", "Intro."], ["End.", "After."], 0);
+    const end = paragraph(view, "End.");
+    const measured = vi.spyOn(view, "nodeDOM");
+    document.dispatchEvent(new Event("scroll"));
+    // Chromium then sends a dragenter to "End." and a dragleave from the cell,
+    // but no dragover. Crepe's indicator hid its line 30ms after a dragleave.
+    end.dispatchEvent(dragEvent("dragenter", 300, 205));
+    cellParagraph("2").dispatchEvent(dragEvent("dragleave", 300, 205, DRAGGED, { relatedTarget: end }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(dropLine()).toMatchObject({ pos: afterTable, line: { p1: { x: 40, y: 180 }, p2: { x: 600, y: 180 } } });
+    // The blocks moved with the editor, so their layout is kept.
+    expect(measured).not.toHaveBeenCalled();
+  });
+
+  it("shows once the page scrolls a place where the block moves under a still pointer, after it hid there", async () => {
+    const view = await open(`Intro.\n\nMove me.\n\n${TABLE}\nEnd.\n`);
+    layOut(view, ["Intro.", "Move me."], ["End."]);
+    const table = positionOf(view, nodeOf("table"));
+    dragBlock(view, "Move me.");
+    // Above the table, right below the block, which a move leaves there.
+    expect(dragOver(cellParagraph("2"), 300, 205)).toBeNull();
+    // The page scrolls 100px, which puts the table's lower half under the
+    // pointer, and the line below the table.
+    layOut(view, ["Intro.", "Move me."], ["End."], 0);
+    document.dispatchEvent(new Event("scroll"));
+    expect(dropLine()).toMatchObject({ pos: table + view.state.doc.nodeAt(table)!.nodeSize, line: { p1: { y: 180 } } });
+  });
+
+  it("hides, and leaves the page unmeasured at each scroll, once the drag ends where the editor does not hear it or leaves the editor", async () => {
+    const view = await open("Intro.\n\nMiddle.\n\nEnd.\n");
+    // "End." from 160px to 180px.
+    ["Intro.", "Middle.", "End."].forEach((text, index) => place(view, nodeOf("paragraph", text), [[100 + index * 30, 120 + index * 30]]));
+    const end = paragraph(view, "End.");
+    const outside = document.body.appendChild(document.createElement("div"));
+    // The app takes a file drop at the document before the editor hears it.
+    const takeFiles = (event: Event) => event.stopPropagation();
+    document.addEventListener("drop", takeFiles, true);
+    const FILES = { Files: "" };
+    const endings: Record<string, () => void> = {
+      "a file drop": () => end.dispatchEvent(dragEvent("drop", 300, 175, FILES)),
+      "a drag to an element outside the editor": () => end.dispatchEvent(dragEvent("dragleave", 300, 175, FILES, { relatedTarget: outside })),
+      "a drag out of the window": () => end.dispatchEvent(dragEvent("dragleave", 300, 175, FILES)),
+      "a cancelled drag": () => outside.dispatchEvent(dragEvent("dragend", 300, 175, FILES)),
+    };
+    const measured = [vi.spyOn(view, "nodeDOM"), vi.mocked(view.dom.getBoundingClientRect)];
+    try {
+      for (const [name, ending] of Object.entries(endings)) {
+        expect(dragOver(end, 300, 175, FILES), name).not.toBeNull();
+        ending();
+        expect(dropLine(), name).toBeNull();
+        for (const spy of measured) spy.mockClear();
+        document.dispatchEvent(new Event("scroll"));
+        expect(dropLine(), name).toBeNull();
+        for (const spy of measured) expect(spy, name).not.toHaveBeenCalled();
+      }
+    } finally {
+      document.removeEventListener("drop", takeFiles, true);
+    }
   });
 
   it("hides its line over the upper half of a table right below the dragged block, which a drop leaves where it is", async () => {
@@ -404,6 +487,20 @@ describe("the drop indicator", () => {
     expect(dragOver(cellParagraph("2"), 300, 205, DRAGGED, ctrl)).toMatchObject({ pos: positionOf(view, nodeOf("table")), line: { p1: { y: top } } });
     drop(view, cellParagraph("2"), 300, 205, DRAGGED, ctrl);
     expect(editor!.getMarkdown()).toBe(`Intro.\n\nMove me.\n\nMove me.\n\n${TABLE}\nEnd.\n`);
+  });
+
+  it("draws its line above a code block right below the dragged block while Ctrl makes the drop a copy, which goes in there", async () => {
+    const view = await open(`Intro.\n\nMove me.\n\n${CODE}\nEnd.\n`);
+    // The code block from 160px to 280px.
+    const { top } = layOutCode(view, ["Intro.", "Move me."], ["End."]);
+    dragBlock(view, "Move me.");
+    // Over the code block's upper half, where a move leaves the block where
+    // it is. Crepe's indicator hid its line there for a copy too.
+    expect(dragOver(codeElement(), 300, 190)).toBeNull();
+    const ctrl = { ctrlKey: true };
+    expect(dragOver(codeElement(), 300, 191, DRAGGED, ctrl)).toMatchObject({ pos: positionOf(view, nodeOf("code_block")), line: { p1: { y: top } } });
+    drop(view, codeElement(), 300, 191, DRAGGED, ctrl);
+    expect(editor!.getMarkdown()).toBe(`Intro.\n\nMove me.\n\nMove me.\n\n${CODE}\nEnd.\n`);
   });
 
   it("draws its line at a table's nearer edge for text from another app dragged onto a cell, where a drop there goes in", async () => {

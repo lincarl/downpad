@@ -283,7 +283,7 @@ describe("text dropped or pasted as plain text", () => {
     const { view } = await open("Intro [link](https://e.com/a)\n");
     const { schema } = view.state;
     // ProseMirror gives dropped plain text the marks at the drop point, here
-    // the link's end, before Crepe's drop indicator puts it in a block of its own.
+    // the link's end, before the drop puts it in a block of its own.
     const marks = view.state.doc.resolve(at(view, "link")).marks();
     const dropped = new Slice(Fragment.from(schema.nodes.paragraph.create(null, schema.text("dropped", marks))), 1, 1);
     expect(marks.map((mark) => mark.type.name)).toEqual(["link"]);

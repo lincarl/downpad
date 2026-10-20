@@ -1,9 +1,10 @@
 // Where a file dropped on the document goes in (§5.4). While something is
-// dragged over the document, Crepe's drop indicator (prosemirror-drop-indicator)
-// draws a line at the block edge nearest the pointer, and Crepe inserts dropped
-// blocks there. md-easy takes file drops before Crepe sees them, so it finds
-// that edge the same way, above or below a table rather than inside it
-// (dropEdge.ts), and inserts the file's Markdown there itself.
+// dragged over the document, md-easy draws the drop line at the block edge
+// where a drop at the pointer goes in, which is the edge nearest the pointer,
+// or above or below a table or a code, math or Mermaid block rather than
+// inside it (dropEdge.ts). A block dragged there goes in at that edge. The app
+// takes file drops before the editor hears them, so it finds the same edge
+// and inserts the file's Markdown there itself.
 
 import { editorViewCtx, parserCtx, remarkCtx, serializerCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
@@ -36,10 +37,11 @@ export interface DropTarget {
 
 /**
  * Where a file dropped at a viewport point goes in, as a document position.
- * Over the document that is the block edge Crepe's drop indicator marks there,
- * which for an edge inside a table is the table's nearer edge (`dropEdge`).
- * The indicator does not show above or below the document, so a drop there
- * goes in at its start or end. Null when no block is rendered.
+ * Over the document that is the block edge the drop line marks there
+ * (`dropEdge`), the edge nearest the point, or the nearer edge of a table
+ * that edge is inside or of a code, math or Mermaid block under the point.
+ * The line does not show above or below the document, so a drop there goes
+ * in at its start or end. Null when no block is rendered.
  */
 export function dropPosition(view: Pick<EditorView, "dom" | "state" | "nodeDOM">, x: number, y: number): number | null {
   const { top, bottom } = view.dom.getBoundingClientRect();

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // A file dropped on the document goes in at the block edge nearest the drop
-// point, the edge Crepe's drop indicator marks. These tests use the real editor
+// point, the edge the drop line marks. These tests use the real editor
 // with a laid-out page, which jsdom cannot measure, given to its blocks.
 
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -1,140 +1,147 @@
-// Where something dropped on the document goes in (§5.4). While something is
-// dragged over the document, Crepe's drop indicator (prosemirror-drop-indicator)
-// draws a line at the block edge nearest the pointer, and Crepe puts what is
-// dropped in there. Those edges include the ones between a table's rows and
-// cells. Put in there, a dragged block cut the table in two or pulled a cell
-// out into a new table. So a drop whose nearest edge is inside a table goes in
-// above or below the whole table, at the table's edge nearer the pointer, and
-// the indicator draws its line there. That holds for blocks and text dragged
-// within the document, text dragged in from elsewhere (`dropAtEdge`,
-// `dropsBesideBlocks`), and dropped files (fileDrop.ts).
+// Where something dropped on the document goes in (§5.4), and the drop line
+// that marks that place while something is dragged over the document.
 //
-// Crepe draws a fenced code block, math block or Mermaid diagram with a
-// CodeMirror editor of its own and keeps every event on it from ProseMirror.
-// A block dragged onto one went into the code as text, and stayed where it
-// was too. So what ProseMirror drags, a block or selected text, goes in above
-// or below a code block it is dropped on, at the block's edge nearer the
-// pointer, and the indicator draws its line there too. Text dragged in from
-// elsewhere, such as another app, still goes into the code at the pointer.
+// A drop goes in at the block edge nearest the pointer, as with Crepe's drop
+// indicator (prosemirror-drop-indicator), with two exceptions. Crepe's edges
+// include the ones between a table's rows and cells. Put in there, a dragged
+// block cut the table in two or pulled a cell out into a new table. So a drop
+// whose nearest edge is inside a table goes in above or below the whole table,
+// at the table's edge nearer the pointer. Crepe also draws a fenced code
+// block, math block or Mermaid diagram with a CodeMirror editor of its own,
+// which took a block dragged onto it into the code as text and left the block
+// where it was too. So what ProseMirror drags, a block or selected text, goes
+// in above or below a code block it is dropped on, at the block's edge nearer
+// the pointer (`codeBlockDrops`). Text dragged in from elsewhere, such as
+// another app, still goes into the code at the pointer. The same edges hold
+// for blocks and text dragged within the document, text dragged in from
+// elsewhere (`dropAtEdge`), and dropped files (fileDrop.ts).
 //
-// Crepe's indicator also finds the edge for a drop again only once the pointer
-// has moved, so after the page scrolled under a still pointer it put the drop
-// in at the edge that had been under the pointer before the scroll, such as
-// one between a table's rows. So md-easy finds the edge for every drop itself,
-// from the page as it is at the drop (`dropAtEdge`).
+// md-easy draws the drop line itself (`dropLine`), from the same measurement
+// of the page as the drop, in place of Crepe's indicator plugin. That plugin
+// found its edge again only for a dragover at a new point, and hid its line
+// 30 ms after a dragleave unless a dragover followed. So when the page
+// scrolled under a still pointer, its line stayed at its old place on the
+// screen or hid, and its drop went in at the edge that had been under the
+// pointer before the scroll, such as one between a table's rows.
 
 import { dropIndicatorState, type DropIndicatorState } from "@milkdown/kit/plugin/cursor";
-import type { Slice } from "@milkdown/kit/prose/model";
+import type { Node as ProseNode, Slice } from "@milkdown/kit/prose/model";
 import { NodeSelection, Plugin, TextSelection, type Transaction } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 
-/** The line the drop indicator draws, from one viewport point to another. */
+/** The drop line, from one viewport point to another. */
 type Line = NonNullable<DropIndicatorState>["line"];
 
 /** A place where a drop goes in, as a document position at a block edge, with
- *  the line the drop indicator draws there. */
+ *  the drop line there. */
 interface Edge {
   pos: number;
   line: Line;
 }
 
 /** The parts of the editor's view that find a block edge on the page. */
-type LaidOut = Pick<EditorView, "state" | "nodeDOM">;
+type LaidOut = Pick<EditorView, "dom" | "state" | "nodeDOM">;
 
-/** The line along the top or bottom edge of a block's box on the page. */
-const lineAt = ({ left, right }: DOMRect, y: number): Line => ({ p1: { x: left, y }, p2: { x: right, y } });
+/** A rendered block, with its box on the page relative to the top left
+ *  corner of the editor's box. */
+interface Block {
+  pos: number;
+  node: ProseNode;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** The rendered blocks of a document, lists, tables and their parts
+ *  included, as laid out in an editor of the given size. */
+interface Layout {
+  doc: ProseNode;
+  width: number;
+  height: number;
+  blocks: Block[];
+  byPos: Map<number, Block>;
+}
+
+/** The layout last measured for each editor. */
+const layouts = new WeakMap<LaidOut, Layout>();
 
 /**
- * The block edge nearest a viewport point, as Crepe's drop indicator picks it:
- * the top or bottom edge of any block, lists, tables and their parts included,
- * by the distance from the point to the nearer end of the edge. On a tie the
- * earlier position wins. Null when no block is rendered.
+ * The rendered blocks of the editor's document, and where the editor's box
+ * now starts on the page. Measuring every block takes long in a long
+ * document, so a layout is kept until the document or the editor's size
+ * changes, as Crepe's indicator kept its edges. A scroll moves the editor and
+ * its blocks together, so it keeps the layout.
  */
-export function nearestBlockEdge(view: LaidOut, x: number, y: number): Edge | null {
-  const nearest: { edge: Edge | null; distance: number } = { edge: null, distance: Infinity };
-  const consider = (pos: number, box: DOMRect, edgeY: number): void => {
-    const distance = Math.min(Math.abs(x - box.left), Math.abs(x - box.right)) + Math.abs(y - edgeY);
-    if (distance < nearest.distance || (distance === nearest.distance && pos < (nearest.edge?.pos ?? Infinity))) {
-      Object.assign(nearest, { edge: { pos, line: lineAt(box, edgeY) }, distance });
-    }
-  };
-  view.state.doc.descendants((node, pos) => {
+function measure(view: LaidOut): { layout: Layout; left: number; top: number } {
+  const { left, top, width, height } = view.dom.getBoundingClientRect();
+  const { doc } = view.state;
+  const kept = layouts.get(view);
+  if (kept && kept.doc === doc && kept.width === width && kept.height === height) return { layout: kept, left, top };
+  const blocks: Block[] = [];
+  doc.descendants((node, pos) => {
     const dom = view.nodeDOM(pos);
     if (dom instanceof HTMLElement) {
       const box = dom.getBoundingClientRect();
-      consider(pos, box, box.top);
-      consider(pos + node.nodeSize, box, box.bottom);
+      blocks.push({ pos, node, left: box.left - left, right: box.right - left, top: box.top - top, bottom: box.bottom - top });
     }
     // A text block's children are inline, so only containers are searched.
     return !node.isTextblock;
   });
-  return nearest.edge;
-}
-
-/** Where a drop beside the block at `pos` goes in: before the block or after
- *  it, at whichever of its top and bottom edges is nearer the viewport height
- *  `y`. Null when the block is not rendered. */
-function besideBlock(view: LaidOut, pos: number, y: number): Edge | null {
-  const node = view.state.doc.nodeAt(pos);
-  const dom = view.nodeDOM(pos);
-  if (!node || !(dom instanceof HTMLElement)) return null;
-  const box = dom.getBoundingClientRect();
-  const above = y < (box.top + box.bottom) / 2;
-  return { pos: above ? pos : pos + node.nodeSize, line: lineAt(box, above ? box.top : box.bottom) };
+  const layout = { doc, width, height, blocks, byPos: new Map(blocks.map((block) => [block.pos, block])) };
+  layouts.set(view, layout);
+  return { layout, left, top };
 }
 
 /**
- * Where a drop goes in instead of at `pos` when `pos` is inside a table: before
- * the table or after it, at whichever of its top and bottom edges is nearer the
- * viewport height `y`. Null when `pos` is not inside a table, or the table is
- * not rendered.
+ * The block edge where a drop at a viewport point goes in, found from the
+ * page as it is now. On a code block, a math block or a Mermaid diagram, with
+ * its toolbar and preview, that is the block's top or bottom edge, whichever
+ * is nearer the point. Elsewhere it is the block edge nearest the point, as
+ * Crepe's drop indicator picks it: the top or bottom edge of any block, by the
+ * distance from the point to the nearer end of the edge, with the earlier
+ * position on a tie. When that edge is inside a table, it is the table's top
+ * or bottom edge, whichever is nearer the point. Null when no block is
+ * rendered.
  */
-export function tableEdge(view: LaidOut, pos: number, y: number): Edge | null {
-  const $pos = view.state.doc.resolve(pos);
-  for (let depth = $pos.depth; depth > 0; depth -= 1) {
-    if ($pos.node(depth).type.spec.tableRole === "table") return besideBlock(view, $pos.before(depth), y);
-  }
-  return null;
-}
-
-/** The position of the code block whose box on the page holds a viewport
- *  point: a fenced code block, a math block or a Mermaid diagram, with its
- *  toolbar and preview. Null when no code block is there. */
-export function codeBlockAt(view: LaidOut, x: number, y: number): number | null {
-  const found: number[] = [];
-  view.state.doc.descendants((node, pos) => {
-    if (found.length) return false;
-    // A text block's children are inline, so only containers are searched.
-    if (!node.type.spec.code) return !node.isTextblock;
-    const dom = view.nodeDOM(pos);
-    if (dom instanceof HTMLElement) {
-      const { left, right, top, bottom } = dom.getBoundingClientRect();
-      if (left <= x && x <= right && top <= y && y <= bottom) found.push(pos);
-    }
-    return false;
-  });
-  return found[0] ?? null;
-}
-
-/**
- * Where a drop at a viewport point goes in instead of at `nearest`, the block
- * edge nearest the point: beside a code block under the point (`codeBlockAt`),
- * or beside a table that `nearest` is inside (`tableEdge`). Null where the
- * drop goes in at `nearest`.
- */
-export function wholeBlockEdge(view: LaidOut, nearest: number, x: number, y: number): Edge | null {
-  const code = codeBlockAt(view, x, y);
-  return code === null ? tableEdge(view, nearest, y) : besideBlock(view, code, y);
-}
-
-/** The block edge where a drop at a viewport point goes in, found from the
- *  page as it is now: the one nearest the point (`nearestBlockEdge`), or
- *  beside a code block under the point or a table that edge is inside
- *  (`wholeBlockEdge`). Null when no block is rendered. */
 export function dropEdge(view: LaidOut, x: number, y: number): Edge | null {
-  const nearest = nearestBlockEdge(view, x, y);
-  return nearest && (wholeBlockEdge(view, nearest.pos, x, y) ?? nearest);
+  const { layout, left, top } = measure(view);
+  const px = x - left;
+  const py = y - top;
+  const edgeOf = (pos: number, block: Block, edgeY: number): Edge => ({
+    pos,
+    line: { p1: { x: block.left + left, y: edgeY + top }, p2: { x: block.right + left, y: edgeY + top } },
+  });
+  /** The edge of `block` nearer the point. */
+  const beside = (block: Block): Edge =>
+    py < (block.top + block.bottom) / 2 ? edgeOf(block.pos, block, block.top) : edgeOf(block.pos + block.node.nodeSize, block, block.bottom);
+
+  const code = layout.blocks.find((block) => block.node.type.spec.code && block.left <= px && px <= block.right && block.top <= py && py <= block.bottom);
+  if (code) return beside(code);
+
+  let nearest: Edge | null = null;
+  let nearestDistance = Infinity;
+  for (const block of layout.blocks) {
+    const across = Math.min(Math.abs(px - block.left), Math.abs(px - block.right));
+    for (const [pos, edgeY] of [[block.pos, block.top], [block.pos + block.node.nodeSize, block.bottom]]) {
+      const distance = across + Math.abs(py - edgeY);
+      if (distance < nearestDistance || (distance === nearestDistance && nearest && pos < nearest.pos)) {
+        nearest = edgeOf(pos, block, edgeY);
+        nearestDistance = distance;
+      }
+    }
+  }
+  if (!nearest) return null;
+
+  const $pos = layout.doc.resolve(nearest.pos);
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.spec.tableRole === "table") {
+      const table = layout.byPos.get($pos.before(depth));
+      return table ? beside(table) : nearest;
+    }
+  }
+  return nearest;
 }
 
 /** Where the last step of a transaction ends its change, in the new document. */
@@ -183,18 +190,16 @@ function backInPlace(view: EditorView, pos: number): boolean {
 /**
  * ProseMirror `handleDrop` that puts dropped content in at the block edge where
  * a drop at the pointer goes in (`dropEdge`), found from the page as it is at
- * the drop. On a code block, or for an edge inside a table, that is above or
- * below the code block or table, where `dropsBesideBlocks` has the indicator
- * draw its line, not into the code or between the table's rows or cells.
- * `dropsBesideBlocks` also calls it for a drop on a code block, which
- * ProseMirror never hears. Crepe's indicator would put it in at the edge it found
- * when the pointer last moved, which is stale after the page scrolled under a
- * still pointer. Moved content leaves where it was, and content moved right
- * beside itself stays there. The content and the selection after it are as
- * Crepe's indicator leaves them. The page scrolls to show what went in when it
- * is out of view, as it can be at the far edge of a tall table.
- * Returns false for a drop with nothing to put in, such as a row dragged by
- * its handle, and where no block is rendered.
+ * the drop, where `dropLine` draws the drop line. On a code block, or for an
+ * edge inside a table, that is above or below the code block or table, not
+ * into the code or between the table's rows or cells. `codeBlockDrops` also
+ * calls it for a drop on a code block, which ProseMirror never hears. Moved
+ * content leaves where it was, and content moved right beside itself stays
+ * there. The content and the selection after it are as ProseMirror leaves
+ * them. The page scrolls to show what went in when it is out of view, as it
+ * can be at the far edge of a tall table. Returns false for a drop with
+ * nothing to put in, such as a row dragged by its handle, and where no block
+ * is rendered.
  */
 export function dropAtEdge(view: EditorView, event: DragEvent, slice: Slice, move: boolean): boolean {
   if (!slice.content.size) return false;
@@ -255,23 +260,102 @@ function onCodeBlock(view: EditorView, event: Event): boolean {
   return !!block && view.dom.contains(block);
 }
 
-/** Whether something dropped at a dragover's point goes in at the drop
- *  indicator's line. That holds for what ProseMirror drags, and for files,
- *  which the app puts in at the line (fileDrop.ts). A code block's editor
- *  takes text dragged in from elsewhere into the code, and a table keeps the
- *  drop of a drag that ProseMirror does not take there (`editorTakesDrag`),
- *  such as a row dragged by its handle. */
+/** Whether something dropped at a drag event's point goes in at the drop
+ *  line. That holds for what ProseMirror drags, and for files, which the app
+ *  puts in at the line (fileDrop.ts). A code block's editor takes text
+ *  dragged in from elsewhere into the code, and a table keeps the drop of a
+ *  drag that ProseMirror does not take there (`editorTakesDrag`), such as a
+ *  row dragged by its handle. */
 function dropsAtLine(view: EditorView, event: DragEvent): boolean {
   if (view.dragging || event.dataTransfer?.types.includes("Files")) return true;
   if (onCodeBlock(view, event)) return false;
   return editorTakesDrag(view, event) || !targetElement(event)?.closest(".milkdown-table-block");
 }
 
+/** Whether two states of the drop line draw the same line at the same place. */
+function sameLine(a: DropIndicatorState, b: DropIndicatorState): boolean {
+  if (!a || !b) return a === b;
+  const [p, q] = [a.line, b.line];
+  return a.pos === b.pos && p.p1.x === q.p1.x && p.p1.y === q.p1.y && p.p2.x === q.p2.x && p.p2.y === q.p2.y;
+}
+
+/** Where the pointer last dragged something over the document, whether a
+ *  drop there goes in at the drop line, and whether it moves what ProseMirror
+ *  drags. */
+interface DragPoint {
+  x: number;
+  y: number;
+  atLine: boolean;
+  moves: boolean;
+}
+
 /**
- * A plugin that puts what ProseMirror drags in above or below a code block it
- * is dropped on, and has Crepe's drop indicator draw its line above or below
- * a table or code block instead of inside it, at the edge where a drop there
- * goes in (`wholeBlockEdge`).
+ * A plugin that draws the drop line while something is dragged over the
+ * document, at the block edge where a drop at the pointer goes in
+ * (`dropEdge`), the edge that `dropAtEdge` and file drops use. It takes the
+ * place of Crepe's indicator plugin, which the editor removes, and draws with
+ * Crepe's indicator state and element.
+ *
+ * The line follows each dragenter and dragover on the document, and each
+ * scroll while a drag is over the document, since the page can scroll under
+ * a still pointer, by Crepe's scroll at the editor's edge or by the wheel.
+ * Chromium then sends only a dragenter and a dragleave when the element under
+ * the pointer changes. The line hides where a move would leave the dragged
+ * block or selection where it is, but not for a drag that the keys held make
+ * a copy (`dragMoves`). It hides where a drop does not go in at the line,
+ * such as text from another app over a code block, whose editor shows its own
+ * drop cursor. It also hides once the drag leaves the document, and at a drop
+ * or the end of a drag anywhere in the window, including a file drop that the
+ * app takes before the editor hears it.
+ */
+export const dropLine = $prose(
+  (ctx) =>
+    new Plugin({
+      view(view) {
+        let point: DragPoint | null = null;
+        const draw = (): void => {
+          const edge = point?.atLine && view.editable ? dropEdge(view, point.x, point.y) : null;
+          const state: DropIndicatorState = edge && !(point?.moves && backInPlace(view, edge.pos)) ? { view, ...edge } : null;
+          if (!sameLine(ctx.get(dropIndicatorState.key), state)) ctx.set(dropIndicatorState.key, state);
+        };
+        const end = (): void => {
+          point = null;
+          draw();
+        };
+        const onDrag = (event: DragEvent): void => {
+          const moves = view.dragging !== null && dragMoves(view, event);
+          point = { x: event.clientX, y: event.clientY, atLine: dropsAtLine(view, event), moves };
+          draw();
+        };
+        /** End the line when the drag leaves the document for an element
+         *  outside it, or leaves the window, where Chromium gives no element. */
+        const onLeave = (event: DragEvent): void => {
+          const to = event.relatedTarget;
+          if (point && !(to instanceof Node && view.dom.contains(to))) end();
+        };
+        const onScroll = (): void => {
+          if (point) draw();
+        };
+        // All in the capture phase, so no element that stops an event keeps
+        // it from the line. Scroll events do not bubble, but the document
+        // hears those of every scrolled element in the capture phase.
+        const listening = new AbortController();
+        const options = { capture: true, signal: listening.signal };
+        const { ownerDocument } = view.dom;
+        view.dom.addEventListener("dragenter", onDrag, options);
+        view.dom.addEventListener("dragover", onDrag, options);
+        view.dom.addEventListener("dragleave", onLeave, options);
+        ownerDocument.addEventListener("drop", end, options);
+        ownerDocument.addEventListener("dragend", end, options);
+        ownerDocument.addEventListener("scroll", onScroll, options);
+        return { destroy: () => listening.abort() };
+      },
+    }),
+);
+
+/**
+ * A plugin that puts what ProseMirror drags in above or below a code block
+ * it is dropped on (`dropAtEdge`), rather than into the code.
  *
  * Crepe's code block view keeps every event on it from ProseMirror. Its
  * CodeMirror editor put the text of a dragged block or selection into the
@@ -280,53 +364,13 @@ function dropsAtLine(view: EditorView, event: DragEvent): boolean {
  * the drop. For a drag that ProseMirror tracks in `view.dragging`, this plugin
  * cancels each drag event on a code block before CodeMirror hears it, which
  * has CodeMirror ignore the event and allows the drop there, and puts the drop
- * in itself, as ProseMirror would (`dropAtEdge`). Text dragged in from
- * elsewhere still goes into the code, and the line hides over the code block.
- *
- * As Crepe's indicator does for its own edges, it hides the line where a move
- * would leave the dragged block where it is, but not for a drag that the keys
- * held make a copy (`dragMoves`). Use it after Crepe's Cursor feature, so its
- * listener runs after the indicator's own and moves the line the indicator
- * just drew. Crepe's indicator finds its edge again only once the pointer
- * moves, so when the page scrolls under a still pointer, this plugin moves
- * the line to the edge where a drop at the pointer now goes in (`dropEdge`).
- * It moves only a line the indicator shows.
+ * in itself, as ProseMirror would. Text dragged in from elsewhere still goes
+ * into the code.
  */
-export const dropsBesideBlocks = $prose(
-  (ctx) =>
+export const codeBlockDrops = $prose(
+  () =>
     new Plugin({
       view(view) {
-        /** Where the pointer last dragged something over the document,
-         *  whether a drop there goes in at the line, and whether it moves what
-         *  ProseMirror drags. Cleared by the drop. */
-        let pointer: { x: number; y: number; atLine: boolean; moves: boolean } | null = null;
-        /** Move the shown line to `edge`, or hide it where a move would leave
-         *  the dragged block where it is. */
-        const showAt = (edge: Edge, moves: boolean): void => {
-          const shown = ctx.get(dropIndicatorState.key);
-          if (shown) ctx.set(dropIndicatorState.key, moves && backInPlace(view, edge.pos) ? null : { ...shown, ...edge });
-        };
-        const onDragOver = (event: DragEvent): void => {
-          const moves = view.dragging !== null && dragMoves(view, event);
-          pointer = { x: event.clientX, y: event.clientY, atLine: dropsAtLine(view, event), moves };
-          const shown = ctx.get(dropIndicatorState.key);
-          if (!shown) return;
-          if (pointer.atLine) {
-            const edge = wholeBlockEdge(view, shown.pos, event.clientX, event.clientY);
-            if (edge) showAt(edge, moves);
-          } else if (onCodeBlock(view, event)) {
-            // The code block's editor shows where the text goes in.
-            ctx.set(dropIndicatorState.key, null);
-          }
-        };
-        const onScroll = (): void => {
-          if (!pointer?.atLine) return;
-          const edge = dropEdge(view, pointer.x, pointer.y);
-          if (edge) showAt(edge, pointer.moves);
-        };
-        const onDrop = (): void => {
-          pointer = null;
-        };
         /** Cancel the drag events that ProseMirror's drag has on a code block,
          *  in the capture phase, and put its drop in beside the block. */
         const onCodeBlockDrag = (event: DragEvent): void => {
@@ -346,22 +390,10 @@ export const dropsBesideBlocks = $prose(
             view.dragging = null;
           }
         };
-        const codeBlockEvents = ["dragenter", "dragover", "drop"] as const;
-        for (const type of codeBlockEvents) view.dom.addEventListener(type, onCodeBlockDrag, true);
-        view.dom.addEventListener("dragover", onDragOver);
-        view.dom.addEventListener("drop", onDrop);
-        // Scroll events do not bubble, but a listener on the document in the
-        // capture phase hears those of every scrolled element.
-        const { ownerDocument } = view.dom;
-        ownerDocument.addEventListener("scroll", onScroll, true);
-        return {
-          destroy: () => {
-            for (const type of codeBlockEvents) view.dom.removeEventListener(type, onCodeBlockDrag, true);
-            view.dom.removeEventListener("dragover", onDragOver);
-            view.dom.removeEventListener("drop", onDrop);
-            ownerDocument.removeEventListener("scroll", onScroll, true);
-          },
-        };
+        const listening = new AbortController();
+        const options = { capture: true, signal: listening.signal };
+        for (const type of ["dragenter", "dragover", "drop"] as const) view.dom.addEventListener(type, onCodeBlockDrag, options);
+        return { destroy: () => listening.abort() };
       },
     }),
 );
