@@ -3771,6 +3771,29 @@ test("a block dragged beside a table goes in where the pointer is, where the dro
   await expect.poll(() => readFile(file, "utf8")).toBe(["Intro.", table, "End.", "Move me.", ...fillers].join("\n\n") + "\n");
 });
 
+test("a block copied by its handle onto the upper half of the table right below it goes in above the table, where the drop line shows", async () => {
+  const file = path.join(directory, "block-copy-table.md");
+  const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";
+  await writeFile(file, `Intro.\n\nCopy me.\n\n${table}\n\nEnd.\n`);
+  await launch(file);
+  const editor = page.locator(".milkdown .ProseMirror");
+  // The key that makes a drag copy, as ProseMirror reads it.
+  const copyKey = process.platform === "darwin" ? "Alt" : "Control";
+  await page.keyboard.down(copyKey);
+  await startBlockDrag(editor.locator("p", { hasText: "Copy me." }));
+  // Onto cell b1, in the table's upper half. A move would leave the block
+  // where it is there, so the drop line hid, though the copy went in.
+  const b1 = await centerOf(editor.locator("td", { hasText: "b1" }));
+  await page.mouse.move(b1.x, b1.y, { steps: 10 });
+  await page.mouse.move(b1.x + 1, b1.y);
+  const tableBox = (await editor.locator(".milkdown-table-block").boundingBox())!;
+  await expect.poll(dropLineY).toBeCloseTo(tableBox.y, 0);
+  await page.mouse.up();
+  await page.keyboard.up(copyKey);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(`Intro.\n\nCopy me.\n\nCopy me.\n\n${table}\n\nEnd.\n`);
+});
+
 test("text from another app dropped on a table cell goes in below the table, where the drop line shows", async () => {
   const file = path.join(directory, "text-drop-table.md");
   const table = "| Head A | Head B |\n| --- | --- |\n| a1 | b1 |\n| a2 | b2 |\n| a3 | b3 |";

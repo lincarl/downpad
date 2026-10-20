@@ -146,20 +146,21 @@ const DRAGGED = { "text/html": "", "text/plain": "" };
 /** The data a drag of text from another app carries. */
 const EXTERNAL = { "text/plain": "EXTERNAL" };
 
-/** A drag event of `type` at a viewport point, carrying `data` by type. */
-function dragEvent(type: string, x: number, y: number, data: Record<string, string> = DRAGGED): DragEvent {
-  const event = new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+/** A drag event of `type` at a viewport point, carrying `data` by type, with
+ *  the keys `keys` held. */
+function dragEvent(type: string, x: number, y: number, data: Record<string, string> = DRAGGED, keys: EventModifierInit = {}): DragEvent {
+  const event = new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, ...keys });
   const dataTransfer = { types: Object.keys(data), files: [], getData: (format: string) => data[format] ?? "", setData: () => {}, clearData: () => {}, dropEffect: "move" };
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
   return event;
 }
 
-/** Drop what is dragged, or `data`, on `target` at a viewport point. jsdom
- *  cannot find the document position under a point, so it is the start of
- *  `target`'s node. */
-function drop(view: EditorView, target: Element, x: number, y: number, data?: Record<string, string>): void {
+/** Drop what is dragged, or `data`, on `target` at a viewport point, with the
+ *  keys `keys` held. jsdom cannot find the document position under a point,
+ *  so it is the start of `target`'s node. */
+function drop(view: EditorView, target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit): void {
   vi.spyOn(view, "posAtCoords").mockReturnValue({ pos: view.posAtDOM(target, 0), inside: -1 });
-  target.dispatchEvent(dragEvent("drop", x, y, data));
+  target.dispatchEvent(dragEvent("drop", x, y, data, keys));
 }
 
 /** The paragraph element of the cell that holds `text`. */
@@ -274,10 +275,10 @@ describe("a table", () => {
 });
 
 describe("the drop indicator", () => {
-  /** Drag over `target` at a viewport point, carrying `data`, and return
-   *  where the indicator then shows. */
-  function dragOver(target: Element, x: number, y: number, data?: Record<string, string>) {
-    target.dispatchEvent(dragEvent("dragover", x, y, data));
+  /** Drag over `target` at a viewport point, carrying `data`, with the keys
+   *  `keys` held, and return where the indicator then shows. */
+  function dragOver(target: Element, x: number, y: number, data?: Record<string, string>, keys?: EventModifierInit) {
+    target.dispatchEvent(dragEvent("dragover", x, y, data, keys));
     return crepeOf(editor!).editor.ctx.get(dropIndicatorState.key);
   }
 
@@ -318,6 +319,18 @@ describe("the drop indicator", () => {
     expect(dragOver(cellParagraph("4"), 300, 237)).not.toBeNull();
     // Over the upper half, above the table, the block would stay where it is.
     expect(dragOver(cellParagraph("2"), 300, 205)).toBeNull();
+  });
+
+  it("draws its line above a table right below the dragged block while Ctrl makes the drop a copy, which goes in there", async () => {
+    const view = await open(`Intro.\n\nMove me.\n\n${TABLE}\nEnd.\n`);
+    const { top } = layOut(view, ["Intro.", "Move me."], ["End."]);
+    dragBlock(view, "Move me.");
+    // Over the upper half of the table, as in the test before, where a move
+    // would leave the block where it is.
+    const ctrl = { ctrlKey: true };
+    expect(dragOver(cellParagraph("2"), 300, 205, DRAGGED, ctrl)).toMatchObject({ pos: positionOf(view, nodeOf("table")), line: { p1: { y: top } } });
+    drop(view, cellParagraph("2"), 300, 205, DRAGGED, ctrl);
+    expect(editor!.getMarkdown()).toBe(`Intro.\n\nMove me.\n\nMove me.\n\n${TABLE}\nEnd.\n`);
   });
 
   it("draws its line at a table's nearer edge for text from another app dragged onto a cell, where a drop there goes in", async () => {

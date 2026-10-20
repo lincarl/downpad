@@ -109,6 +109,25 @@ function draggedBlock(view: EditorView): NodeSelection | null {
   return node instanceof NodeSelection ? node : null;
 }
 
+/** The key held while dragging to copy rather than move, as ProseMirror reads
+ *  it: Option on macOS, Ctrl elsewhere. */
+const copyKey = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "altKey" : "ctrlKey";
+
+/**
+ * Whether a drop at `event` would move what ProseMirror drags rather than copy
+ * it, by ProseMirror's own rule for each drop: a `dragCopies` prop decides, or
+ * else the drop copies while Ctrl, or Option on macOS, is held. Crepe's block
+ * handle marks every drag it starts as a move in `view.dragging`, but
+ * ProseMirror ignores that at the drop.
+ */
+export function dragMoves(view: EditorView, event: DragEvent): boolean {
+  let copies: boolean | undefined;
+  view.someProp("dragCopies", (test) => {
+    copies = copies || test(event);
+  });
+  return copies === undefined ? !event[copyKey] : !copies;
+}
+
 /** Whether moving what is dragged to `pos` would leave it where it is, since
  *  `pos` is at an end of the dragged block or selection, or inside it. */
 function backInPlace(view: EditorView, pos: number): boolean {
@@ -190,7 +209,8 @@ function dropsAtLine(view: EditorView, event: DragEvent): boolean {
  * A plugin that has Crepe's drop indicator draw its line above or below a table
  * instead of inside it, at the edge where a drop there goes in (`tableEdge`).
  * As Crepe's indicator does for its own edges, it hides the line where a move
- * would leave the dragged block where it is. Use it after Crepe's Cursor
+ * would leave the dragged block where it is, but not for a drag that the keys
+ * held make a copy (`dragMoves`). Use it after Crepe's Cursor
  * feature, so its listener runs after the indicator's own and moves the line
  * the indicator just drew. Crepe's indicator finds its edge again only once
  * the pointer moves, so when the page scrolls under a still pointer, this
@@ -201,24 +221,27 @@ export const tableDropIndicator = $prose(
   (ctx) =>
     new Plugin({
       view(view) {
-        /** Where the pointer last dragged something over the document, and
-         *  whether a drop there goes in at the line. Cleared by the drop. */
-        let pointer: { x: number; y: number; atLine: boolean } | null = null;
+        /** Where the pointer last dragged something over the document,
+         *  whether a drop there goes in at the line, and whether it moves what
+         *  ProseMirror drags. Cleared by the drop. */
+        let pointer: { x: number; y: number; atLine: boolean; moves: boolean } | null = null;
         /** Move the shown line to `edge`, or hide it where a move would leave
          *  the dragged block where it is. */
-        const showAt = (edge: Edge): void => {
+        const showAt = (edge: Edge, moves: boolean): void => {
           const shown = ctx.get(dropIndicatorState.key);
-          if (shown) ctx.set(dropIndicatorState.key, view.dragging?.move && backInPlace(view, edge.pos) ? null : { ...shown, ...edge });
+          if (shown) ctx.set(dropIndicatorState.key, moves && backInPlace(view, edge.pos) ? null : { ...shown, ...edge });
         };
         const onDragOver = (event: DragEvent): void => {
-          pointer = { x: event.clientX, y: event.clientY, atLine: dropsAtLine(view, event) };
+          const moves = view.dragging !== null && dragMoves(view, event);
+          pointer = { x: event.clientX, y: event.clientY, atLine: dropsAtLine(view, event), moves };
           const shown = ctx.get(dropIndicatorState.key);
           const edge = shown && pointer.atLine ? tableEdge(view, shown.pos, event.clientY) : null;
-          if (edge) showAt(edge);
+          if (edge) showAt(edge, moves);
         };
         const onScroll = (): void => {
-          const edge = pointer?.atLine ? dropEdge(view, pointer.x, pointer.y) : null;
-          if (edge) showAt(edge);
+          if (!pointer?.atLine) return;
+          const edge = dropEdge(view, pointer.x, pointer.y);
+          if (edge) showAt(edge, pointer.moves);
         };
         const onDrop = (): void => {
           pointer = null;
