@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import { packByHeight, splitIntoPages } from "./paginate";
 
 /** jsdom does no layout, so the measurements the packer reads are stubbed. */
-function block(top: number, height: number, label: string, marginTop = 0): HTMLElement {
-  const el = document.createElement("div");
+function block(top: number, height: number, label: string, marginTop = 0, tag = "div"): HTMLElement {
+  const el = document.createElement(tag);
   el.dataset.label = label;
   el.style.marginTop = `${marginTop}px`;
   Object.defineProperty(el, "offsetTop", { value: top });
@@ -93,6 +93,106 @@ describe("packByHeight", () => {
     // The margins do not collapse, so the heading's margin is part of the
     // quote's height and the page holds only the quote's own above it.
     expect(labels(packByHeight(quoteOnSecondPage(css, before?.()), 200))).toEqual([["a"], ["quote", "b"]]);
+  });
+});
+
+describe("packByHeight, keeping a heading with the block after it", () => {
+  /** A heading measured like `block`. */
+  const heading = (top: number, height: number, label: string, marginTop = 0): HTMLElement =>
+    block(top, height, label, marginTop, "h2");
+  /** An empty paragraph or a rule, measured like `block`. */
+  const blank = (top: number, height: number, label: string, tag: "p" | "hr" = "p"): HTMLElement =>
+    block(top, height, label, 0, tag);
+  /** A paragraph measured like `block` that holds nothing but a `child` element, such as an image. */
+  const holding = (child: string, top: number, height: number, label: string): HTMLElement => {
+    const paragraph = block(top, height, label, 0, "p");
+    paragraph.append(document.createElement(child));
+    return paragraph;
+  };
+
+  it.each([
+    ["a heading that would end a page", () => [block(0, 150, "a"), heading(160, 30, "h"), block(200, 100, "b")], [["a"], ["h", "b"]]],
+    [
+      "a heading and its subheading that would end a page",
+      () => [block(0, 150, "a"), heading(160, 20, "h1"), heading(185, 20, "h2"), block(210, 100, "b")],
+      [["a"], ["h1", "h2", "b"]],
+    ],
+    // Only the first heading fits above the break, so the packer put the
+    // subheading with the text and left the heading alone at the foot.
+    [
+      "a heading at the foot of a page whose subheading starts the next",
+      () => [block(0, 200, "a"), heading(205, 20, "h1"), heading(230, 30, "h2"), block(265, 100, "b")],
+      [["a"], ["h1", "h2", "b"]],
+    ],
+  ])("moves %s to the next page, with the block after it", (_kind, items, pages) => {
+    // The packer measured height only, so a heading that fit printed alone at
+    // the foot of the page and its text started the next page.
+    expect(labels(packByHeight(items(), 250))).toEqual(pages);
+  });
+
+  it.each([
+    ["an empty paragraph", () => [block(0, 150, "a"), heading(160, 30, "h"), blank(195, 8, "empty"), block(210, 100, "b")], [["a"], ["h", "empty", "b"]]],
+    ["a paragraph holding only a line break", () => [block(0, 150, "a"), heading(160, 30, "h"), holding("br", 195, 8, "break"), block(210, 100, "b")], [["a"], ["h", "break", "b"]]],
+    [
+      "a paragraph holding only a bold non-breaking space",
+      () => {
+        const spacer = holding("strong", 195, 8, "spacer");
+        spacer.firstElementChild!.textContent = "\u00a0";
+        return [block(0, 150, "a"), heading(160, 30, "h"), spacer, block(210, 100, "b")];
+      },
+      [["a"], ["h", "spacer", "b"]],
+    ],
+    ["a rule", () => [block(0, 150, "a"), heading(160, 30, "h"), blank(195, 10, "rule", "hr"), block(215, 100, "b")], [["a"], ["h", "rule", "b"]]],
+    [
+      "an empty paragraph and a subheading",
+      () => [block(0, 140, "a"), heading(150, 20, "h1"), blank(175, 8, "empty"), heading(190, 20, "h2"), block(215, 100, "b")],
+      [["a"], ["h1", "empty", "h2", "b"]],
+    ],
+  ])("moves a heading with %s under it to the next page, with the block after them", (_kind, items, pages) => {
+    // The heading went with the empty paragraph or rule under it, and nothing
+    // more, so it stayed at the foot of the page and its text started the next.
+    expect(labels(packByHeight(items(), 250))).toEqual(pages);
+  });
+
+  it.each([
+    ["a rule", "hr"],
+    ["an empty paragraph", "p"],
+  ] as const)("packs %s with no heading above it as before", (_kind, tag) => {
+    // Only a heading starts a run, so a document without headings breaks as it did.
+    const items = [block(0, 200, "a"), blank(210, 10, "blank", tag), block(225, 100, "b")];
+    expect(labels(packByHeight(items, 250))).toEqual([["a", "blank"], ["b"]]);
+  });
+
+  it.each([
+    // A heading moved without its block would print alone on a page.
+    ["the block after it is too tall to share an empty page", () => [block(0, 100, "a"), heading(110, 30, "h"), block(150, 240, "tall")], [["a", "h"], ["tall"]]],
+    // Only the subheading and the block fit an empty page together. Moving the
+    // subheading alone would leave the heading at the foot of the page.
+    [
+      "only the last heading of a run fits an empty page with the block",
+      () => [block(0, 100, "a"), heading(110, 30, "h1"), heading(150, 30, "h2"), block(190, 200, "tall")],
+      [["a", "h1", "h2"], ["tall"]],
+    ],
+    // The page leaves room for the heading's top margin above it, so the two
+    // fit only without it.
+    ["they fit an empty page only without the heading's top margin", () => [block(0, 90, "a"), heading(120, 30, "h", 30), block(160, 200, "b")], [["a", "h"], ["b"]]],
+    // The empty paragraph does not end the run, so the subheading after it
+    // starts none of its own.
+    [
+      "only the last heading of a run with an empty paragraph in it fits an empty page with the block",
+      () => [block(0, 100, "a"), heading(110, 30, "h1"), blank(145, 8, "empty"), heading(160, 30, "h2"), block(200, 200, "tall")],
+      [["a", "h1", "empty", "h2"], ["tall"]],
+    ],
+    // An image is what the heading introduces, not a blank to move past.
+    [
+      "the block after it holds only an image",
+      () => [block(0, 150, "a"), heading(160, 30, "h"), holding("img", 195, 40, "image"), block(240, 100, "b")],
+      [["a", "h", "image"], ["b"]],
+    ],
+    ["no block follows the heading", () => [block(0, 240, "a"), heading(245, 30, "h")], [["a"], ["h"]]],
+    ["only an empty paragraph follows the heading", () => [block(0, 230, "a"), heading(235, 10, "h"), blank(248, 8, "empty")], [["a", "h"], ["empty"]]],
+  ])("packs a heading as before when %s", (_kind, items, pages) => {
+    expect(labels(packByHeight(items(), 250))).toEqual(pages);
   });
 });
 
@@ -1098,6 +1198,44 @@ describe("splitIntoPages, splitting a quote", () => {
       paragraphs(10, "b").map((p) => p.textContent).join(""),
     ]);
     expect(pieces.map((piece) => piece.textContent).join("")).toBe(text);
+  });
+});
+
+describe("splitIntoPages, keeping a heading with the block after it", () => {
+  beforeEach(() => fakeLayout.install());
+  afterEach(() => fakeLayout.uninstall());
+
+  const texts = (pages: Element[][]): string[][] => pages.map((page) => page.map((el) => el.textContent ?? ""));
+  const text = (count: number, label: string): string[] => paragraphs(count, label).map((p) => p.textContent ?? "");
+
+  it("moves a heading at the foot of a page to the next page, with the paragraph after it", () => {
+    // 15 paragraphs and the heading fill 480 px of the 500 px page, and the
+    // paragraph after it does not fit. The heading printed alone at the foot.
+    const flow = stack("div", ...paragraphs(15, "a"), sized("h2", 30, "Heading."), sized("p", 30, "After."));
+
+    expect(texts(splitIntoPages(flow, 500))).toEqual([text(15, "a"), ["Heading.", "After."]]);
+  });
+
+  it("moves a heading at the foot of a piece of a quote to the next piece", () => {
+    const quote = stack("blockquote", ...paragraphs(15, "a"), sized("h3", 30, "Heading."), ...paragraphs(5, "b"));
+    const flow = stack("div", quote);
+
+    splitIntoPages(flow, 500);
+
+    const pieces = Array.from(flow.children, (piece) => Array.from(piece.children, (child) => child.textContent));
+    expect(pieces).toEqual([text(15, "a"), ["Heading.", ...text(5, "b")]]);
+  });
+
+  it("leaves a heading above a paragraph taller than a page at the foot of its page", () => {
+    // The paragraph's first piece fills a page, so the heading cannot go with
+    // it. Moving the heading would print it alone on a page.
+    const flow = stack("div", sized("p", 30, "Intro."), sized("h2", 30, "Findings."), longParagraph(400, "w"));
+
+    const pages = texts(splitIntoPages(flow, 500));
+
+    expect(pages[0]).toEqual(["Intro.", "Findings."]);
+    expect(pages.length).toBeGreaterThan(2);
+    for (const page of pages.slice(1)) expect(page).toHaveLength(1);
   });
 });
 
