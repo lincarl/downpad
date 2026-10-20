@@ -1382,6 +1382,60 @@ test("a press on the page around the document leaves focus where it was, and Shi
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;b\n```", "First line.c", "Last line.a"].join("\n\n") + "\n");
 });
 
+/** The point `fraction` of the way across the character at `index` of the
+ *  split's Markdown pane's line that reads `text`. */
+function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
+  return page.locator(".editor-pane-raw .cm-line").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).evaluate((line, [index, fraction]) => {
+    const node = document.createTreeWalker(line, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(node, index);
+    range.setEnd(node, index + 1);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * fraction, y: box.top + box.height / 2 };
+  }, [index, fraction] as const);
+}
+
+test("a press on a line number puts the cursor at the start of its line in a code block and the Markdown pane, and Shift+click from the document into the Markdown pane puts it at the click", async () => {
+  const file = path.join(directory, "line-numbers.md");
+  await writeFile(file, ["```\nconst alpha = 1;\nconst beta = 2;\n```", "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const code = documentView.locator(".cm-content");
+  const markdown = page.locator(".editor-pane-raw .cm-content");
+  /** The middle of the line number that reads `number` in `editor`. */
+  const lineNumber = (editor: Locator, number: number) => centerOf(editor.locator(".cm-lineNumbers .cm-gutterElement").filter({ hasText: new RegExp(`^${number}$`) }));
+  // Chromium focused CodeMirror's scroll container, which takes no keys, so
+  // the next key was lost.
+  await clickOn("Last line.", -1, 0.75);
+  const second = await lineNumber(documentView, 2);
+  await page.mouse.click(second.x, second.y);
+  await expect(code).toBeFocused();
+  await page.keyboard.type("a");
+  // From the find card, a Shift+click there is a plain click.
+  await clickOn("Last line.", -1, 0.75);
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  await shiftClickAt(await lineNumber(documentView, 1));
+  await expect(code).toBeFocused();
+  await page.keyboard.type("b");
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("First line.");
+  const markdownPane = page.locator(".editor-pane-raw");
+  const last = await lineNumber(markdownPane, 8);
+  await page.mouse.click(last.x, last.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("c");
+  // From the document, CodeMirror selected from the pane's own cursor, here
+  // at the start of the last line, to the click, and the next key replaced
+  // the Markdown in between.
+  await clickOn("First line.", -1, 0.75);
+  await shiftClickAt(await pointInMarkdown("First line.", 3, 0.25));
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("d");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);

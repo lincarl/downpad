@@ -237,8 +237,9 @@ export class WysiwygEditor {
       featureConfigs: {
         // Render ```mermaid code blocks as diagrams below the source (§5.2),
         // show the find card's matches inside code blocks (§5.13), add a
-        // cursor on Ctrl or Cmd+click only in a block that has focus, and put
-        // the cursor at a Shift+click in a block that does not.
+        // cursor on Ctrl or Cmd+click only in a block that has focus, put the
+        // cursor at a Shift+click in a block that does not, and at the start
+        // of a line on a press on its line number.
         [Crepe.Feature.CodeMirror]: {
           renderPreview: renderMermaidPreview,
           extensions: [codeBlockFindHighlights, codeBlockClicks],

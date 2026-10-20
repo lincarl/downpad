@@ -16,6 +16,7 @@ import {
 } from "@codemirror/search";
 import { base64Collapse, dropOutsidePayload, inBase64Payload, paragraphPlace } from "./base64Collapse";
 import { differingRuns, type Run } from "../differingRuns";
+import { codeMirrorPresses } from "../codeMirrorPresses";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
@@ -386,6 +387,9 @@ export class RawEditor {
           // Make non-hyphen dashes (em/en dash, …) unmistakable in the source: a
           // monospace font renders them almost identically to a hyphen (§5.3).
           specialDashHighlight(),
+          // Put the cursor at a Shift+click from the document pane, and at
+          // the start of the line on a press on a line number (§5.6).
+          codeMirrorPresses,
           updateListener,
         ],
       }),
