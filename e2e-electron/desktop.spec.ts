@@ -1495,6 +1495,47 @@ test("the selection toolbar hides once focus moves to the split's Markdown pane"
   await expect(toolbar).toHaveAttribute("data-show", "true");
 });
 
+test("a click on a task's box from the find card, the Markdown pane or a code block toggles it and puts the caret at the start of its text", async () => {
+  const file = path.join(directory, "task-box-focus.md");
+  await writeFile(file, ["```\nconst alpha = 1;\n```", "- [ ] task open", "Middle one.", "Middle two.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  /** Move the pointer onto the task's box, as a user does, so Crepe's block
+   *  handle, where it shows, moves beside the task first, and click it. */
+  const clickBox = async () => {
+    const box = (await documentView.locator(".milkdown-list-item-block .label-wrapper").boundingBox())!;
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(point.x + 60, point.y);
+    await page.mouse.move(point.x, point.y, { steps: 5 });
+    await expect.poll(() => page.locator(".milkdown-block-handle").evaluate((handle, left) => getComputedStyle(handle).opacity === "0" || handle.getBoundingClientRect().right <= left, box.x)).toBe(true);
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+  // Crepe focused the document at its old selection, out of sight while
+  // focus was elsewhere, and the next key replaced it.
+  await selectText("Last line.");
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  await clickBox();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("a");
+  // From a code block, focus went back into the block, and the next key
+  // replaced the selected code.
+  const line = (await documentView.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await page.keyboard.press("Shift+Home");
+  await clickBox();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("b");
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await clickBox();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("c");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "- [x] cbatask open", "Middle one.", "Middle two.", "Last line."].join("\n\n") + "\n");
+});
+
 test("a Shift+drag from a link's text scrolls the document while the pointer is below it", async () => {
   const file = path.join(directory, "shift-drag-scroll.md");
   const lines = Array.from({ length: 60 }, (_, index) => `Line ${index + 1} has some words.`);

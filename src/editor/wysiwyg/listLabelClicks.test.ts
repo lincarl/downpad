@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // A press on a list item's bullet or number puts the caret at the start of
 // the item's text, and a Shift+press while the document has focus extends the
-// selection to there. A task's box is Crepe's. These tests press the labels of
-// the real editor.
+// selection to there. A task's box toggles the task, which Crepe does, and
+// from outside the document the caret goes to the start of the task's text.
+// These tests press the labels of the real editor.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -90,5 +91,38 @@ describe("listLabelClicks", () => {
     const before = view.state.selection;
     expect(pressLabel(view, "task")).toBe(false);
     expect(view.state.selection.eq(before)).toBe(true);
+  });
+
+  /** Put the pointer down on the box of the task that reads `text`, as
+   *  Crepe's view toggles a task on, and return the task's checked state. */
+  function pressTaskBox(view: EditorView, text: string): boolean {
+    const item = [...view.dom.querySelectorAll(".milkdown-list-item-block")].find((element) => element.querySelector("p")?.textContent === text)!;
+    item.querySelector(".label-wrapper")!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+    let checked = false;
+    view.state.doc.descendants((node) => {
+      if (node.type.name === "list_item" && node.textContent === text) checked = node.attrs.checked === true;
+    });
+    return checked;
+  }
+
+  it("puts the caret at the start of a task's text and toggles it on a press on its box from outside the document", async () => {
+    const view = await open();
+    const anchor = textStart(view, "Last line.");
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, anchor, anchor + 4)));
+    const outside = document.createElement("input");
+    document.body.append(outside);
+    outside.focus();
+    expect(pressTaskBox(view, "task")).toBe(true);
+    expect(view.hasFocus()).toBe(true);
+    expect(view.state.selection.toJSON()).toEqual({ type: "text", anchor: textStart(view, "task"), head: textStart(view, "task") });
+  });
+
+  it("leaves the selection on a press on a task's box while the document has focus", async () => {
+    const view = await open();
+    const anchor = textStart(view, "Last line.");
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, anchor, anchor + 4)));
+    view.focus();
+    expect(pressTaskBox(view, "task")).toBe(true);
+    expect(view.state.selection.toJSON()).toEqual({ type: "text", anchor, head: anchor + 4 });
   });
 });

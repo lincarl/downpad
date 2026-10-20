@@ -1,4 +1,4 @@
-// A press on a list item's bullet or number.
+// A press on a list item's bullet, number or task box.
 //
 // Crepe draws each list item's bullet or number in a label left of the item's
 // text, outside the text the user edits. Chromium puts the caret of a click
@@ -19,25 +19,35 @@
 // a drag from there selects to the pointer. A Shift+press while the document
 // has focus extends the selection to the start of the item's text instead.
 // From outside the document, a Shift+press is a plain one, as on the
-// document's text (shiftClicks.ts). A task item's box toggles the task on the
-// press, which Crepe's view handles, and cancels the press, so no mouse
-// events follow it.
+// document's text (shiftClicks.ts).
+//
+// A task item's box toggles the task on the press, which Crepe's view handles
+// and cancels, so no mouse events follow it. Crepe focuses the document first
+// and leaves its selection as it was. While the document has focus, that is
+// the selection the user sees, and it stays. From outside the document the
+// user does not see it. The next key replaced text selected there, possibly
+// out of view, and from a code block focus went back into the block, where
+// the next key replaced the selected code. On a press on a task's box
+// from outside the document, this plugin therefore first puts the caret at
+// the start of the task's text and focuses the document, and Crepe then
+// toggles the task.
 
-import { Plugin, Selection } from "@milkdown/kit/prose/state";
+import { Plugin, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 import { dragSelect } from "./shiftClicks";
 
-/** The position at the start of the text of the list item whose bullet or
- *  number `target` is in, or null when it is in none or in a task's box. */
-function labelledText(view: EditorView, target: EventTarget | null): number | null {
+/** The list item whose label `target` is in: the position at the start of its
+ *  text, and whether it is a task, or null when `target` is in no label. */
+function labelledItem(view: EditorView, target: EventTarget | null): { start: number; task: boolean } | null {
   const label = target instanceof Element ? target.closest(".label-wrapper") : null;
   if (!label || !view.dom.contains(label)) return null;
   // The label comes before the item's content, so it maps to the content's start.
   const $start = view.state.doc.resolve(view.posAtDOM(label, 0));
   const item = $start.parent;
-  if (item.type.name !== "list_item" || item.attrs.checked != null) return null;
-  return Selection.findFrom($start, 1, true)?.from ?? null;
+  if (item.type.name !== "list_item") return null;
+  const start = Selection.findFrom($start, 1, true)?.from;
+  return start === undefined ? null : { start, task: item.attrs.checked != null };
 }
 
 /** Put the caret at the start of the text of the list item whose bullet or
@@ -46,25 +56,45 @@ function labelledText(view: EditorView, target: EventTarget | null): number | nu
  *  (see the header). */
 function labelPress(view: EditorView, event: MouseEvent): void {
   if (event.button !== 0) return;
-  const start = labelledText(view, event.target);
-  if (start === null) return;
+  const item = labelledItem(view, event.target);
+  if (!item || item.task) return;
   event.preventDefault();
   const focused = view.hasFocus();
-  dragSelect(view, event.shiftKey && focused ? view.state.selection.anchor : start, start);
+  dragSelect(view, event.shiftKey && focused ? view.state.selection.anchor : item.start, item.start);
   // Focusing first would move focus back into a code block that holds the
   // selection, since focusing the view puts the browser's selection there.
   if (!focused) view.focus();
 }
 
-/** ProseMirror plugin that takes a press on a list item's bullet or number
- *  (see the header). ProseMirror ignores a press that a listener cancelled. */
+/** Put the caret at the start of a task's text and focus the view on a
+ *  press on the task's box from outside the view, before Crepe toggles the
+ *  task (see the header). */
+function taskPress(view: EditorView, event: PointerEvent): void {
+  if (event.button !== 0 || view.hasFocus()) return;
+  const item = labelledItem(view, event.target);
+  if (!item?.task) return;
+  const $start = view.state.doc.resolve(item.start);
+  view.dispatch(view.state.tr.setSelection(TextSelection.between($start, $start)).setMeta("pointer", true));
+  view.focus();
+}
+
+/** ProseMirror plugin that takes a press on a list item's bullet or number,
+ *  and one on a task's box from outside the document (see the header).
+ *  ProseMirror ignores a press that a listener cancelled. */
 export const listLabelClicks = $prose(
   () =>
     new Plugin({
       view(view) {
         const press = (event: MouseEvent): void => labelPress(view, event);
+        const pointerPress = (event: PointerEvent): void => taskPress(view, event);
         view.dom.addEventListener("mousedown", press, true);
-        return { destroy: () => view.dom.removeEventListener("mousedown", press, true) };
+        view.dom.addEventListener("pointerdown", pointerPress, true);
+        return {
+          destroy: () => {
+            view.dom.removeEventListener("mousedown", press, true);
+            view.dom.removeEventListener("pointerdown", pointerPress, true);
+          },
+        };
       },
     }),
 );
