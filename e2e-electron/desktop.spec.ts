@@ -838,6 +838,53 @@ test("a Shift+drag from a link's text scrolls the document while the pointer is 
   expect(await scrollTop()).toBe(released);
 });
 
+test("a Shift+drag from a link's text goes on from the selection's anchor after the document changes", async () => {
+  const file = path.join(directory, "shift-drag-edit.md");
+  await writeFile(file, [
+    "Start [anchor](https://example.com/a) here and more words.",
+    "Typed here and then [link](https://example.com/l) after it.",
+    "End line near the end.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(2);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  // A typed closing `~~` becomes strikethrough once the caret leaves it, here
+  // on the press, which takes the four tildes out. The drag went on from a
+  // position four characters past the caret.
+  await clickOn("Typed here and then ", 9, 0.75);
+  await page.keyboard.type(" ~~struck~~");
+  let point = await pointOn("link", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await expect(page.locator(".milkdown .ProseMirror del")).toHaveText("struck");
+  point = await pointOn(" after it.", 4, 0.25);
+  await page.mouse.move(point.x, point.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(selected).toBe(" and then link aft");
+  await page.keyboard.press("Backspace");
+  // Backspace with the button still down took the selected text out, and the
+  // drag then reached past the end of the document.
+  await clickOn("End line near the end.", 14, 0.25);
+  point = await pointOn("anchor", 2, 0.25);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Backspace");
+  point = await pointOn("the end.", 4, 0.25);
+  await page.mouse.move(point.x, point.y, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(selected).toBe("the ");
+  await page.keyboard.type("Q");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Start [an](https://example.com/a)Qend.\n");
+  expect(errors).toEqual([]);
+});
+
 test("text typed, composed or pasted right after a link goes after it", async () => {
   const file = path.join(directory, "after-link.md");
   await writeFile(file, [

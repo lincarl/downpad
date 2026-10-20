@@ -276,10 +276,15 @@ function shiftClickOnLink(view: EditorView, event: MouseEvent): boolean {
   const found = link && view.dom.contains(link) ? view.posAtCoords({ left: event.clientX, top: event.clientY }) : null;
   if (!found || (found.inside >= 0 && view.state.doc.nodeAt(found.inside)?.isInline)) return false;
   event.preventDefault();
-  const { anchor } = view.state.selection;
+  // Each step extends from the anchor the selection has then, which
+  // ProseMirror moves along with every change to the document. That can be
+  // a key pressed while the button is down, such as Backspace, or a change
+  // made along with the selection, such as strikethrough made of text typed
+  // just before. An anchor kept from the press could lie past the end of
+  // the document after such a change.
   const extend = (head: number): void => {
     const { doc, selection } = view.state;
-    const next = TextSelection.between(doc.resolve(anchor), doc.resolve(head));
+    const next = TextSelection.between(selection.$anchor, doc.resolve(head));
     if (!next.eq(selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
   };
   extend(found.pos);
