@@ -196,16 +196,25 @@ function changeEnd(tr: Transaction): number {
 /**
  * Put a text caret after content just inserted, which ends at `end`, so typing
  * goes on after it. Inserted text keeps the caret right after it, where
- * typing at the end of a dropped link starts plain text outside the link
- * (linkEdges.ts). After an image the caret goes to the start of the next
- * text. With no text after it, it goes in the gap after the image, where
- * typing starts a new line, and where Crepe adds an empty last line at the
- * end of the document. The image is never left selected, where the next key
- * would replace it.
+ * typing after a dropped link starts plain text outside the link. linkEdges.ts
+ * does that at a link's edge, but ProseMirror joins a dropped link with the
+ * same link right after it, such as one to a missing attachment that the
+ * file now fills, and the caret is then inside the joined link. So the caret
+ * gets the marks there without the link as its stored marks, which
+ * linkEdges.ts sets again after a change that leaves the caret in place.
+ * After an image the caret goes to the start of the next text. With no text
+ * after it, it goes in the gap after the image, where typing starts a new
+ * line, and where Crepe adds an empty last line at the end of the document.
+ * The image is never left selected, where the next key would replace it.
  */
 function placeCaret(tr: Transaction, end: number, endsInText: boolean): Transaction {
   const $end = tr.doc.resolve(end);
-  if ($end.parent.inlineContent) return tr.setSelection(TextSelection.create(tr.doc, end));
+  if ($end.parent.inlineContent) {
+    tr.setSelection(TextSelection.create(tr.doc, end));
+    const link = tr.doc.type.schema.marks.link;
+    const marks = $end.marks();
+    return link?.isInSet(marks) ? tr.setStoredMarks(link.removeFromSet(marks)) : tr;
+  }
   const before = Selection.findFrom($end, -1, true);
   if (endsInText && before) return tr.setSelection(before);
   const after = Selection.findFrom($end, 1, true);

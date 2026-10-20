@@ -2381,6 +2381,30 @@ test("typing right after a link dropped as a list item stays out of the link", a
   );
 });
 
+test("typing right after a file dropped before a link to the same file stays out of the link", async () => {
+  const file = path.join(directory, "drop-before-same-link.md");
+  // The attachments are missing, so a dropped file takes the name of one, and
+  // its link the same target.
+  await writeFile(file, "a[report.csv](attachments/report.csv)b\n\n# c[notes.csv](attachments/notes.csv)d\n");
+  await launch(file);
+  await expect(page.locator(".ProseMirror a")).toHaveCount(2);
+  const toolbar = page.getByRole("button", { name: "Save", exact: true });
+  // Dropped away from the text, a file goes in at the caret, and ProseMirror
+  // joins its link with the one after it. Milkdown changes a heading's id
+  // after each edit of it, which drops the marks set for the caret.
+  for (const [name, typed] of [["report.csv", "x"], ["notes.csv", "y"]] as const) {
+    await clickOn(name, 0, 0.25);
+    await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+    await dropFiles(toolbar, [await csvFile(name)]);
+    await expect(page.locator(".ProseMirror a", { hasText: name + name })).toHaveCount(1);
+    await page.keyboard.type(typed);
+  }
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "a[report.csv](attachments/report.csv)x[report.csv](attachments/report.csv)b\n\n# c[notes.csv](attachments/notes.csv)y[notes.csv](attachments/notes.csv)d\n",
+  );
+});
+
 test("a file dropped on a collapsed base64 image in the Markdown view goes in after the image", async () => {
   const file = path.join(directory, "drop-on-image-data.md");
   const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=".repeat(4);

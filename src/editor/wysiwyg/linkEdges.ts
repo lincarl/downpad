@@ -34,6 +34,14 @@
 // is dropped on, and Crepe's drop indicator then puts it in a block of its
 // own. So text dropped on a link became a new link to the same target.
 // `transformPasted` below takes the link off.
+//
+// A file dropped right before a link to the same target, such as a missing
+// attachment that the file now fills, joins that link, so the caret after the
+// file is inside one link. fileDrop.ts gives that caret the marks there
+// without the link as its stored marks. ProseMirror drops stored marks on
+// every change, and Milkdown changes a heading's id after each edit of it,
+// so such marks are set again after a change that leaves the caret where it
+// was (`keptPlainMarks`).
 
 import { Fragment, Mark, Slice, type MarkType, type Node as ProseNode, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
@@ -74,6 +82,23 @@ function plainMarksAt(state: EditorState): readonly Mark[] | null {
   const marks = state.storedMarks ?? $cursor.marks();
   const link = edgeLink($cursor, marks);
   return link ? link.removeFromSet(marks) : null;
+}
+
+/**
+ * The stored marks of the caret of `before`, inside a link, that leave the
+ * link out, when `transactions` changed the document and left that caret
+ * where it was. ProseMirror drops stored marks on every change, such as
+ * Milkdown's update of a heading's id after each edit of the heading. Null
+ * otherwise.
+ */
+function keptPlainMarks(transactions: readonly Transaction[], before: EditorState, state: EditorState): readonly Mark[] | null {
+  const $before = caretOf(before);
+  const $caret = caretOf(state);
+  const link = state.schema.marks.link;
+  const stored = before.storedMarks;
+  if (!$before || !$caret || !link || !stored || link.isInSet(stored) || state.storedMarks) return null;
+  if (!link.isInSet($before.marks()) || !link.isInSet($caret.marks()) || transactions.some((tr) => tr.selectionSet)) return null;
+  return transactions.reduce((pos, tr) => tr.mapping.map(pos), $before.pos) === $caret.pos ? stored : null;
 }
 
 /** The caret position on a link's side, where typing goes into the link, or
@@ -168,9 +193,9 @@ function linkEdgesPlugin(): Plugin<number | null> {
         return plain && link ? new Slice(withoutLinks(slice.content, link), slice.openStart, slice.openEnd) : slice;
       },
     },
-    appendTransaction(_transactions, _before, state) {
+    appendTransaction(transactions, before, state) {
       if (linkSideCaret(state) !== null) return null;
-      const marks = plainMarksAt(state);
+      const marks = plainMarksAt(state) ?? keptPlainMarks(transactions, before, state);
       return marks ? state.tr.setStoredMarks(marks) : null;
     },
   });

@@ -528,6 +528,21 @@ describe("a file dropped away from the document text", () => {
     expect(opened.getMarkdown()).toBe(`Alpha beta${LINK_A}! gamma.\n\nSecond line.\n`);
   });
 
+  // Milkdown updates a heading's id after each edit of it, in a change of its own.
+  it.each([["a paragraph", ""], ["a heading", "# "]])("keeps typing after the file out of the same link right after it in %s", async (_where, prefix) => {
+    const opened = await open(`${prefix}a[report.csv](attachments/report.csv)b\n`);
+    const view = viewOf(opened);
+    // Before the link, whose attachment is missing, so the dropped file
+    // takes its name and ProseMirror joins the two links into one.
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)));
+
+    opened.insertMarkdown("[report.csv](attachments/report.csv)");
+    await settle();
+    type(opened, "x");
+
+    expect(opened.getMarkdown()).toBe(`${prefix}a[report.csv](attachments/report.csv)x[report.csv](attachments/report.csv)b\n`);
+  });
+
   it("puts an image dropped at a caret inside a line after that line", async () => {
     const opened = await open("Alpha beta gamma.\n\nSecond line.\n");
     const view = viewOf(opened);
