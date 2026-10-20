@@ -897,11 +897,17 @@ test("a click on the URL shown after a link puts the caret at the link's end, an
   // link follows right after it. It opened nothing and selected the whole
   // paragraph, so the next key replaced it. Now the caret goes to the end of
   // the link, as on a plain click on the URL.
-  for (const index of [6, 5]) {
+  const ctrlClickUrl = async (index: number) => {
     await page.keyboard.down("ControlOrMeta");
     await clickUrl(index, 0.5);
     await page.keyboard.up("ControlOrMeta");
-  }
+  };
+  await ctrlClickUrl(6);
+  // With the pointer resting there, Crepe shows the preview of the link that
+  // follows over the line above, and a click on the preview opens its link.
+  await clickOn(" end.", 2, 0.5);
+  await expect(page.locator(".milkdown-link-preview")).toBeHidden();
+  await ctrlClickUrl(5);
   await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "opened"))).toEqual(["https://example.com/7", "https://example.com/6"]);
   await page.keyboard.type("f");
   await page.keyboard.press("ControlOrMeta+s");
