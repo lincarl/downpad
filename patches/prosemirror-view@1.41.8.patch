@@ -1,8 +1,98 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..7e43faf3be2b1aaefb787abd5ca2b4bffce8e67a 100644
+index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e4bd62d0d 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -3563,8 +3563,12 @@ handlers.focus = function (view) {
+@@ -2317,6 +2317,31 @@ function hasFocusAndSelection(view) {
+   if (view.editable && !view.hasFocus()) return false;
+   return hasSelection(view);
+ }
++// md-easy patch: whether Chromium, not the user, moved the DOM selection to
++// the start of the document. Chromium moves a selection it cannot show there
++// whenever the page takes focus, also while the page has focus already and
++// no focus event fires, such as when the window is activated again, a native
++// dialog closes or DevTools sends an input event. A selected block between
++// two blocks that take no caret, such as an image between two code blocks,
++// is such a selection, so the next key went to the start of the document. A
++// move there is Chromium's when no input that can move the selection, a
++// click, a touch or a key other than a modifier, came since ProseMirror put
++// its selection in the DOM, or each one that came left it there (see
++// setSelectionOrigin). The selection then goes back. ProseMirror reads the
++// start of the document as a caret in its first text, or as a gap cursor
++// before a block that takes no caret, such as a horizontal rule, so a
++// selection that starts at or before the first text is at the start.
++function pageReset(view, domSel) {
++  var readSel, firstText;
++  return !(view.state.selection instanceof prosemirrorState.TextSelection) && view.input.selectionMoves == view.domObserver.selectionMoves && selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) && readSel.from <= ((firstText = prosemirrorState.Selection.findFrom(view.state.doc.resolve(0), 1, true)) ? firstText.from : 0);
++}
++// md-easy patch: put ProseMirror's selection back in the DOM if the page
++// moved it (see pageReset) and ProseMirror has not read the move yet, before
++// an input that would otherwise go to the start of the document.
++function putBackPageReset(view) {
++  var domSel = view.domSelectionRange();
++  if (!view.domObserver.currentSelection.eq(domSel) && hasFocusAndSelection(view) && pageReset(view, domSel)) selectionToDOM(view);
++}
+ function hasSelection(view) {
+   var sel = view.domSelectionRange();
+   if (!sel.anchorNode) return false;
+@@ -2910,6 +2935,9 @@ var InputState = _createClass(function InputState() {
+   };
+   this.lastSelectionOrigin = null;
+   this.lastSelectionTime = 0;
++  // md-easy patch: the number of inputs that can move the selection
++  // (see pageReset).
++  this.selectionMoves = 0;
+   this.lastIOSEnter = 0;
+   this.lastIOSEnterFallbackTimeout = -1;
+   this.lastFocus = 0;
+@@ -2944,10 +2972,28 @@ function initInput(view) {
+   });
+   ensureListeners(view);
+ }
++// md-easy patch: `moves` counts the input in selectionMoves (see
++// pageReset). A modifier key on its own moves no selection. An input that
++// leaves the DOM selection where ProseMirror last put or read it, such as
++// Ctrl+C, moves nothing, so once its event is over it no longer keeps the
++// selection from going back.
+ function setSelectionOrigin(view, origin) {
++  var moves = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : true;
+   view.input.lastSelectionOrigin = origin;
+   view.input.lastSelectionTime = Date.now();
++  if (moves) {
++    var count = ++view.input.selectionMoves;
++    // The browser moves the selection for the input as soon as its event
++    // is handled, before this timeout runs. Chromium runs pending input
++    // before timeouts, so the page can move the selection first, as when
++    // DevTools sends the next event right away. The input then keeps
++    // counting until ProseMirror sets the selection again.
++    setTimeout(function () {
++      if (view.docView && view.input.selectionMoves == count && view.domObserver.currentSelection.eq(view.domSelectionRange())) view.domObserver.selectionMoves = count;
++    });
++  }
+ }
++var modifierKeys = [16, 17, 18, 20, 91, 92, 93, 224];
+ function destroyInput(view) {
+   view.domObserver.stop();
+   for (var type in view.input.eventHandlers) view.dom.removeEventListener(type, view.input.eventHandlers[type]);
+@@ -2980,6 +3026,9 @@ editHandlers.keydown = function (view, _event) {
+   var event = _event;
+   view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
+   if (inOrNearComposition(view, event)) return;
++  // md-easy patch: the page can move the selection right before a key
++  // reaches the view (see pageReset). Put it back before the key counts.
++  putBackPageReset(view);
+   view.input.lastKeyCode = event.keyCode;
+   view.input.lastKeyCodeTime = Date.now();
+   if (android && chrome && event.keyCode == 13) return;
+@@ -3000,7 +3049,7 @@ editHandlers.keydown = function (view, _event) {
+   }) || captureKeyDown(view, event)) {
+     event.preventDefault();
+   } else {
+-    setSelectionOrigin(view, "key");
++    setSelectionOrigin(view, "key", modifierKeys.indexOf(event.keyCode) < 0);
+   }
+ };
+ editHandlers.keyup = function (view, event) {
+@@ -3563,8 +3612,12 @@ handlers.focus = function (view) {
      view.dom.classList.add("ProseMirror-focused");
      view.domObserver.start();
      view.focused = true;
@@ -16,11 +106,169 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..7e43faf3be2b1aaefb787abd5ca2b4bf
      }, 20);
    }
  };
+@@ -3580,6 +3633,32 @@ handlers.blur = function (view, _event) {
+ };
+ handlers.beforeinput = function (view, _event) {
+   var event = _event;
++  // md-easy patch: text that comes without a key, such as from an input
++  // method, the emoji panel or dictation, can come right after the page
++  // moved the selection, before ProseMirror read the move (see pageReset).
++  // Put the selection back before the input goes in. ProseMirror types a key
++  // over a selection that is not text, such as a selected block or cells,
++  // itself, and left such text to Chromium. Chromium cannot type into a
++  // selection it cannot show. Over a block between two paragraphs it removed
++  // the DOM range around the block, which joined the paragraphs, and over
++  // two selected cells it replaced the text of only one. So type the text as
++  // ProseMirror does for a key. A composition still goes to Chromium, as it
++  // cannot be cancelled.
++  if (view.editable && !view.composing) {
++    putBackPageReset(view);
++    var sel = view.state.selection,
++      text = event.data;
++    if (event.inputType == "insertText" && text && !/[\r\n]/.test(text) && !(sel instanceof prosemirrorState.TextSelection)) {
++      event.preventDefault();
++      var deflt = function deflt() {
++        return view.state.tr.insertText(text).scrollIntoView();
++      };
++      if (!view.someProp("handleTextInput", function (f) {
++        return f(view, sel.$from.pos, sel.$to.pos, text, deflt);
++      })) view.dispatch(deflt());
++      return;
++    }
++  }
+   if (chrome && android && event.inputType == "deleteContentBackward") {
+     view.domObserver.flushSoon();
+     var domChangeCount = view.input.domChangeCount;
+@@ -4232,6 +4311,10 @@ var DOMObserver = function () {
+     this.flushingSoon = -1;
+     this.observer = null;
+     this.currentSelection = new SelectionState();
++    // md-easy patch: the input's selectionMoves when the selection
++    // last went into the DOM, or when an input since then ended without
++    // moving it (see pageReset and setSelectionOrigin).
++    this.selectionMoves = -1;
+     this.onCharData = null;
+     this.suppressingSelectionUpdates = false;
+     this.lastChangedTextNode = null;
+@@ -4341,6 +4424,7 @@ var DOMObserver = function () {
+     key: "setCurSelection",
+     value: function setCurSelection() {
+       this.currentSelection.set(this.view.domSelectionRange());
++      this.selectionMoves = this.view.input.selectionMoves;
+     }
+   }, {
+     key: "ignoreSelectionChange",
+@@ -4460,6 +4544,9 @@ var DOMObserver = function () {
+         selectionToDOM(view);
+         this.currentSelection.set(sel);
+         view.scrollToSelection();
++      } else if (from < 0 && newSel && pageReset(view, sel)) {
++        // md-easy patch: see pageReset.
++        selectionToDOM(view);
+       } else if (from > -1 || newSel) {
+         if (from > -1) {
+           view.docView.markDirty(from, to);
 diff --git a/dist/index.js b/dist/index.js
-index 2f19364145a8bb8c0f44c738d58271c76078e6f9..7ad83228255435303f417f6deee0c3766057b523 100644
+index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9ce2430f26 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -3816,8 +3816,13 @@ handlers.focus = view => {
+@@ -2385,6 +2385,35 @@ function hasFocusAndSelection(view) {
+         return false;
+     return hasSelection(view);
+ }
++// md-easy patch: whether Chromium, not the user, moved the DOM selection to
++// the start of the document. Chromium moves a selection it cannot show there
++// whenever the page takes focus, also while the page has focus already and
++// no focus event fires, such as when the window is activated again, a native
++// dialog closes or DevTools sends an input event. A selected block between
++// two blocks that take no caret, such as an image between two code blocks,
++// is such a selection, so the next key went to the start of the document. A
++// move there is Chromium's when no input that can move the selection, a
++// click, a touch or a key other than a modifier, came since ProseMirror put
++// its selection in the DOM, or each one that came left it there (see
++// setSelectionOrigin). The selection then goes back. ProseMirror reads the
++// start of the document as a caret in its first text, or as a gap cursor
++// before a block that takes no caret, such as a horizontal rule, so a
++// selection that starts at or before the first text is at the start.
++function pageReset(view, domSel) {
++    let readSel, firstText;
++    return !(view.state.selection instanceof TextSelection) &&
++        view.input.selectionMoves == view.domObserver.selectionMoves &&
++        selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) &&
++        readSel.from <= ((firstText = Selection.findFrom(view.state.doc.resolve(0), 1, true)) ? firstText.from : 0);
++}
++// md-easy patch: put ProseMirror's selection back in the DOM if the page
++// moved it (see pageReset) and ProseMirror has not read the move yet, before
++// an input that would otherwise go to the start of the document.
++function putBackPageReset(view) {
++    let domSel = view.domSelectionRange();
++    if (!view.domObserver.currentSelection.eq(domSel) && hasFocusAndSelection(view) && pageReset(view, domSel))
++        selectionToDOM(view);
++}
+ function hasSelection(view) {
+     let sel = view.domSelectionRange();
+     if (!sel.anchorNode)
+@@ -3063,6 +3092,9 @@ class InputState {
+         this.lastClick = { time: 0, x: 0, y: 0, type: "", button: 0 };
+         this.lastSelectionOrigin = null;
+         this.lastSelectionTime = 0;
++        // md-easy patch: the number of inputs that can move the selection
++        // (see pageReset).
++        this.selectionMoves = 0;
+         this.lastIOSEnter = 0;
+         this.lastIOSEnterFallbackTimeout = -1;
+         this.lastFocus = 0;
+@@ -3098,10 +3130,29 @@ function initInput(view) {
+         view.dom.addEventListener("input", () => null);
+     ensureListeners(view);
+ }
+-function setSelectionOrigin(view, origin) {
++// md-easy patch: `moves` counts the input in selectionMoves (see
++// pageReset). A modifier key on its own moves no selection. An input that
++// leaves the DOM selection where ProseMirror last put or read it, such as
++// Ctrl+C, moves nothing, so once its event is over it no longer keeps the
++// selection from going back.
++function setSelectionOrigin(view, origin, moves = true) {
+     view.input.lastSelectionOrigin = origin;
+     view.input.lastSelectionTime = Date.now();
++    if (moves) {
++        let count = ++view.input.selectionMoves;
++        // The browser moves the selection for the input as soon as its event
++        // is handled, before this timeout runs. Chromium runs pending input
++        // before timeouts, so the page can move the selection first, as when
++        // DevTools sends the next event right away. The input then keeps
++        // counting until ProseMirror sets the selection again.
++        setTimeout(() => {
++            if (view.docView && view.input.selectionMoves == count &&
++                view.domObserver.currentSelection.eq(view.domSelectionRange()))
++                view.domObserver.selectionMoves = count;
++        });
++    }
+ }
++const modifierKeys = [16, 17, 18, 20, 91, 92, 93, 224];
+ function destroyInput(view) {
+     view.domObserver.stop();
+     for (let type in view.input.eventHandlers)
+@@ -3143,6 +3194,9 @@ editHandlers.keydown = (view, _event) => {
+     view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
+     if (inOrNearComposition(view, event))
+         return;
++    // md-easy patch: the page can move the selection right before a key
++    // reaches the view (see pageReset). Put it back before the key counts.
++    putBackPageReset(view);
+     view.input.lastKeyCode = event.keyCode;
+     view.input.lastKeyCodeTime = Date.now();
+     // Suppress enter key events on Chrome Android, because those tend
+@@ -3170,7 +3224,7 @@ editHandlers.keydown = (view, _event) => {
+         event.preventDefault();
+     }
+     else {
+-        setSelectionOrigin(view, "key");
++        setSelectionOrigin(view, "key", modifierKeys.indexOf(event.keyCode) < 0);
+     }
+ };
+ editHandlers.keyup = (view, event) => {
+@@ -3816,8 +3870,13 @@ handlers.focus = view => {
          view.dom.classList.add("ProseMirror-focused");
          view.domObserver.start();
          view.focused = true;
@@ -35,3 +283,62 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..7ad83228255435303f417f6deee0c376
                  selectionToDOM(view);
          }, 20);
      }
+@@ -3835,6 +3894,28 @@ handlers.blur = (view, _event) => {
+ };
+ handlers.beforeinput = (view, _event) => {
+     let event = _event;
++    // md-easy patch: text that comes without a key, such as from an input
++    // method, the emoji panel or dictation, can come right after the page
++    // moved the selection, before ProseMirror read the move (see pageReset).
++    // Put the selection back before the input goes in. ProseMirror types a key
++    // over a selection that is not text, such as a selected block or cells,
++    // itself, and left such text to Chromium. Chromium cannot type into a
++    // selection it cannot show. Over a block between two paragraphs it removed
++    // the DOM range around the block, which joined the paragraphs, and over
++    // two selected cells it replaced the text of only one. So type the text as
++    // ProseMirror does for a key. A composition still goes to Chromium, as it
++    // cannot be cancelled.
++    if (view.editable && !view.composing) {
++        putBackPageReset(view);
++        let sel = view.state.selection, text = event.data;
++        if (event.inputType == "insertText" && text && !/[\r\n]/.test(text) && !(sel instanceof TextSelection)) {
++            event.preventDefault();
++            let deflt = () => view.state.tr.insertText(text).scrollIntoView();
++            if (!view.someProp("handleTextInput", f => f(view, sel.$from.pos, sel.$to.pos, text, deflt)))
++                view.dispatch(deflt());
++            return;
++        }
++    }
+     // We should probably do more with beforeinput events, but support
+     // is so spotty that I'm still waiting to see where they are going.
+     // Very specific hack to deal with backspace sometimes failing on
+@@ -4581,6 +4662,10 @@ class DOMObserver {
+         this.flushingSoon = -1;
+         this.observer = null;
+         this.currentSelection = new SelectionState;
++        // md-easy patch: the input's selectionMoves when the selection
++        // last went into the DOM, or when an input since then ended without
++        // moving it (see pageReset and setSelectionOrigin).
++        this.selectionMoves = -1;
+         this.onCharData = null;
+         this.suppressingSelectionUpdates = false;
+         this.lastChangedTextNode = null;
+@@ -4677,6 +4762,7 @@ class DOMObserver {
+     }
+     setCurSelection() {
+         this.currentSelection.set(this.view.domSelectionRange());
++        this.selectionMoves = this.view.input.selectionMoves;
+     }
+     ignoreSelectionChange(sel) {
+         if (!sel.focusNode)
+@@ -4771,6 +4857,10 @@ class DOMObserver {
+             this.currentSelection.set(sel);
+             view.scrollToSelection();
+         }
++        else if (from < 0 && newSel && pageReset(view, sel)) {
++            // md-easy patch: see pageReset.
++            selectionToDOM(view);
++        }
+         else if (from > -1 || newSel) {
+             if (from > -1) {
+                 view.docView.markDirty(from, to);

@@ -311,6 +311,152 @@ test("Shift+click on a missing image chip extends the selection to it", async ()
   expect(await app!.evaluate(() => Reflect.get(globalThis, "dialogs"))).toBe(0);
 });
 
+test("a key typed over an image or code block selected between images and code blocks replaces it", async () => {
+  // Chromium cannot show a selected block between two blocks that take no
+  // caret, and moves such a selection to the start of the document whenever
+  // the page takes focus. Playwright focuses the page before each key and
+  // mouse event it sends, as the window does when it is activated again.
+  const file = path.join(directory, "between-blocks.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const code = (name: string) => `\`\`\`js\nconst ${name} = 1;\n\`\`\``;
+  const blocks = [
+    "# Blocks",
+    code("one"),
+    "![Shown](pic.svg)",
+    code("two"),
+    "![Gone](missing.png)",
+    code("three"),
+    "Arrow from here.",
+    "![Near](pic.svg)",
+    "![Far](far.png)",
+    code("four"),
+    "![Top](pic.svg)",
+    code("five"),
+    "![Bottom](pic.svg)",
+    "Last line.",
+  ];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  // A click on a missing image opens a file dialog. Cancel it.
+  await app!.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
+  });
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-block");
+  await expect(images).toHaveCount(6);
+  /** Type the capital `letter` with Shift, save, and expect it in the file
+   *  in place of `block`. Shift on its own also gives Chromium a chance to
+   *  move the selection before ProseMirror reads the letter. */
+  const typeOver = async (letter: string, block: string) => {
+    await page.keyboard.press(`Shift+Key${letter}`);
+    await page.keyboard.press("ControlOrMeta+s");
+    blocks[blocks.indexOf(block)] = letter;
+    await expect.poll(() => readFile(file, "utf8")).toBe(blocks.join("\n\n") + "\n");
+  };
+  // Each step replaces a block below the ones the later steps select, so
+  // their neighbours stay as they are.
+  // A code block between two images, which its handle selects.
+  const five = page.locator(".milkdown .ProseMirror .milkdown-code-block").filter({ hasText: "const five" });
+  await five.scrollIntoViewIfNeeded();
+  const fiveBox = (await five.boundingBox())!;
+  await page.mouse.move(fiveBox.x + 10, fiveBox.y + fiveBox.height / 2);
+  const grip = page.locator(".milkdown-block-handle .operation-item").last();
+  await expect.poll(async () => {
+    const box = await grip.boundingBox();
+    return !!box && box.y < fiveBox.y + fiveBox.height && box.y + box.height > fiveBox.y;
+  }).toBe(true);
+  const gripBox = (await grip.boundingBox())!;
+  await page.mouse.click(gripBox.x + gripBox.width / 2, gripBox.y + gripBox.height / 2);
+  await typeOver("D", code("five"));
+  // A missing image after another image, which Right selects from the line
+  // before them, after the first image and the gap between the two.
+  await page.locator(".milkdown .ProseMirror > p", { hasText: "Arrow from here." }).scrollIntoViewIfNeeded();
+  await clickOn("Arrow from here.", -1, 0.75);
+  await page.keyboard.press("End");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+  await expect(images.nth(3)).toHaveClass(/\bselected\b/);
+  await typeOver("C", "![Far](far.png)");
+  // A missing image between code blocks, which a click selects.
+  await images.nth(1).click();
+  await expect(images.nth(1)).toHaveClass(/\bselected\b/);
+  await typeOver("B", "![Gone](missing.png)");
+  // An image between code blocks stays selected when the selection moves
+  // with no key or click, as on a mouse move here.
+  await images.first().click();
+  await expect(images.first()).toHaveClass(/\bselected\b/);
+  const shownBox = (await images.first().boundingBox())!;
+  await page.mouse.move(shownBox.x + 4, shownBox.y + 4);
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+  await expect(images.first()).toHaveClass(/\bselected\b/);
+  await typeOver("A", "![Shown](pic.svg)");
+});
+
+test("an image selected between code blocks below a rule is replaced after Ctrl+C and by text that comes without a key", async () => {
+  // As in the test above, Playwright focuses the page before each event it
+  // sends, and Chromium then moves the selection to the start of the
+  // document. Before a rule, ProseMirror reads that as a gap cursor.
+  const file = path.join(directory, "below-rule.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const code = (name: string) => `\`\`\`js\nconst ${name} = 1;\n\`\`\``;
+  const blocks = ["---", code("one"), "![First](pic.svg)", code("two"), "![Second](pic.svg)", code("three"), "Last line."];
+  await writeFile(file, blocks.join("\n\n") + "\n");
+  await launch(file);
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-block");
+  await expect(images).toHaveCount(2);
+  /** Save and expect `text` in the file in place of `block`. */
+  const expectReplaced = async (text: string, block: string) => {
+    await page.keyboard.press("ControlOrMeta+s");
+    blocks[blocks.indexOf(block)] = text;
+    await expect.poll(() => readFile(file, "utf8")).toBe(blocks.join("\n\n") + "\n");
+  };
+  // Ctrl+C moves no selection, so the selection still goes back after it.
+  // A person holds a key for a moment, so the key's handling ends before
+  // its release. Without the delay, the release that DevTools sends right
+  // away focuses the page and moves the selection before that.
+  await images.nth(1).click();
+  await expect(images.nth(1)).toHaveClass(/\bselected\b/);
+  await page.keyboard.press("ControlOrMeta+c", { delay: 100 });
+  await page.keyboard.press("Shift+KeyB");
+  await expectReplaced("B", "![Second](pic.svg)");
+  // Text from an input method, the emoji panel or dictation comes with no
+  // key event.
+  await images.first().click();
+  await expect(images.first()).toHaveClass(/\bselected\b/);
+  const session = await page.context().newCDPSession(page);
+  await session.send("Input.insertText", { text: "漢" });
+  await expectReplaced("漢", "![First](pic.svg)");
+});
+
+test("text that comes without a key replaces an image selected between paragraphs and selected table cells as a key does", async () => {
+  // Text from an input method, the emoji panel or dictation comes with no
+  // key event, as DevTools sends it here. Chromium typed it over the image
+  // and joined the paragraphs around it, and kept the text of the first of
+  // two selected cells.
+  const file = path.join(directory, "keyless.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
+  await writeFile(file, ["Above.", "![Pic](pic.svg)", "Below.", table, "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  const image = page.locator(".milkdown .ProseMirror .milkdown-image-block");
+  await image.click();
+  await expect(image).toHaveClass(/\bselected\b/);
+  await session.send("Input.insertText", { text: "漢字" });
+  await expect(image).toHaveCount(0);
+  // Select the cells from "one" to "two" with a Shift+click.
+  await clickOn("one", 1, 0.5);
+  const two = await pointOn("two", 1, 0.5);
+  await page.keyboard.down("Shift");
+  await page.mouse.click(two.x, two.y);
+  await page.keyboard.up("Shift");
+  await expect(page.locator(".milkdown .ProseMirror .selectedCell")).toHaveCount(2);
+  await session.send("Input.insertText", { text: "かな" });
+  await page.keyboard.press("ControlOrMeta+s");
+  // A key puts its text in the cell where the selection ends and empties the
+  // other one. Milkdown pads the columns of a table it writes.
+  const written = "| A     | B    |\n| ----- | ---- |\n|       | かな   |\n| three | four |";
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "漢字", "Below.", written, "Last line."].join("\n\n") + "\n");
+});
+
 test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
   const file = path.join(directory, "image-links.md");
   // An image wide enough to click either half of.
@@ -5530,6 +5676,52 @@ test("a click right of the text in a table cell puts the caret after it, and a r
     "| short text here    | a longer note |",
     "",
   ].join("\n"));
+});
+
+test("a drag of a table's row or column handle that moves nothing leaves the caret where it was", async () => {
+  const file = path.join(directory, "table-handles.md");
+  const markdown = "Intro.\n\n| Name | Notes |\n| --- | --- |\n| one | two |\n| three | four |\n\nLast line.\n";
+  await writeFile(file, markdown);
+  await launch(file);
+  const table = page.locator(".milkdown .ProseMirror table.children");
+  const preview = page.locator(".milkdown-table-block .drag-preview");
+  await page.locator(".milkdown .ProseMirror > p", { hasText: "Last line." }).click();
+  await page.keyboard.press("End");
+  /** Drag the `role` handle of `cell`'s column or row a little, staying over
+   *  that column or row, so the drop moves nothing. Chromium cleared the
+   *  selection on the press, and nothing put it back. */
+  const dragInPlace = async (cell: Locator, role: "col" | "row"): Promise<void> => {
+    const handle = page.locator(`[data-role="${role}-drag-handle"]`);
+    // Crepe hides the handles 200 ms after the pointer leaves the table.
+    await page.waitForTimeout(300);
+    await cell.hover();
+    await expect(handle).toHaveAttribute("data-show", "true");
+    const cellBox = (await cell.boundingBox())!;
+    // The handle moves to the cell once floating-ui has placed it.
+    await expect.poll(async () => {
+      const box = await handle.boundingBox();
+      if (!box) return false;
+      return role === "col"
+        ? Math.abs(box.x + box.width / 2 - (cellBox.x + cellBox.width / 2)) < 2
+        : Math.abs(box.y + box.height / 2 - (cellBox.y + cellBox.height / 2)) < 2;
+    }).toBe(true);
+    const box = (await handle.boundingBox())!;
+    const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 6, start.y + 6);
+    await expect(preview).toHaveAttribute("data-show", "true");
+    await page.mouse.move(start.x + 10, start.y + 10, { steps: 4 });
+    await page.waitForTimeout(100);
+    await page.mouse.up();
+    await expect(preview).toHaveAttribute("data-show", "false");
+  };
+  await dragInPlace(table.locator("td", { hasText: "one" }), "col");
+  await page.keyboard.type("a");
+  await dragInPlace(table.locator("td", { hasText: "three" }), "row");
+  await page.keyboard.type("b");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(markdown.replace("Last line.", "Last line.ab"));
 });
 
 /** Press on the grip of Crepe's block handle beside `block` and move a little,
