@@ -1,10 +1,10 @@
 // Link rendering for the WYSIWYG view (spec §5.6). Crepe renders links as a
-// plain `link` mark; this plugin adds the "text-and-url" presentation — the URL
-// shown in a muted suffix after the link text, middle-truncated, full URL on
-// hover — and Ctrl/Cmd-click to open in the browser. In "text-only" mode no
-// suffix is drawn (traditional rendering); Ctrl-click still opens. A click
-// opens the link of the image or the text under the pointer, never the next
-// one.
+// plain `link` mark. This plugin adds the "text-and-url" presentation, the URL
+// shown in a muted suffix after the link text, middle-truncated, with the full
+// URL as its title. It also opens a link in the browser on Ctrl/Cmd-click. In
+// "text-only" mode no suffix is drawn (traditional rendering); Ctrl-click still
+// opens. A click opens the link of the image or the text under the pointer,
+// never the next one.
 //
 // The suffix is a ProseMirror widget Decoration (non-editable, click-through),
 // so it never becomes part of the document or the serialized markdown. It is
@@ -12,12 +12,36 @@
 // marks of the text after it, so a link's suffix landed inside a link right
 // after it, and a Ctrl/Cmd-click on the suffix opened that other link.
 //
+// The suffix draws its URL as CSS generated content, with no text in the DOM.
+// Chromium has no caret position inside text that can be neither edited nor
+// selected, and a click on such text put the caret at the start of the
+// paragraph. Chromium puts a click on generated content after the suffix,
+// which ProseMirror reads as the link's end. Print writes the URL into the
+// suffix as text (printRender.ts), because the paginator breaks a paragraph
+// or heading only between lines of its text.
+//
+// The suffix holds an empty comment, so it has a child but no text. Chromium
+// treats a non-editable element with no children as one solid object, and
+// an input method's composition right after such a suffix broke once it had
+// more than one step. Chromium dropped the composition and put the committed
+// text in a second time. Text in the suffix, even a zero-width space, also
+// kept the composition, but Chromium then lost the caret when a composition
+// there was emptied, and the next one went in at the paragraph's start.
+//
+// A caret at a link's end is drawn after the suffix when text typed there
+// goes outside the link, such as at a plain caret (linkEdges.ts) or into a
+// link right after it, because that text shows after the suffix. A caret
+// there that types into the link, as on the link's side, and a selection
+// that ends there stay before the suffix. Drawing the suffix before a
+// selection's end made Chromium type over the selection outside the <a>,
+// which ProseMirror read as taking the link off the retyped text.
+//
 // Double-clicking a link to a local markdown file (a relative/absolute `.md`
 // path) opens that file in a tab instead of selecting a word (spec §5.6); the
 // open itself is delegated to the app via ctx.openMarkdownFile.
 
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, PluginKey, type Transaction } from "@milkdown/kit/prose/state";
+import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { AddMarkStep, RemoveMarkStep } from "@milkdown/kit/prose/transform";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -47,6 +71,9 @@ function linkMarkHref(node: ProseNode): string | null {
   return mark ? ((mark.attrs.href as string | undefined) ?? null) : null;
 }
 
+/** What the key of each URL suffix starts with, before the link's href. */
+const SUFFIX_KEY = "md-link-url:";
+
 /** Add a URL suffix after each run of text in `block` (at `pos`) that links
  *  to one href. A run never crosses a text block, so each block is independent. */
 function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): void {
@@ -56,7 +83,7 @@ function addBlockSuffixes(block: ProseNode, pos: number, decos: Decoration[]): v
     if (runHref !== null) {
       // Keyed by the href alone, so an edit that only moves a link keeps its
       // widget instead of drawing it again.
-      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, marks: [], ignoreSelection: true, key: `md-link-url:${runHref}` }));
+      decos.push(Decoration.widget(runEnd, makeSuffix(runHref), { side: 1, marks: [], ignoreSelection: true, key: `${SUFFIX_KEY}${runHref}`, href: runHref }));
     }
     runHref = null;
   };
@@ -130,12 +157,33 @@ interface LinkUrlState {
   decorations: DecorationSet;
 }
 
+/** The suffixes of `state`. The suffix at a caret is drawn before the caret,
+ *  unless text typed there joins the suffix's link (see the header). */
+function suffixesFor(state: EditorState): DecorationSet | undefined {
+  const set = linkUrlKey.getState(state)?.decorations;
+  const { selection } = state;
+  const $caret = selection instanceof TextSelection ? selection.$cursor : null;
+  if (!set || !$caret) return set;
+  const [suffix] = set.find($caret.pos, $caret.pos, (spec: { key?: string }) => !!spec.key?.startsWith(SUFFIX_KEY));
+  if (!suffix) return set;
+  const spec = suffix.spec as { key: string; href: string };
+  const typed = state.storedMarks ?? $caret.marks();
+  if (typed.some((mark) => mark.type.name === "link" && mark.attrs.href === spec.href)) return set;
+  const after = Decoration.widget($caret.pos, makeSuffix(spec.href), { ...spec, side: -1, key: `${spec.key}:after` });
+  return set.remove([suffix]).add(state.doc, [after]);
+}
+
+/** The suffix element for `href`. The URL it shows is CSS generated content
+ *  from `data-url` (see `.md-link-url[data-url]::after`), not text in the
+ *  DOM, so a click on it puts the caret at the link's end. The empty comment
+ *  keeps an input method's composition after it working (see the header). */
 function makeSuffix(href: string): () => HTMLElement {
   return () => {
     const span = document.createElement("span");
     span.className = "md-link-url";
-    span.textContent = ` (${middleTruncate(href)})`;
+    span.dataset.url = middleTruncate(href);
     span.title = href;
+    span.append(document.createComment(""));
     return span;
   };
 }
@@ -191,9 +239,7 @@ export function linkUrlPlugin(ctx: Pick<WysiwygContext, "getSettings" | "getFile
       },
     },
     props: {
-      decorations(state) {
-        return linkUrlKey.getState(state)?.decorations;
-      },
+      decorations: suffixesFor,
       handleClick(view: EditorView, _pos: number, event: MouseEvent): boolean {
         if (!(event.ctrlKey || event.metaKey)) return false;
         const href = clickedHref(view, event);

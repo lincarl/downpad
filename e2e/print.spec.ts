@@ -70,6 +70,22 @@ function printedSheets(
   }, leaveOut);
 }
 
+/**
+ * The document view's text, without whitespace, as the Document version
+ * prints it, leaving out what `leaveOut` matches. The URL shown after a link
+ * is generated content on screen and text in print (printRender.ts).
+ */
+function printableText(page: import("@playwright/test").Page, leaveOut = ""): Promise<string> {
+  return page.locator(wysiwyg).evaluate((node, leaveOut) => {
+    const copy = node.cloneNode(true) as HTMLElement;
+    if (leaveOut) copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
+    copy.querySelectorAll<HTMLElement>(".md-link-url").forEach((url) => {
+      url.textContent = ` (${url.dataset.url})`;
+    });
+    return copy.textContent!.replace(/\s+/g, "");
+  }, leaveOut);
+}
+
 test("the Print button opens the workspace with a paginated preview", async ({ page }) => {
   await openWorkspace(page);
 
@@ -344,7 +360,7 @@ test("a paragraph, quote and list item taller than a page continue on the next s
   await typeDocument(page, markdown);
   await expect(page.locator(`${wysiwyg} blockquote blockquote p`)).toHaveCount(60);
   await expect(page.locator(`${wysiwyg} li`).last()).toContainText("Last item");
-  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  const documentText = await printableText(page);
   const boldText = await page.locator(`${wysiwyg} strong`).textContent();
 
   await page.click('button[aria-label="Print"]');
@@ -414,7 +430,7 @@ test("a Hebrew or Arabic paragraph taller than a page continues on the next shee
 
   await typeDocument(page, markdown);
   await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
-  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  const documentText = await printableText(page);
 
   await page.click('button[aria-label="Print"]');
   await expect(page.locator(".print-page").first()).toBeVisible();
@@ -462,7 +478,7 @@ test("a sheet of nothing but bold text fits its page where bold text is wider", 
     Array.from({ length: count }, (_, i) => `${label}${i + 1}`).join(" ");
   await typeDocument(page, ["# Bold", "", `${words("w", 100)} **${words("bold", 1500)}**`, "", "The end."].join("\n"));
   await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
-  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  const documentText = await printableText(page);
   await page.addStyleTag({ content: ".print-doc strong { letter-spacing: 0.15em; }" });
 
   await page.click('button[aria-label="Print"]');
@@ -486,7 +502,7 @@ test("a heading taller than a page fits each sheet when printed below 100%", asy
   const words = Array.from({ length: 500 }, (_, i) => `w${i + 1}`).join(" ");
   await typeDocument(page, [`# ${words}`, "", "The end."].join("\n"));
   await expect(page.locator(`${wysiwyg} p`).last()).toHaveText("The end.");
-  const documentText = await page.locator(wysiwyg).evaluate((node) => node.textContent!.replace(/\s+/g, ""));
+  const documentText = await printableText(page);
 
   await page.click('button[aria-label="Print"]');
   await expect(page.locator(".print-page").first()).toBeVisible();
@@ -579,11 +595,7 @@ test("every printed sheet holds its blocks inside the page and the document's te
       await expect
         .poll(() => page.locator(`${wysiwyg} img`).evaluateAll((images) => images.every((image) => (image as HTMLImageElement).naturalHeight > 0)))
         .toBe(true);
-      const documentText = await page.locator(wysiwyg).evaluate((node, leaveOut) => {
-        const copy = node.cloneNode(true) as HTMLElement;
-        copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
-        return copy.textContent!.replace(/\s+/g, "");
-      }, leaveOut);
+      const documentText = await printableText(page, leaveOut);
       await page.addStyleTag({ content: ".print-doc strong { letter-spacing: 0.15em; }" });
       await page.click('button[aria-label="Print"]');
       const workspace = page.locator(".print-workspace");
@@ -682,11 +694,7 @@ test("quotes and list items that begin with a heading, and quotes around a table
   await expect(page.locator(`${wysiwyg} > p`).last()).toHaveText("The end.");
   await expect(page.locator(`${wysiwyg} blockquote h2`)).toHaveCount(49);
   await expect(page.locator(`${wysiwyg} li h2`)).toHaveCount(25);
-  const documentText = await page.locator(wysiwyg).evaluate((node, leaveOut) => {
-    const copy = node.cloneNode(true) as HTMLElement;
-    copy.querySelectorAll(leaveOut).forEach((left) => left.remove());
-    return copy.textContent!.replace(/\s+/g, "");
-  }, leaveOut);
+  const documentText = await printableText(page, leaveOut);
 
   await page.click('button[aria-label="Print"]');
   const workspace = page.locator(".print-workspace");

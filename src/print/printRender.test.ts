@@ -43,6 +43,15 @@ describe("the printed document", () => {
     expect(printedBlocks(missing)).toEqual([missing.replace(' title="Missing image. Click to locate it."', "")]);
   });
 
+  it("prints the URL shown after a link as text, which a page break can split", () => {
+    const link = '<a href="https://e.com/a">A</a>';
+    const url = '<span class="md-link-url ProseMirror-widget" data-url="https://e.com/a" title="https://e.com/a"><!----></span>';
+
+    expect(printedBlocks(`<h1>${link}${url}</h1>`)).toEqual([
+      `<h1>${link}<span class="md-link-url ProseMirror-widget" title="https://e.com/a"> (https://e.com/a)</span></h1>`,
+    ]);
+  });
+
   it("prints an image inside the text selection without the selection's mark", () => {
     const image = '<p>A <span class="milkdown-image-inline md-image-missing md-in-selection"><img src="data:," alt="Gone"></span></p>';
 
