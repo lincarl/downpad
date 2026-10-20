@@ -1539,6 +1539,61 @@ test("the block handle's add button from a code block puts the next key in the n
   await expect.poll(() => readFile(file, "utf8")).toBe(["```\nconst alpha = 1;\n```", "First line.", "a", "Last line."].join("\n\n") + "\n");
 });
 
+test("after a press or drag on the block handle from anywhere, the next key replaces the block it selected or moved", async () => {
+  const file = path.join(directory, "block-handle-focus.md");
+  const code = (name: string) => "```js\nconst " + name + " = 1;\n```";
+  await writeFile(file, ["First.", code("alpha"), "Move me.", "Drop back.", "Leave me.", code("moved"), "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const codeBlocks = documentView.locator(".milkdown-code-block");
+  // The handle takes no focus, so Chromium moved focus to the page on the
+  // press, and only a release on the handle itself brought it back. From a
+  // code block, Chromium starts no drag on a Shift+press, which extends a
+  // selection, so a Shift+drag only selects the block, as a click on the
+  // handle does, and the next key was lost.
+  const line = (await codeBlocks.first().locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + 1, line.y + line.height / 2);
+  await expect(codeBlocks.first().locator(".cm-content")).toBeFocused();
+  await page.keyboard.down("Shift");
+  await startBlockDrag(documentView.locator("p", { hasText: "Move me." }));
+  const last = await centerOf(documentView.locator("p", { hasText: "Last line." }));
+  await page.mouse.move(last.x, last.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("A");
+  // A code block moved by its handle took focus in its code, so the next key
+  // went into the code.
+  await startBlockDrag(codeBlocks.last());
+  const first = (await documentView.locator("p", { hasText: "First." }).boundingBox())!;
+  await page.mouse.move(first.x + 20, first.y + 2, { steps: 10 });
+  await page.mouse.move(first.x + 21, first.y + 2);
+  await page.mouse.up();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("B");
+  // From the find card, a drag that drops the block back where it was.
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
+  const back = documentView.locator("p", { hasText: "Drop back." });
+  await startBlockDrag(back);
+  const middle = await centerOf(back);
+  await page.mouse.move(middle.x, middle.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("C");
+  // From the split's Markdown pane, a drag that ends outside the document.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("Last line.");
+  await startBlockDrag(documentView.locator("p", { hasText: "Leave me." }));
+  const strip = (await page.locator(".tabstrip").boundingBox())!;
+  await page.mouse.move(strip.x + strip.width * 0.6, strip.y + strip.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(documentView).toBeFocused();
+  await page.keyboard.type("D");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["B", "First.", code("alpha"), "A", "C", "D", "Last line."].join("\n\n") + "\n");
+});
+
 test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {
   const file = path.join(directory, "page-presses.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");

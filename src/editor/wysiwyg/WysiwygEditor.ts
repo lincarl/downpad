@@ -38,6 +38,7 @@ import { linkViewPlugin } from "./linkView";
 import { shiftClicks } from "./shiftClicks";
 import { listLabelClicks } from "./listLabelClicks";
 import { paddingPresses } from "./paddingPresses";
+import { blockHandle } from "./blockHandle";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
@@ -295,6 +296,8 @@ export class WysiwygEditor {
     this.crepe.editor.use(paddingPresses);
     // Focus leaves a code block once the document's selection has left it.
     this.crepe.editor.use(codeBlockFocus);
+    // The document takes focus after a press on the block handle.
+    this.crepe.editor.use(blockHandle);
     // Image context menu (§5.5) + publishes the EditorView into viewRef.
     this.crepe.editor.use(imageContextMenuPlugin(viewRef, context));
     // Show missing inline images as missing too, and keep missing images in
