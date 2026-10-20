@@ -1895,6 +1895,72 @@ test("a drag from the document's side padding selects to the line beside or unde
   expect(Math.abs(line!.y - (areaBox.y + areaBox.height))).toBeLessThan((lines.lines[1]!.y - lines.lines[0]!.y) * 1.5);
 });
 
+test("a drag from the document's side padding beside a code block selects in its code until the button is released, Esc is pressed or the window loses focus", async () => {
+  const file = path.join(directory, "side-padding-code-drags.md");
+  const code = (lines: string[]) => "```js\n" + lines.join("\n") + "\n```";
+  await writeFile(file, ["Intro line.", code(["const alpha = 1;", "const beta = 2;", "const gamma = 3;", "const delta = 4;"]), "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const lines = page.locator(".milkdown .ProseMirror .cm-line");
+  await expect(lines).toHaveCount(4);
+  const content = page.locator(".milkdown .ProseMirror .cm-content");
+  const selected = () => page.evaluate(() => document.getSelection()!.toString());
+  const left = await besideX("left");
+  const right = await besideX("right");
+  /** The middle of the height of line `index` of the code. */
+  const middle = async (index: number) => {
+    const box = (await lines.nth(index).boundingBox())!;
+    return box.y + box.height / 2;
+  };
+  // The press beside the code put the cursor there, but nothing followed the
+  // pointer, so a drag from beside the second line into the third selected
+  // nothing, and the next key went in at the start of the second line.
+  await page.mouse.move(left, await middle(1));
+  await page.mouse.down();
+  const into = await lines.nth(2).evaluate((line) => {
+    const range = document.createRange();
+    const node = document.createTreeWalker(line, NodeFilter.SHOW_TEXT).nextNode()!;
+    range.setStart(node, 4);
+    range.setEnd(node, 5);
+    const box = range.getBoundingClientRect();
+    return { x: box.left + box.width * 0.75, y: box.top + box.height / 2 };
+  });
+  await page.mouse.move(into.x, into.y, { steps: 5 });
+  await page.mouse.up();
+  await expect(content).toBeFocused();
+  expect(await selected()).toBe("const beta = 2;\nconst");
+  await page.keyboard.type("X");
+  // A press that moves a pixel only puts the cursor at the end of the line.
+  await page.mouse.move(right, await middle(0));
+  await page.mouse.down();
+  await page.mouse.move(right - 1, (await middle(0)) + 1);
+  await page.mouse.up();
+  expect(await selected()).toBe("");
+  await page.keyboard.type("Y");
+  // Esc, which collapses the code's selection, ends the drag, so a move
+  // after it selects nothing again.
+  await page.mouse.move(left, await middle(2));
+  await page.mouse.down();
+  await page.mouse.move(left, await middle(1), { steps: 3 });
+  expect(await selected()).toBe("X gamma = 3;\n");
+  await page.keyboard.press("Escape");
+  await page.mouse.move(left, await middle(0), { steps: 3 });
+  await page.mouse.up();
+  expect(await selected()).toBe("");
+  await page.keyboard.type("Z");
+  // So does the window losing focus. Playwright keeps the page focused, so
+  // the test sends the window's blur event itself.
+  await page.mouse.move(left, await middle(2));
+  await page.mouse.down();
+  await page.mouse.move(left, await middle(1), { steps: 3 });
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.mouse.move(left, await middle(0), { steps: 3 });
+  await page.mouse.up();
+  expect(await selected()).toBe("ZX gamma = 3;\n");
+  await page.keyboard.type("W");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Intro line.", code(["const alpha = 1;Y", "Wconst delta = 4;"]), "Last line."].join("\n\n") + "\n");
+});
+
 /** The point `fraction` of the way across the character at `index` of the
  *  split's Markdown pane's line that reads `text`. */
 function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {

@@ -184,13 +184,14 @@ function scrollerOf(element: Element): Element | null {
 }
 
 /** Call `to` with the point under the pointer on each move until the mouse
- *  button is released, the window loses focus or `to` returns false. While
- *  the pointer is above or below the document's scroll container, the
- *  container scrolls each frame by as far as the pointer is outside it, as
- *  Chromium's drag selection scrolls, and `to` gets the point at the
- *  container's edge. A point outside the document view comes moved to the
- *  view's edge, since it has no position in the document. */
-export function followPointer(view: EditorView, to: (left: number, top: number) => boolean): void {
+ *  button is released, the window loses focus or `to` returns false, and
+ *  with `endOnEscape` until Esc is pressed. While the pointer is above or
+ *  below the document's scroll container, the container scrolls each frame
+ *  by as far as the pointer is outside it, as Chromium's drag selection
+ *  scrolls, and `to` gets the point at the container's edge. A point outside
+ *  the document view comes moved to the view's edge, since it has no
+ *  position in the document. */
+export function followPointer(view: EditorView, to: (left: number, top: number) => boolean, { endOnEscape = false } = {}): void {
   const root = view.dom.ownerDocument;
   const win = root.defaultView;
   const scroller = scrollerOf(view.dom);
@@ -219,15 +220,20 @@ export function followPointer(view: EditorView, to: (left: number, top: number) 
     pointer = { left: moved.clientX, top: moved.clientY };
     if (!frame) follow();
   };
+  const key = (pressed: KeyboardEvent): void => {
+    if (pressed.key === "Escape") end();
+  };
   const end = (): void => {
     if (frame) win?.cancelAnimationFrame(frame);
     frame = 0;
     root.removeEventListener("mousemove", move);
     root.removeEventListener("mouseup", end);
+    root.removeEventListener("keydown", key, true);
     win?.removeEventListener("blur", end);
   };
   root.addEventListener("mousemove", move);
   root.addEventListener("mouseup", end);
+  if (endOnEscape) root.addEventListener("keydown", key, true);
   win?.addEventListener("blur", end);
 }
 
