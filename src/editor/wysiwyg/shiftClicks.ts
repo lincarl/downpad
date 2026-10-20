@@ -38,9 +38,9 @@
 // cell, so prosemirror-tables selected the cells from there to the one
 // pressed, and the next key replaced their text. Left of a cell's text and
 // below its last line, the caret went to the start of the line, and Chromium
-// extended the selection to its end. For a press between blocks the caret
-// therefore goes where Chromium puts the caret of a plain click, as
-// ProseMirror reads it.
+// on Linux and macOS extended the selection to its end. For a press between
+// blocks the caret therefore goes where Chromium puts the caret of a plain
+// click, as ProseMirror reads it.
 //
 // With focus in the document, prosemirror-tables selects cells on a
 // Shift+click into another cell, or while cells are selected.

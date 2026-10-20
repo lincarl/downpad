@@ -1066,9 +1066,12 @@ test("Shift+click from the find card or the Markdown pane beside or below a tabl
   await shiftClickCell("Head B", -11, 0.5, "E");
   // A plain click left of a cell's text, below its last line, puts the caret
   // at the end of that line. The caret went before the cell's paragraph, at
-  // the start of the line, so the next key replaced the cell's text.
+  // the start of the line, so the next key replaced the cell's text. On
+  // Windows, Chromium puts the caret of such a click at the point of the line
+  // nearest to it instead, here its start.
   await toMarkdown();
   await shiftClickCell("epsilonC", 11, 0.6, "F");
+  const epsilon = process.platform === "win32" ? "FepsilonC" : "epsilonCF";
   await page.keyboard.press("ControlOrMeta+s");
   // Milkdown pads the columns of a table it writes, here to the note's width.
   const second = (text: string) => text.padEnd(note.length);
@@ -1078,7 +1081,7 @@ test("Shift+click from the find card or the Markdown pane beside or below a tabl
       `| --------- | ${"-".repeat(note.length)} |`,
       `| alpha     | ${second("beta")} |`,
       `| gammaA    | ${second("deltaB")} |`,
-      `| epsilonCF | ${note} |`,
+      `| ${epsilon} | ${note} |`,
       `| eta       | ${second("zetaD")} |`,
     ].join("\n"),
     "First line.",
