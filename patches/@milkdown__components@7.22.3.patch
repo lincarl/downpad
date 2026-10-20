@@ -1,5 +1,5 @@
 diff --git a/lib/link-tooltip/index.js b/lib/link-tooltip/index.js
-index beb0075e791ec3ab70ea3372fd126b452d820581..ea6ca99d72ce375cd8e6807e538fff5cbe2fdd4b 100644
+index beb0075e791ec3ab70ea3372fd126b452d820581..6e1eb926a16f15ca3c4a99ac422cf0525f9b509a 100644
 --- a/lib/link-tooltip/index.js
 +++ b/lib/link-tooltip/index.js
 @@ -463,9 +463,14 @@ function findMarkPosition(mark, node, doc, from, to) {
@@ -20,6 +20,48 @@ index beb0075e791ec3ab70ea3372fd126b452d820581..ea6ca99d72ce375cd8e6807e538fff5c
    const node = view.state.doc.nodeAt(pos);
    if (!node) return;
    const mark = node.marks.find(
+@@ -477,6 +482,19 @@ function shouldShowPreviewWhenHover(ctx, view, event) {
+   return { show: true, pos, node, mark };
+ }
+ 
++// md-easy patch: the range of the link that `mark` makes at `pos`, the run
++// of nodes around it in its block that all carry the mark. Milkdown writes
++// such a run as one link.
++function linkRange(doc, pos, mark) {
++  const $pos = doc.resolve(pos);
++  const { parent } = $pos;
++  let first = $pos.index();
++  let end = first + 1;
++  while (first > 0 && mark.isInSet(parent.child(first - 1).marks)) first--;
++  while (end < parent.childCount && mark.isInSet(parent.child(end).marks)) end++;
++  return { from: $pos.posAtIndex(first), to: $pos.posAtIndex(end) };
++}
++
+ keepAlive(h);
+ const PreviewLink = defineComponent({
+   props: {
+@@ -663,16 +681,11 @@ function configureLinkPreviewTooltip(ctx) {
+     if (state.mode === "edit") return;
+     const result = shouldShowPreviewWhenHover(ctx, view, event);
+     if (result) {
+-      const position = view.state.doc.resolve(result.pos);
+-      const markPosition = findMarkPosition(
+-        result.mark,
+-        result.node,
+-        view.state.doc,
+-        position.before(),
+-        position.after()
+-      );
+-      const from = markPosition.start;
+-      const to = markPosition.end;
++      // md-easy patch: Edit and Remove act on the whole link. The preview
++      // took only the node under the pointer, so they split a link of
++      // several nodes, such as an image with a caption after it or text
++      // around bold text, and Remove left the link on the rest.
++      const { from, to } = linkRange(view.state.doc, result.pos, result.mark);
+       linkPreviewTooltipView.show(
+         result.mark,
+         from,
 diff --git a/lib/list-item-block/index.js b/lib/list-item-block/index.js
 index d1926c0f730d5437f2110e3b51e87dd50d0ab6d7..6dd98f86a75fe4efed85f4c057a633d8580f5e9a 100644
 --- a/lib/list-item-block/index.js

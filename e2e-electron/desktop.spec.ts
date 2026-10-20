@@ -1178,6 +1178,38 @@ test("the link preview shows the link whose text is under the pointer, never the
   await expect(preview.locator(".link-display")).toHaveText("https://example.com/8");
 });
 
+test("the link preview's Remove and Edit act on the whole link, also one of an image and a caption", async () => {
+  const file = path.join(directory, "link-preview-range.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, ["[![Alt](bar.svg) caption](https://example.com/target)", "Mixed [a **bold** b](https://example.com/m) end.", "Plain line."].join("\n\n") + "\n");
+  await launch(file);
+  await expect.poll(() => page.locator(".milkdown .ProseMirror .milkdown-image-inline img").evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  // Crepe shows the preview only while the document has focus.
+  await clickOn("Plain line.", 2, 0.5);
+  const preview = page.locator(".milkdown-link-preview");
+  /** Rest the pointer on `text` until the preview of `href` shows. */
+  const hover = async (text: string, href: string) => {
+    const point = await pointOn(text, 1, 0.5);
+    await page.mouse.move(point.x, point.y);
+    await expect(preview).toHaveAttribute("data-show", "true");
+    await expect(preview.locator(".link-display")).toHaveText(href);
+  };
+  // The preview acted on the first node of the link, or the one under the
+  // pointer, so Remove took the link off the image or the caption only, and
+  // Edit gave only the bold text the new address.
+  await hover(" caption", "https://example.com/target");
+  await preview.locator(".link-remove-button").click();
+  await expect(preview).toBeHidden();
+  await hover("bold", "https://example.com/m");
+  await preview.locator(".link-edit-button").click();
+  await expect(page.locator(".milkdown-link-edit input")).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type("https://example.com/new");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["![Alt](bar.svg) caption", "Mixed [a **bold** b](https://example.com/new) end.", "Plain line."].join("\n\n") + "\n");
+});
+
 test("a change the browser makes inside a link while the caret rests at its end keeps the link", async () => {
   const file = path.join(directory, "link-text-service.md");
   await writeFile(file, "Intro [lnk](https://example.com/a)\n\nFix [teh](https://example.com/b)\n");
