@@ -62,6 +62,22 @@ describe("Markdown view colours", () => {
     expect(tokens("```\nplain code\n```\n").get("plain code")).toBe("");
   });
 
+  it("reads display math as one block, as the document view does, in the body colour", () => {
+    const blocks = (doc: string): string[] => {
+      const names: string[] = [];
+      for (let block = markdownSource().language.parser.parse(doc).topNode.firstChild; block; block = block.nextSibling) names.push(block.name);
+      return names;
+    };
+    // A blank line and Markdown inside the fences stay in the math.
+    const closed = "Intro.\n$$\n# a_b_\n\n- c\n$$\n\nAfter.\n";
+    expect(blocks(closed)).toEqual(["Paragraph", "DisplayMath", "Paragraph"]);
+    expect(tokens(closed).get("a_b_")).toBe("");
+    // Math that is not closed takes in the rest of the text.
+    expect(blocks("$$\na\n\nAfter.\n")).toEqual(["DisplayMath"]);
+    // A line that is only $$x$$ is a paragraph, and so is math in a list.
+    expect(blocks("$$x$$\n\n- $$\n  a\n\n  b\n  $$\n")).toEqual(["Paragraph", "BulletList"]);
+  });
+
   it("reads a leading --- block as frontmatter, not a heading", () => {
     const map = tokens("---\ntitle: Notes\ntags:\n  - draft\n---\n\nBody\n");
     expect(map.get("title")).not.toBe(map.get("Notes"));

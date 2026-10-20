@@ -118,6 +118,10 @@ export class AppRuntime {
       editorHost: this.editorHost,
       showActiveDoc: () => this.showActiveDoc(),
     });
+    // Images pasted into the document view go in as the files of a drop at
+    // the caret, so one that waits for a Save As never goes into a hidden or
+    // rebuilt editor (§5.5).
+    this.editorHost.setPasteHandler((tabId, files) => this.run(() => this.fileDrops.pasteImages(tabId, files)));
     this.desktopEvents = new DesktopEventBindings({
       store,
       files: this.files,

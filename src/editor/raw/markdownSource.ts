@@ -15,7 +15,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { Tag, styleTags, tags as t } from "@lezer/highlight";
-import type { BlockContext, Element, MarkdownConfig } from "@lezer/markdown";
+import type { BlockContext, Element, Line, MarkdownConfig } from "@lezer/markdown";
 
 /** Nodes that VS Code colours apart from the tags Lezer gives them. */
 const md = {
@@ -109,6 +109,78 @@ const frontmatter: MarkdownConfig = {
   ],
 };
 
+const DOLLAR = 36;
+
+/** Where the run of `$` that opens display math on `line` ends, or -1 when
+ *  the line opens none. As in remark-math, which the document view reads math
+ *  with, that is two or more `$` and no other `$` after them on the line, so
+ *  a line that is only `$$x$$` is a paragraph. Lezer reads a line indented by
+ *  four columns or more as code before it asks this. */
+function displayMathOpening(line: Line): number {
+  if (line.next !== DOLLAR) return -1;
+  let end = line.pos + 1;
+  while (end < line.text.length && line.text.charCodeAt(end) === DOLLAR) end++;
+  return end - line.pos < 2 || line.text.includes("$", end) ? -1 : end;
+}
+
+/** The length of the run of `$` that closes display math opened by `size` of
+ *  them on `line`, or -1 when the line does not close it. As in remark-math,
+ *  that is a line of at least as many `$` alone, indented by at most three
+ *  spaces. */
+function displayMathClosing(line: Line, size: number): number {
+  if (line.indent - line.baseIndent >= 4) return -1;
+  let end = line.pos;
+  while (end < line.text.length && line.text.charCodeAt(end) === DOLLAR) end++;
+  return end - line.pos >= size && line.skipSpace(end) === line.text.length ? end - line.pos : -1;
+}
+
+/** Whether the block a parser reads now is at the top level of the text,
+ *  outside any list or quote. */
+const atTopLevel = (cx: BlockContext): boolean => cx.parentType().name === "Document";
+
+/**
+ * Display math in `$$` fences at the top level, read as the document view
+ * reads it. Blank lines inside the fences stay in the math, and math that is
+ * not closed takes in the rest of the text, so the Markdown view's blocks end
+ * where the document view's do. A file aimed at a Markdown view's caret in
+ * the math then goes in beside the whole formula (`paragraphPlace` in
+ * base64Collapse.ts), never between its lines. Inside a list or a quote, a
+ * line that opens math only ends the paragraph above it, and the lines after
+ * it read as Markdown. That list or quote is already the top-level block that
+ * holds the math. The math keeps the body colour.
+ */
+const displayMath: MarkdownConfig = {
+  defineNodes: [{ name: "DisplayMath", block: true }, "DisplayMathMark"],
+  parseBlock: [
+    {
+      name: "DisplayMath",
+      before: "FencedCode",
+      parse(cx, line) {
+        const opening = displayMathOpening(line);
+        if (opening < 0 || !atTopLevel(cx)) return false;
+        const from = cx.lineStart + line.pos;
+        const size = opening - line.pos;
+        const marks = [cx.elt("DisplayMathMark", from, from + size)];
+        while (cx.nextLine()) {
+          const closing = displayMathClosing(line, size);
+          if (closing >= 0) {
+            marks.push(cx.elt("DisplayMathMark", cx.lineStart + line.pos, cx.lineStart + line.pos + closing));
+            cx.nextLine();
+            break;
+          }
+        }
+        cx.addElement(cx.elt("DisplayMath", from, cx.prevLineEnd(), marks));
+        return true;
+      },
+      // Display math starts a block of its own right below a paragraph's
+      // line. A line of a list or quote that is not indented or marked as
+      // one then ends that list or quote too, rather than continue its
+      // paragraph.
+      endLeaf: (_cx, line) => displayMathOpening(line) >= 0,
+    },
+  ],
+};
+
 /** Lezer's Markdown tags, adjusted to the scopes VS Code colours. */
 const vscodeScopes: MarkdownConfig = {
   props: [
@@ -125,11 +197,12 @@ const vscodeScopes: MarkdownConfig = {
   ],
 };
 
-/** GitHub-flavoured Markdown, as the document view reads it, with frontmatter
- *  and VS Code's token scopes. `markdown()` alone parses plain CommonMark, so
- *  tables, strikethrough and task lists would read as paragraphs. */
+/** GitHub-flavoured Markdown, as the document view reads it, with frontmatter,
+ *  display math and VS Code's token scopes. `markdown()` alone parses plain
+ *  CommonMark, so tables, strikethrough and task lists would read as
+ *  paragraphs. */
 export function markdownSource(): LanguageSupport {
-  return markdown({ base: markdownLanguage, extensions: [frontmatter, vscodeScopes] });
+  return markdown({ base: markdownLanguage, extensions: [frontmatter, displayMath, vscodeScopes] });
 }
 
 const color = (name: string): string => `var(--md-src-${name})`;

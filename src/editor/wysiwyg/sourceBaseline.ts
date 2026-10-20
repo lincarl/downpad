@@ -273,6 +273,15 @@ export class SourceBaseline {
     this.blocks = childrenOf(doc);
   }
 
+  /** Whether `doc` is still the document this baseline was made from, block
+   *  for block, apart from Crepe's empty last line, so it writes as the exact
+   *  source. */
+  holds(doc: ProseNode): boolean {
+    const blocks = written(childrenOf(doc));
+    const before = written(this.blocks);
+    return blocks.length === before.length && blocks.every((block, index) => block === before[index]);
+  }
+
   /** `doc` as Markdown. That is the exact source while the document still says
    *  the same, and otherwise the source text of each unchanged block with
    *  Milkdown's form of the rest. Milkdown's form of the whole document when

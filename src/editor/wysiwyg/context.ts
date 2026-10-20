@@ -12,4 +12,12 @@ export interface WysiwygContext extends ImageStoreContext {
    * double-click and is built from a plain ImageStoreContext, so it omits this.
    */
   openMarkdownFile?(absPath: string): void;
+  /**
+   * Put images pasted into the document in at the caret, as files dropped
+   * away from the text go in (§5.4, §5.5). The app stores each image and puts
+   * it into the document's view shown by then, which may no longer be this
+   * editor. Call it while handling the paste event. Optional for the same
+   * reason as `openMarkdownFile`. Without it, a pasted image puts nothing in.
+   */
+  pasteImages?(files: File[]): void;
 }
