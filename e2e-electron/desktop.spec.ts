@@ -2066,13 +2066,24 @@ test("the buttons that add a table's row or column put the next key in the new l
   const table = documentView.locator("table.children");
   const a1Cell = table.locator("td").filter({ hasText: "a1" });
   /** Follow the border right of a1, or below it, to its add button, and
-   *  click the button. */
+   *  click the button. Crepe shows the line's handle from a throttled
+   *  pointer move, which a busy machine can drop for the last moves into the
+   *  narrow zone at the border, so the moves there repeat until it shows. */
   const clickAdd = async (axis: "col" | "row") => {
-    const a1 = (await a1Cell.boundingBox())!;
     const handle = page.locator(`[data-role="${axis === "col" ? "y" : "x"}-line-drag-handle"]`);
-    if (axis === "col") await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
-    else await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
-    await expect(handle).toHaveAttribute("data-show", "true");
+    let a1 = (await a1Cell.boundingBox())!;
+    await expect(async () => {
+      a1 = (await a1Cell.boundingBox())!;
+      // Each try starts inside the cell, so the pointer moves into the zone.
+      if (axis === "col") {
+        await page.mouse.move(a1.x + a1.width - 15, a1.y + a1.height / 2);
+        await page.mouse.move(a1.x + a1.width - 3, a1.y + a1.height / 2, { steps: 4 });
+      } else {
+        await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 15);
+        await page.mouse.move(a1.x + a1.width / 2, a1.y + a1.height - 3, { steps: 6 });
+      }
+      await expect(handle).toHaveAttribute("data-show", "true", { timeout: 1000 });
+    }).toPass();
     const plus = await centerOf(handle.locator(".add-button"));
     if (axis === "col") await page.mouse.move(a1.x + a1.width - 2, plus.y, { steps: 10 });
     else await page.mouse.move(plus.x + 2, a1.y + a1.height - 2, { steps: 10 });
