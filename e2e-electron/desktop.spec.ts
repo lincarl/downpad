@@ -388,10 +388,14 @@ function pointOn(text: string, index: number, fraction: number): Promise<{ x: nu
   }, [text, index, fraction] as const);
 }
 
-/** Click `fraction` of the way across a character, as `pointOn` finds it. */
+/** Click `fraction` of the way across a character, as `pointOn` finds it,
+ *  and have ProseMirror read the click's caret at once. ProseMirror reads it
+ *  on the browser's selectionchange event, which can come after a key sent
+ *  right after the click, so the key would act on the caret from before. */
 async function clickOn(text: string, index: number, fraction: number): Promise<void> {
   const point = await pointOn(text, index, fraction);
   await page.mouse.click(point.x, point.y);
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
 }
 
 /** Select the first text node that reads `text` from its end with the
@@ -614,9 +618,6 @@ test("text typed where a link's whole text was deleted is plain", async () => {
   await page.keyboard.press("Backspace");
   await page.keyboard.type("r");
   await clickOn("s more.", 0, 0.75);
-  // Read the click's caret before the keys, which would otherwise act on the
-  // caret left in the line above.
-  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Backspace");
