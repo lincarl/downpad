@@ -687,6 +687,45 @@ test("Shift+click or Shift+drag on a link's text extends the selection", async (
   ].join("\n\n") + "\n");
 });
 
+test("Shift+click on an image in a line extends the selection to the side of it clicked", async () => {
+  const file = path.join(directory, "shift-click-image.md");
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  await writeFile(file, [
+    "Pics ![Bar](bar.svg) after.",
+    "Go [![Bar](bar.svg) text](https://example.com/m) end.",
+  ].join("\n\n") + "\n");
+  await launch(file);
+  const images = page.locator(".milkdown .ProseMirror .milkdown-image-inline img");
+  await expect(images).toHaveCount(2);
+  for (const index of [0, 1]) {
+    await expect.poll(() => images.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  }
+  /** Shift+click `fraction` of the way across `image`. */
+  const shiftClick = async (image: Locator, fraction: number) => {
+    const box = (await image.boundingBox())!;
+    await page.keyboard.down("Shift");
+    await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+    await page.keyboard.up("Shift");
+  };
+  // Chromium does not extend the selection on a Shift+click on an image, so
+  // the caret stayed where it was and the next key went in there.
+  await clickOn(" after.", 2, 0.25);
+  await shiftClick(images.first(), 0.25);
+  await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe(" a");
+  await page.keyboard.type("x");
+  // On the right half of an image inside a link, the selection ends after it.
+  await clickOn(" end.", 2, 0.25);
+  await shiftClick(images.last(), 0.75);
+  await expect.poll(() => page.evaluate(() => document.getSelection()!.toString())).toBe(" text e");
+  await page.keyboard.type("y");
+  await page.keyboard.press("ControlOrMeta+s");
+  // Typing over selected text of a link keeps the link.
+  await expect.poll(() => readFile(file, "utf8")).toBe([
+    "Pics xfter.",
+    "Go [![Bar](bar.svg)y](https://example.com/m)nd.",
+  ].join("\n\n") + "\n");
+});
+
 test("Shift+click on a link's text while a code block has focus puts the caret there", async () => {
   const file = path.join(directory, "shift-click-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "Then [docs](https://example.com/docs) after the link."].join("\n\n") + "\n");
