@@ -145,6 +145,9 @@ function putBack(view: EditorView, replaced: Replaced): void {
   if (key) tr.setMeta(key, { redo: false, historyState: replaced.history });
   const focused = view.hasFocus();
   view.dispatch(tr);
+  // Start a new undo step, as after an undo, so the next edit does not join
+  // the edit before the composition.
+  view.dispatch(closeHistory(view.state.tr));
   // Crepe's code block view takes focus in its code when it is selected, so
   // a code block, a math block or a Mermaid diagram took it. Text that IBus
   // commits after the composition then went into the code. Give focus back

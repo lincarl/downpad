@@ -496,6 +496,25 @@ describe("a composition over a selection that is not text", () => {
     expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
   });
 
+  it("keeps text committed after a composition that ended empty out of the undo step of the edit before it", async () => {
+    const selectAbove = (doc: ProseNode) => NodeSelection.create(doc, 0);
+    const view = await open(imageBetweenParagraphs, selectAbove, true);
+    // An edit right before, which a change next to it soon after joins.
+    view.dispatch(view.state.tr.insertText("!", "Above.".length + 1));
+    view.dispatch(view.state.tr.setSelection(selectAbove(view.state.doc)));
+    const composed = await startComposition(view, "明", [textNode(view, "Below."), 0]);
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(view.state.selection.eq(selectAbove(view.state.doc))).toBe(true);
+    const commit = new InputEvent("beforeinput", { inputType: "insertText", data: "明", bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(commit);
+    await settle();
+    expect(editor!.getMarkdown()).toBe(["明", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(["Above.!", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
+  });
+
   it.each([
     ["an image", imageBetweenParagraphs, selectImage],
     ["a code block", codeBetweenParagraphs, selectCode],
