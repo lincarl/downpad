@@ -2255,16 +2255,29 @@ test("a click below the end of the Markdown puts the cursor at its end, in the s
   await page.mouse.up();
   expect(await selectedText()).toBe(" line.\n\nLast line.abc");
   await page.keyboard.type("d");
-  // In the Markdown view too.
+  // In the Markdown view too. The line numbers stopped at the last line, so
+  // below them a Shift+click focused CodeMirror's scroll container and did
+  // not extend the selection.
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(markdown).toBeVisible();
-  const first = await pointInMarkdown("Firstd", 1, 0.5);
+  let first = await pointInMarkdown("Firstd", 1, 0.25);
   await page.mouse.click(first.x, first.y);
   await page.mouse.click((await belowEnd()).text.x, (await belowEnd()).text.y);
   await expect(markdown).toBeFocused();
   await page.keyboard.type("e");
+  first = await pointInMarkdown("Firstde", 1, 0.25);
+  await page.mouse.click(first.x, first.y);
+  await shiftClickAt((await belowEnd()).numbers);
+  await expect(markdown).toBeFocused();
+  expect(await selectedText()).toBe("irstde");
+  await page.keyboard.type("f");
+  first = await pointInMarkdown("Ff", 0, 0.25);
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click((await belowEnd()).numbers.x, (await belowEnd()).numbers.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("g");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("Firstde");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Ffg");
 });
 
 test("a click in the room find adds below the Markdown view puts the cursor at the end of the Markdown", async () => {
