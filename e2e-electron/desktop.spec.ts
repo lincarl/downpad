@@ -532,11 +532,15 @@ test("an input method's composition replaces a selected block, selected table ce
     await expect(inline).toHaveClass(/\bselected\b/);
     await composeOver("すき", line, written);
   }
-  // Each undo brings back one block or the cells, the image selected again.
+  // Each undo brings back one block or the cells, an image selected again.
+  // The undo of the composition over the image in the row left a text
+  // selection over it, and the image was not selected.
+  const middle = documentView.locator(".milkdown-image-inline", { has: page.getByRole("img", { name: "M", exact: true }) });
   for (const expected of saved.slice(1)) {
     await page.keyboard.press("ControlOrMeta+z");
     await page.keyboard.press("ControlOrMeta+s");
     await expect.poll(() => readFile(file, "utf8")).toBe(expected);
+    if (expected === saved[1]) await expect(middle).toHaveClass(/\bselected\b/);
   }
   await expect(image).toHaveClass(/\bselected\b/);
 });

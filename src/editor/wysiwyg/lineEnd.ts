@@ -51,8 +51,9 @@
 // key's text goes. Chromium places the caret after the composition's first
 // text by text offsets it read before the change, so the plugin puts that
 // caret right (`caretAfterFirstText`). Chromium replaces a selected image in
-// a line itself, and a formula gives way to a selected space with its marks,
-// which the composition types over (`readyForComposition`). The change and
+// a line itself, which stays selected for ProseMirror too (`keepNode`), and a
+// formula gives way to a selected space with its marks, which the
+// composition types over (`readyForComposition`). The change and
 // the composition are one undo step, which brings the selection's content
 // back. A composition that commits nothing, as when it is cancelled, is
 // taken back once ProseMirror has read its end, in the same task, with the
@@ -236,6 +237,9 @@ export const endPastAtoms = $prose(() => {
   const readExtended = (view: EditorView) => {
     if (keptAnchor !== null) view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
   };
+  /** Whether a composition starts over a selected node in a line that stays
+   *  selected, such as an image, until ProseMirror has started it. */
+  let keepNode = false;
   /** Puts the caret after the text of a composition's first step, in the
    *  text block that a selection that is not text gave way to. Chromium puts
    *  that caret at the text offset where the selection started before
@@ -264,6 +268,7 @@ export const endPastAtoms = $prose(() => {
       const removeSelection = () => {
         readExtended(view);
         replaced = null;
+        keepNode = false;
         caretAfterFirstText.disconnect();
         if (crossesBreakEdge(view.state.selection)) {
           view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
@@ -285,6 +290,12 @@ export const endPastAtoms = $prose(() => {
         // carry the same composition id.
         view.dispatch(closeHistory(replacement.tr));
         replaced = replacement.replaced;
+        // ProseMirror reads the browser's range around an image that stays
+        // selected as it starts the composition. It took that range for
+        // selected text, which the undo step kept, so an undo selected text
+        // instead of the image, and a composition cancelled after it removed
+        // the image. Have it read the image's selection instead.
+        keepNode = view.state.selection instanceof NodeSelection;
         // Text typed over a selection in a line goes where the selection
         // started, so only a caret that took a block's place needs this.
         if (!view.state.selection.empty) return;
@@ -311,21 +322,37 @@ export const endPastAtoms = $prose(() => {
           if (!view.isDestroyed && sameContent(view.state.doc, started.empty)) putBack(view, started);
         });
       };
+      /** Stops keeping a node selected once ProseMirror has started the
+       *  composition. */
+      const startedComposition = () => {
+        keepNode = false;
+      };
       // Ready the selection in the capture phase, before ProseMirror and
-      // Milkdown. Take it back in the bubble phase. ProseMirror listens on its
-      // element from when the view is made, before this, so this listener
-      // runs after ProseMirror's.
+      // Milkdown. Stop keeping a node selected, and take the selection back,
+      // in the bubble phase. ProseMirror listens on its element from when the
+      // view is made, before this, so the bubble-phase listeners run after
+      // ProseMirror's.
       view.dom.addEventListener("compositionstart", removeSelection, true);
+      view.dom.addEventListener("compositionstart", startedComposition);
       view.dom.addEventListener("compositionend", putBackIfEmpty);
       return {
         destroy: () => {
           caretAfterFirstText.disconnect();
           view.dom.removeEventListener("compositionstart", removeSelection, true);
+          view.dom.removeEventListener("compositionstart", startedComposition);
           view.dom.removeEventListener("compositionend", putBackIfEmpty);
         },
       };
     },
     props: {
+      /** Reads the browser's range around a selected node in a line, such as
+       *  an image, as that node's selection while ProseMirror starts a
+       *  composition over it (`keepNode`). */
+      createSelectionBetween: (view, $anchor, $head) => {
+        const { selection } = view.state;
+        const covers = selection.from === Math.min($anchor.pos, $head.pos) && selection.to === Math.max($anchor.pos, $head.pos);
+        return keepNode && selection instanceof NodeSelection && covers ? selection : null;
+      },
       handleKeyDown: (view, event) => {
         if (event.isComposing) return false;
         const end = END_MOVES_CARET && event.key === "End" && !event.ctrlKey && !event.metaKey && !event.altKey;

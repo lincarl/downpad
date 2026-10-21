@@ -552,8 +552,9 @@ describe("a composition over a selection that is not text", () => {
     ["an image in a link inside a line", "head [![Pic](pic.png)](https://example.org) tail\n", "image", "head [漢字](https://example.org) tail\n"],
     ["a bold image", "**![Pic](pic.png)** tail\n", "image", "**漢字** tail\n"],
     ["an emphasized formula", "*$x$* tail\n", "math_inline", "*漢字* tail\n"],
-  ])("gives text composed over %s the marks a key's text gets, and one undo brings it back", async (_node, markdown, type, composed) => {
-    const view = await open(markdown, (doc) => NodeSelection.create(doc, find(doc, (node) => node.type.name === type)));
+  ])("gives text composed over %s the marks a key's text gets, and one undo brings it back selected", async (_node, markdown, type, composed) => {
+    const select = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === type));
+    const view = await open(markdown, select);
     const typed = view.state.tr.insertText("漢字").doc;
     await composeOverSelection(view, "漢字");
     await endComposition(view, "漢字");
@@ -561,6 +562,9 @@ describe("a composition over a selection that is not text", () => {
     expect(editor!.getMarkdown()).toBe(composed);
     expect(undo(view.state, view.dispatch)).toBe(true);
     expect(editor!.getMarkdown()).toBe(markdown);
+    // ProseMirror read the browser's range around an image as selected text
+    // as the composition started, and the undo selected that text.
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
   });
 
   it.each([
