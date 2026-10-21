@@ -564,6 +564,35 @@ describe("a composition over a selection that is not text", () => {
   });
 
   it.each([
+    ["a heading whose text a later heading shares", "# Notes\n\nFirst.\n\n# Notes\n", (doc: ProseNode) => NodeSelection.create(doc, 0)],
+    ["a formula whose space changes its heading's id", "# A$x$B\n\nBody.\n", (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "math_inline"))],
+  ])("puts back %s when the composition commits nothing", async (_content, markdown, select) => {
+    // Milkdown gives each heading an id from its text as the document
+    // changes, and a later heading with the same text gets a number after
+    // its id. So the change that readied the selection also renamed a
+    // heading, and the document no longer matched the one the composition
+    // was to leave.
+    const view = await open(markdown, select);
+    const before = view.state.doc;
+    const { selection } = view.state;
+    if (selection instanceof NodeSelection && selection.node.isInline) {
+      // The composition types over the space that took the formula's place,
+      // and its last step empties it.
+      await composeOverSelection(view, "か");
+      const { focusNode, focusOffset } = document.getSelection()!;
+      (focusNode as Text).deleteData(focusOffset - 1, 1);
+      await settle();
+    } else {
+      await emptyComposition(view, "First.");
+    }
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(markdown);
+    expect(view.state.doc.eq(before)).toBe(true);
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
+    expect(undoDepth(view.state)).toBe(0);
+  });
+
+  it.each([
     ["an image", imageBetweenParagraphs, selectImage],
     ["a code block", codeBetweenParagraphs, selectCode],
   ])("still replaces %s with text committed without a composition after one that ended empty", async (_block, markdown, select) => {

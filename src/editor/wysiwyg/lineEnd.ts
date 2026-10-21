@@ -61,7 +61,7 @@
 
 import { historyProviderPlugin } from "@milkdown/kit/plugin/history";
 import { closeHistory } from "@milkdown/kit/prose/history";
-import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
+import { Mark, type Node as ProseNode, type ResolvedPos } from "@milkdown/kit/prose/model";
 import { NodeSelection, Plugin, TextSelection, type Selection, type SelectionBookmark, type Transaction } from "@milkdown/kit/prose/state";
 import type { Step } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -101,10 +101,25 @@ function coversNonText(selection: Selection): boolean {
   return !(selection instanceof TextSelection) && !selection.empty;
 }
 
+/** Whether `a` and `b` hold the same nodes, text and marks, whatever the
+ *  nodes' attributes. Milkdown gives each heading an id from its text, with a
+ *  number for each heading before it with the same text, and keeps the ids
+ *  in sync as the document changes. So a change to one heading can rename
+ *  another one. */
+function sameContent(a: ProseNode, b: ProseNode): boolean {
+  if (a === b) return true;
+  if (a.type !== b.type || a.text !== b.text || a.childCount !== b.childCount || !Mark.sameSet(a.marks, b.marks)) return false;
+  for (let index = 0; index < a.childCount; index++) {
+    if (!sameContent(a.child(index), b.child(index))) return false;
+  }
+  return true;
+}
+
 /** A selection that is not text that a composition replaced, until the
  *  composition ends. */
 interface Replaced {
-  /** The document the composition leaves if it commits nothing. */
+  /** The document the composition leaves if it commits nothing, apart from
+   *  attributes that other plugins change, such as a heading's id. */
   empty: ProseNode;
   /** The steps that take `empty` back to the document before. */
   back: Step[];
@@ -287,8 +302,13 @@ export const endPastAtoms = $prose(() => {
         // own compositionend handler, which runs before this one, or in a
         // microtask that it queues there. Run after that, in the same task,
         // so no key, such as Ctrl+Z, and no other composition comes between.
+        // Milkdown can rename a heading right after the change that readied
+        // the selection, and again as the composition ends, so only the
+        // content has to match. The same nodes and text have the same
+        // positions, so the steps back still apply, and Milkdown renames the
+        // headings again after them.
         queueMicrotask(() => {
-          if (!view.isDestroyed && view.state.doc.eq(started.empty)) putBack(view, started);
+          if (!view.isDestroyed && sameContent(view.state.doc, started.empty)) putBack(view, started);
         });
       };
       // Ready the selection in the capture phase, before ProseMirror and
