@@ -144,6 +144,11 @@ export interface AppState {
   find: FindState;
   banner: BannerState | null;
   saveStatus: { lastSavedAt: number | null; autosaving: boolean };
+  /** Whether startup (`AppRuntime.bootstrap`) has finished. It has then shown
+   *  the first document or the Recent view and put the keyboard shortcuts and
+   *  desktop events in place. The app shell shows it as `data-started`, which
+   *  the Electron tests wait for before they act. */
+  started: boolean;
 }
 
 // ── Settings (mirror of settings.toml; see spec §5.9 and ipc/contracts) ──

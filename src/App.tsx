@@ -114,10 +114,13 @@ function AppContent({ store }: { store: Store }) {
     <AppRuntimeProvider runtime={runtime}>
       {/* The single column is exactly as wide as the window. A row that needs
           more room, such as the status bar with a long path, fits its own
-          content to it instead of making every row wider than the window. */}
+          content to it instead of making every row wider than the window.
+          `data-started` turns "true" once startup has finished, which the
+          Electron tests wait for before they act. */}
       <div
         className="app grid h-screen grid-cols-[minmax(0,1fr)] grid-rows-[39px_46px_auto_minmax(0,1fr)_22px] overflow-hidden bg-window text-ink"
         data-testid="app-shell"
+        data-started={state.started}
       >
         <Toolbar />
         <TabStrip />

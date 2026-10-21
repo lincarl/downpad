@@ -326,6 +326,9 @@ export class AppRuntime {
       print: () => void this.printActiveDocument(),
     }));
     this.desktopEvents.start();
+    // Startup has finished. The app shell shows this as `data-started`, which
+    // the Electron tests wait for before they act.
+    this.store.set({ started: true });
     // First desktop launch only: offer to make md-easy the default .md app.
     void this.startup.maybePromptDefaultHandler();
   }
