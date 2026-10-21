@@ -414,6 +414,26 @@ describe("a composition over a selection that is not text", () => {
     await vi.advanceTimersByTimeAsync(100);
   }
 
+  /** Start a composition of `text` over the browser's selection, as Chromium
+   *  types one over selected text or a selected image in a line. Chromium
+   *  removes what the selection holds and puts the text at the caret that
+   *  leaves, in the text node there or in a new one. */
+  async function composeOverSelection(view: EditorView, text: string): Promise<void> {
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const selection = document.getSelection()!;
+    selection.getRangeAt(0).deleteContents();
+    const { focusNode, focusOffset } = selection;
+    if (focusNode instanceof Text) {
+      focusNode.insertData(focusOffset, text);
+      selection.collapse(focusNode, focusOffset + text.length);
+    } else {
+      const node = document.createTextNode(text);
+      focusNode!.insertBefore(node, focusNode!.childNodes[focusOffset] ?? null);
+      selection.collapse(node, text.length);
+    }
+    await settle();
+  }
+
   /** Start a composition over the selected block after the paragraph that
    *  reads `above`, and empty it, which ends it. The test sends its end. */
   async function emptyComposition(view: EditorView, above = "Above."): Promise<void> {
@@ -525,6 +545,22 @@ describe("a composition over a selection that is not text", () => {
     await settle();
     expect(editor!.getMarkdown()).toBe(codeBetweenParagraphs);
     expect(document.activeElement).toBe(field);
+  });
+
+  it.each([
+    ["an image in a link", "[![Pic](pic.png)](https://example.org) tail\n", "image", "[漢字](https://example.org) tail\n"],
+    ["an image in a link inside a line", "head [![Pic](pic.png)](https://example.org) tail\n", "image", "head [漢字](https://example.org) tail\n"],
+    ["a bold image", "**![Pic](pic.png)** tail\n", "image", "**漢字** tail\n"],
+    ["an emphasized formula", "*$x$* tail\n", "math_inline", "*漢字* tail\n"],
+  ])("gives text composed over %s the marks a key's text gets, and one undo brings it back", async (_node, markdown, type, composed) => {
+    const view = await open(markdown, (doc) => NodeSelection.create(doc, find(doc, (node) => node.type.name === type)));
+    const typed = view.state.tr.insertText("漢字").doc;
+    await composeOverSelection(view, "漢字");
+    await endComposition(view, "漢字");
+    expect(view.state.doc.eq(typed)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(composed);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(markdown);
   });
 
   it.each([

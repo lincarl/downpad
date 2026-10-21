@@ -450,13 +450,16 @@ test("text that comes without a key replaces an image selected between paragraph
   await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "漢字", "Below.", written, "Last line."].join("\n\n") + "\n");
 });
 
-test("an input method's composition replaces a selected block or selected table cells as a key does, and one undo brings each back", async () => {
+test("an input method's composition replaces a selected block, selected table cells or a selected image in a line as a key does, and one undo brings each back", async () => {
   // DevTools composes as an input method does, a step at a time, and then
   // commits. Chromium cannot put a composition where a block was. Over an
   // image between paragraphs it went to the end of the paragraph above and
   // the image stayed, and over two selected cells it kept the text of one.
+  // Over an image in a link the text lost the link, and over an image
+  // between two images it came in twice.
   const file = path.join(directory, "compose-over-blocks.md");
   await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  await writeFile(path.join(directory, "dot.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#36c"/></svg>');
   const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
   const blocks = [
     "Above.",
@@ -471,6 +474,8 @@ test("an input method's composition replaces a selected block or selected table 
     "```mermaid\ngraph TD; A-->B;\n```",
     "Selected by its handle.",
     table,
+    "Linked [![Inline](dot.svg)](https://example.org) image.",
+    "Images ![L](dot.svg)![M](dot.svg)![R](dot.svg) in a row.",
     "Last line.",
   ];
   const original = blocks.join("\n\n") + "\n";
@@ -516,6 +521,17 @@ test("an input method's composition replaces a selected block or selected table 
   await shiftClickAt(await pointOn("two", 1, 0.5));
   await expect(documentView.locator(".selectedCell")).toHaveCount(2);
   await composeOver("あい", table, "| A     | B    |\n| ----- | ---- |\n|       | あい   |\n| three | four |");
+  // Images in a line, selected with a click, give way as to a key, with the
+  // link, and the text comes in once.
+  for (const [alt, line, written] of [
+    ["Inline", "Linked [![Inline](dot.svg)](https://example.org) image.", "Linked [すき](https://example.org) image."],
+    ["M", "Images ![L](dot.svg)![M](dot.svg)![R](dot.svg) in a row.", "Images ![L](dot.svg)すき![R](dot.svg) in a row."],
+  ]) {
+    const inline = documentView.locator(".milkdown-image-inline", { has: page.getByRole("img", { name: alt, exact: true }) });
+    await inline.click();
+    await expect(inline).toHaveClass(/\bselected\b/);
+    await composeOver("すき", line, written);
+  }
   // Each undo brings back one block or the cells, the image selected again.
   for (const expected of saved.slice(1)) {
     await page.keyboard.press("ControlOrMeta+z");
@@ -525,14 +541,16 @@ test("an input method's composition replaces a selected block or selected table 
   await expect(image).toHaveClass(/\bselected\b/);
 });
 
-test("an input method's composition that commits nothing over a selected block or selected table cells leaves them as they were", async () => {
+test("an input method's composition that commits nothing over a selected block, selected table cells or a selected image in a line leaves them as they were", async () => {
   // A composition emptied by its last step, or committed empty, ends with
   // nothing in the document. Before, an image lost its selection and the
   // next key went to the end of the paragraph above it.
   const file = path.join(directory, "compose-nothing.md");
   await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  await writeFile(path.join(directory, "dot.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#36c"/></svg>');
   const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
-  const blocks = ["Above.", "![Pic](pic.svg)", "Below.", "```js\nconst x = 1;\n```", "After the code.", "$$\nE = mc^2\n$$", "After the formula.", table, "Last line."];
+  const row = "Images ![L](dot.svg)![M](dot.svg)![R](dot.svg) in a row.";
+  const blocks = ["Above.", "![Pic](pic.svg)", "Below.", "```js\nconst x = 1;\n```", "After the code.", "$$\nE = mc^2\n$$", "After the formula.", table, row, "Last line."];
   const original = blocks.join("\n\n") + "\n";
   await writeFile(file, original);
   await launch(file);
@@ -561,6 +579,14 @@ test("an input method's composition that commits nothing over a selected block o
   for (const text of ["か", "かな", ""]) await step(text);
   await expect(cells).toHaveCount(2);
   await page.keyboard.press("Shift+KeyC");
+  // Between two images the first step's text stayed, as Milkdown's widgets
+  // beside the caret ended the composition there.
+  const middle = documentView.locator(".milkdown-image-inline", { has: page.getByRole("img", { name: "M", exact: true }) });
+  await middle.click();
+  await expect(middle).toHaveClass(/\bselected\b/);
+  for (const text of ["か", "かな", ""]) await step(text);
+  await expect(middle).toHaveClass(/\bselected\b/);
+  await page.keyboard.press("Shift+KeyD");
   // Crepe's code block view takes focus in its code when it is selected, as
   // when an undo brings a code block back, and the key went there.
   await selectWithHandle(code);
@@ -579,11 +605,12 @@ test("an input method's composition that commits nothing over a selected block o
   await session.send("Input.insertText", { text: "かな" });
   await page.keyboard.press("ControlOrMeta+s");
   const written = "| A     | B    |\n| ----- | ---- |\n|       | C    |\n| three | four |";
-  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "A", "Below.", "B", "After the code.", "かな", "After the formula.", written, "Last line."].join("\n\n") + "\n");
-  // The compositions left no undo steps of their own, so four undos take
-  // back the three keys and the text.
+  const rowWritten = "Images ![L](dot.svg)D![R](dot.svg) in a row.";
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "A", "Below.", "B", "After the code.", "かな", "After the formula.", written, rowWritten, "Last line."].join("\n\n") + "\n");
+  // The compositions left no undo steps of their own, so five undos take
+  // back the four keys and the text.
   await documentView.locator("p", { hasText: "After the code." }).click();
-  for (let i = 0; i < 4; i++) await page.keyboard.press("ControlOrMeta+z");
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ControlOrMeta+z");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(original);
 });

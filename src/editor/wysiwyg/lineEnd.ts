@@ -38,28 +38,31 @@
 // in twice.
 //
 // The same handler readies a selection that is not text, such as a selected
-// block or selected table cells, for a composition. ProseMirror types a key
-// over such a selection itself, and the prosemirror-view patch types text
-// that comes without a composition the same way. A composition went to
-// Chromium, which cannot put text where a block was. ProseMirror read the
-// DOM selection as the composition started, which over an image between two
-// paragraphs left the caret at the end of the paragraph above, and the
-// composed text went there with the image kept. So the plugin replaces the
-// selection as a typed key does, with no text, and the composition goes on
-// from the caret that leaves, in an empty paragraph where the block was or
-// in the cell where a key's text goes. Chromium places the caret after the
-// composition's first text by text offsets it read before the change, so
-// the plugin puts that caret right (`caretAfterFirstText`). The change and
-// the composition are one undo step, which brings the block or the cells
+// block, selected table cells or a selected image or formula in a line, for
+// a composition. ProseMirror types a key over such a selection itself, and
+// the prosemirror-view patch types text that comes without a composition the
+// same way. A composition went to Chromium, which cannot put text where a
+// block was. ProseMirror read the DOM selection as the composition started,
+// which over an image between two paragraphs left the caret at the end of
+// the paragraph above, and the composed text went there with the image kept.
+// So the plugin replaces a selected block or selected cells as a typed key
+// does, with no text, and the composition goes on from the caret that
+// leaves, in an empty paragraph where the block was or in the cell where a
+// key's text goes. Chromium places the caret after the composition's first
+// text by text offsets it read before the change, so the plugin puts that
+// caret right (`caretAfterFirstText`). Chromium replaces a selected image in
+// a line itself, and a formula gives way to a selected space with its marks,
+// which the composition types over (`readyForComposition`). The change and
+// the composition are one undo step, which brings the selection's content
 // back. A composition that commits nothing, as when it is cancelled, is
 // taken back once ProseMirror has read its end, in the same task, with the
-// undo history and focus as they were before it, so the block or the cells
-// are selected as before and no key or other composition comes in between.
+// undo history and focus as they were before it, so the content is selected
+// as before and no key or other composition comes in between.
 
 import { historyProviderPlugin } from "@milkdown/kit/plugin/history";
 import { closeHistory } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
-import { Plugin, TextSelection, type EditorState, type Selection, type SelectionBookmark, type Transaction } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, TextSelection, type Selection, type SelectionBookmark, type Transaction } from "@milkdown/kit/prose/state";
 import type { Step } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
@@ -111,24 +114,46 @@ interface Replaced {
   history: unknown;
 }
 
-/** Replaces a selection that is not text, which a composition is about to
- *  replace, as a typed key does but with no text, and leaves the caret where
- *  the key's text would go. Returns the change and what the composition
- *  replaces. */
-function readyForComposition(state: EditorState): { tr: Transaction; replaced: Replaced } {
+/** Readies a selection that is not text for a composition that is about to
+ *  replace it as a typed key does, and returns the change to make and what
+ *  the composition replaces.
+ *
+ *  A selected block, selected cells or the whole document give way to the
+ *  caret where the key's text would go, such as in an empty paragraph where
+ *  a block was. A node in a line whose element holds no text, such as an
+ *  image, stays selected, with no change, and Chromium replaces it as it
+ *  replaces selected text. ProseMirror reads that as typing over the node,
+ *  which gives the text the node's marks, such as a link, as a key's text
+ *  gets them. Chromium cannot replace an element that holds text, such as a
+ *  formula's, so such a node gives way to a selected space with its marks,
+ *  and the composition types over that. Replacing a node in a line with the
+ *  caret lost its marks, and between two images Milkdown's widgets beside
+ *  the caret made ProseMirror draw the first step's text again, which ended
+ *  the composition, so the text came in twice. A selected space that fills
+ *  a link's element inside a line does that too, since Chromium types the
+ *  later steps after the element, so an image does not use one. */
+function readyForComposition(view: EditorView): { tr: Transaction; replaced: Replaced } {
+  const { state } = view;
+  const { selection } = state;
+  const inline = selection instanceof NodeSelection && selection.node.isInline;
+  const native = inline && !view.nodeDOM(selection.from)?.textContent;
   // ProseMirror types a key over a selection that is not text with
-  // insertText, which wraps the text in a paragraph where a block was and
-  // puts the caret after it. Type a space that way and take it out again.
-  const tr = state.tr.insertText(" ");
-  const end = tr.selection.from;
-  tr.delete(end - 1, end);
+  // insertText, which wraps the text in a paragraph where a block was, gives
+  // it the marks of a node in a line, and puts the caret after it.
+  const typed = () => state.tr.insertText(" ");
+  const emptied = native ? state.tr.deleteSelection() : typed();
+  const end = emptied.selection.from;
+  if (!native) emptied.delete(end - 1, end);
   const replaced: Replaced = {
-    empty: tr.doc,
-    back: tr.steps.map((step, index) => step.invert(tr.docs[index]!)).reverse(),
-    selection: state.selection.getBookmark(),
+    empty: emptied.doc,
+    back: emptied.steps.map((step, index) => step.invert(emptied.docs[index]!)).reverse(),
+    selection: selection.getBookmark(),
     history: historyProviderPlugin.key()?.getState(state),
   };
-  return { tr: tr.scrollIntoView(), replaced };
+  if (native) return { tr: state.tr, replaced };
+  if (!inline) return { tr: emptied.scrollIntoView(), replaced };
+  const tr = typed();
+  return { tr: tr.setSelection(TextSelection.create(tr.doc, end - 1, end)).scrollIntoView(), replaced };
 }
 
 /** Takes back the replacement of a selection that is not text, whose
@@ -238,12 +263,16 @@ export const endPastAtoms = $prose(() => {
         // composition right after Page Up goes where Page Up put the caret.
         view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
         if (!coversNonText(view.state.selection)) return;
-        const replacement = readyForComposition(view.state);
-        // Start a new undo step. The composition's first change joins it, as
-        // it comes right after this one and next to it, and its later changes
-        // join that one, as they carry the same composition id.
+        const replacement = readyForComposition(view);
+        // Start a new undo step, with this change if it makes one. The
+        // composition's first change joins it, as it comes right after this
+        // one and next to it, and its later changes join that one, as they
+        // carry the same composition id.
         view.dispatch(closeHistory(replacement.tr));
         replaced = replacement.replaced;
+        // Text typed over a selection in a line goes where the selection
+        // started, so only a caret that took a block's place needs this.
+        if (!view.state.selection.empty) return;
         const { node } = view.domAtPos(view.state.selection.head);
         caretAfterFirstText.observe(node, { childList: true, characterData: true, subtree: true });
       };
