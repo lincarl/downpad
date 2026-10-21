@@ -12,13 +12,15 @@
 // two code blocks, to the start of the document whenever the page is focused,
 // also while it has focus already. The patch puts the block's selection back
 // when no input moved the selection since ProseMirror set it, and before a key
-// or text that comes without one goes in.
+// goes in.
 //
 // ProseMirror itself types a key over a selection that is not text, such as
 // a selected block or cells, and left text that comes without a key, such as
 // from an input method, to Chromium. Over an image between two
 // paragraphs, Chromium removed the DOM range around the image, which joined
-// the paragraphs. The patch types such text as ProseMirror types a key.
+// the paragraphs. The patch types such text as ProseMirror types a key, over
+// ProseMirror's selection, so a move of the DOM selection that ProseMirror
+// has not read yet does not change where it goes.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";

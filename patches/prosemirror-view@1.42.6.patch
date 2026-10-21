@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589aa5ee171 100644
+index d52a5260a7b9924b2865053ea1e8c6484225277b..d84d622eff36bd63bd03e9830ddba53564a7a7e4 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -781,7 +781,23 @@ var ViewDesc = function () {
@@ -51,7 +51,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589
 +}
 +// md-easy patch: put ProseMirror's selection back in the DOM if the page
 +// moved it (see pageReset) and ProseMirror has not read the move yet, before
-+// an input that would otherwise go to the start of the document.
++// a key that would otherwise go to the start of the document.
 +function putBackPageReset(view) {
 +  var domSel = view.domSelectionRange();
 +  if (!view.domObserver.currentSelection.eq(domSel) && hasFocusAndSelection(view) && pageReset(view, domSel)) selectionToDOM(view);
@@ -131,23 +131,22 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589
      }, 20);
    }
  };
-@@ -3698,6 +3767,32 @@ handlers.blur = function (view, _event) {
+@@ -3698,6 +3767,31 @@ handlers.blur = function (view, _event) {
  };
  handlers.beforeinput = function (view, _event) {
    var event = _event;
-+  // md-easy patch: text that comes without a key, such as from an input
-+  // method, the emoji panel or dictation, can come right after the page
-+  // moved the selection, before ProseMirror read the move (see pageReset).
-+  // Put the selection back before the input goes in. ProseMirror types a key
-+  // over a selection that is not text, such as a selected block or cells,
-+  // itself, and left such text to Chromium. Chromium cannot type into a
-+  // selection it cannot show. Over a block between two paragraphs it removed
-+  // the DOM range around the block, which joined the paragraphs, and over
-+  // two selected cells it replaced the text of only one. So type the text as
-+  // ProseMirror does for a key. A composition still goes to Chromium, as it
-+  // cannot be cancelled.
++  // md-easy patch: ProseMirror types a key over a selection that is not
++  // text, such as a selected block or cells, itself, and left text that
++  // comes without a key, such as from an input method, the emoji panel or
++  // dictation, to Chromium. Chromium cannot type into a selection it cannot
++  // show. Over a block between two paragraphs it removed the DOM range
++  // around the block, which joined the paragraphs, and over two selected
++  // cells it replaced the text of only one. So type the text as ProseMirror
++  // does for a key. It goes over ProseMirror's selection, so a move of the
++  // DOM selection to the start of the document that ProseMirror has not
++  // read yet does not take it there (see pageReset). A composition still
++  // goes to Chromium, as it cannot be cancelled.
 +  if (view.editable && !view.composing) {
-+    putBackPageReset(view);
 +    var sel = view.state.selection,
 +      text = event.data;
 +    if (event.inputType == "insertText" && text && !/[\r\n]/.test(text) && !(sel instanceof prosemirrorState.TextSelection)) {
@@ -164,7 +163,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589
    if (android && event.inputType == "deleteContentBackward") {
      view.domObserver.flushSoon();
      var domChangeCount = view.input.domChangeCount;
-@@ -4350,6 +4445,10 @@ var DOMObserver = function () {
+@@ -4350,6 +4444,10 @@ var DOMObserver = function () {
      this.flushingSoon = -1;
      this.observer = null;
      this.currentSelection = new SelectionState();
@@ -175,7 +174,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589
      this.onCharData = null;
      this.suppressingSelectionUpdates = false;
      this.lastChangedTextNode = null;
-@@ -4459,6 +4558,7 @@ var DOMObserver = function () {
+@@ -4459,6 +4557,7 @@ var DOMObserver = function () {
      key: "setCurSelection",
      value: function setCurSelection() {
        this.currentSelection.set(this.view.domSelectionRange());
@@ -183,7 +182,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589
      }
    }, {
      key: "ignoreSelectionChange",
-@@ -4580,6 +4680,9 @@ var DOMObserver = function () {
+@@ -4580,6 +4679,9 @@ var DOMObserver = function () {
          selectionToDOM(view);
          this.currentSelection.set(sel);
          view.scrollToSelection();
@@ -194,7 +193,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589
          if (from > -1) {
            view.docView.markDirty(from, to);
 diff --git a/dist/index.js b/dist/index.js
-index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f4d8d044a 100644
+index dc0d117b85e1da3eae915b4d8ff8e5e604683861..b4896ce261241f5c6db2f4aa72ce00705b3b60f2 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -850,7 +850,19 @@ class ViewDesc {
@@ -245,7 +244,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f
 +}
 +// md-easy patch: put ProseMirror's selection back in the DOM if the page
 +// moved it (see pageReset) and ProseMirror has not read the move yet, before
-+// an input that would otherwise go to the start of the document.
++// a key that would otherwise go to the start of the document.
 +function putBackPageReset(view) {
 +    let domSel = view.domSelectionRange();
 +    if (!view.domObserver.currentSelection.eq(domSel) && hasFocusAndSelection(view) && pageReset(view, domSel))
@@ -329,23 +328,22 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f
                  selectionToDOM(view);
          }, 20);
      }
-@@ -3946,6 +4017,28 @@ handlers.blur = (view, _event) => {
+@@ -3946,6 +4017,27 @@ handlers.blur = (view, _event) => {
  };
  handlers.beforeinput = (view, _event) => {
      let event = _event;
-+    // md-easy patch: text that comes without a key, such as from an input
-+    // method, the emoji panel or dictation, can come right after the page
-+    // moved the selection, before ProseMirror read the move (see pageReset).
-+    // Put the selection back before the input goes in. ProseMirror types a key
-+    // over a selection that is not text, such as a selected block or cells,
-+    // itself, and left such text to Chromium. Chromium cannot type into a
-+    // selection it cannot show. Over a block between two paragraphs it removed
-+    // the DOM range around the block, which joined the paragraphs, and over
-+    // two selected cells it replaced the text of only one. So type the text as
-+    // ProseMirror does for a key. A composition still goes to Chromium, as it
-+    // cannot be cancelled.
++    // md-easy patch: ProseMirror types a key over a selection that is not
++    // text, such as a selected block or cells, itself, and left text that
++    // comes without a key, such as from an input method, the emoji panel or
++    // dictation, to Chromium. Chromium cannot type into a selection it cannot
++    // show. Over a block between two paragraphs it removed the DOM range
++    // around the block, which joined the paragraphs, and over two selected
++    // cells it replaced the text of only one. So type the text as ProseMirror
++    // does for a key. It goes over ProseMirror's selection, so a move of the
++    // DOM selection to the start of the document that ProseMirror has not
++    // read yet does not take it there (see pageReset). A composition still
++    // goes to Chromium, as it cannot be cancelled.
 +    if (view.editable && !view.composing) {
-+        putBackPageReset(view);
 +        let sel = view.state.selection, text = event.data;
 +        if (event.inputType == "insertText" && text && !/[\r\n]/.test(text) && !(sel instanceof TextSelection)) {
 +            event.preventDefault();
@@ -358,7 +356,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f
      // We should probably do more with beforeinput events, but support
      // is so spotty that I'm still waiting to see where they are going.
      // Very specific hack to deal with backspace sometimes failing on
-@@ -4692,6 +4785,10 @@ class DOMObserver {
+@@ -4692,6 +4784,10 @@ class DOMObserver {
          this.flushingSoon = -1;
          this.observer = null;
          this.currentSelection = new SelectionState;
@@ -369,7 +367,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f
          this.onCharData = null;
          this.suppressingSelectionUpdates = false;
          this.lastChangedTextNode = null;
-@@ -4788,6 +4885,7 @@ class DOMObserver {
+@@ -4788,6 +4884,7 @@ class DOMObserver {
      }
      setCurSelection() {
          this.currentSelection.set(this.view.domSelectionRange());
@@ -377,7 +375,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f
      }
      ignoreSelectionChange(sel) {
          if (!sel.focusNode)
-@@ -4885,6 +4983,10 @@ class DOMObserver {
+@@ -4885,6 +4982,10 @@ class DOMObserver {
              this.currentSelection.set(sel);
              view.scrollToSelection();
          }
