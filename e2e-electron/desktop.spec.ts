@@ -2073,14 +2073,26 @@ test("Shift+click below the end of the document extends the selection there, fro
   await shiftClickAt((await pointsBelowEnd()).page);
   await expect(view).toBeFocused();
   await page.keyboard.type("Z");
+  // A press there that moves a pixel or two before the release only puts the
+  // caret, also below the last line's text, so the next key replaces nothing.
+  const last = (await view.locator("p", { hasText: "FirstXYZ" }).boundingBox())!;
+  for (const [key, where] of [["U", "padding"], ["T", "page"]] as const) {
+    const below = (await pointsBelowEnd())[where];
+    await page.mouse.move(last.x + 20, below.y);
+    await page.mouse.down();
+    await page.mouse.move(last.x + 22, below.y + 2, { steps: 2 });
+    await page.mouse.up();
+    await page.keyboard.type(key);
+  }
+  await expect(view.locator(":scope > :last-child")).toHaveText("FirstXYZUT");
   // A drag from below the end selects from the end to the pointer.
   const from = (await pointsBelowEnd()).page;
-  const to = await pointInText(view.locator("p", { hasText: "FirstXYZ" }), 2, 0.25);
+  const to = await pointInText(view.locator("p", { hasText: "FirstXYZUT" }), 2, 0.25);
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 6 });
   await page.mouse.up();
-  expect(await selectedText()).toBe("rstXYZ");
+  expect(await selectedText()).toBe("rstXYZUT");
   await page.keyboard.type("V");
   // From the split's Markdown pane, too.
   await page.getByRole("radio", { name: "Split", exact: true }).click();

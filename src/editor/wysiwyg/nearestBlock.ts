@@ -13,9 +13,18 @@
 // takes the text block nearest the point, as a press in the side padding
 // does (paddingPresses.ts), and the position there at the point moved into
 // that block, which beside a line is the line's start or end.
+//
+// Below the last block, in the view's bottom padding, where a point on the
+// page below the view comes moved to, the drag selects to the end of the
+// document, where a press there puts the caret (paddingPresses.ts). With the
+// last line at the point, a press below the end that moved a pixel or two
+// before the release selected from the end to the point's place on that line,
+// and the next key replaced the text in between.
 
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
+import { Selection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
+import { belowContent } from "../../shell/pagePresses";
 
 /** A rendered block of the document, with its position and its box. */
 export interface Block {
@@ -128,12 +137,14 @@ export function textPosition(view: EditorView, { node, pos, box }: Block, x: num
   return x < (box.left + box.right) / 2 ? start : end;
 }
 
-/** The position a drag at the point selects to (see the header). In the text
- *  block nearest the point it is `textPosition`. At a code block or a block
- *  that takes no caret it is the position before or after the block that
- *  ProseMirror finds at the point moved into its box, as for a point on the
- *  block. Null for a document with nothing rendered. */
+/** The position a drag at the point selects to (see the header). Below the
+ *  last block it is the end of the document. In the text block nearest the
+ *  point it is `textPosition`. At a code block or a block that takes no caret
+ *  it is the position before or after the block that ProseMirror finds at the
+ *  point moved into its box, as for a point on the block. Null for a document
+ *  with nothing rendered. */
 export function positionNear(view: EditorView, x: number, y: number): number | null {
+  if (belowContent(view.dom, y)) return Selection.atEnd(view.state.doc).head;
   const block = nearestBlock(view, x, y);
   if (!block) return null;
   if (block.node.isTextblock && !block.node.type.spec.code) return textPosition(view, block, x, y);

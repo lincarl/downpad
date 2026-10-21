@@ -52,8 +52,9 @@
 // such as a list, a table, a code block or an image, so there is a line to
 // type on. The end is then that line, where the next key starts a new
 // paragraph and replaces no block. As beside a line, a drag from there
-// selects to the pointer, and a Shift+press extends the selection to the end
-// while the document has focus and is a plain one from outside it.
+// selects to the pointer, and to the end while the pointer stays below the
+// last block (nearestBlock.ts), and a Shift+press extends the selection to the
+// end while the document has focus and is a plain one from outside it.
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView as CodeMirror } from "@codemirror/view";
