@@ -10,9 +10,10 @@
 //
 // Chromium moves a selection it cannot show, such as a selected image between
 // two code blocks, to the start of the document whenever the page is focused,
-// also while it has focus already. The patch puts the block's selection back
-// when no input moved the selection since ProseMirror set it, and before a key
-// goes in.
+// also while it has focus already. ProseMirror's own check puts it back only
+// within 200 ms of a focus event and not before a leading block that takes no
+// caret. The patch puts the block's selection back when no input moved the
+// selection since ProseMirror set it, and before a key goes in.
 //
 // ProseMirror itself types a key over a selection that is not text, such as
 // a selected block or cells, and left text that comes without a key, such as

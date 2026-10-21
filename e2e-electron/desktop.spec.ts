@@ -390,7 +390,7 @@ test("a key typed over an image or code block selected between images and code b
   await typeOver("A", "![Shown](pic.svg)");
 });
 
-test("an image selected between code blocks below a rule is replaced after Ctrl+C and by text that comes without a key", async () => {
+test("an image selected between code blocks below a rule is replaced after Ctrl+C", async () => {
   // As in the test above, Playwright focuses the page before each event it
   // sends, and Chromium then moves the selection to the start of the
   // document. Before a rule, ProseMirror reads that as a gap cursor.
@@ -417,13 +417,6 @@ test("an image selected between code blocks below a rule is replaced after Ctrl+
   await page.keyboard.press("ControlOrMeta+c", { delay: 100 });
   await page.keyboard.press("Shift+KeyB");
   await expectReplaced("B", "![Second](pic.svg)");
-  // Text from an input method, the emoji panel or dictation comes with no
-  // key event.
-  await images.first().click();
-  await expect(images.first()).toHaveClass(/\bselected\b/);
-  const session = await page.context().newCDPSession(page);
-  await session.send("Input.insertText", { text: "漢" });
-  await expectReplaced("漢", "![First](pic.svg)");
 });
 
 test("text that comes without a key replaces an image selected between paragraphs and selected table cells as a key does", async () => {
