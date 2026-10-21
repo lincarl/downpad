@@ -38,7 +38,13 @@
 // line's start or end, as Chromium does beside a paragraph. Beside a code
 // block, an image or a rule, and from outside the document, such as from the
 // find card, the Markdown pane or a code block, a Shift+press is a plain one,
-// as on those blocks themselves (shiftClicks.ts, codeMirrorPresses.ts).
+// as on those blocks themselves (shiftClicks.ts, codeMirrorPresses.ts). So it
+// is while a block, such as an image on its own line, or table cells are
+// selected. The anchor of such a selection is not in text, and a text
+// selection from there starts in the text after it, so the selected image was
+// left out, and with a table after the image the selection started in its
+// first cell and the next key broke the table up. From selected cells the
+// selection started in the cell where the cell selection ended.
 //
 // A press in the view's bottom padding, below the last block, lands on the
 // view's own element too. Chromium put the caret on the last line, at its end
@@ -168,7 +174,10 @@ function paddingPress(view: EditorView, event: MouseEvent): void {
     return;
   }
   const focused = view.hasFocus();
-  dragSelect(view, event.shiftKey && focused ? view.state.selection.anchor : place.head, place.head);
+  // A text selection from the anchor of a selected block or of selected
+  // cells, which is not in text, starts in the text after it (see the header).
+  const extend = event.shiftKey && focused && view.state.selection.$anchor.parent.inlineContent;
+  dragSelect(view, extend ? view.state.selection.anchor : place.head, place.head);
   // Focusing first would move focus back into a code block that holds the
   // selection, since focusing the view puts the browser's selection there.
   if (!focused) view.focus();

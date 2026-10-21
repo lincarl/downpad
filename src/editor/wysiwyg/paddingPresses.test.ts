@@ -3,13 +3,16 @@
 // handed on from the page below the view, puts the caret at the end of the
 // document. Crepe keeps an empty line after a last block that is not a
 // paragraph or a heading, so the end is that line, where the next key adds a
-// paragraph. These tests use the real editor, with the view laid out by hand,
-// since jsdom lays nothing out.
+// paragraph. A Shift+press while the document has focus extends the selection
+// there, unless a block or table cells are selected. These tests use the real
+// editor, with the view laid out by hand, since jsdom lays nothing out.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
-import { TextSelection } from "@milkdown/kit/prose/state";
+import type { Node as ProseNode } from "@milkdown/kit/prose/model";
+import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
+import { CellSelection } from "@milkdown/kit/prose/tables";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
@@ -61,6 +64,16 @@ function press(view: EditorView, clientY: number, shiftKey = false): boolean {
   return event.defaultPrevented;
 }
 
+/** The position of the first node in `doc` that `test` accepts. */
+function find(doc: ProseNode, test: (node: ProseNode) => boolean): number {
+  let found = -1;
+  doc.descendants((node, pos) => {
+    if (found < 0 && test(node)) found = pos;
+    return found < 0;
+  });
+  return found;
+}
+
 describe("a press below the document's last block", () => {
   it.each([
     ["a paragraph", "Last line.", "paragraph", "Last line."],
@@ -93,6 +106,25 @@ describe("a press below the document's last block", () => {
     expect(press(view, 150, true)).toBe(true);
     expect(view.state.selection.anchor).toBe(3);
     expect(view.state.selection.head).toBe(view.state.doc.content.size - 1);
+  });
+
+  const table = "| C | D |\n| --- | --- |\n| c1 | d1 |";
+  it.each([
+    // A text selection from before the image started in the table's first cell.
+    ["an image on its own line", `Intro text.\n\n![Bar](bar.svg)\n\n${table}\n\nLast line.\n`, (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "image-block"))],
+    // A text selection from the cell selection's anchor started in d1.
+    ["table cells", `Intro text.\n\n${table}\n\nLast line.\n`, (doc: ProseNode) => {
+      const cell = (text: string) => doc.resolve(find(doc, (node) => node.type.spec.tableRole === "cell" && node.textContent === text));
+      return new CellSelection(cell("c1"), cell("d1"));
+    }],
+  ])("takes a Shift+press with %s selected as a plain press", { timeout: 60_000 }, async (_name, markdown, select) => {
+    const view = await mount(markdown);
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(select(view.state.doc)));
+    expect(press(view, 150, true)).toBe(true);
+    const { selection, doc } = view.state;
+    expect(selection.empty).toBe(true);
+    expect(selection.head).toBe(doc.content.size - 1);
   });
 
   it("leaves a press beside the last block's text to the browser", { timeout: 60_000 }, async () => {

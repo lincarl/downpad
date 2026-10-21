@@ -2104,6 +2104,45 @@ test("Shift+click below the end of the document extends the selection there, fro
   await expect.poll(() => readFile(file, "utf8")).toBe([code, "FiVW"].join("\n\n") + "\n");
 });
 
+test("Shift+click below the end of the document with an image or table cells selected is a plain click", async () => {
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  const table = "| C | D |\n| --- | --- |\n| c1 | d1 |";
+  const imageFile = path.join(directory, "below-end-image.md");
+  await writeFile(imageFile, ["Intro text.", "![Bar](bar.svg)", table, "Last line."].join("\n\n") + "\n");
+  const cellsFile = path.join(directory, "below-end-cells.md");
+  await writeFile(cellsFile, ["Intro text.", table, "Last line."].join("\n\n") + "\n");
+  await launch(imageFile);
+  const view = shownDocument();
+  // The selection to the end started after the selected image, in the
+  // table's first cell, and the next key broke up the table and left the
+  // image.
+  const image = view.locator(".milkdown-image-block img");
+  await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  const imageCenter = await centerOf(image);
+  await page.mouse.click(imageCenter.x, imageCenter.y);
+  await expect(view.locator(".milkdown-image-block.selected")).toHaveCount(1);
+  await shiftClickAt((await pointsBelowEnd()).padding);
+  expect(await selectedText()).toBe("");
+  await page.keyboard.type("X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(imageFile, "utf8")).toBe(["Intro text.", "![Bar](bar.svg)", table, "Last line.X"].join("\n\n") + "\n");
+  // The selection to the end started in the cell where the cell selection
+  // ended and left out the cell where it started.
+  await chooseOpen(cellsFile);
+  const first = await pointInText(view.locator("td p", { hasText: "c1" }), 0, 0.5);
+  const second = await pointInText(view.locator("td p", { hasText: "d1" }), 1, 0.5);
+  await page.mouse.move(first.x, first.y);
+  await page.mouse.down();
+  await page.mouse.move(second.x, second.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(view.locator(".selectedCell")).toHaveCount(2);
+  await shiftClickAt((await pointsBelowEnd()).page);
+  expect(await selectedText()).toBe("");
+  await page.keyboard.type("Y");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(cellsFile, "utf8")).toBe(["Intro text.", table, "Last line.Y"].join("\n\n") + "\n");
+});
+
 /** The point `fraction` of the way across the character at `index` of the
  *  split's Markdown pane's line that reads `text`. */
 function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
