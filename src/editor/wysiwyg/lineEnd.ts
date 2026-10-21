@@ -103,10 +103,10 @@ function coversNonText(selection: Selection): boolean {
 }
 
 /** Whether `a` and `b` hold the same nodes, text and marks, whatever the
- *  nodes' attributes. Milkdown gives each heading an id from its text, with a
- *  number for each heading before it with the same text, and keeps the ids
- *  in sync as the document changes. So a change to one heading can rename
- *  another one. */
+ *  nodes' attributes. Milkdown gives each heading an id from its text,
+ *  numbers the id of a heading whose text an earlier heading has, and keeps
+ *  the ids in sync as the document changes. So a change to one heading can
+ *  rename another one. */
 function sameContent(a: ProseNode, b: ProseNode): boolean {
   if (a === b) return true;
   if (a.type !== b.type || a.text !== b.text || a.childCount !== b.childCount || !Mark.sameSet(a.marks, b.marks)) return false;
