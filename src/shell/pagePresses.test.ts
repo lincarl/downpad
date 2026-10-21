@@ -3,8 +3,8 @@
 // handles a Shift+press inside an element from an editor outside what was
 // pressed, so Chromium takes the press as a plain click. pagePressesKeepFocus
 // cancels a press on the page around the editors, so focus stays where it
-// was, and hands one below the document view's end on to the view. These
-// tests check when each acts and when it leaves the press alone.
+// was, and hands one below an editor's end on to the editor. These tests
+// check when each acts and when it leaves the press alone.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "./pagePresses";
@@ -180,7 +180,7 @@ describe("pagePressesKeepFocus", () => {
     expect(cancelled(element.querySelector(".column")!, 2)).toBe(false);
   });
 
-  it("hands a press below the end of the document view a column or pane shows on to it, at the same point", () => {
+  it("hands a press below the end of the editor a column or pane shows on to it, at the same point", () => {
     const element = area();
     const [, documentPane, markdownPane] = element.querySelectorAll<HTMLElement>(".pane");
     const documentView = documentPane!.querySelector<HTMLElement>(".ProseMirror")!;
@@ -208,6 +208,8 @@ describe("pagePressesKeepFocus", () => {
     // only keeps focus where it was.
     expect(press(documentPane!, 80)).toEqual([]);
     expect(press(element, 150)).toEqual([]);
-    expect(press(markdownPane!, 250)).toEqual([]);
+    // Below a CodeMirror editor, its content takes the press.
+    expect(press(markdownPane!, 250).map((event) => event.target)).toEqual([markdown.querySelector(".cm-content")]);
+    expect(press(markdownPane!, 200)).toEqual([]);
   });
 });

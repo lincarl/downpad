@@ -2189,6 +2189,86 @@ test("a click or Shift+click on the fold gutter in the Markdown view folds a sec
   await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.XYZ"].join("\n\n") + "\n");
 });
 
+test("a click below the end of the Markdown puts the cursor at its end, in the split's Markdown pane and the Markdown view", async () => {
+  const file = path.join(directory, "below-end-markdown.md");
+  await writeFile(file, "First line.\n\nLast line.");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const pane = page.locator(".editor-pane-raw:not([hidden])");
+  const markdown = pane.locator(".cm-content");
+  /** Points 40px below the Markdown's last line, in its text and on its line
+   *  numbers. */
+  const belowEnd = () =>
+    pane.evaluate((element) => {
+      const y = [...element.querySelectorAll(".cm-line")].at(-1)!.getBoundingClientRect().bottom + 40;
+      const content = element.querySelector(".cm-content")!.getBoundingClientRect();
+      const numbers = element.querySelector(".cm-lineNumbers")!.getBoundingClientRect();
+      return { text: { x: content.left + 120, y }, numbers: { x: numbers.left + numbers.width / 2, y } };
+    });
+  // The press landed on CodeMirror's own element, outside its text and
+  // gutters. Below the text, Chromium put the cursor on the last line, at its
+  // end on Linux and at the point nearest the click on Windows. Below the
+  // line numbers, it moved focus to the page, and the next key was lost.
+  await clickOn("First line.", 2, 0.5);
+  const { text, numbers } = await belowEnd();
+  await page.mouse.click(text.x, text.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("a");
+  await clickOn("First line.", 2, 0.5);
+  await page.mouse.click(numbers.x, numbers.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("b");
+  // Shift+click from the document pane is a plain click there.
+  await clickOn("First line.", 2, 0.5);
+  await shiftClickAt(text);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("c");
+  // A drag from below the end selects from the end to the pointer.
+  const to = await pointInMarkdown("First line.", 5, 0.25);
+  await page.mouse.move(text.x, text.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.mouse.up();
+  expect(await selectedText()).toBe(" line.\n\nLast line.abc");
+  await page.keyboard.type("d");
+  // In the Markdown view too.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(markdown).toBeVisible();
+  const first = await pointInMarkdown("Firstd", 1, 0.5);
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click((await belowEnd()).text.x, (await belowEnd()).text.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("e");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Firstde");
+});
+
+test("a click in the room find adds below the Markdown view puts the cursor at the end of the Markdown", async () => {
+  const file = path.join(directory, "below-end-find-room.md");
+  await writeFile(file, LONG_DOCUMENT);
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const pane = page.locator(".editor-pane-raw:not([hidden])");
+  await expect(pane.locator(".cm-line").first()).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("needle");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await expect.poll(currentMatchProblem).toBe("");
+  // The press kept focus in the find card, where the next key went.
+  const room = await pane.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    const editor = element.querySelector(".cm-editor")!.getBoundingClientRect();
+    const { bottom } = element.getBoundingClientRect();
+    return { x: editor.left + 80, y: (editor.bottom + bottom) / 2, height: bottom - editor.bottom };
+  });
+  expect(room.height).toBeGreaterThan(40);
+  await page.mouse.click(room.x, room.y);
+  await expect(pane.locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("Z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(LONG_DOCUMENT + "Z");
+});
+
 test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {
   const file = path.join(directory, "table-add-focus.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "| Name | Notes |\n| --- | --- |\n| a1 | b1 |", "Last line."].join("\n\n") + "\n");

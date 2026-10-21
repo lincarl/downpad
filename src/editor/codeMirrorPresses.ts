@@ -22,7 +22,11 @@
 // A Shift+press there while the editor has focus extends the selection to that
 // point instead. A press on another gutter, such as on a fold arrow, keeps
 // focus and the selection where they were, and CodeMirror still folds or
-// unfolds on the click.
+// unfolds on the click. A press on any gutter below the last line puts the
+// cursor at the end of the text instead, as CodeMirror does for a press below
+// the last line in the text beside it. In the Markdown view the gutters reach
+// down to the editor's bottom (app.css), and that is a press below the end of
+// the Markdown.
 
 import { EditorView, ViewPlugin } from "@codemirror/view";
 
@@ -37,9 +41,10 @@ const shiftPressFromOutside = EditorView.domEventHandlers({
   },
 });
 
-/** Put the cursor at the start of the line of a pressed line number, or
- *  extend the selection to there on a Shift+press in the focused editor, and
- *  focus the editor. On a press on another gutter, keep focus and the
+/** Put the cursor at the start of the line of a pressed line number, or at
+ *  the end of the text on a press on a gutter below the last line, or extend
+ *  the selection to there on a Shift+press in the focused editor, and focus
+ *  the editor. On a press on another gutter beside a line, keep focus and the
  *  selection where they were (see the header). CodeMirror's handlers see
  *  presses on its content only, so this listens on its scroll container,
  *  which holds the gutters. */
@@ -48,12 +53,15 @@ const gutterPresses = ViewPlugin.define((view) => {
     const { target } = event;
     if (event.button !== 0 || !(target instanceof Element) || !target.closest(".cm-gutters")) return;
     event.preventDefault();
-    if (!target.closest(".cm-lineNumbers")) return;
-    const { from } = view.lineBlockAtHeight(event.clientY - view.documentTop);
-    const anchor = event.shiftKey && view.hasFocus ? view.state.selection.main.anchor : from;
+    const height = event.clientY - view.documentTop;
+    const line = view.lineBlockAtHeight(height);
+    const below = height > line.bottom;
+    if (!below && !target.closest(".cm-lineNumbers")) return;
+    const head = below ? view.state.doc.length : line.from;
+    const anchor = event.shiftKey && view.hasFocus ? view.state.selection.main.anchor : head;
     // A code block in the document passes its selection on to the document
     // when it gets focus, so the selection is set first.
-    view.dispatch({ selection: { anchor, head: from }, userEvent: "select.pointer" });
+    view.dispatch({ selection: { anchor, head }, userEvent: "select.pointer" });
     view.focus();
   };
   view.scrollDOM.addEventListener("mousedown", press);

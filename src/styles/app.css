@@ -607,6 +607,19 @@ body {
   min-height: 100%;
 }
 
+/* The text and the gutters reach down to the editor's bottom, so a press
+   below the last line lands on them. CodeMirror then puts the cursor at the
+   end of the Markdown, also for a drag or a Shift+press, and a press on a
+   gutter there does the same (codeMirrorPresses.ts). */
+.editor-pane-raw .cm-scroller {
+  flex-grow: 1;
+}
+
+.editor-pane-raw .cm-content,
+.editor-pane-raw .cm-gutters {
+  align-self: stretch;
+}
+
 /* Find can give the Markdown view room below its last line, to lift a match
    there clear of the find card (findReveal.ts). */
 .editor-area.markdown-only .editor-pane-raw {
