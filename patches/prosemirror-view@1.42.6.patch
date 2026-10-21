@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c8965559b9d 100644
+index d52a5260a7b9924b2865053ea1e8c6484225277b..8fc62eed7b4777dd931f0f8c751cc8dd31ff74af 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -781,7 +781,23 @@ var ViewDesc = function () {
@@ -121,21 +121,23 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c89
    }
  };
  editHandlers.keyup = function (view, event) {
-@@ -3681,8 +3750,12 @@ handlers.focus = function (view) {
+@@ -3681,8 +3750,14 @@ handlers.focus = function (view) {
      view.dom.classList.add("ProseMirror-focused");
      view.domObserver.start();
      view.focused = true;
 +    // md-easy patch: a key or click since focus may have moved the DOM
 +    // selection before ProseMirror read it (End on a busy page). Putting
-+    // the old selection back would undo that move, so leave it.
-+    var selectionTime = view.input.lastSelectionTime;
++    // the old selection back would undo that move, so leave it. The
++    // count of such inputs tells, as the time of the last one can be the
++    // same millisecond (see setSelectionOrigin).
++    var selectionMoves = view.input.selectionMoves;
      setTimeout(function () {
 -      if (view.docView && view.hasFocus() && !view.domObserver.currentSelection.eq(view.domSelectionRange())) selectionToDOM(view);
-+      if (view.docView && view.hasFocus() && view.input.lastSelectionTime == selectionTime && !view.domObserver.currentSelection.eq(view.domSelectionRange())) selectionToDOM(view);
++      if (view.docView && view.hasFocus() && view.input.selectionMoves == selectionMoves && !view.domObserver.currentSelection.eq(view.domSelectionRange())) selectionToDOM(view);
      }, 20);
    }
  };
-@@ -3698,6 +3771,33 @@ handlers.blur = function (view, _event) {
+@@ -3698,6 +3773,33 @@ handlers.blur = function (view, _event) {
  };
  handlers.beforeinput = function (view, _event) {
    var event = _event;
@@ -169,7 +171,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c89
    if (android && event.inputType == "deleteContentBackward") {
      view.domObserver.flushSoon();
      var domChangeCount = view.input.domChangeCount;
-@@ -4350,6 +4450,10 @@ var DOMObserver = function () {
+@@ -4350,6 +4452,10 @@ var DOMObserver = function () {
      this.flushingSoon = -1;
      this.observer = null;
      this.currentSelection = new SelectionState();
@@ -180,7 +182,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c89
      this.onCharData = null;
      this.suppressingSelectionUpdates = false;
      this.lastChangedTextNode = null;
-@@ -4459,6 +4563,7 @@ var DOMObserver = function () {
+@@ -4459,6 +4565,7 @@ var DOMObserver = function () {
      key: "setCurSelection",
      value: function setCurSelection() {
        this.currentSelection.set(this.view.domSelectionRange());
@@ -188,7 +190,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c89
      }
    }, {
      key: "ignoreSelectionChange",
-@@ -4575,11 +4680,17 @@ var DOMObserver = function () {
+@@ -4575,11 +4682,17 @@ var DOMObserver = function () {
          }
        }
        var readSel = null;
@@ -208,7 +210,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c89
          if (from > -1) {
            view.docView.markDirty(from, to);
 diff --git a/dist/index.js b/dist/index.js
-index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7d4f2a0ed 100644
+index dc0d117b85e1da3eae915b4d8ff8e5e604683861..104d3e6d158bb0365763ffdb88d43ee011c76f3a 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -850,7 +850,19 @@ class ViewDesc {
@@ -332,22 +334,24 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7
      }
  };
  editHandlers.keyup = (view, event) => {
-@@ -3927,8 +3997,13 @@ handlers.focus = view => {
+@@ -3927,8 +3997,15 @@ handlers.focus = view => {
          view.dom.classList.add("ProseMirror-focused");
          view.domObserver.start();
          view.focused = true;
 +        // md-easy patch: a key or click since focus may have moved the DOM
 +        // selection before ProseMirror read it (End on a busy page). Putting
-+        // the old selection back would undo that move, so leave it.
-+        let selectionTime = view.input.lastSelectionTime;
++        // the old selection back would undo that move, so leave it. The
++        // count of such inputs tells, as the time of the last one can be the
++        // same millisecond (see setSelectionOrigin).
++        let selectionMoves = view.input.selectionMoves;
          setTimeout(() => {
 -            if (view.docView && view.hasFocus() && !view.domObserver.currentSelection.eq(view.domSelectionRange()))
-+            if (view.docView && view.hasFocus() && view.input.lastSelectionTime == selectionTime &&
++            if (view.docView && view.hasFocus() && view.input.selectionMoves == selectionMoves &&
 +                !view.domObserver.currentSelection.eq(view.domSelectionRange()))
                  selectionToDOM(view);
          }, 20);
      }
-@@ -3946,6 +4021,30 @@ handlers.blur = (view, _event) => {
+@@ -3946,6 +4023,30 @@ handlers.blur = (view, _event) => {
  };
  handlers.beforeinput = (view, _event) => {
      let event = _event;
@@ -378,7 +382,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7
      // We should probably do more with beforeinput events, but support
      // is so spotty that I'm still waiting to see where they are going.
      // Very specific hack to deal with backspace sometimes failing on
-@@ -4692,6 +4791,10 @@ class DOMObserver {
+@@ -4692,6 +4793,10 @@ class DOMObserver {
          this.flushingSoon = -1;
          this.observer = null;
          this.currentSelection = new SelectionState;
@@ -389,7 +393,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7
          this.onCharData = null;
          this.suppressingSelectionUpdates = false;
          this.lastChangedTextNode = null;
-@@ -4788,6 +4891,7 @@ class DOMObserver {
+@@ -4788,6 +4893,7 @@ class DOMObserver {
      }
      setCurSelection() {
          this.currentSelection.set(this.view.domSelectionRange());
@@ -397,7 +401,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7
      }
      ignoreSelectionChange(sel) {
          if (!sel.focusNode)
-@@ -4876,8 +4980,12 @@ class DOMObserver {
+@@ -4876,8 +4982,12 @@ class DOMObserver {
          // If it looks like the browser has reset the selection to the
          // start of the document after focus, restore the selection from
          // the state
@@ -410,7 +414,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7
              selectionCollapsed(sel) && (readSel = selectionFromDOM(view)) &&
              readSel.eq(Selection.near(view.state.doc.resolve(0), 1))) {
              view.input.lastFocus = 0;
-@@ -4885,6 +4993,10 @@ class DOMObserver {
+@@ -4885,6 +4995,10 @@ class DOMObserver {
              this.currentSelection.set(sel);
              view.scrollToSelection();
          }
