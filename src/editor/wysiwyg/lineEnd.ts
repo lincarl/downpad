@@ -133,7 +133,7 @@ function readyForComposition(state: EditorState): { tr: Transaction; replaced: R
 
 /** Takes back the replacement of a selection that is not text, whose
  *  composition committed nothing, with its selection and undo history from
- *  before, and gives focus back to the document view if it had it. */
+ *  before, and gives focus back to where it was. */
 function putBack(view: EditorView, replaced: Replaced): void {
   const tr = view.state.tr;
   for (const step of replaced.back) tr.step(step);
@@ -143,6 +143,7 @@ function putBack(view: EditorView, replaced: Replaced): void {
   // redo step, and redo would replace the content again.
   const key = historyProviderPlugin.key();
   if (key) tr.setMeta(key, { redo: false, historyState: replaced.history });
+  const { activeElement } = view.dom.ownerDocument;
   const focused = view.hasFocus();
   view.dispatch(tr);
   // Start a new undo step, as after an undo, so the next edit does not join
@@ -151,9 +152,12 @@ function putBack(view: EditorView, replaced: Replaced): void {
   // Crepe's code block view takes focus in its code when it is selected, so
   // a code block, a math block or a Mermaid diagram took it. Text that IBus
   // commits after the composition then went into the code. Give focus back
-  // to the document view, as before the composition, so the block stays
-  // selected and the next key or text replaces it.
-  if (focused && !view.hasFocus()) view.focus();
+  // to where it was, the document view, where the next key or text replaces
+  // the block, or another field.
+  if (view.dom.ownerDocument.activeElement === activeElement) return;
+  if (focused) view.focus();
+  else if (activeElement instanceof HTMLElement && activeElement !== view.dom.ownerDocument.body) activeElement.focus({ preventScroll: true });
+  else if (view.dom.ownerDocument.activeElement instanceof HTMLElement) view.dom.ownerDocument.activeElement.blur();
 }
 
 /** Moves the caret past the inline atoms that start its line, keeping the

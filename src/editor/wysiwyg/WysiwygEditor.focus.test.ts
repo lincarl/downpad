@@ -515,6 +515,18 @@ describe("a composition over a selection that is not text", () => {
     expect(editor!.getMarkdown()).toBe(["Above.!", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
   });
 
+  it("leaves focus in another field that took it as the composition ended, when a code block comes back", async () => {
+    // Crepe's code block view takes focus in its code when it is selected.
+    const view = await open(codeBetweenParagraphs, selectCode);
+    await emptyComposition(view);
+    const field = document.body.appendChild(document.createElement("input"));
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "", bubbles: true }));
+    field.focus();
+    await settle();
+    expect(editor!.getMarkdown()).toBe(codeBetweenParagraphs);
+    expect(document.activeElement).toBe(field);
+  });
+
   it.each([
     ["an image", imageBetweenParagraphs, selectImage],
     ["a code block", codeBetweenParagraphs, selectCode],
