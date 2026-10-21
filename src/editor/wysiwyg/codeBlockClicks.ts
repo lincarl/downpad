@@ -23,5 +23,5 @@ export const codeBlockClicks = [
     const editor = event.target instanceof Element ? event.target.closest(".cm-editor") : null;
     return editor instanceof HTMLElement && !!EditorView.findFromDOM(editor)?.hasFocus;
   }),
-  codeMirrorPresses,
+  codeMirrorPresses(),
 ];

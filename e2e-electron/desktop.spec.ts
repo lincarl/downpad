@@ -2140,6 +2140,18 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await shiftClickAt(await lineNumber(documentView, 1));
   await expect(code).toBeFocused();
   await page.keyboard.type("b");
+  // The line numbers reach a few pixels below the code's last line, and a
+  // press there counts as one on the last line's number.
+  await clickOn("Last line.", -1, 0.75);
+  const belowLast = await documentView.evaluate((view) => {
+    const numbers = view.querySelector(".cm-lineNumbers")!.getBoundingClientRect();
+    const last = [...view.querySelectorAll(".cm-line")].at(-1)!.getBoundingClientRect();
+    return { x: numbers.left + numbers.width / 2, y: (last.bottom + numbers.bottom) / 2, height: numbers.bottom - last.bottom };
+  });
+  expect(belowLast.height).toBeGreaterThanOrEqual(2);
+  await page.mouse.click(belowLast.x, belowLast.y);
+  await expect(code).toBeFocused();
+  await page.keyboard.type("e");
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   await caretInMarkdown("First line.");
   const markdownPane = page.locator(".editor-pane-raw");
@@ -2155,7 +2167,7 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await expect(markdown).toBeFocused();
   await page.keyboard.type("d");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\neaconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
 });
 
 test("a click or Shift+click on the fold gutter in the Markdown view folds a section on its arrow and leaves focus and the cursor where they were", async () => {

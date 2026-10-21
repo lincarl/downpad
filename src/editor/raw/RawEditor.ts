@@ -387,9 +387,10 @@ export class RawEditor {
           // Make non-hyphen dashes (em/en dash, …) unmistakable in the source: a
           // monospace font renders them almost identically to a hyphen (§5.3).
           specialDashHighlight(),
-          // Put the cursor at a Shift+click from the document pane, and at
-          // the start of the line on a press on a line number (§5.6).
-          codeMirrorPresses,
+          // Put the cursor at a Shift+click from the document pane, at the
+          // start of the line on a press on a line number, and at the end of
+          // the text on a press on a gutter below the last line (§5.6).
+          codeMirrorPresses({ endBelowText: true }),
           updateListener,
         ],
       }),
