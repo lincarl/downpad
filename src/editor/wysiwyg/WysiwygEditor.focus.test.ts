@@ -605,6 +605,20 @@ describe("a composition over a selection that is not text", () => {
     expect(undoDepth(view.state)).toBe(0);
   });
 
+  it("puts a formula back when its composition ends before any text replaced the space that took its place", async () => {
+    // The space stayed, selected, and the document no longer matched the one
+    // the composition was to leave.
+    const markdown = "*$x$* tail\n";
+    const select = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "math_inline"));
+    const view = await open(markdown, select);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(find(view.state.doc, (node) => node.type.name === "math_inline")).toBe(-1);
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(markdown);
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
+    expect(undoDepth(view.state)).toBe(0);
+  });
+
   it("leaves another edit made during a composition that commits nothing, and its undo step", async () => {
     // An edit that ends during the composition, such as an image whose new
     // file was read meanwhile, can change only an attribute. The composition

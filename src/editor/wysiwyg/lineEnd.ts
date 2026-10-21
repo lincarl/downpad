@@ -185,9 +185,10 @@ function readyForComposition(view: EditorView): { tr: Transaction; replaced: Rep
 
 /** Takes back the replacement of a selection that is not text, whose
  *  composition committed nothing, with its selection and undo history from
- *  before, and gives focus back to where it was. */
-function putBack(view: EditorView, replaced: Replaced): void {
-  const tr = view.state.tr;
+ *  before, and gives focus back to where it was. `tr` starts from the
+ *  document the composition left, `replaced.empty` apart from headings'
+ *  ids. */
+function putBack(view: EditorView, replaced: Replaced, tr: Transaction): void {
   for (const step of replaced.back) tr.step(step);
   tr.setSelection(replaced.selection.resolve(tr.doc)).scrollIntoView();
   // Carry the undo history from before as prosemirror-history's next state,
@@ -335,7 +336,12 @@ export const endPastAtoms = $prose(() => {
         // renames the headings again after them. Any other change made
         // meanwhile keeps the replacement, and its undo step.
         queueMicrotask(() => {
-          if (!view.isDestroyed && sameContent(view.state.doc, started.empty)) putBack(view, started);
+          if (view.isDestroyed) return;
+          // A composition that ends before Chromium typed over the selected
+          // space that took a formula's place leaves that space.
+          const tr = view.state.tr;
+          if (!sameContent(tr.doc, started.empty)) tr.deleteSelection();
+          if (sameContent(tr.doc, started.empty)) putBack(view, started, tr);
         });
       };
       /** Stops keeping a node selected once ProseMirror has started the
