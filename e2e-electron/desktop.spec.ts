@@ -2184,12 +2184,24 @@ test("a Shift+drag from a link's text scrolls the document while the pointer is 
   await page.keyboard.up("Shift");
   const selected = await page.evaluate(() => document.getSelection()!.toString());
   expect(selected.startsWith("art anchor here.")).toBe(true);
-  // The selection follows to the bottom edge of the scrolled document.
-  const last = await page.locator(".milkdown .ProseMirror > p").evaluateAll((blocks, bottom) => {
-    const shown = blocks.filter((block) => block.getBoundingClientRect().bottom <= bottom);
-    return shown[shown.length - 1]!.textContent;
-  }, areaBox.y + areaBox.height);
-  expect(selected).toContain(last);
+  // The selection follows to the bottom edge of the scrolled document, into
+  // the paragraph nearest the edge, the upper one when the edge falls midway
+  // between two. Where the edge falls depends on the frames the drag got, so
+  // the paragraph is found as the drag finds it, not as the last one shown
+  // in full, which the selection only partly holds when the edge falls in
+  // the space below it.
+  const ends = await page.evaluate((edge) => {
+    const blocks = [...document.querySelectorAll(".milkdown .ProseMirror > p")];
+    const distance = (block: Element) => {
+      const box = block.getBoundingClientRect();
+      return Math.max(box.top - edge, edge - box.bottom, 0);
+    };
+    const nearest = blocks.reduce((best, block) => (distance(block) < distance(best) ? block : best));
+    const focus = document.getSelection()!.focusNode!;
+    const focused = (focus instanceof Element ? focus : focus.parentElement)!.closest("p")!;
+    return { nearest: nearest.textContent, focused: focused.textContent };
+  }, areaBox.y + areaBox.height - 1);
+  expect(ends.focused).toBe(ends.nearest);
   // The document stops scrolling once the button is released.
   const released = await scrollTop();
   await page.waitForTimeout(300);
