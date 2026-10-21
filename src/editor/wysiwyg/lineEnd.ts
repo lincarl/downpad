@@ -62,11 +62,12 @@
 
 import { historyProviderPlugin } from "@milkdown/kit/plugin/history";
 import { closeHistory } from "@milkdown/kit/prose/history";
-import { Mark, type Node as ProseNode, type ResolvedPos } from "@milkdown/kit/prose/model";
+import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import { NodeSelection, Plugin, TextSelection, type Selection, type SelectionBookmark, type Transaction } from "@milkdown/kit/prose/state";
 import type { Step } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
+import { putBackWaitingMarks, waitingMarks } from "./mathDelimiters";
 
 /** Whether End moves the caret. On macOS it scrolls the page instead, and
  *  Cmd+Right goes to the end of the line. */
@@ -102,14 +103,16 @@ function coversNonText(selection: Selection): boolean {
   return !(selection instanceof TextSelection) && !selection.empty;
 }
 
-/** Whether `a` and `b` hold the same nodes, text and marks, whatever the
- *  nodes' attributes. Milkdown gives each heading an id from its text,
+/** Whether `a` and `b` hold the same nodes, text, marks and attributes, apart
+ *  from the ids of headings. Milkdown gives each heading an id from its text,
  *  numbers the id of a heading whose text an earlier heading has, and keeps
  *  the ids in sync as the document changes. So a change to one heading can
- *  rename another one. */
+ *  rename another one. Any other change counts, such as an image's new file
+ *  that an edit started before the composition put in meanwhile. */
 function sameContent(a: ProseNode, b: ProseNode): boolean {
   if (a === b) return true;
-  if (a.type !== b.type || a.text !== b.text || a.childCount !== b.childCount || !Mark.sameSet(a.marks, b.marks)) return false;
+  const attrs = a.type.name === "heading" ? { ...b.attrs, id: a.attrs.id } : b.attrs;
+  if (!a.hasMarkup(b.type, attrs, b.marks) || a.text !== b.text || a.childCount !== b.childCount) return false;
   for (let index = 0; index < a.childCount; index++) {
     if (!sameContent(a.child(index), b.child(index))) return false;
   }
@@ -120,7 +123,7 @@ function sameContent(a: ProseNode, b: ProseNode): boolean {
  *  composition ends. */
 interface Replaced {
   /** The document the composition leaves if it commits nothing, apart from
-   *  attributes that other plugins change, such as a heading's id. */
+   *  the ids of headings (`sameContent`). */
   empty: ProseNode;
   /** The steps that take `empty` back to the document before. */
   back: Step[];
@@ -128,6 +131,9 @@ interface Replaced {
   selection: SelectionBookmark;
   /** The undo history before, from Milkdown's history plugin. */
   history: unknown;
+  /** The typed closing marks that waited before, and those that undo and
+   *  redo make wait again, which follow the undo history. */
+  waiting: ReturnType<typeof waitingMarks>;
 }
 
 /** Readies a selection that is not text for a composition that is about to
@@ -169,6 +175,7 @@ function readyForComposition(view: EditorView): { tr: Transaction; replaced: Rep
     back: emptied.steps.map((step, index) => step.invert(emptied.docs[index]!)).reverse(),
     selection: selection.getBookmark(),
     history: historyProviderPlugin.key()?.getState(state),
+    waiting: waitingMarks(state),
   };
   if (native) return { tr: state.tr, replaced };
   if (!inline) return { tr: emptied.scrollIntoView(), replaced };
@@ -188,6 +195,10 @@ function putBack(view: EditorView, replaced: Replaced): void {
   // redo step, and redo would replace the content again.
   const key = historyProviderPlugin.key();
   if (key) tr.setMeta(key, { redo: false, historyState: replaced.history });
+  // The math delimiters' guard keeps a record for each undo and redo step,
+  // which the replacement cut back, and took this change for an undo, so
+  // redo put back a formula as plain text.
+  putBackWaitingMarks(tr, replaced.waiting);
   const { activeElement } = view.dom.ownerDocument;
   const focused = view.hasFocus();
   view.dispatch(tr);
@@ -318,10 +329,11 @@ export const endPastAtoms = $prose(() => {
         // microtask that it queues there. Run after that, in the same task,
         // so no key, such as Ctrl+Z, and no other composition comes between.
         // Milkdown can rename a heading right after the change that readied
-        // the selection, and again as the composition ends, so only the
-        // content has to match. The same nodes and text have the same
-        // positions, so the steps back still apply, and Milkdown renames the
-        // headings again after them.
+        // the selection, and again as the composition ends, so the ids of
+        // headings need not match (`sameContent`). The same nodes and text
+        // have the same positions, so the steps back still apply, and Milkdown
+        // renames the headings again after them. Any other change made
+        // meanwhile keeps the replacement, and its undo step.
         queueMicrotask(() => {
           if (!view.isDestroyed && sameContent(view.state.doc, started.empty)) putBack(view, started);
         });

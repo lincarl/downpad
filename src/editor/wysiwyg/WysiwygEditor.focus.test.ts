@@ -103,6 +103,15 @@ function holdSelectionChange(): void {
 
 const caretOffset = () => document.getSelection()!.anchorOffset;
 
+/** Type `text` one character at a time, the way the browser reports keys. */
+function type(view: EditorView, text: string): void {
+  for (const character of text) {
+    const { from, to } = view.state.selection;
+    const insert = () => view.state.tr.insertText(character, from, to);
+    if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, character, insert))) view.dispatch(insert());
+  }
+}
+
 it("keeps the caret where End moved it right after a click focused the editor", async () => {
   const { view, text } = await open();
   // A click in the middle of the line focuses the editor and places the caret.
@@ -594,6 +603,42 @@ describe("a composition over a selection that is not text", () => {
     expect(view.state.doc.eq(before)).toBe(true);
     expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
     expect(undoDepth(view.state)).toBe(0);
+  });
+
+  it("leaves another edit made during a composition that commits nothing, and its undo step", async () => {
+    // An edit that ends during the composition, such as an image whose new
+    // file was read meanwhile, can change only an attribute. The composition
+    // was taken back with the undo history from before that edit.
+    const markdown = ["![First](first.png)", "Middle.", "![Pic](pic.png)", "Below."].join("\n\n") + "\n";
+    const select = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "image-block" && node.attrs.src === "pic.png"));
+    const view = await open(markdown, select);
+    await emptyComposition(view, "Middle.");
+    view.dispatch(view.state.tr.setNodeAttribute(find(view.state.doc, (node) => node.type.name === "image-block"), "src", "other.png"));
+    await endComposition(view, "");
+    const withoutPic = ["![First](other.png)", "Middle.", "<br />", "Below."].join("\n\n") + "\n";
+    expect(editor!.getMarkdown()).toBe(withoutPic);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(withoutPic.replace("other.png", "first.png"));
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(markdown);
+  });
+
+  it("lets redo put back a typed formula as a formula after a composition that commits nothing", async () => {
+    // The math delimiters' guard keeps a record for each redo step of a
+    // typed closing mark that waited, which the replacement cut back. It took
+    // the change that took the composition back for an undo, and redo put the
+    // formula back as text.
+    const view = await open(imageBetweenParagraphs, selectImage);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, "Above.".length + 1)));
+    type(view, " $x$");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    view.dispatch(view.state.tr.setSelection(selectImage(view.state.doc)));
+    await emptyComposition(view);
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    type(view, " y");
+    expect(editor!.getMarkdown()).toBe(["Above. $x$ y", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
   });
 
   it.each([
