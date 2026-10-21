@@ -2008,14 +2008,16 @@ for (const layout of ["Document", "Split"] as const) {
   test(`a click below the end of the document puts the caret at the end after any last block, in the ${layout === "Document" ? "Document view" : "split's document pane"}`, async () => {
     test.setTimeout(150_000);
     await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
-    const documents = Object.entries(LAST_BLOCKS).map(([name, last], index) => ({ name, last, file: path.join(directory, `below-end-${index}.md`) }));
-    for (const { file, last } of documents) await writeFile(file, `Intro text.\n\n${last}\n`);
+    // Each document starts with its own text, so a check waits for that
+    // document and never passes on the one shown before.
+    const documents = Object.entries(LAST_BLOCKS).map(([name, last], index) => ({ name, last, intro: `Intro ${index}.`, file: path.join(directory, `below-end-${index}.md`) }));
+    for (const { file, intro, last } of documents) await writeFile(file, `${intro}\n\n${last}\n`);
     await launch(documents[0]!.file);
     if (layout === "Split") await page.getByRole("radio", { name: "Split", exact: true }).click();
-    for (const [index, { name, last, file }] of documents.entries()) {
+    for (const [index, { name, last, intro, file }] of documents.entries()) {
       if (index > 0) await chooseOpen(file);
       const view = shownDocument();
-      await expect(view.locator("p", { hasText: "Intro text." })).toBeVisible();
+      await expect(view.locator("p", { hasText: intro })).toBeVisible();
       if (name === "Mermaid diagram") await expect(view.locator(".mermaid-preview svg")).toBeVisible();
       if (name.includes("formula") || name === "math block") await expect(view.locator(".katex")).toBeVisible();
       if (name === "image") await expect.poll(() => view.locator(".milkdown-image-block img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
@@ -2033,7 +2035,7 @@ for (const layout of ["Document", "Split"] as const) {
       const before = name === "paragraph" || name === "heading" ? await lastLine.innerText() : "";
       let typed = "";
       for (const [key, where] of [["a", "padding"], ["b", "beside"], ["c", "margin"], ["d", "page"]] as const) {
-        await clickInShown("Intro text.", 2);
+        await clickInShown(intro, 2);
         const point = (await pointsBelowEnd())[where];
         await page.mouse.click(point.x, point.y);
         await expect(view, `${name}, ${where}`).toBeFocused();
@@ -2043,7 +2045,7 @@ for (const layout of ["Document", "Split"] as const) {
       }
       await page.keyboard.press("ControlOrMeta+s");
       const end = before ? `${last}${typed}` : `${last}\n\n${typed}`;
-      await expect.poll(() => readFile(file, "utf8"), name).toBe(`Intro text.\n\n${end}\n`);
+      await expect.poll(() => readFile(file, "utf8"), name).toBe(`${intro}\n\n${end}\n`);
     }
   });
 }
@@ -2250,6 +2252,34 @@ test("a click or Shift+click on the fold gutter in the Markdown view folds a sec
   await page.keyboard.type("Z");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.XYZ"].join("\n\n") + "\n");
+});
+
+test("a click below the end of the Markdown view on the fold gutter leaves a folded last section folded", async () => {
+  // The fold gutter reaches below the last line, and CodeMirror took a click
+  // there for one on the last line, which unfolded a last section that ends
+  // the Markdown.
+  const file = path.join(directory, "fold-last.md");
+  await writeFile(file, "First line.\n\n# One\n\nText one.");
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const pane = page.locator(".editor-pane-raw");
+  const markdown = pane.locator(".cm-content");
+  const placeholders = pane.locator(".cm-foldPlaceholder");
+  const foldGutter = (below: boolean) =>
+    pane.evaluate((element, below) => {
+      const lines = [...element.querySelectorAll(".cm-line")];
+      const line = (below ? lines.at(-1) : lines.find((each) => each.textContent === "# One"))!.getBoundingClientRect();
+      const gutter = element.querySelector(".cm-foldGutter")!.getBoundingClientRect();
+      return { x: gutter.left + gutter.width / 2, y: below ? line.bottom + 40 : line.top + line.height / 2 };
+    }, below);
+  await caretInMarkdown("First line.");
+  const arrow = await foldGutter(false);
+  await page.mouse.click(arrow.x, arrow.y);
+  await expect(placeholders).toHaveCount(1);
+  const below = await foldGutter(true);
+  await page.mouse.click(below.x, below.y);
+  await expect(markdown).toBeFocused();
+  await expect(placeholders).toHaveCount(1);
 });
 
 test("a click below the end of the Markdown puts the cursor at its end, in the split's Markdown pane and the Markdown view", async () => {

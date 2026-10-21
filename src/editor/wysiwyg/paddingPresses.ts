@@ -65,6 +65,7 @@
 import { EditorSelection } from "@codemirror/state";
 import { EditorView as CodeMirror } from "@codemirror/view";
 import { NodeSelection, Plugin, Selection, TextSelection } from "@milkdown/kit/prose/state";
+import { CellSelection } from "@milkdown/kit/prose/tables";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 import { belowContent } from "../../shell/pagePresses";
@@ -176,8 +177,10 @@ function paddingPress(view: EditorView, event: MouseEvent): void {
   const focused = view.hasFocus();
   // A text selection from the anchor of a selected block or of selected
   // cells, which is not in text, starts in the text after it (see the header).
-  const extend = event.shiftKey && focused && view.state.selection.$anchor.parent.inlineContent;
-  dragSelect(view, extend ? view.state.selection.anchor : place.head, place.head);
+  const { selection } = view.state;
+  const blockOrCells = selection instanceof CellSelection || (selection instanceof NodeSelection && selection.node.isBlock);
+  const extend = event.shiftKey && focused && !blockOrCells;
+  dragSelect(view, extend ? selection.anchor : place.head, place.head);
   // Focusing first would move focus back into a code block that holds the
   // selection, since focusing the view puts the browser's selection there.
   if (!focused) view.focus();

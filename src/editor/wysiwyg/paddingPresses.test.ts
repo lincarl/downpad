@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
-import { NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
+import { AllSelection, NodeSelection, TextSelection } from "@milkdown/kit/prose/state";
 import { CellSelection } from "@milkdown/kit/prose/tables";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -124,6 +124,17 @@ describe("a press below the document's last block", () => {
     expect(press(view, 150, true)).toBe(true);
     const { selection, doc } = view.state;
     expect(selection.empty).toBe(true);
+    expect(selection.head).toBe(doc.content.size - 1);
+  });
+
+  it("keeps a selection of the whole document with Shift, to the end", { timeout: 60_000 }, async () => {
+    const view = await mount(`Intro text.\n\n${table}\n\nLast line.\n`);
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)));
+    expect(press(view, 150, true)).toBe(true);
+    const { selection, doc } = view.state;
+    expect(selection.$from.parent.textContent).toBe("Intro text.");
+    expect(selection.$from.parentOffset).toBe(0);
     expect(selection.head).toBe(doc.content.size - 1);
   });
 

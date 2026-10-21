@@ -29,8 +29,11 @@
 // a press on any gutter below the last line puts the cursor at the end of the
 // text, as CodeMirror does for a press below the last line in the text beside
 // it, and a Shift+press while the editor has focus extends the selection to
-// there. In a code block a press on a gutter below the last line, beside the
-// code's bottom padding, counts as one beside the last line.
+// there. CodeMirror's fold gutter takes a click below the last line for one on
+// the last line, so a click there unfolded a folded last section. Such a click
+// is therefore stopped before it reaches the gutter. In a code block a press
+// on a gutter below the last line, beside the code's bottom padding, counts as
+// one beside the last line.
 
 import type { Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
@@ -50,18 +53,24 @@ const shiftPressFromOutside = EditorView.domEventHandlers({
  *  extend the selection to there on a Shift+press in the focused editor, and
  *  focus the editor. On a press on another gutter, keep focus and the
  *  selection where they were (see the header). With `endBelowText`, a press
- *  on any gutter below the last line goes to the end of the text instead.
- *  CodeMirror's handlers see presses on its content only, so this listens on
- *  its scroll container, which holds the gutters. */
+ *  on any gutter below the last line goes to the end of the text instead,
+ *  and the click that follows does not reach the gutter. CodeMirror's
+ *  handlers see presses on its content only, so this listens on its scroll
+ *  container, which holds the gutters. */
 function gutterPresses(endBelowText: boolean): Extension {
   return ViewPlugin.define((view) => {
+    /** The line at the height of `event` on a gutter, and whether `event`
+     *  lies below it, past the last line, where `endBelowText` takes it. */
+    const lineAt = (event: MouseEvent) => {
+      const height = event.clientY - view.documentTop;
+      const line = view.lineBlockAtHeight(height);
+      return { line, below: endBelowText && height > line.bottom };
+    };
     const press = (event: MouseEvent): void => {
       const { target } = event;
       if (event.button !== 0 || !(target instanceof Element) || !target.closest(".cm-gutters")) return;
       event.preventDefault();
-      const height = event.clientY - view.documentTop;
-      const line = view.lineBlockAtHeight(height);
-      const below = endBelowText && height > line.bottom;
+      const { line, below } = lineAt(event);
       if (!below && !target.closest(".cm-lineNumbers")) return;
       const head = below ? view.state.doc.length : line.from;
       const anchor = event.shiftKey && view.hasFocus ? view.state.selection.main.anchor : head;
@@ -70,8 +79,18 @@ function gutterPresses(endBelowText: boolean): Extension {
       view.dispatch({ selection: { anchor, head }, userEvent: "select.pointer" });
       view.focus();
     };
+    const click = (event: MouseEvent): void => {
+      if (event.target instanceof Element && event.target.closest(".cm-gutters") && lineAt(event).below) event.stopPropagation();
+    };
     view.scrollDOM.addEventListener("mousedown", press);
-    return { destroy: () => view.scrollDOM.removeEventListener("mousedown", press) };
+    // In the capture phase, before the fold gutter's own listener.
+    view.scrollDOM.addEventListener("click", click, true);
+    return {
+      destroy: () => {
+        view.scrollDOM.removeEventListener("mousedown", press);
+        view.scrollDOM.removeEventListener("click", click, true);
+      },
+    };
   });
 }
 
