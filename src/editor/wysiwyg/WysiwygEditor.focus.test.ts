@@ -363,11 +363,16 @@ describe("a composition over a selection that is not text", () => {
     return found;
   }
 
-  /** Open `markdown`, focus it and give it the selection `select` makes. */
+  /** Open `markdown` and give it the selection `select` makes, with focus
+   *  in the document view. */
   async function open(markdown: string, select: (doc: ProseNode) => Selection): Promise<EditorView> {
     const view = await mount(markdown);
     view.dom.focus();
     view.dispatch(view.state.tr.setSelection(select(view.state.doc)));
+    // Crepe's code block view takes focus in its code when it is selected,
+    // and the block handle that selects one gives focus back to the document
+    // view (blockHandle.ts).
+    view.focus();
     await settle();
     return view;
   }
@@ -436,21 +441,28 @@ describe("a composition over a selection that is not text", () => {
     expect(undoDepth(view.state)).toBe(depth);
   });
 
-  it("still replaces the image with text committed without a composition after one that ended empty", async () => {
+  it.each([
+    ["an image", imageBetweenParagraphs, selectImage],
+    ["a code block", ["Above.", "```js\nconst x = 1;\n```", "Below."].join("\n\n") + "\n", (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "code_block"))],
+  ])("still replaces %s with text committed without a composition after one that ended empty", async (_block, markdown, select) => {
     // IBus empties the composition, which ends it, and then commits its text
-    // without one. If the image is back by then, that text replaces it.
-    const view = await open(imageBetweenParagraphs, selectImage);
+    // without one. If the block is back by then, that text replaces it. Crepe's
+    // code block view takes focus in its code when it is selected, and the
+    // text went there.
+    const view = await open(markdown, select);
     const composed = await startComposition(view, "明", [textNode(view, "Above."), 6]);
     composed.remove();
     await settle();
     await endComposition(view, "");
+    expect(view.hasFocus()).toBe(true);
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
     const commit = new InputEvent("beforeinput", { inputType: "insertText", data: "明", bubbles: true, cancelable: true });
     view.dom.dispatchEvent(commit);
     expect(commit.defaultPrevented).toBe(true);
     await settle();
     expect(editor!.getMarkdown()).toBe(["Above.", "明", "Below."].join("\n\n") + "\n");
     expect(undo(view.state, view.dispatch)).toBe(true);
-    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(editor!.getMarkdown()).toBe(markdown);
   });
 
   it("replaces selected table cells as a key does", async () => {

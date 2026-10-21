@@ -52,7 +52,8 @@
 // the plugin puts that caret right (`caretAfterFirstText`). The change and
 // the composition are one undo step, which brings the block or the cells
 // back. A composition that commits nothing, as when it is cancelled, is
-// undone that way once it ends.
+// undone that way once it ends, with focus put back as it was before it, so
+// the block or the cells are selected as before.
 
 import { closeHistory, undo, undoDepth } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
@@ -195,7 +196,8 @@ export const endPastAtoms = $prose(() => {
       };
       /** Undoes the replacement of a selection that is not text once a
        *  composition that committed nothing has ended, which brings the block
-       *  or the cells back as an undo does. */
+       *  or the cells back as an undo does, selected and with focus in the
+       *  document view. */
       const putBackIfEmpty = () => {
         caretAfterFirstText.disconnect();
         const started = cleared;
@@ -206,7 +208,16 @@ export const endPastAtoms = $prose(() => {
         setTimeout(() => {
           if (view.isDestroyed || cleared !== started) return;
           cleared = null;
-          if (view.state.doc.eq(started.doc) && undoDepth(view.state) === started.depth) undo(view.state, view.dispatch);
+          if (!view.state.doc.eq(started.doc) || undoDepth(view.state) !== started.depth) return;
+          const focused = view.hasFocus();
+          undo(view.state, view.dispatch);
+          // Crepe's code block view takes focus in its code when it is
+          // selected, so a code block, a math block or a Mermaid diagram took
+          // it. Text that IBus commits after the composition then went into
+          // the code. Give focus back to the document view, as before the
+          // composition, so the block stays selected and the next key or text
+          // replaces it.
+          if (focused && !view.hasFocus()) view.focus();
         });
       };
       // Listen in the capture phase, before ProseMirror and Milkdown.
