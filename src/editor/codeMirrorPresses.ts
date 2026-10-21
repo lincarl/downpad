@@ -23,7 +23,19 @@
 // point instead. A press on another gutter, such as on a fold arrow, keeps
 // focus and the selection where they were, and CodeMirror still folds or
 // unfolds on the click.
+//
+// In the Markdown view the gutters reach down to the editor's bottom
+// (app.css), so a press below the end of the Markdown can land on them. There
+// a press on any gutter below the last line puts the cursor at the end of the
+// text, as CodeMirror does for a press below the last line in the text beside
+// it, and a Shift+press while the editor has focus extends the selection to
+// there. CodeMirror's fold gutter takes a click below the last line for one on
+// the last line, so a click there unfolded a folded last section. Such a click
+// is therefore stopped before it reaches the gutter. In a code block a press
+// on a gutter below the last line, beside the code's bottom padding, counts as
+// one beside the last line.
 
+import type { Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 
 /** Put the cursor at a Shift+press in an editor that does not have focus,
@@ -40,26 +52,52 @@ const shiftPressFromOutside = EditorView.domEventHandlers({
 /** Put the cursor at the start of the line of a pressed line number, or
  *  extend the selection to there on a Shift+press in the focused editor, and
  *  focus the editor. On a press on another gutter, keep focus and the
- *  selection where they were (see the header). CodeMirror's handlers see
- *  presses on its content only, so this listens on its scroll container,
- *  which holds the gutters. */
-const gutterPresses = ViewPlugin.define((view) => {
-  const press = (event: MouseEvent): void => {
-    const { target } = event;
-    if (event.button !== 0 || !(target instanceof Element) || !target.closest(".cm-gutters")) return;
-    event.preventDefault();
-    if (!target.closest(".cm-lineNumbers")) return;
-    const { from } = view.lineBlockAtHeight(event.clientY - view.documentTop);
-    const anchor = event.shiftKey && view.hasFocus ? view.state.selection.main.anchor : from;
-    // A code block in the document passes its selection on to the document
-    // when it gets focus, so the selection is set first.
-    view.dispatch({ selection: { anchor, head: from }, userEvent: "select.pointer" });
-    view.focus();
-  };
-  view.scrollDOM.addEventListener("mousedown", press);
-  return { destroy: () => view.scrollDOM.removeEventListener("mousedown", press) };
-});
+ *  selection where they were (see the header). With `endBelowText`, a press
+ *  on any gutter below the last line goes to the end of the text instead,
+ *  and the click that follows does not reach the gutter. CodeMirror's
+ *  handlers see presses on its content only, so this listens on its scroll
+ *  container, which holds the gutters. */
+function gutterPresses(endBelowText: boolean): Extension {
+  return ViewPlugin.define((view) => {
+    /** The line at the height of `event` on a gutter, and whether `event`
+     *  lies below it, past the last line, where `endBelowText` takes it. */
+    const lineAt = (event: MouseEvent) => {
+      const height = event.clientY - view.documentTop;
+      const line = view.lineBlockAtHeight(height);
+      return { line, below: endBelowText && height > line.bottom };
+    };
+    const press = (event: MouseEvent): void => {
+      const { target } = event;
+      if (event.button !== 0 || !(target instanceof Element) || !target.closest(".cm-gutters")) return;
+      event.preventDefault();
+      const { line, below } = lineAt(event);
+      if (!below && !target.closest(".cm-lineNumbers")) return;
+      const head = below ? view.state.doc.length : line.from;
+      const anchor = event.shiftKey && view.hasFocus ? view.state.selection.main.anchor : head;
+      // A code block in the document passes its selection on to the document
+      // when it gets focus, so the selection is set first.
+      view.dispatch({ selection: { anchor, head }, userEvent: "select.pointer" });
+      view.focus();
+    };
+    const click = (event: MouseEvent): void => {
+      if (event.target instanceof Element && event.target.closest(".cm-gutters") && lineAt(event).below) event.stopPropagation();
+    };
+    view.scrollDOM.addEventListener("mousedown", press);
+    // In the capture phase, before the fold gutter's own listener.
+    view.scrollDOM.addEventListener("click", click, true);
+    return {
+      destroy: () => {
+        view.scrollDOM.removeEventListener("mousedown", press);
+        view.scrollDOM.removeEventListener("click", click, true);
+      },
+    };
+  });
+}
 
 /** CodeMirror extensions for a Shift+press from outside the editor and a
- *  press on a gutter (see the header). */
-export const codeMirrorPresses = [shiftPressFromOutside, gutterPresses];
+ *  press on a gutter (see the header). `endBelowText` is for the Markdown
+ *  view, where a press on a gutter below the last line goes to the end of
+ *  the text. */
+export function codeMirrorPresses({ endBelowText = false } = {}): Extension {
+  return [shiftPressFromOutside, gutterPresses(endBelowText)];
+}

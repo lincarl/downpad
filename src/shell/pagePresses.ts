@@ -13,15 +13,26 @@
 // page.
 //
 // A press on the page around the editors, such as beside the document's
-// column, in a split pane's margin or below the end of the document view or
-// the Markdown view, moved focus to the page, so the next key went nowhere,
-// also when the document had focus.
-// `pagePressesKeepFocus` cancels such a press, so focus and the caret stay
-// where they were.
+// column or in a split pane's margin, moved focus to the page, so the next key
+// went nowhere, also when the document had focus. `pagePressesKeepFocus`
+// cancels such a press, so focus and the caret stay where they were. Below the
+// end of the document view or the Markdown view, in the document's column or
+// in a pane, focus stayed where it was too. Most editors put the caret at the
+// end there, so the press goes on to the editor above it as a press at the
+// same point, which the editor takes as one below its last line. The document
+// view then puts the caret at its end (editor/wysiwyg/paddingPresses.ts), and
+// CodeMirror puts its cursor at the end of the Markdown, also for a drag or a
+// Shift+press. Beside the document's column, focus stays where it was at any
+// height, since the page there shows no line where the document ends.
 
 /** The editors a press on the page lays out around: the document view and
  *  each CodeMirror editor, such as the Markdown view. */
 const EDITORS = ".ProseMirror, .cm-editor";
+
+/** The element of each editor that takes its presses: the document view
+ *  itself, and a CodeMirror editor's content, which fills the Markdown
+ *  view. */
+const PRESSED = ".ProseMirror, .cm-content";
 
 /** Have the browser take a Shift+press inside `root` as a plain click when
  *  the focused element does not hold what was pressed and the selection is
@@ -61,17 +72,43 @@ function inPlainText(node: Node | null): boolean {
   return node instanceof Text && !node.parentElement?.isContentEditable;
 }
 
+/** Whether the height `y` lies below the content of `element`, inside its
+ *  bottom padding or below it. The document view's content ends with its
+ *  last block. */
+export function belowContent(element: Element, y: number): boolean {
+  const top = element.getBoundingClientRect().top + element.clientTop;
+  return y > top + element.clientHeight - (parseFloat(getComputedStyle(element).paddingBottom) || 0);
+}
+
+/** A copy of the press `event` at the same point, with the same button, keys
+ *  and click count. It does not bubble, so of the listeners around the
+ *  element it is sent to, such as this one, only those for the capture phase
+ *  see it. */
+function pressCopy(event: MouseEvent): MouseEvent {
+  const { clientX, clientY, screenX, screenY, button, buttons, detail, altKey, ctrlKey, metaKey, shiftKey, view } = event;
+  return new MouseEvent("mousedown", { clientX, clientY, screenX, screenY, button, buttons, detail, altKey, ctrlKey, metaKey, shiftKey, view, cancelable: true });
+}
+
 /** Keep focus where it was on a press on the page around the editors in
- *  `area` (see the header). Such a press lands outside the editors on an
- *  element that holds one, such as `area` itself, the document's column or a
- *  split pane. A press inside an editor, or on another element, such as the
+ *  `area`, and hand a press below an editor's end on to the editor (see the
+ *  header). Such a press lands outside the editors on an element that holds
+ *  one, such as `area` itself, the document's column or a split pane. Below
+ *  the content of the editor that the column or pane shows, the press goes
+ *  to the element of the editor that takes presses, as a press at the same
+ *  point. A press inside an editor, or on another element, such as the
  *  frontmatter table or the split's divider, is left as it is. Returns a
  *  function that stops this. */
 export function pagePressesKeepFocus(area: HTMLElement): () => void {
   const press = (event: MouseEvent): void => {
     const { target } = event;
     if (event.button !== 0 || !(target instanceof Element) || target.closest(EDITORS)) return;
-    if (target.querySelector(EDITORS)) event.preventDefault();
+    if (!target.querySelector(EDITORS)) return;
+    event.preventDefault();
+    if (target === area) return;
+    const editor = [...target.querySelectorAll(EDITORS)].find((element) => element.getClientRects().length > 0);
+    if (!editor || !belowContent(editor, event.clientY)) return;
+    const pressed = editor.matches(PRESSED) ? editor : editor.querySelector(PRESSED);
+    pressed?.dispatchEvent(pressCopy(event));
   };
   area.addEventListener("mousedown", press);
   return () => area.removeEventListener("mousedown", press);

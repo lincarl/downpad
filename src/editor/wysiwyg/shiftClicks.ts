@@ -242,9 +242,10 @@ export function followPointer(view: EditorView, to: (left: number, top: number) 
  *  follows the pointer (`followPointer`). That position is the one
  *  `positionNear` finds, so beside a line, such as in the document's side
  *  padding or left of a list item's text, it is the line's start or end, as
- *  Chromium has it. Following stops once the selection is no longer a text
- *  selection, as when prosemirror-tables takes the drag over to select the
- *  cells it crosses, and when the window loses focus.
+ *  Chromium has it, and below the last block it is the document's end.
+ *  Following stops once the selection is no longer a text selection, as
+ *  when prosemirror-tables takes the drag over to select the cells it
+ *  crosses, and when the window loses focus.
  *
  *  The anchor stays where the press found it, also when another plugin
  *  changes the selection in between. prosemirror-tables makes a selection

@@ -1637,11 +1637,14 @@ test("a press on the page around the document leaves focus where it was, and Shi
   await launch(file);
   const documentView = page.locator(".milkdown .ProseMirror");
   const markdown = page.locator(".editor-pane-raw .cm-content");
-  // Chromium moved focus to the page on a press beside the document's column
-  // or below its last line, and the next key was lost, also when the
-  // document or a code block had focus.
+  // Chromium moved focus to the page on a press beside the document's column,
+  // also below the document's end, or in the column's margin beside the text,
+  // and the next key was lost, also when the document or a code block had
+  // focus.
   await clickOn("Last line.", -1, 0.75);
   const area = (await page.locator("#document-editor-panel").boundingBox())!;
+  const end = (await documentView.locator("p", { hasText: "Last line." }).boundingBox())!;
+  expect(area.y + area.height / 2).toBeGreaterThan(end.y + end.height);
   await page.mouse.click(area.x + 10, area.y + area.height / 2);
   await expect(documentView).toBeFocused();
   await page.keyboard.type("a");
@@ -1649,7 +1652,7 @@ test("a press on the page around the document leaves focus where it was, and Shi
   await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
   await expect(documentView.locator(".cm-content")).toBeFocused();
   const column = (await page.locator(".editor-column").boundingBox())!;
-  await page.mouse.click(column.x + 40, column.y + column.height - 20);
+  await page.mouse.click(column.x + 10, line.y + line.height / 2);
   await expect(documentView.locator(".cm-content")).toBeFocused();
   await page.keyboard.type("b");
   // From the split's Markdown pane, Chromium extended the pane's selection to
@@ -1659,7 +1662,8 @@ test("a press on the page around the document leaves focus where it was, and Shi
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   await caretInMarkdown("First line.");
   const pane = (await page.locator(".editor-pane-wysiwyg").boundingBox())!;
-  await shiftClickAt({ x: pane.x + 10, y: pane.y + pane.height / 2 });
+  const first = (await documentView.locator("p", { hasText: "First line." }).boundingBox())!;
+  await shiftClickAt({ x: pane.x + 10, y: first.y + first.height / 2 });
   await expect(markdown).toBeFocused();
   await page.keyboard.type("c");
   const strip = (await page.locator(".tabstrip").boundingBox())!;
@@ -1954,6 +1958,193 @@ test("a drag from the document's side padding beside a code block selects in its
   await expect.poll(() => readFile(file, "utf8")).toBe(["Intro line.", code(["const alpha = 1;Y", "Wconst delta = 4;"]), "Last line."].join("\n\n") + "\n");
 });
 
+/** The document view shown, in the Document view or the split's document
+ *  pane, while the views of other tabs stay hidden. */
+const shownDocument = () => page.locator(".editor-pane-wysiwyg:not([hidden]) .milkdown .ProseMirror");
+
+/** Points below the end of the shown document view, at the height of its
+ *  bottom padding below the last block, and on the page below the view. At
+ *  that height they are in the middle of the text column, in the side
+ *  padding 8px left of it and in the margin of the column or pane, 12px left
+ *  of the view. */
+function pointsBelowEnd(): Promise<Record<"padding" | "beside" | "margin" | "page", { x: number; y: number }>> {
+  return shownDocument().evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const left = box.left + Number.parseFloat(style.paddingLeft);
+    const middle = (left + box.right - Number.parseFloat(style.paddingRight)) / 2;
+    const y = (element.lastElementChild!.getBoundingClientRect().bottom + box.bottom) / 2;
+    return { padding: { x: middle, y }, beside: { x: left - 8, y }, margin: { x: box.left - 12, y }, page: { x: middle, y: box.bottom + 24 } };
+  });
+}
+
+/** Click the character at `index` of the first paragraph of the shown
+ *  document view that holds `text`, and have ProseMirror read the click's
+ *  caret at once, as `clickOn` does. */
+async function clickInShown(text: string, index: number): Promise<void> {
+  const point = await pointInText(shownDocument().locator("p", { hasText: text }).first(), index, 0.5);
+  await page.mouse.click(point.x, point.y);
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+}
+
+/** Last blocks of a document by name, as Markdown. The formula whose code is
+ *  hidden shows its preview alone. */
+const LAST_BLOCKS = {
+  "paragraph": "Last line.",
+  "heading": "## Last heading",
+  "list": "- one\n- two",
+  "task list": "- [ ] one\n- [ ] two",
+  "quote": "> Quote text.",
+  "table": "| A | B |\n| --- | --- |\n| x1 | y1 |",
+  "code block": "```js\nconst a = 1;\n```",
+  "math block": "$$\nE = mc^2\n$$",
+  "Mermaid diagram": "```mermaid\ngraph TD; A-->B;\n```",
+  "image": "![Bar](bar.svg)",
+  "rule": "---",
+  "formula whose code is hidden": "$$\nE = mc^2\n$$",
+};
+
+for (const layout of ["Document", "Split"] as const) {
+  test(`a click below the end of the document puts the caret at the end after any last block, in the ${layout === "Document" ? "Document view" : "split's document pane"}`, async () => {
+    test.setTimeout(150_000);
+    await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+    // Each document starts with its own text, so a check waits for that
+    // document and never passes on the one shown before.
+    const documents = Object.entries(LAST_BLOCKS).map(([name, last], index) => ({ name, last, intro: `Intro ${index}.`, file: path.join(directory, `below-end-${index}.md`) }));
+    for (const { file, intro, last } of documents) await writeFile(file, `${intro}\n\n${last}\n`);
+    await launch(documents[0]!.file);
+    if (layout === "Split") await page.getByRole("radio", { name: "Split", exact: true }).click();
+    for (const [index, { name, last, intro, file }] of documents.entries()) {
+      if (index > 0) await chooseOpen(file);
+      const view = shownDocument();
+      await expect(view.locator("p", { hasText: intro })).toBeVisible();
+      if (name === "Mermaid diagram") await expect(view.locator(".mermaid-preview svg")).toBeVisible();
+      if (name.includes("formula") || name === "math block") await expect(view.locator(".katex")).toBeVisible();
+      if (name === "image") await expect.poll(() => view.locator(".milkdown-image-block img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
+      if (name.includes("hidden")) {
+        await view.locator(".milkdown-code-block .preview-toggle-button").click();
+        await expect(view.locator(".milkdown-code-block .cm-editor")).toBeHidden();
+      }
+      // Chromium put the caret on the last line at its end on Linux and at
+      // the point nearest the click on Windows, the side padding rule put it
+      // at the line's start, and on the page below the view, in the column or
+      // the pane, focus stayed where it was. Crepe keeps an empty line after
+      // a last block that is not a paragraph or a heading, and the next key
+      // goes there, after the block, also after a block that takes no caret.
+      const lastLine = view.locator(":scope > :last-child");
+      const before = name === "paragraph" || name === "heading" ? await lastLine.innerText() : "";
+      let typed = "";
+      for (const [key, where] of [["a", "padding"], ["b", "beside"], ["c", "margin"], ["d", "page"]] as const) {
+        await clickInShown(intro, 2);
+        const point = (await pointsBelowEnd())[where];
+        await page.mouse.click(point.x, point.y);
+        await expect(view, `${name}, ${where}`).toBeFocused();
+        await page.keyboard.type(key);
+        typed += key;
+        await expect(lastLine, `${name}, ${where}`).toHaveText(before + typed);
+      }
+      await page.keyboard.press("ControlOrMeta+s");
+      const end = before ? `${last}${typed}` : `${last}\n\n${typed}`;
+      await expect.poll(() => readFile(file, "utf8"), name).toBe(`${intro}\n\n${end}\n`);
+    }
+  });
+}
+
+test("Shift+click below the end of the document extends the selection there, from outside the document it is a plain click, and a drag from there selects to the pointer", async () => {
+  const file = path.join(directory, "below-end-shift.md");
+  const code = "```js\nconst a = 1;\n```";
+  await writeFile(file, [code, "First line.", "Last line."].join("\n\n") + "\n");
+  await launch(file);
+  const view = shownDocument();
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  // On the page below the view the press kept focus and the caret where they
+  // were, so the selection did not grow and the next key went to the caret.
+  await clickOn("First line.", 4, 0.75);
+  await shiftClickAt((await pointsBelowEnd()).page);
+  expect((await selectedText()).replace(/\s+/g, " ")).toBe(" line. Last line.");
+  await page.keyboard.type("X");
+  // From the find card and from a code block, it is a plain click.
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(find).toBeFocused();
+  await shiftClickAt((await pointsBelowEnd()).padding);
+  await expect(view).toBeFocused();
+  await page.keyboard.type("Y");
+  const line = (await view.locator(".cm-line").boundingBox())!;
+  await page.mouse.click(line.x + line.width - 2, line.y + line.height / 2);
+  await expect(view.locator(".cm-content")).toBeFocused();
+  await shiftClickAt((await pointsBelowEnd()).page);
+  await expect(view).toBeFocused();
+  await page.keyboard.type("Z");
+  // A press there that moves a pixel or two before the release only puts the
+  // caret, also below the last line's text, so the next key replaces nothing.
+  const last = (await view.locator("p", { hasText: "FirstXYZ" }).boundingBox())!;
+  for (const [key, where] of [["U", "padding"], ["T", "page"]] as const) {
+    const below = (await pointsBelowEnd())[where];
+    await page.mouse.move(last.x + 20, below.y);
+    await page.mouse.down();
+    await page.mouse.move(last.x + 22, below.y + 2, { steps: 2 });
+    await page.mouse.up();
+    await page.keyboard.type(key);
+  }
+  await expect(view.locator(":scope > :last-child")).toHaveText("FirstXYZUT");
+  // A drag from below the end selects from the end to the pointer.
+  const from = (await pointsBelowEnd()).page;
+  const to = await pointInText(view.locator("p", { hasText: "FirstXYZUT" }), 2, 0.25);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.mouse.up();
+  expect(await selectedText()).toBe("rstXYZUT");
+  await page.keyboard.type("V");
+  // From the split's Markdown pane, too.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await caretInMarkdown("FiV");
+  await shiftClickAt((await pointsBelowEnd()).page);
+  await expect(view).toBeFocused();
+  await page.keyboard.type("W");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe([code, "FiVW"].join("\n\n") + "\n");
+});
+
+test("Shift+click below the end of the document with an image or table cells selected is a plain click", async () => {
+  await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
+  const table = "| C | D |\n| --- | --- |\n| c1 | d1 |";
+  const imageFile = path.join(directory, "below-end-image.md");
+  await writeFile(imageFile, ["Intro text.", "![Bar](bar.svg)", table, "Last line."].join("\n\n") + "\n");
+  const cellsFile = path.join(directory, "below-end-cells.md");
+  await writeFile(cellsFile, ["Intro text.", table, "Last line."].join("\n\n") + "\n");
+  await launch(imageFile);
+  const view = shownDocument();
+  // The selection to the end started after the selected image, in the
+  // table's first cell, and the next key broke up the table and left the
+  // image.
+  const image = view.locator(".milkdown-image-block img");
+  await expect.poll(() => image.evaluate((element) => element instanceof HTMLImageElement && element.naturalWidth)).toBe(48);
+  const imageCenter = await centerOf(image);
+  await page.mouse.click(imageCenter.x, imageCenter.y);
+  await expect(view.locator(".milkdown-image-block.selected")).toHaveCount(1);
+  await shiftClickAt((await pointsBelowEnd()).padding);
+  expect(await selectedText()).toBe("");
+  await page.keyboard.type("X");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(imageFile, "utf8")).toBe(["Intro text.", "![Bar](bar.svg)", table, "Last line.X"].join("\n\n") + "\n");
+  // The selection to the end started in the cell where the cell selection
+  // ended and left out the cell where it started.
+  await chooseOpen(cellsFile);
+  const first = await pointInText(view.locator("td p", { hasText: "c1" }), 0, 0.5);
+  const second = await pointInText(view.locator("td p", { hasText: "d1" }), 1, 0.5);
+  await page.mouse.move(first.x, first.y);
+  await page.mouse.down();
+  await page.mouse.move(second.x, second.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(view.locator(".selectedCell")).toHaveCount(2);
+  await shiftClickAt((await pointsBelowEnd()).page);
+  expect(await selectedText()).toBe("");
+  await page.keyboard.type("Y");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(cellsFile, "utf8")).toBe(["Intro text.", table, "Last line.Y"].join("\n\n") + "\n");
+});
+
 /** The point `fraction` of the way across the character at `index` of the
  *  split's Markdown pane's line that reads `text`. */
 function pointInMarkdown(text: string, index: number, fraction: number): Promise<{ x: number; y: number }> {
@@ -1990,6 +2181,18 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await shiftClickAt(await lineNumber(documentView, 1));
   await expect(code).toBeFocused();
   await page.keyboard.type("b");
+  // The line numbers reach a few pixels below the code's last line, and a
+  // press there counts as one on the last line's number.
+  await clickOn("Last line.", -1, 0.75);
+  const belowLast = await documentView.evaluate((view) => {
+    const numbers = view.querySelector(".cm-lineNumbers")!.getBoundingClientRect();
+    const last = [...view.querySelectorAll(".cm-line")].at(-1)!.getBoundingClientRect();
+    return { x: numbers.left + numbers.width / 2, y: (last.bottom + numbers.bottom) / 2, height: numbers.bottom - last.bottom };
+  });
+  expect(belowLast.height).toBeGreaterThanOrEqual(2);
+  await page.mouse.click(belowLast.x, belowLast.y);
+  await expect(code).toBeFocused();
+  await page.keyboard.type("e");
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   await caretInMarkdown("First line.");
   const markdownPane = page.locator(".editor-pane-raw");
@@ -2005,7 +2208,7 @@ test("a press on a line number puts the cursor at the start of its line in a cod
   await expect(markdown).toBeFocused();
   await page.keyboard.type("d");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\naconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["```\nbconst alpha = 1;\neaconst beta = 2;\n```", "Firdst line.", "cLast line."].join("\n\n") + "\n");
 });
 
 test("a click or Shift+click on the fold gutter in the Markdown view folds a section on its arrow and leaves focus and the cursor where they were", async () => {
@@ -2049,6 +2252,127 @@ test("a click or Shift+click on the fold gutter in the Markdown view folds a sec
   await page.keyboard.type("Z");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three.XYZ"].join("\n\n") + "\n");
+});
+
+test("a click below the end of the Markdown view on the fold gutter leaves a folded last section folded", async () => {
+  // The fold gutter reaches below the last line, and CodeMirror took a click
+  // there for one on the last line, which unfolded a last section that ends
+  // the Markdown.
+  const file = path.join(directory, "fold-last.md");
+  await writeFile(file, "First line.\n\n# One\n\nText one.");
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const pane = page.locator(".editor-pane-raw");
+  const markdown = pane.locator(".cm-content");
+  const placeholders = pane.locator(".cm-foldPlaceholder");
+  const foldGutter = (below: boolean) =>
+    pane.evaluate((element, below) => {
+      const lines = [...element.querySelectorAll(".cm-line")];
+      const line = (below ? lines.at(-1) : lines.find((each) => each.textContent === "# One"))!.getBoundingClientRect();
+      const gutter = element.querySelector(".cm-foldGutter")!.getBoundingClientRect();
+      return { x: gutter.left + gutter.width / 2, y: below ? line.bottom + 40 : line.top + line.height / 2 };
+    }, below);
+  await caretInMarkdown("First line.");
+  const arrow = await foldGutter(false);
+  await page.mouse.click(arrow.x, arrow.y);
+  await expect(placeholders).toHaveCount(1);
+  const below = await foldGutter(true);
+  await page.mouse.click(below.x, below.y);
+  await expect(markdown).toBeFocused();
+  await expect(placeholders).toHaveCount(1);
+});
+
+test("a click below the end of the Markdown puts the cursor at its end, in the split's Markdown pane and the Markdown view", async () => {
+  const file = path.join(directory, "below-end-markdown.md");
+  await writeFile(file, "First line.\n\nLast line.");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const pane = page.locator(".editor-pane-raw:not([hidden])");
+  const markdown = pane.locator(".cm-content");
+  /** Points 40px below the Markdown's last line, in its text and on its line
+   *  numbers. */
+  const belowEnd = () =>
+    pane.evaluate((element) => {
+      const y = [...element.querySelectorAll(".cm-line")].at(-1)!.getBoundingClientRect().bottom + 40;
+      const content = element.querySelector(".cm-content")!.getBoundingClientRect();
+      const numbers = element.querySelector(".cm-lineNumbers")!.getBoundingClientRect();
+      return { text: { x: content.left + 120, y }, numbers: { x: numbers.left + numbers.width / 2, y } };
+    });
+  // The press landed on CodeMirror's own element, outside its text and
+  // gutters. Below the text, Chromium put the cursor on the last line, at its
+  // end on Linux and at the point nearest the click on Windows. Below the
+  // line numbers, it moved focus to the page, and the next key was lost.
+  await clickOn("First line.", 2, 0.5);
+  const { text, numbers } = await belowEnd();
+  await page.mouse.click(text.x, text.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("a");
+  await clickOn("First line.", 2, 0.5);
+  await page.mouse.click(numbers.x, numbers.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("b");
+  // Shift+click from the document pane is a plain click there.
+  await clickOn("First line.", 2, 0.5);
+  await shiftClickAt(text);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("c");
+  // A drag from below the end selects from the end to the pointer.
+  const to = await pointInMarkdown("First line.", 5, 0.25);
+  await page.mouse.move(text.x, text.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.mouse.up();
+  expect(await selectedText()).toBe(" line.\n\nLast line.abc");
+  await page.keyboard.type("d");
+  // In the Markdown view too. The line numbers stopped at the last line, so
+  // below them a Shift+click focused CodeMirror's scroll container and did
+  // not extend the selection.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(markdown).toBeVisible();
+  let first = await pointInMarkdown("Firstd", 1, 0.25);
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click((await belowEnd()).text.x, (await belowEnd()).text.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("e");
+  first = await pointInMarkdown("Firstde", 1, 0.25);
+  await page.mouse.click(first.x, first.y);
+  await shiftClickAt((await belowEnd()).numbers);
+  await expect(markdown).toBeFocused();
+  expect(await selectedText()).toBe("irstde");
+  await page.keyboard.type("f");
+  first = await pointInMarkdown("Ff", 0, 0.25);
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click((await belowEnd()).numbers.x, (await belowEnd()).numbers.y);
+  await expect(markdown).toBeFocused();
+  await page.keyboard.type("g");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Ffg");
+});
+
+test("a click in the room find adds below the Markdown view puts the cursor at the end of the Markdown", async () => {
+  const file = path.join(directory, "below-end-find-room.md");
+  await writeFile(file, LONG_DOCUMENT);
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const pane = page.locator(".editor-pane-raw:not([hidden])");
+  await expect(pane.locator(".cm-line").first()).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("needle");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await expect.poll(currentMatchProblem).toBe("");
+  // The press kept focus in the find card, where the next key went.
+  const room = await pane.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    const editor = element.querySelector(".cm-editor")!.getBoundingClientRect();
+    const { bottom } = element.getBoundingClientRect();
+    return { x: editor.left + 80, y: (editor.bottom + bottom) / 2, height: bottom - editor.bottom };
+  });
+  expect(room.height).toBeGreaterThan(40);
+  await page.mouse.click(room.x, room.y);
+  await expect(pane.locator(".cm-content")).toBeFocused();
+  await page.keyboard.type("Z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(LONG_DOCUMENT + "Z");
 });
 
 test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {

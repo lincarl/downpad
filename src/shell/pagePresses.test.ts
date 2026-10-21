@@ -3,7 +3,8 @@
 // handles a Shift+press inside an element from an editor outside what was
 // pressed, so Chromium takes the press as a plain click. pagePressesKeepFocus
 // cancels a press on the page around the editors, so focus stays where it
-// was. These tests check when each acts and when it leaves the press alone.
+// was, and hands one below an editor's end on to the editor. These tests
+// check when each acts and when it leaves the press alone.
 
 import { afterEach, describe, expect, it } from "vitest";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "./pagePresses";
@@ -125,17 +126,21 @@ describe("shiftPressesAsClicks", () => {
 });
 
 describe("pagePressesKeepFocus", () => {
-  /** An editor area with a column around a document view and a CodeMirror
-   *  editor, a frontmatter table and a divider beside them. */
+  /** An editor area with a column around a hidden pane, a pane with a
+   *  frontmatter table and a document view that holds a code block, a
+   *  divider, and a pane with a CodeMirror editor. */
   function area() {
     const element = document.createElement("div");
     element.innerHTML = [
-      '<div class="column"><div class="pane">',
+      '<div class="column">',
+      '<div class="pane" hidden><div class="ProseMirror" contenteditable="true"><p>Other tab</p></div></div>',
+      '<div class="pane">',
       '<div class="frontmatter"><span class="caption">Frontmatter</span></div>',
-      '<div class="milkdown"><div class="ProseMirror" contenteditable="true"><p>Text</p></div><div class="toolbar"></div></div>',
+      '<div class="milkdown"><div class="ProseMirror" contenteditable="true"><p>Text</p>',
+      '<div class="cm-editor"><div class="cm-content"></div></div></div><div class="toolbar"></div></div>',
       "</div>",
       '<div class="divider" tabindex="0"></div>',
-      '<div class="pane"><div class="cm-editor"><div class="cm-gutters"></div></div></div></div>',
+      '<div class="pane"><div class="cm-editor"><div class="cm-gutters"></div><div class="cm-content"></div></div></div></div>',
     ].join("");
     document.body.append(element);
     stop = pagePressesKeepFocus(element);
@@ -147,6 +152,16 @@ describe("pagePressesKeepFocus", () => {
     const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button });
     target.dispatchEvent(event);
     return event.defaultPrevented;
+  }
+
+  /** Lay `element` out from the top of the page down to `bottom`, with
+   *  `padding` inside its bottom edge, since jsdom lays nothing out. */
+  function show(element: HTMLElement, bottom: number, padding = 0): void {
+    const box = { top: 0, bottom, left: 0, right: 100, width: 100, height: bottom, x: 0, y: 0 } as DOMRect;
+    element.getBoundingClientRect = () => box;
+    element.getClientRects = () => [box] as unknown as DOMRectList;
+    Object.defineProperty(element, "clientHeight", { configurable: true, value: bottom });
+    element.style.paddingBottom = `${padding}px`;
   }
 
   it("cancels a press on the area or an element that holds an editor, outside the editor", () => {
@@ -163,5 +178,38 @@ describe("pagePressesKeepFocus", () => {
       expect(cancelled(element.querySelector(selector)!), selector).toBe(false);
     }
     expect(cancelled(element.querySelector(".column")!, 2)).toBe(false);
+  });
+
+  it("hands a press below the end of the editor a column or pane shows on to it, at the same point", () => {
+    const element = area();
+    const [, documentPane, markdownPane] = element.querySelectorAll<HTMLElement>(".pane");
+    const documentView = documentPane!.querySelector<HTMLElement>(".ProseMirror")!;
+    const markdown = markdownPane!.querySelector<HTMLElement>(".cm-editor")!;
+    // The document view's last block ends at 80, above its bottom padding.
+    show(documentView, 100, 20);
+    show(markdown, 200);
+    const received: MouseEvent[] = [];
+    for (const pressed of [documentView, documentView.querySelector<HTMLElement>(".cm-content")!, markdown.querySelector<HTMLElement>(".cm-content")!]) {
+      pressed.addEventListener("mousedown", (event) => received.push(event));
+    }
+    const press = (target: Element, clientY: number, shiftKey = false) => {
+      const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientX: 30, clientY, shiftKey, detail: 1 });
+      target.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      return received.splice(0);
+    };
+    // Below the last block, beside the padding or below the view, on the
+    // column or the pane. The copy does not bubble, so only the view sees it.
+    const [copy, ...more] = press(element.querySelector(".column")!, 90, true);
+    expect(more).toEqual([]);
+    expect(copy).toMatchObject({ target: documentView, clientX: 30, clientY: 90, shiftKey: true, button: 0, detail: 1, bubbles: false });
+    expect(press(documentPane!, 150).map((event) => event.target)).toEqual([documentView]);
+    // Beside the view's text, or beside the column at any height, the press
+    // only keeps focus where it was.
+    expect(press(documentPane!, 80)).toEqual([]);
+    expect(press(element, 150)).toEqual([]);
+    // Below a CodeMirror editor, its content takes the press.
+    expect(press(markdownPane!, 250).map((event) => event.target)).toEqual([markdown.querySelector(".cm-content")]);
+    expect(press(markdownPane!, 200)).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-// A press in the document's side padding.
+// A press in the document's side padding, and one below its end.
 //
 // Crepe pads the document view on each side, and a press there lands on the
 // view's own element, beside the block at its height. ProseMirror leaves a
@@ -38,13 +38,37 @@
 // line's start or end, as Chromium does beside a paragraph. Beside a code
 // block, an image or a rule, and from outside the document, such as from the
 // find card, the Markdown pane or a code block, a Shift+press is a plain one,
-// as on those blocks themselves (shiftClicks.ts, codeMirrorPresses.ts).
+// as on those blocks themselves (shiftClicks.ts, codeMirrorPresses.ts). So it
+// is while a block, such as an image on its own line, or table cells are
+// selected. The anchor of such a selection is not in text, and a text
+// selection from there starts in the text after it, so the selected image was
+// left out, and with a table after the image the selection started in its
+// first cell and the next key broke the table up. From selected cells the
+// selection started in the cell where the cell selection ended.
+//
+// A press in the view's bottom padding, below the last block, lands on the
+// view's own element too. Chromium put the caret on the last line, at its end
+// on Linux and macOS but at the point nearest the press on Windows, and left
+// of the text column the side padding rule put it at the line's start. On the
+// page below the view, focus stayed where it was (shell/pagePresses.ts). A
+// press below the end of the document, in the bottom padding or on the page
+// below the view, which pagePresses.ts hands on to the view, therefore puts
+// the caret at the end of the document, as most editors do. Crepe keeps an
+// empty paragraph after a last block that is not a paragraph or a heading,
+// such as a list, a table, a code block or an image, so there is a line to
+// type on. The end is then that line, where the next key starts a new
+// paragraph and replaces no block. As beside a line, a drag from there
+// selects to the pointer, and to the end while the pointer stays below the
+// last block (nearestBlock.ts), and a Shift+press extends the selection to the
+// end while the document has focus and is a plain one from outside it.
 
 import { EditorSelection } from "@codemirror/state";
 import { EditorView as CodeMirror } from "@codemirror/view";
-import { NodeSelection, Plugin, TextSelection, type Selection } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, Selection, TextSelection } from "@milkdown/kit/prose/state";
+import { CellSelection } from "@milkdown/kit/prose/tables";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
+import { belowContent } from "../../shell/pagePresses";
 import { nearestBlock, textPosition, type Block } from "./nearestBlock";
 import { dragSelect, followPointer, selectedOnClick, selectThenFocus } from "./shiftClicks";
 
@@ -127,12 +151,15 @@ function dragInCode(view: EditorView, code: CodeMirror, anchor: number): void {
 }
 
 /** Take a press in the view's side padding beside anything but the lines of
- *  a paragraph or heading, put the caret, the code's cursor or the selection
- *  where it goes, and follow a drag from there (see the header). */
+ *  a paragraph or heading, or one below the last block, put the caret, the
+ *  code's cursor or the selection where it goes, and follow a drag from
+ *  there (see the header). The last block ends where the view's bottom
+ *  padding starts. */
 function paddingPress(view: EditorView, event: MouseEvent): void {
   if (event.button !== 0 || event.target !== view.dom) return;
-  const side = sideOf(view, event.clientX);
-  const place = side && placeBeside(view, event.clientX, event.clientY, side);
+  const { clientX: x, clientY: y } = event;
+  const side = sideOf(view, x);
+  const place = belowContent(view.dom, y) ? Selection.atEnd(view.state.doc) : side && placeBeside(view, x, y, side);
   if (!place) return;
   event.preventDefault();
   if ("code" in place) {
@@ -148,15 +175,21 @@ function paddingPress(view: EditorView, event: MouseEvent): void {
     return;
   }
   const focused = view.hasFocus();
-  dragSelect(view, event.shiftKey && focused ? view.state.selection.anchor : place.head, place.head);
+  // A text selection from the anchor of a selected block or of selected
+  // cells, which is not in text, starts in the text after it (see the header).
+  const { selection } = view.state;
+  const blockOrCells = selection instanceof CellSelection || (selection instanceof NodeSelection && selection.node.isBlock);
+  const extend = event.shiftKey && focused && !blockOrCells;
+  dragSelect(view, extend ? selection.anchor : place.head, place.head);
   // Focusing first would move focus back into a code block that holds the
   // selection, since focusing the view puts the browser's selection there.
   if (!focused) view.focus();
 }
 
 /** ProseMirror plugin that takes a press in the document's side padding
- *  beside anything but the lines of a paragraph or heading (see the header).
- *  ProseMirror and its plugins leave a press that a listener cancelled. */
+ *  beside anything but the lines of a paragraph or heading, and one below
+ *  the last block (see the header). ProseMirror and its plugins leave a press
+ *  that a listener cancelled. */
 export const paddingPresses = $prose(
   () =>
     new Plugin({
