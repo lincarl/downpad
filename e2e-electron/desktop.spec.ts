@@ -450,6 +450,99 @@ test("text that comes without a key replaces an image selected between paragraph
   await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "漢字", "Below.", written, "Last line."].join("\n\n") + "\n");
 });
 
+test("an input method's composition replaces a selected block or selected table cells as a key does, and one undo brings each back", async () => {
+  // DevTools composes as an input method does, a step at a time, and then
+  // commits. Chromium cannot put a composition where a block was. Over an
+  // image between paragraphs it went to the end of the paragraph above and
+  // the image stayed, and over two selected cells it kept the text of one.
+  const file = path.join(directory, "compose-over-blocks.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
+  const blocks = [
+    "Above.",
+    "![Pic](pic.svg)",
+    "Below.",
+    "---",
+    "After the rule.",
+    "```js\nconst x = 1;\n```",
+    "After the code.",
+    "$$\nE = mc^2\n$$",
+    "After the formula.",
+    "```mermaid\ngraph TD; A-->B;\n```",
+    "Selected by its handle.",
+    table,
+    "Last line.",
+  ];
+  const original = blocks.join("\n\n") + "\n";
+  await writeFile(file, original);
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const codeBlocks = documentView.locator(".milkdown-code-block");
+  await expect(codeBlocks.nth(1).locator(".katex")).toBeVisible();
+  await expect(codeBlocks.nth(2).locator(".mermaid-preview svg")).toBeVisible();
+  const image = documentView.locator(".milkdown-image-block");
+  const session = await page.context().newCDPSession(page);
+  /** The file after each composition, last first. */
+  const saved: string[] = [original];
+  /** Compose two steps of `text`, commit it, and expect it in the file in
+   *  place of `block`, or of the whole table `written` gives. */
+  const composeOver = async (text: string, block: string, written?: string) => {
+    for (const step of [text.slice(0, 1), text]) await session.send("Input.imeSetComposition", { text: step, selectionStart: step.length, selectionEnd: step.length });
+    await session.send("Input.insertText", { text });
+    blocks[blocks.indexOf(block)] = written ?? text;
+    saved.unshift(blocks.join("\n\n") + "\n");
+    await page.keyboard.press("ControlOrMeta+s");
+    await expect.poll(() => readFile(file, "utf8")).toBe(saved[0]);
+  };
+  await image.click();
+  await expect(image).toHaveClass(/\bselected\b/);
+  await composeOver("かな", "![Pic](pic.svg)");
+  await documentView.locator("hr").click();
+  await expect(documentView.locator("hr")).toHaveClass(/\bProseMirror-selectednode\b/);
+  await composeOver("ひら", "---");
+  // A code block, a math block, a Mermaid diagram and a paragraph that the
+  // block handle selected.
+  await selectWithHandle(codeBlocks.first());
+  await composeOver("がな", "```js\nconst x = 1;\n```");
+  await selectWithHandle(codeBlocks.first());
+  await composeOver("かず", "$$\nE = mc^2\n$$");
+  await selectWithHandle(codeBlocks.first());
+  await composeOver("ずけい", "```mermaid\ngraph TD; A-->B;\n```");
+  await selectWithHandle(documentView.locator("p", { hasText: "Selected by its handle." }));
+  await composeOver("て", "Selected by its handle.");
+  // A key puts its text in the cell where the selection ends and empties the
+  // other one. Milkdown pads the columns of a table it writes.
+  await clickOn("one", 1, 0.5);
+  await shiftClickAt(await pointOn("two", 1, 0.5));
+  await expect(documentView.locator(".selectedCell")).toHaveCount(2);
+  await composeOver("あい", table, "| A     | B    |\n| ----- | ---- |\n|       | あい   |\n| three | four |");
+  // Each undo brings back one block or the cells, the image selected again.
+  for (const expected of saved.slice(1)) {
+    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press("ControlOrMeta+s");
+    await expect.poll(() => readFile(file, "utf8")).toBe(expected);
+  }
+  await expect(image).toHaveClass(/\bselected\b/);
+});
+
+/** Click the grip of Crepe's block handle beside `block`, which selects the
+ *  block. */
+async function selectWithHandle(block: Locator): Promise<void> {
+  await block.scrollIntoViewIfNeeded();
+  const box = (await block.boundingBox())!;
+  await page.mouse.move(box.x + 10, box.y + box.height / 2);
+  // Crepe shows the handle beside the block under the pointer once
+  // floating-ui has placed it.
+  const grip = page.locator(".milkdown-block-handle[data-show=true] .operation-item").last();
+  await expect.poll(async () => {
+    const gripBox = await grip.boundingBox();
+    return !!gripBox && gripBox.y < box.y + box.height && gripBox.y + gripBox.height > box.y;
+  }).toBe(true);
+  const center = await centerOf(grip);
+  await page.mouse.click(center.x, center.y);
+  await expect(block).toHaveClass(/\b(selected|ProseMirror-selectednode)\b/);
+}
+
 test("Ctrl or Cmd+click and double-click on either half of an inline image follow only the image's own link", async () => {
   const file = path.join(directory, "image-links.md");
   // An image wide enough to click either half of.

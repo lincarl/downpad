@@ -36,9 +36,26 @@
 // such as a line break and a formula, but only if the caret is there when
 // the composition starts, so a selection removed later made the text come
 // in twice.
+//
+// The same handler readies a selection that is not text, such as a selected
+// block or selected table cells, for a composition. ProseMirror types a key
+// over such a selection itself, and the prosemirror-view patch types text
+// that comes without a composition the same way. A composition went to
+// Chromium, which cannot put text where a block was. ProseMirror read the
+// DOM selection as the composition started, which over an image between two
+// paragraphs left the caret at the end of the paragraph above, and the
+// composed text went there with the image kept. So the plugin replaces the
+// selection as a typed key does, with no text, and the composition goes on
+// from the caret that leaves, in an empty paragraph where the block was or
+// in the cell where a key's text goes. Chromium places the caret after the
+// composition's first text by text offsets it read before the change, so
+// the plugin puts that caret right (`caretAfterFirstText`). The change and
+// the composition are one undo step, which brings the block or the cells
+// back.
 
+import { closeHistory } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
-import { Plugin, TextSelection, type Selection } from "@milkdown/kit/prose/state";
+import { Plugin, TextSelection, type EditorState, type Selection, type Transaction } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 
@@ -69,6 +86,24 @@ function crossesBreakEdge(selection: Selection): boolean {
   return selection instanceof TextSelection && !selection.empty && (afterBreakBeforeAtom(selection.$from) || afterBreakBeforeAtom(selection.$to));
 }
 
+/** Whether `selection` is not text but covers something, such as a selected
+ *  block, selected table cells or the whole document. A gap cursor covers
+ *  nothing. */
+function coversNonText(selection: Selection): boolean {
+  return !(selection instanceof TextSelection) && !selection.empty;
+}
+
+/** Replaces the selection as a typed key does, but with no text, and leaves
+ *  the caret where the key's text would go. */
+function clearAsKey(state: EditorState): Transaction {
+  // ProseMirror types a key over a selection that is not text with
+  // insertText, which wraps the text in a paragraph where a block was and
+  // puts the caret after it. Type a space that way and take it out again.
+  const tr = state.tr.insertText(" ");
+  const end = tr.selection.from;
+  return tr.delete(end - 1, end).scrollIntoView();
+}
+
 /** Moves the caret past the inline atoms that start its line, keeping the
  *  selection's anchor when `extend` is set. */
 function moveEndPastAtoms(view: EditorView, extend: boolean): void {
@@ -92,7 +127,8 @@ function moveEndPastAtoms(view: EditorView, extend: boolean): void {
  *  the anchor of a selection that Shift and a key that moves the caret extend
  *  from right after a line break and before an inline atom, types over a
  *  selection that starts or ends there, and removes such a selection before
- *  a composition replaces it. */
+ *  a composition replaces it. Replaces a selection that is not text as a key
+ *  does before a composition. */
 export const endPastAtoms = $prose(() => {
   /** The anchor of the selection that a Shift key is extending from right
    *  after a line break, until ProseMirror reads the extended selection. */
@@ -103,16 +139,64 @@ export const endPastAtoms = $prose(() => {
   const readExtended = (view: EditorView) => {
     if (keptAnchor !== null) view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
   };
+  /** Puts the caret after the text of a composition's first step, in the
+   *  text block that a selection that is not text gave way to. Chromium puts
+   *  that caret at the text offset where the selection started before
+   *  compositionstart, plus the length of the text. The change made at
+   *  compositionstart moved where the text goes, such as past the break
+   *  before a new paragraph or past the text of a cell it emptied, so the
+   *  caret landed elsewhere, such as at the end of the paragraph above.
+   *  ProseMirror finds the composition's text from the caret, so it drew the
+   *  new text again, which ended the composition, and the next step started
+   *  another one after it. Text that goes into a text node ProseMirror drew
+   *  keeps that node, so only text in a node of its own needs the caret.
+   *  Chromium calls observers in the order they were made, and this one is
+   *  made before the view and its own observer, so ProseMirror reads the
+   *  caret this puts. It stops after the first change it sees. */
+  const caretAfterFirstText = new MutationObserver((records) => {
+    caretAfterFirstText.disconnect();
+    const text = records.flatMap((record) => [...record.addedNodes]).find((node): node is Text => node.nodeType === Node.TEXT_NODE);
+    text?.ownerDocument.getSelection()?.collapse(text, text.length);
+  });
   return new Plugin({
     view: (view) => {
-      /** Removes a selection that a composition is about to replace. */
+      /** Removes a selection that a composition is about to replace, or
+       *  replaces one that is not text as a key does. */
       const removeSelection = () => {
         readExtended(view);
-        if (crossesBreakEdge(view.state.selection)) view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+        caretAfterFirstText.disconnect();
+        if (crossesBreakEdge(view.state.selection)) {
+          view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+          return;
+        }
+        // A composition in a field of a node view, such as a code block's
+        // code or an image's caption, starts there and leaves the document
+        // without focus.
+        if (!coversNonText(view.state.selection) || !view.hasFocus()) return;
+        // Read a move of the selection that ProseMirror has not read yet, as
+        // the prosemirror-view patch does before text without a key, so a
+        // composition right after Page Up goes where Page Up put the caret.
+        view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
+        if (!coversNonText(view.state.selection)) return;
+        // Start a new undo step. The composition's first change joins it, as
+        // it comes right after this one and next to it, and its later changes
+        // join that one, as they carry the same composition id.
+        view.dispatch(closeHistory(clearAsKey(view.state)));
+        const { node } = view.domAtPos(view.state.selection.head);
+        caretAfterFirstText.observe(node, { childList: true, characterData: true, subtree: true });
       };
+      /** Stops watching for a composition's first text once it ends. */
+      const composed = () => caretAfterFirstText.disconnect();
       // Listen in the capture phase, before ProseMirror and Milkdown.
       view.dom.addEventListener("compositionstart", removeSelection, true);
-      return { destroy: () => view.dom.removeEventListener("compositionstart", removeSelection, true) };
+      view.dom.addEventListener("compositionend", composed, true);
+      return {
+        destroy: () => {
+          caretAfterFirstText.disconnect();
+          view.dom.removeEventListener("compositionstart", removeSelection, true);
+          view.dom.removeEventListener("compositionend", composed, true);
+        },
+      };
     },
     props: {
       handleKeyDown: (view, event) => {
