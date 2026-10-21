@@ -66,6 +66,7 @@ function makeStore(): Store {
     },
     banner: null,
     saveStatus: { lastSavedAt: null, autosaving: false },
+    started: false,
   };
   return new Store(state);
 }

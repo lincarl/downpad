@@ -40,6 +40,7 @@ function makeStore(markdown = "hello world"): Store {
     },
     banner: null,
     saveStatus: { lastSavedAt: null, autosaving: false },
+    started: false,
   };
   return new Store(initial);
 }

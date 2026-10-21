@@ -37,7 +37,15 @@ test.afterEach(async () => {
   app = undefined;
 });
 
-async function launch(file?: string, developmentOverride?: string): Promise<void> {
+/** Start the desktop app, with `file` as its launch argument, and resolve once
+ *  startup has finished (`untilStarted`). `developmentOverride` sets
+ *  MD_EASY_DEV_URL. A test of what startup shows before it can finish, such
+ *  as the recovery prompt that startup waits on, passes `duringStartup` to
+ *  resolve once the app shell shows instead. */
+async function launch(
+  file?: string,
+  { developmentOverride, duringStartup = false }: { developmentOverride?: string; duringStartup?: boolean } = {},
+): Promise<void> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE" && entry[0] !== "MD_EASY_DEV_URL"),
   );
@@ -59,6 +67,15 @@ async function launch(file?: string, developmentOverride?: string): Promise<void
   page = await app.firstWindow();
   await expect(page.getByTestId("app-shell")).toBeVisible();
   if (cpuThrottlingRate) await throttleCpu(cpuThrottlingRate);
+  if (!duringStartup) await untilStarted();
+}
+
+/** Resolve once the app has finished startup, as its shell's `data-started`
+ *  shows. Until then the app has no keyboard shortcuts, so a key does
+ *  nothing, and startup can still reset the tabs and the layout, which
+ *  undoes a file opened or a layout chosen meanwhile. */
+async function untilStarted(): Promise<void> {
+  await expect(page.getByTestId("app-shell")).toHaveAttribute("data-started", "true");
 }
 
 /** Make the renderer's CPU `rate` times slower, as on a slower machine. */
@@ -3383,7 +3400,7 @@ test("the packaged app ignores a remote development URL override", async () => {
   test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");
   await writeFile(file, "# Bundled application\n");
-  await launch(file, "https://example.invalid/");
+  await launch(file, { developmentOverride: "https://example.invalid/" });
   await expect(page.locator(heading)).toHaveText("Bundled application");
   expect(new URL(page.url()).protocol).toBe("file:");
   expect(await app!.evaluate(({ app }) => app.isPackaged)).toBe(true);
@@ -3964,9 +3981,11 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await mkdir(recovery);
   const snapshot = { sessionId: "earlier-session", savedAt: new Date().toISOString(), filePath: file, markdown, isDirty: true };
   await writeFile(path.join(recovery, "earlier-session.json"), JSON.stringify(snapshot));
-  await launch();
-  // Startup only fills the tab, so the editor must still be built for it.
+  // Startup waits for an answer to the recovery prompt.
+  await launch(undefined, { duringStartup: true });
   await page.getByRole("button", { name: "Open recovered", exact: true }).click();
+  await untilStarted();
+  // Startup only fills the tab, so the editor must still be built for it.
   await expect(page.locator(heading)).toHaveText("Title");
   await expect(page).toHaveTitle("● recovered.md — md-easy");
   await page.locator(heading).click({ button: "right" });
