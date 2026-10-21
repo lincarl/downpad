@@ -32,7 +32,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
-import { undo, undoDepth } from "@milkdown/kit/prose/history";
+import { redo, redoDepth, undo, undoDepth } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { NodeSelection, TextSelection, type Selection } from "@milkdown/kit/prose/state";
 import { CellSelection } from "@milkdown/kit/prose/tables";
@@ -427,9 +427,13 @@ describe("a composition over a selection that is not text", () => {
     expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
   });
 
-  it("puts the image back, selected, when the composition commits nothing, and adds no undo step", async () => {
+  it("puts the image back, selected, when the composition commits nothing, and leaves the undo history as it was", async () => {
     const view = await open(imageBetweenParagraphs, selectImage);
-    const depth = undoDepth(view.state);
+    // An edit that was undone, so that redo can bring it back.
+    view.dispatch(view.state.tr.insertText(" Typed", "Above.".length + 1));
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    view.dispatch(view.state.tr.setSelection(selectImage(view.state.doc)));
+    const depths = [undoDepth(view.state), redoDepth(view.state)];
     const composed = await startComposition(view, "か", [textNode(view, "Above."), 6]);
     expect(find(view.state.doc, (node) => node.type.name === "image-block")).toBe(-1);
     // The composition is emptied, which ends it.
@@ -438,7 +442,11 @@ describe("a composition over a selection that is not text", () => {
     await endComposition(view, "");
     expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
     expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
-    expect(undoDepth(view.state)).toBe(depth);
+    expect([undoDepth(view.state), redoDepth(view.state)]).toEqual(depths);
+    // Redo brings back the edit, and not the empty paragraph the composition
+    // started in, which would replace the image.
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(["Above. Typed", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
   });
 
   it.each([

@@ -545,12 +545,14 @@ test("an input method's composition that commits nothing over a selected block o
   const session = await page.context().newCDPSession(page);
   const step = (text: string) => session.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
   // Each is selected again, with focus in the document view, so the next key
-  // replaces it.
+  // replaces it. Redo has nothing to bring back.
   await image.click();
   await expect(image).toHaveClass(/\bselected\b/);
   await step("か");
   await expect(image).toHaveCount(0);
   await step("");
+  await expect(image).toHaveClass(/\bselected\b/);
+  await page.keyboard.press("ControlOrMeta+Shift+KeyZ");
   await expect(image).toHaveClass(/\bselected\b/);
   await page.keyboard.press("Shift+KeyA");
   await clickOn("one", 1, 0.5);

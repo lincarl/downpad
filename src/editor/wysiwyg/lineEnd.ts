@@ -52,9 +52,10 @@
 // the plugin puts that caret right (`caretAfterFirstText`). The change and
 // the composition are one undo step, which brings the block or the cells
 // back. A composition that commits nothing, as when it is cancelled, is
-// undone that way once it ends, with focus put back as it was before it, so
-// the block or the cells are selected as before.
+// undone that way once it ends, with the undo history and focus put back as
+// they were before it, so the block or the cells are selected as before.
 
+import { historyProviderPlugin } from "@milkdown/kit/plugin/history";
 import { closeHistory, undo, undoDepth } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, TextSelection, type EditorState, type Selection, type Transaction } from "@milkdown/kit/prose/state";
@@ -164,9 +165,9 @@ export const endPastAtoms = $prose(() => {
   return new Plugin({
     view: (view) => {
       /** The document and the undo depth right after a composition started
-       *  over a selection that is not text replaced it, until a composition
-       *  starts or this one has ended. */
-      let cleared: { doc: ProseNode; depth: number } | null = null;
+       *  over a selection that is not text replaced it, and the undo history
+       *  from before that, until a composition starts or this one has ended. */
+      let cleared: { doc: ProseNode; depth: number; history: unknown } | null = null;
       /** Removes a selection that a composition is about to replace, or
        *  replaces one that is not text as a key does. */
       const removeSelection = () => {
@@ -186,18 +187,21 @@ export const endPastAtoms = $prose(() => {
         // composition right after Page Up goes where Page Up put the caret.
         view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
         if (!coversNonText(view.state.selection)) return;
+        // The undo history from before the replacement, which a composition
+        // that commits nothing puts back (see putBackIfEmpty).
+        const history: unknown = historyProviderPlugin.key()?.getState(view.state);
         // Start a new undo step. The composition's first change joins it, as
         // it comes right after this one and next to it, and its later changes
         // join that one, as they carry the same composition id.
         view.dispatch(closeHistory(clearAsKey(view.state)));
-        cleared = { doc: view.state.doc, depth: undoDepth(view.state) };
+        cleared = { doc: view.state.doc, depth: undoDepth(view.state), history };
         const { node } = view.domAtPos(view.state.selection.head);
         caretAfterFirstText.observe(node, { childList: true, characterData: true, subtree: true });
       };
       /** Undoes the replacement of a selection that is not text once a
        *  composition that committed nothing has ended, which brings the block
        *  or the cells back as an undo does, selected and with focus in the
-       *  document view. */
+       *  document view, and puts back the undo history from before. */
       const putBackIfEmpty = () => {
         caretAfterFirstText.disconnect();
         const started = cleared;
@@ -210,7 +214,13 @@ export const endPastAtoms = $prose(() => {
           cleared = null;
           if (!view.state.doc.eq(started.doc) || undoDepth(view.state) !== started.depth) return;
           const focused = view.hasFocus();
-          undo(view.state, view.dispatch);
+          // The undo's transaction carries the history's state after it in
+          // the history's meta, which keeps the replacement as a redo step.
+          // Redo would then replace the block with an empty paragraph again,
+          // and the redo steps from before the composition would be gone.
+          // Carry the history from before the replacement instead.
+          const key = historyProviderPlugin.key();
+          undo(view.state, (tr) => view.dispatch(key ? tr.setMeta(key, { ...tr.getMeta(key), historyState: started.history }) : tr));
           // Crepe's code block view takes focus in its code when it is
           // selected, so a code block, a math block or a Mermaid diagram took
           // it. Text that IBus commits after the composition then went into
