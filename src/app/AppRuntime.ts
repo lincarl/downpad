@@ -269,6 +269,9 @@ export class AppRuntime {
   }
 
   private async bootstrap(): Promise<void> {
+    // A runtime that replaces another, as after a hot reload in development,
+    // keeps the store, so startup is not finished until this one's ends.
+    this.store.set({ started: false });
     // Load settings before the first mount so the editor picks up the saved
     // serializer style and default view.
     await this.settingsModel.init();
