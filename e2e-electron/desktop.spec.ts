@@ -577,6 +577,9 @@ test("an input method's composition that commits nothing over a selected block, 
   await page.keyboard.press("ControlOrMeta+Shift+KeyZ");
   await expect(image).toHaveClass(/\bselected\b/);
   await page.keyboard.press("Shift+KeyA");
+  // The table can lie below the window, whose frame on Windows leaves less
+  // room, and a click there lands on nothing.
+  await documentView.getByRole("table").scrollIntoViewIfNeeded();
   await clickOn("one", 1, 0.5);
   await shiftClickAt(await pointOn("two", 1, 0.5));
   await expect(cells).toHaveCount(2);
