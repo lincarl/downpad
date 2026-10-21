@@ -554,7 +554,7 @@ test("an input method's composition that commits nothing over a selected block, 
   await writeFile(path.join(directory, "dot.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#36c"/></svg>');
   const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
   const row = "Images ![L](dot.svg)![M](dot.svg)![R](dot.svg) in a row.";
-  const blocks = ["Above.", "![Pic](pic.svg)", "Below.", "```js\nconst x = 1;\n```", "After the code.", "$$\nE = mc^2\n$$", "After the formula.", table, row, "Last line."];
+  const blocks = ["Above.", "![Pic](pic.svg)", "Below.", "```js\nconst x = 1;\n```", "After the code.", "$$\nE = mc^2\n$$", "After the formula.", table, row, "# Notes", "Between the headings.", "# Notes", "Last line."];
   const original = blocks.join("\n\n") + "\n";
   await writeFile(file, original);
   await launch(file);
@@ -607,10 +607,18 @@ test("an input method's composition that commits nothing over a selected block, 
   await expect(math).toHaveClass(/\bselected\b/);
   await expect(documentView).toBeFocused();
   await session.send("Input.insertText", { text: "かな" });
+  // Milkdown numbers the id of a heading whose text an earlier heading has.
+  // It renamed the second heading once the first gave way, and the first
+  // stayed gone.
+  const headings = documentView.locator("h1", { hasText: "Notes" });
+  await selectWithHandle(headings.first());
+  for (const text of ["か", "かな", ""]) await step(text);
+  await expect(headings).toHaveCount(2);
+  await expect(headings.first()).toHaveClass(/\bProseMirror-selectednode\b/);
   await page.keyboard.press("ControlOrMeta+s");
   const written = "| A     | B    |\n| ----- | ---- |\n|       | C    |\n| three | four |";
   const rowWritten = "Images ![L](dot.svg)D![R](dot.svg) in a row.";
-  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "A", "Below.", "B", "After the code.", "かな", "After the formula.", written, rowWritten, "Last line."].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "A", "Below.", "B", "After the code.", "かな", "After the formula.", written, rowWritten, "# Notes", "Between the headings.", "# Notes", "Last line."].join("\n\n") + "\n");
   // The compositions left no undo steps of their own, so five undos take
   // back the four keys and the text.
   await documentView.locator("p", { hasText: "After the code." }).click();
