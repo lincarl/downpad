@@ -6,4 +6,4 @@ minimumReleaseAgeExclude:
   - electron@44.7.1
 patchedDependencies:
   '@milkdown/components@7.22.3': patches/@milkdown__components@7.22.3.patch
-  prosemirror-view@1.41.8: patches/prosemirror-view@1.41.8.patch
+  prosemirror-view@1.42.6: patches/prosemirror-view@1.42.6.patch

@@ -1,8 +1,33 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e4bd62d0d 100644
+index d52a5260a7b9924b2865053ea1e8c6484225277b..0f8f0b3d7d84c3d78194e6c94b962589aa5ee171 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
-@@ -2317,6 +2317,31 @@ function hasFocusAndSelection(view) {
+@@ -781,7 +781,23 @@ var ViewDesc = function () {
+       if (dom == this.dom && this.contentDOM) {
+         atEnd = offset > domIndex(this.contentDOM);
+       } else if (this.contentDOM && this.contentDOM != this.dom && this.dom.contains(this.contentDOM)) {
+-        atEnd = !!(dom.compareDocumentPosition(this.contentDOM) & 4);
++        // md-easy patch: prosemirror-view's own fix (ab65c94, "Fix
++        // regression in posAtDOM") of a bug that 1.42.6 brought, until a
++        // release has it. 1.42.6 read a position before a node view's
++        // content as the node's end and one after it as the start, such
++        // as a press on a list item's bullet, which Crepe draws before
++        // the item's text.
++        var rel = dom.compareDocumentPosition(this.contentDOM),
++          contentDOM = this.contentDOM;
++        if (rel & 16) {
++          // this.contentDOM is inside dom
++          atEnd = offset > Array.from(dom.childNodes).findIndex(function (n) {
++            return n.contains(contentDOM);
++          });
++        } else {
++          // Check if after or before
++          atEnd = !(rel & 4);
++        }
+       } else if (this.dom.firstChild) {
+         if (offset == 0) for (var search = dom;; search = search.parentNode) {
+           if (search == this.dom) {
+@@ -2350,6 +2366,31 @@ function hasFocusAndSelection(view) {
    if (view.editable && !view.hasFocus()) return false;
    return hasSelection(view);
  }
@@ -34,7 +59,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
  function hasSelection(view) {
    var sel = view.domSelectionRange();
    if (!sel.anchorNode) return false;
-@@ -2910,6 +2935,9 @@ var InputState = _createClass(function InputState() {
+@@ -2958,6 +2999,9 @@ var InputState = _createClass(function InputState() {
    };
    this.lastSelectionOrigin = null;
    this.lastSelectionTime = 0;
@@ -44,7 +69,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
    this.lastIOSEnter = 0;
    this.lastIOSEnterFallbackTimeout = -1;
    this.lastFocus = 0;
-@@ -2944,10 +2972,28 @@ function initInput(view) {
+@@ -2992,10 +3036,28 @@ function initInput(view) {
    });
    ensureListeners(view);
  }
@@ -71,19 +96,19 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
  }
 +var modifierKeys = [16, 17, 18, 20, 91, 92, 93, 224];
  function destroyInput(view) {
+   if (view.input.mouseDown) view.input.mouseDown.done();
    view.domObserver.stop();
-   for (var type in view.input.eventHandlers) view.dom.removeEventListener(type, view.input.eventHandlers[type]);
-@@ -2980,6 +3026,9 @@ editHandlers.keydown = function (view, _event) {
+@@ -3029,6 +3091,9 @@ editHandlers.keydown = function (view, _event) {
    var event = _event;
    view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
-   if (inOrNearComposition(view, event)) return;
+   if (inOrNearComposition(view)) return;
 +  // md-easy patch: the page can move the selection right before a key
 +  // reaches the view (see pageReset). Put it back before the key counts.
 +  putBackPageReset(view);
    view.input.lastKeyCode = event.keyCode;
    view.input.lastKeyCodeTime = Date.now();
    if (android && chrome && event.keyCode == 13) return;
-@@ -3000,7 +3049,7 @@ editHandlers.keydown = function (view, _event) {
+@@ -3049,7 +3114,7 @@ editHandlers.keydown = function (view, _event) {
    }) || captureKeyDown(view, event)) {
      event.preventDefault();
    } else {
@@ -92,7 +117,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
    }
  };
  editHandlers.keyup = function (view, event) {
-@@ -3563,8 +3612,12 @@ handlers.focus = function (view) {
+@@ -3681,8 +3746,12 @@ handlers.focus = function (view) {
      view.dom.classList.add("ProseMirror-focused");
      view.domObserver.start();
      view.focused = true;
@@ -106,7 +131,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
      }, 20);
    }
  };
-@@ -3580,6 +3633,32 @@ handlers.blur = function (view, _event) {
+@@ -3698,6 +3767,32 @@ handlers.blur = function (view, _event) {
  };
  handlers.beforeinput = function (view, _event) {
    var event = _event;
@@ -136,10 +161,10 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
 +      return;
 +    }
 +  }
-   if (chrome && android && event.inputType == "deleteContentBackward") {
+   if (android && event.inputType == "deleteContentBackward") {
      view.domObserver.flushSoon();
      var domChangeCount = view.input.domChangeCount;
-@@ -4232,6 +4311,10 @@ var DOMObserver = function () {
+@@ -4350,6 +4445,10 @@ var DOMObserver = function () {
      this.flushingSoon = -1;
      this.observer = null;
      this.currentSelection = new SelectionState();
@@ -150,7 +175,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
      this.onCharData = null;
      this.suppressingSelectionUpdates = false;
      this.lastChangedTextNode = null;
-@@ -4341,6 +4424,7 @@ var DOMObserver = function () {
+@@ -4459,6 +4558,7 @@ var DOMObserver = function () {
      key: "setCurSelection",
      value: function setCurSelection() {
        this.currentSelection.set(this.view.domSelectionRange());
@@ -158,7 +183,7 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
      }
    }, {
      key: "ignoreSelectionChange",
-@@ -4460,6 +4544,9 @@ var DOMObserver = function () {
+@@ -4580,6 +4680,9 @@ var DOMObserver = function () {
          selectionToDOM(view);
          this.currentSelection.set(sel);
          view.scrollToSelection();
@@ -169,10 +194,31 @@ index ce89be47cebd61a79c6039950f6dcd10df0e3c7e..07a7d3a39399054c1b4c47e1043f690e
          if (from > -1) {
            view.docView.markDirty(from, to);
 diff --git a/dist/index.js b/dist/index.js
-index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9ce2430f26 100644
+index dc0d117b85e1da3eae915b4d8ff8e5e604683861..57292bac372d911498b45b997484e36f4d8d044a 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -2385,6 +2385,35 @@ function hasFocusAndSelection(view) {
+@@ -850,7 +850,19 @@ class ViewDesc {
+             atEnd = offset > domIndex(this.contentDOM);
+         }
+         else if (this.contentDOM && this.contentDOM != this.dom && this.dom.contains(this.contentDOM)) {
+-            atEnd = !!(dom.compareDocumentPosition(this.contentDOM) & 4);
++            // md-easy patch: prosemirror-view's own fix (ab65c94, "Fix
++            // regression in posAtDOM") of a bug that 1.42.6 brought, until a
++            // release has it. 1.42.6 read a position before a node view's
++            // content as the node's end and one after it as the start, such
++            // as a press on a list item's bullet, which Crepe draws before
++            // the item's text.
++            let rel = dom.compareDocumentPosition(this.contentDOM);
++            if (rel & 16) { // this.contentDOM is inside dom
++                atEnd = offset > Array.from(dom.childNodes).findIndex(n => n.contains(this.contentDOM));
++            }
++            else { // Check if after or before
++                atEnd = !(rel & 4);
++            }
+         }
+         else if (this.dom.firstChild) {
+             if (offset == 0)
+@@ -2434,6 +2446,35 @@ function hasFocusAndSelection(view) {
          return false;
      return hasSelection(view);
  }
@@ -208,7 +254,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
  function hasSelection(view) {
      let sel = view.domSelectionRange();
      if (!sel.anchorNode)
-@@ -3063,6 +3092,9 @@ class InputState {
+@@ -3129,6 +3170,9 @@ class InputState {
          this.lastClick = { time: 0, x: 0, y: 0, type: "", button: 0 };
          this.lastSelectionOrigin = null;
          this.lastSelectionTime = 0;
@@ -218,7 +264,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
          this.lastIOSEnter = 0;
          this.lastIOSEnterFallbackTimeout = -1;
          this.lastFocus = 0;
-@@ -3098,10 +3130,29 @@ function initInput(view) {
+@@ -3164,10 +3208,29 @@ function initInput(view) {
          view.dom.addEventListener("input", () => null);
      ensureListeners(view);
  }
@@ -247,11 +293,11 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
  }
 +const modifierKeys = [16, 17, 18, 20, 91, 92, 93, 224];
  function destroyInput(view) {
-     view.domObserver.stop();
-     for (let type in view.input.eventHandlers)
-@@ -3143,6 +3194,9 @@ editHandlers.keydown = (view, _event) => {
+     if (view.input.mouseDown)
+         view.input.mouseDown.done();
+@@ -3211,6 +3274,9 @@ editHandlers.keydown = (view, _event) => {
      view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
-     if (inOrNearComposition(view, event))
+     if (inOrNearComposition(view))
          return;
 +    // md-easy patch: the page can move the selection right before a key
 +    // reaches the view (see pageReset). Put it back before the key counts.
@@ -259,7 +305,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
      view.input.lastKeyCode = event.keyCode;
      view.input.lastKeyCodeTime = Date.now();
      // Suppress enter key events on Chrome Android, because those tend
-@@ -3170,7 +3224,7 @@ editHandlers.keydown = (view, _event) => {
+@@ -3238,7 +3304,7 @@ editHandlers.keydown = (view, _event) => {
          event.preventDefault();
      }
      else {
@@ -268,7 +314,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
      }
  };
  editHandlers.keyup = (view, event) => {
-@@ -3816,8 +3870,13 @@ handlers.focus = view => {
+@@ -3927,8 +3993,13 @@ handlers.focus = view => {
          view.dom.classList.add("ProseMirror-focused");
          view.domObserver.start();
          view.focused = true;
@@ -283,7 +329,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
                  selectionToDOM(view);
          }, 20);
      }
-@@ -3835,6 +3894,28 @@ handlers.blur = (view, _event) => {
+@@ -3946,6 +4017,28 @@ handlers.blur = (view, _event) => {
  };
  handlers.beforeinput = (view, _event) => {
      let event = _event;
@@ -312,7 +358,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
      // We should probably do more with beforeinput events, but support
      // is so spotty that I'm still waiting to see where they are going.
      // Very specific hack to deal with backspace sometimes failing on
-@@ -4581,6 +4662,10 @@ class DOMObserver {
+@@ -4692,6 +4785,10 @@ class DOMObserver {
          this.flushingSoon = -1;
          this.observer = null;
          this.currentSelection = new SelectionState;
@@ -323,7 +369,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
          this.onCharData = null;
          this.suppressingSelectionUpdates = false;
          this.lastChangedTextNode = null;
-@@ -4677,6 +4762,7 @@ class DOMObserver {
+@@ -4788,6 +4885,7 @@ class DOMObserver {
      }
      setCurSelection() {
          this.currentSelection.set(this.view.domSelectionRange());
@@ -331,7 +377,7 @@ index 2f19364145a8bb8c0f44c738d58271c76078e6f9..a898f068385c6bfb6b98416de8854b9c
      }
      ignoreSelectionChange(sel) {
          if (!sel.focusNode)
-@@ -4771,6 +4857,10 @@ class DOMObserver {
+@@ -4885,6 +4983,10 @@ class DOMObserver {
              this.currentSelection.set(sel);
              view.scrollToSelection();
          }
