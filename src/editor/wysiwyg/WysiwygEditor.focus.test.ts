@@ -6,7 +6,9 @@
 // in case the browser moved the caret on focus. On a busy page that timer can
 // run after a key such as End has moved the caret but before ProseMirror reads
 // the move, which put the caret back where the click left it. The patch skips
-// the restore once a key or click has moved the selection since focus.
+// the restore once a key or click has moved the selection since focus, and so
+// does ProseMirror's own check for a move to the start of the document within
+// 200 ms of focus, which undid Ctrl+Home.
 //
 // Chromium moves a selection it cannot show, such as a selected image between
 // two code blocks, to the start of the document whenever the page is focused,
@@ -19,9 +21,8 @@
 // a selected block or cells, and left text that comes without a key, such as
 // from an input method, to Chromium. Over an image between two
 // paragraphs, Chromium removed the DOM range around the image, which joined
-// the paragraphs. The patch types such text as ProseMirror types a key, over
-// ProseMirror's selection, so a move of the DOM selection that ProseMirror
-// has not read yet does not change where it goes.
+// the paragraphs. The patch types such text as ProseMirror types a key, after
+// it reads a move of the DOM selection that it has not read yet.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -121,6 +122,24 @@ it("still puts the editor's caret back when focus alone moved it", async () => {
   document.getSelection()!.collapse(text, "First".length);
   await vi.advanceTimersByTimeAsync(20);
   expect(caretOffset()).toBe("First line. Mar".length);
+});
+
+it("keeps the caret where Ctrl+Home moved it right after focus came back", async () => {
+  const view = await mount("First line. Markdown.\n\nSecond line.\n", true);
+  const text = view.dom.querySelector("p")!.firstChild as Text;
+  view.dom.focus();
+  await placeCaret(text, "First".length);
+  await vi.advanceTimersByTimeAsync(500);
+  view.dom.blur();
+  // Focus comes back, and within 200 ms the browser moves the caret to the
+  // start of the document for Ctrl+Home, which ProseMirror's own check after
+  // focus took for a move by the browser.
+  view.dom.focus();
+  view.dom.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", keyCode: 36, ctrlKey: true, bubbles: true, cancelable: true }));
+  await placeCaret(text, 0);
+  await vi.advanceTimersByTimeAsync(20);
+  expect(view.state.selection.from).toBe(1);
+  expect(caretOffset()).toBe(0);
 });
 
 describe("a selected block that the page moves to the start of the document", () => {
@@ -226,6 +245,19 @@ describe("a selected block that the page moves to the start of the document", ()
     await moveToStart(start);
     expect(view.state.selection).toBeInstanceOf(TextSelection);
     expect(view.state.selection.from).toBe(1);
+  });
+
+  it("takes such a move before text that comes without a key, and leaves the block", async () => {
+    const { view, start } = await selectImage();
+    keydown(view, "PageUp", 33);
+    // The text comes before Chromium reports the move of Page Up.
+    document.getSelection()!.collapse(start, 0);
+    const input = new InputEvent("beforeinput", { inputType: "insertText", data: "漢", bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(input);
+    expect(input.defaultPrevented).toBe(false);
+    expect(view.state.selection).toBeInstanceOf(TextSelection);
+    expect(view.state.selection.from).toBe(1);
+    expect(editor!.getMarkdown()).toBe(markdown);
   });
 });
 

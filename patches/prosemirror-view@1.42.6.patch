@@ -1,5 +1,5 @@
 diff --git a/dist/index.cjs b/dist/index.cjs
-index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9ccb57e3767 100644
+index d52a5260a7b9924b2865053ea1e8c6484225277b..9e2c44adceb1a7288e22167418e02c8965559b9d 100644
 --- a/dist/index.cjs
 +++ b/dist/index.cjs
 @@ -781,7 +781,23 @@ var ViewDesc = function () {
@@ -135,7 +135,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9cc
      }, 20);
    }
  };
-@@ -3698,6 +3771,31 @@ handlers.blur = function (view, _event) {
+@@ -3698,6 +3771,33 @@ handlers.blur = function (view, _event) {
  };
  handlers.beforeinput = function (view, _event) {
    var event = _event;
@@ -146,14 +146,16 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9cc
 +  // show. Over a block between two paragraphs it removed the DOM range
 +  // around the block, which joined the paragraphs, and over two selected
 +  // cells it replaced the text of only one. So type the text as ProseMirror
-+  // does for a key. It goes over ProseMirror's selection, so a move of the
-+  // DOM selection to the start of the document that ProseMirror has not
-+  // read yet does not take it there (see pageReset). A composition still
-+  // goes to Chromium, as it cannot be cancelled.
-+  if (view.editable && !view.composing) {
++  // does for a key. A move of the DOM selection that ProseMirror has not
++  // read yet is read first, so text after Page Up goes where Page Up put the
++  // caret, while a move to the start of the document by the page goes back
++  // (see pageReset). A composition still goes to Chromium, as it cannot be
++  // cancelled.
++  if (view.editable && !view.composing && event.inputType == "insertText" && event.data && !/[\r\n]/.test(event.data)) {
++    if (!view.domObserver.currentSelection.eq(view.domSelectionRange())) view.domObserver.flush();
 +    var sel = view.state.selection,
 +      text = event.data;
-+    if (event.inputType == "insertText" && text && !/[\r\n]/.test(text) && !(sel instanceof prosemirrorState.TextSelection)) {
++    if (!(sel instanceof prosemirrorState.TextSelection)) {
 +      event.preventDefault();
 +      var deflt = function deflt() {
 +        return view.state.tr.insertText(text).scrollIntoView();
@@ -167,7 +169,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9cc
    if (android && event.inputType == "deleteContentBackward") {
      view.domObserver.flushSoon();
      var domChangeCount = view.input.domChangeCount;
-@@ -4350,6 +4448,10 @@ var DOMObserver = function () {
+@@ -4350,6 +4450,10 @@ var DOMObserver = function () {
      this.flushingSoon = -1;
      this.observer = null;
      this.currentSelection = new SelectionState();
@@ -178,7 +180,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9cc
      this.onCharData = null;
      this.suppressingSelectionUpdates = false;
      this.lastChangedTextNode = null;
-@@ -4459,6 +4561,7 @@ var DOMObserver = function () {
+@@ -4459,6 +4563,7 @@ var DOMObserver = function () {
      key: "setCurSelection",
      value: function setCurSelection() {
        this.currentSelection.set(this.view.domSelectionRange());
@@ -186,7 +188,16 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9cc
      }
    }, {
      key: "ignoreSelectionChange",
-@@ -4580,6 +4683,9 @@ var DOMObserver = function () {
+@@ -4575,11 +4680,17 @@ var DOMObserver = function () {
+         }
+       }
+       var readSel = null;
+-      if (from < 0 && newSel && view.input.lastFocus > Date.now() - 200 && Math.max(view.input.lastTouch, view.input.lastClick.time) < Date.now() - 300 && selectionCollapsed(sel) && (readSel = selectionFromDOM(view)) && readSel.eq(prosemirrorState.Selection.near(view.state.doc.resolve(0), 1))) {
++      // md-easy patch: not after a key that can move the selection, such as
++      // Ctrl+Home right after focus, which this took for the browser's move
++      // and undid (see pageReset).
++      if (from < 0 && newSel && view.input.lastFocus > Date.now() - 200 && Math.max(view.input.lastTouch, view.input.lastClick.time) < Date.now() - 300 && view.input.selectionMoves == this.selectionMoves && selectionCollapsed(sel) && (readSel = selectionFromDOM(view)) && readSel.eq(prosemirrorState.Selection.near(view.state.doc.resolve(0), 1))) {
+         view.input.lastFocus = 0;
          selectionToDOM(view);
          this.currentSelection.set(sel);
          view.scrollToSelection();
@@ -197,7 +208,7 @@ index d52a5260a7b9924b2865053ea1e8c6484225277b..e11ff8be9e0086619deda6045984e9cc
          if (from > -1) {
            view.docView.markDirty(from, to);
 diff --git a/dist/index.js b/dist/index.js
-index dc0d117b85e1da3eae915b4d8ff8e5e604683861..0e7a70281810b8a9828a644d5cbdcf68456c827c 100644
+index dc0d117b85e1da3eae915b4d8ff8e5e604683861..08b7d47be458245ef5849b631af787d7d4f2a0ed 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -850,7 +850,19 @@ class ViewDesc {
@@ -336,7 +347,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..0e7a70281810b8a9828a644d5cbdcf68
                  selectionToDOM(view);
          }, 20);
      }
-@@ -3946,6 +4021,27 @@ handlers.blur = (view, _event) => {
+@@ -3946,6 +4021,30 @@ handlers.blur = (view, _event) => {
  };
  handlers.beforeinput = (view, _event) => {
      let event = _event;
@@ -347,13 +358,16 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..0e7a70281810b8a9828a644d5cbdcf68
 +    // show. Over a block between two paragraphs it removed the DOM range
 +    // around the block, which joined the paragraphs, and over two selected
 +    // cells it replaced the text of only one. So type the text as ProseMirror
-+    // does for a key. It goes over ProseMirror's selection, so a move of the
-+    // DOM selection to the start of the document that ProseMirror has not
-+    // read yet does not take it there (see pageReset). A composition still
-+    // goes to Chromium, as it cannot be cancelled.
-+    if (view.editable && !view.composing) {
++    // does for a key. A move of the DOM selection that ProseMirror has not
++    // read yet is read first, so text after Page Up goes where Page Up put the
++    // caret, while a move to the start of the document by the page goes back
++    // (see pageReset). A composition still goes to Chromium, as it cannot be
++    // cancelled.
++    if (view.editable && !view.composing && event.inputType == "insertText" && event.data && !/[\r\n]/.test(event.data)) {
++        if (!view.domObserver.currentSelection.eq(view.domSelectionRange()))
++            view.domObserver.flush();
 +        let sel = view.state.selection, text = event.data;
-+        if (event.inputType == "insertText" && text && !/[\r\n]/.test(text) && !(sel instanceof TextSelection)) {
++        if (!(sel instanceof TextSelection)) {
 +            event.preventDefault();
 +            let deflt = () => view.state.tr.insertText(text).scrollIntoView();
 +            if (!view.someProp("handleTextInput", f => f(view, sel.$from.pos, sel.$to.pos, text, deflt)))
@@ -364,7 +378,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..0e7a70281810b8a9828a644d5cbdcf68
      // We should probably do more with beforeinput events, but support
      // is so spotty that I'm still waiting to see where they are going.
      // Very specific hack to deal with backspace sometimes failing on
-@@ -4692,6 +4788,10 @@ class DOMObserver {
+@@ -4692,6 +4791,10 @@ class DOMObserver {
          this.flushingSoon = -1;
          this.observer = null;
          this.currentSelection = new SelectionState;
@@ -375,7 +389,7 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..0e7a70281810b8a9828a644d5cbdcf68
          this.onCharData = null;
          this.suppressingSelectionUpdates = false;
          this.lastChangedTextNode = null;
-@@ -4788,6 +4888,7 @@ class DOMObserver {
+@@ -4788,6 +4891,7 @@ class DOMObserver {
      }
      setCurSelection() {
          this.currentSelection.set(this.view.domSelectionRange());
@@ -383,7 +397,20 @@ index dc0d117b85e1da3eae915b4d8ff8e5e604683861..0e7a70281810b8a9828a644d5cbdcf68
      }
      ignoreSelectionChange(sel) {
          if (!sel.focusNode)
-@@ -4885,6 +4986,10 @@ class DOMObserver {
+@@ -4876,8 +4980,12 @@ class DOMObserver {
+         // If it looks like the browser has reset the selection to the
+         // start of the document after focus, restore the selection from
+         // the state
++        // md-easy patch: not after a key that can move the selection, such as
++        // Ctrl+Home right after focus, which this took for the browser's move
++        // and undid (see pageReset).
+         if (from < 0 && newSel && view.input.lastFocus > Date.now() - 200 &&
+             Math.max(view.input.lastTouch, view.input.lastClick.time) < Date.now() - 300 &&
++            view.input.selectionMoves == this.selectionMoves &&
+             selectionCollapsed(sel) && (readSel = selectionFromDOM(view)) &&
+             readSel.eq(Selection.near(view.state.doc.resolve(0), 1))) {
+             view.input.lastFocus = 0;
+@@ -4885,6 +4993,10 @@ class DOMObserver {
              this.currentSelection.set(sel);
              view.scrollToSelection();
          }
