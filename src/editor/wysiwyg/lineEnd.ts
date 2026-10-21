@@ -145,9 +145,13 @@ interface Replaced {
  *  and the composition types over that. Replacing a node in a line with the
  *  caret lost its marks, and between two images Milkdown's widgets beside
  *  the caret made ProseMirror draw the first step's text again, which ended
- *  the composition, so the text came in twice. A selected space that fills
- *  a link's element inside a line does that too, since Chromium types the
- *  later steps after the element, so an image does not use one. */
+ *  the composition, so the text came in twice. A selected space at the end
+ *  of a link's text does that too. Chromium types a step that adds to the
+ *  text of the step before, as Japanese input does, after the link's
+ *  element, as it does over selected text there, and ProseMirror draws that
+ *  text inside the link. Over an image the later steps stay in the link, so
+ *  an image does not use a space, and a formula at the end of a link's text
+ *  gets its first step's text twice, as selected text there does. */
 function readyForComposition(view: EditorView): { tr: Transaction; replaced: Replaced } {
   const { state } = view;
   const { selection } = state;
