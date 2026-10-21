@@ -26,12 +26,13 @@
 //
 // A composition cannot be cancelled, so the patch leaves it to Chromium. The
 // document view's compositionstart handler (lineEnd.ts) replaces such a
-// selection as a key does first.
+// selection as a key does first, and undoes that if the composition commits
+// nothing.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
-import { undo } from "@milkdown/kit/prose/history";
+import { undo, undoDepth } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { NodeSelection, TextSelection, type Selection } from "@milkdown/kit/prose/state";
 import { CellSelection } from "@milkdown/kit/prose/tables";
@@ -419,6 +420,37 @@ describe("a composition over a selection that is not text", () => {
     expect(undo(view.state, view.dispatch)).toBe(true);
     expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
     expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+  });
+
+  it("puts the image back, selected, when the composition commits nothing, and adds no undo step", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    const depth = undoDepth(view.state);
+    const composed = await startComposition(view, "か", [textNode(view, "Above."), 6]);
+    expect(find(view.state.doc, (node) => node.type.name === "image-block")).toBe(-1);
+    // The composition is emptied, which ends it.
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+    expect(undoDepth(view.state)).toBe(depth);
+  });
+
+  it("still replaces the image with text committed without a composition after one that ended empty", async () => {
+    // IBus empties the composition, which ends it, and then commits its text
+    // without one. If the image is back by then, that text replaces it.
+    const view = await open(imageBetweenParagraphs, selectImage);
+    const composed = await startComposition(view, "明", [textNode(view, "Above."), 6]);
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    const commit = new InputEvent("beforeinput", { inputType: "insertText", data: "明", bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(commit);
+    expect(commit.defaultPrevented).toBe(true);
+    await settle();
+    expect(editor!.getMarkdown()).toBe(["Above.", "明", "Below."].join("\n\n") + "\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
   });
 
   it("replaces selected table cells as a key does", async () => {

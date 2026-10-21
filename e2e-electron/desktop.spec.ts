@@ -525,6 +525,56 @@ test("an input method's composition replaces a selected block or selected table 
   await expect(image).toHaveClass(/\bselected\b/);
 });
 
+test("an input method's composition that commits nothing over a selected block or selected table cells puts them back", async () => {
+  // A composition emptied by its last step, or committed empty, ends with
+  // nothing in the document. Before, an image lost its selection and the
+  // next key went to the end of the paragraph above it.
+  const file = path.join(directory, "compose-nothing.md");
+  await writeFile(path.join(directory, "pic.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#c33"/></svg>');
+  const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
+  const blocks = ["Above.", "![Pic](pic.svg)", "Below.", "```js\nconst x = 1;\n```", "After the code.", table, "Last line."];
+  const original = blocks.join("\n\n") + "\n";
+  await writeFile(file, original);
+  await launch(file);
+  const documentView = page.locator(".milkdown .ProseMirror");
+  const image = documentView.locator(".milkdown-image-block");
+  const code = documentView.locator(".milkdown-code-block");
+  const cells = documentView.locator(".selectedCell");
+  const session = await page.context().newCDPSession(page);
+  const step = (text: string) => session.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+  // The image and the cells are selected again, so the next key replaces them.
+  await image.click();
+  await expect(image).toHaveClass(/\bselected\b/);
+  await step("か");
+  await expect(image).toHaveCount(0);
+  await step("");
+  await expect(image).toHaveClass(/\bselected\b/);
+  await page.keyboard.press("Shift+KeyA");
+  await clickOn("one", 1, 0.5);
+  await shiftClickAt(await pointOn("two", 1, 0.5));
+  await expect(cells).toHaveCount(2);
+  for (const text of ["か", "かな", ""]) await step(text);
+  await expect(cells).toHaveCount(2);
+  await page.keyboard.press("Shift+KeyC");
+  // A code block comes back as an undo brings it back, with the cursor at the
+  // start of its code.
+  await selectWithHandle(code);
+  await step("か");
+  await expect(code).toHaveCount(0);
+  await session.send("Input.insertText", { text: "" });
+  await expect(code.locator(".cm-content")).toBeFocused();
+  await page.keyboard.press("Shift+KeyB");
+  await page.keyboard.press("ControlOrMeta+s");
+  const written = "| A     | B    |\n| ----- | ---- |\n|       | C    |\n| three | four |";
+  await expect.poll(() => readFile(file, "utf8")).toBe(["Above.", "A", "Below.", "```js\nBconst x = 1;\n```", "After the code.", written, "Last line."].join("\n\n") + "\n");
+  // The compositions left no undo steps of their own, so three undos take
+  // back the three keys.
+  await documentView.locator("p", { hasText: "After the code." }).click();
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(original);
+});
+
 /** Click the grip of Crepe's block handle beside `block`, which selects the
  *  block. */
 async function selectWithHandle(block: Locator): Promise<void> {

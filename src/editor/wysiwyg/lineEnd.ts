@@ -51,9 +51,10 @@
 // composition's first text by text offsets it read before the change, so
 // the plugin puts that caret right (`caretAfterFirstText`). The change and
 // the composition are one undo step, which brings the block or the cells
-// back.
+// back. A composition that commits nothing, as when it is cancelled, is
+// undone that way once it ends.
 
-import { closeHistory } from "@milkdown/kit/prose/history";
+import { closeHistory, undo, undoDepth } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
 import { Plugin, TextSelection, type EditorState, type Selection, type Transaction } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -128,7 +129,8 @@ function moveEndPastAtoms(view: EditorView, extend: boolean): void {
  *  from right after a line break and before an inline atom, types over a
  *  selection that starts or ends there, and removes such a selection before
  *  a composition replaces it. Replaces a selection that is not text as a key
- *  does before a composition. */
+ *  does before a composition, and puts it back if the composition commits
+ *  nothing. */
 export const endPastAtoms = $prose(() => {
   /** The anchor of the selection that a Shift key is extending from right
    *  after a line break, until ProseMirror reads the extended selection. */
@@ -160,10 +162,15 @@ export const endPastAtoms = $prose(() => {
   });
   return new Plugin({
     view: (view) => {
+      /** The document and the undo depth right after a composition started
+       *  over a selection that is not text replaced it, until a composition
+       *  starts or this one has ended. */
+      let cleared: { doc: ProseNode; depth: number } | null = null;
       /** Removes a selection that a composition is about to replace, or
        *  replaces one that is not text as a key does. */
       const removeSelection = () => {
         readExtended(view);
+        cleared = null;
         caretAfterFirstText.disconnect();
         if (crossesBreakEdge(view.state.selection)) {
           view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
@@ -182,19 +189,34 @@ export const endPastAtoms = $prose(() => {
         // it comes right after this one and next to it, and its later changes
         // join that one, as they carry the same composition id.
         view.dispatch(closeHistory(clearAsKey(view.state)));
+        cleared = { doc: view.state.doc, depth: undoDepth(view.state) };
         const { node } = view.domAtPos(view.state.selection.head);
         caretAfterFirstText.observe(node, { childList: true, characterData: true, subtree: true });
       };
-      /** Stops watching for a composition's first text once it ends. */
-      const composed = () => caretAfterFirstText.disconnect();
+      /** Undoes the replacement of a selection that is not text once a
+       *  composition that committed nothing has ended, which brings the block
+       *  or the cells back as an undo does. */
+      const putBackIfEmpty = () => {
+        caretAfterFirstText.disconnect();
+        const started = cleared;
+        if (!started) return;
+        // ProseMirror reads the composition's last change by the next task.
+        // The last undo step then holds only the replacement and changes of
+        // the composition that left nothing, unless an edit came since.
+        setTimeout(() => {
+          if (view.isDestroyed || cleared !== started) return;
+          cleared = null;
+          if (view.state.doc.eq(started.doc) && undoDepth(view.state) === started.depth) undo(view.state, view.dispatch);
+        });
+      };
       // Listen in the capture phase, before ProseMirror and Milkdown.
       view.dom.addEventListener("compositionstart", removeSelection, true);
-      view.dom.addEventListener("compositionend", composed, true);
+      view.dom.addEventListener("compositionend", putBackIfEmpty, true);
       return {
         destroy: () => {
           caretAfterFirstText.disconnect();
           view.dom.removeEventListener("compositionstart", removeSelection, true);
-          view.dom.removeEventListener("compositionend", composed, true);
+          view.dom.removeEventListener("compositionend", putBackIfEmpty, true);
         },
       };
     },
