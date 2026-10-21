@@ -23,10 +23,16 @@
 // paragraphs, Chromium removed the DOM range around the image, which joined
 // the paragraphs. The patch types such text as ProseMirror types a key, after
 // it reads a move of the DOM selection that it has not read yet.
+//
+// A composition cannot be cancelled, so the patch leaves it to Chromium. The
+// document view's composition handlers (lineEnd.ts) ready such a selection
+// first, so the composition replaces it as a key does, and take that back if
+// the composition commits nothing.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
+import { redo, redoDepth, undo, undoDepth } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { NodeSelection, TextSelection, type Selection } from "@milkdown/kit/prose/state";
 import { CellSelection } from "@milkdown/kit/prose/tables";
@@ -96,6 +102,15 @@ function holdSelectionChange(): void {
 }
 
 const caretOffset = () => document.getSelection()!.anchorOffset;
+
+/** Type `text` one character at a time, the way the browser reports keys. */
+function type(view: EditorView, text: string): void {
+  for (const character of text) {
+    const { from, to } = view.state.selection;
+    const insert = () => view.state.tr.insertText(character, from, to);
+    if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, character, insert))) view.dispatch(insert());
+  }
+}
 
 it("keeps the caret where End moved it right after a click focused the editor", async () => {
   const { view, text } = await open();
@@ -210,6 +225,18 @@ describe("a selected block that the page moves to the start of the document", ()
     expect(editor!.getMarkdown()).toBe(["# Head", code("a"), "漢", code("b")].join("\n\n") + "\n");
   });
 
+  it("keeps the block selected for a composition that starts before ProseMirror reads the move, and the composition replaces it", async () => {
+    const { view, image, start } = await selectImage();
+    document.getSelection()!.collapse(start, 0);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    // An empty paragraph takes the image's place, with the caret in it.
+    const { $from } = view.state.selection;
+    expect(view.state.selection.empty).toBe(true);
+    expect($from.parent.type.name).toBe("paragraph");
+    expect($from.parent.content.size).toBe(0);
+    expect($from.before()).toBe(image);
+  });
+
   it("keeps the block selected when the page moves the selection before a rule at the start", async () => {
     const { view, image, start } = await selectImage(["---", code("a"), "![Pic](pic.png)", code("b")].join("\n\n") + "\n");
     expect(view.state.doc.firstChild!.type.name).toBe("hr");
@@ -255,6 +282,16 @@ describe("a selected block that the page moves to the start of the document", ()
     const input = new InputEvent("beforeinput", { inputType: "insertText", data: "漢", bubbles: true, cancelable: true });
     view.dom.dispatchEvent(input);
     expect(input.defaultPrevented).toBe(false);
+    expect(view.state.selection).toBeInstanceOf(TextSelection);
+    expect(view.state.selection.from).toBe(1);
+    expect(editor!.getMarkdown()).toBe(markdown);
+  });
+
+  it("takes such a move before a composition, and leaves the block", async () => {
+    const { view, start } = await selectImage();
+    keydown(view, "PageUp", 33);
+    document.getSelection()!.collapse(start, 0);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     expect(view.state.selection).toBeInstanceOf(TextSelection);
     expect(view.state.selection.from).toBe(1);
     expect(editor!.getMarkdown()).toBe(markdown);
@@ -314,19 +351,359 @@ describe("text that comes without a key over a selection that is not text", () =
     expect(editor!.getMarkdown()).toBe(["Above.", "| A     | B    |\n| ----- | ---- |\n|       | 漢字   |\n| three | four |"].join("\n\n") + "\n");
   });
 
-  it("leaves a composition over a selected image, and text over selected text, to the browser", async () => {
-    const view = await open(imageBetweenParagraphs, selectImage);
-    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    // ProseMirror reads the DOM selection as a composition starts, which
-    // here puts the caret after "Above.", so select the image again.
-    view.dispatch(view.state.tr.setSelection(selectImage(view.state.doc)));
-    expect(input(view, "か", "insertCompositionText").defaultPrevented).toBe(false);
-    expect(input(view, "漢字").defaultPrevented).toBe(false);
-    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "漢字", bubbles: true }));
-    await vi.advanceTimersByTimeAsync(100);
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 3)));
-    await settle();
+  it("leaves text over selected text to the browser", async () => {
+    const view = await open(imageBetweenParagraphs, (doc) => TextSelection.create(doc, 1, 3));
     expect(input(view, "漢字").defaultPrevented).toBe(false);
     expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+  });
+});
+
+describe("a composition over a selection that is not text", () => {
+  const imageBetweenParagraphs = ["Above.", "![Pic](pic.png)", "Below."].join("\n\n") + "\n";
+  const table = "| A | B |\n| --- | --- |\n| one | two |\n| three | four |";
+
+  /** The position of the first node in `doc` that `test` accepts. */
+  function find(doc: ProseNode, test: (node: ProseNode) => boolean): number {
+    let found = -1;
+    doc.descendants((node, pos) => {
+      if (found < 0 && test(node)) found = pos;
+      return found < 0;
+    });
+    return found;
+  }
+
+  /** Open `markdown` and give it the selection `select` makes, with focus
+   *  in the document view. With `clock` set, the clock runs only when the
+   *  test says so. */
+  async function open(markdown: string, select: (doc: ProseNode) => Selection, clock = false): Promise<EditorView> {
+    const view = await mount(markdown, clock);
+    view.dom.focus();
+    view.dispatch(view.state.tr.setSelection(select(view.state.doc)));
+    // Crepe's code block view takes focus in its code when it is selected,
+    // and the block handle that selects one gives focus back to the document
+    // view (blockHandle.ts).
+    view.focus();
+    await settle();
+    return view;
+  }
+
+  const selectImage = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "image-block"));
+  const codeBetweenParagraphs = ["Above.", "```js\nconst x = 1;\n```", "Below."].join("\n\n") + "\n";
+  const selectCode = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "code_block"));
+
+  /** The first text node in the document view that reads `text`. */
+  function textNode(view: EditorView, text: string): Text {
+    const walker = document.createTreeWalker(view.dom, NodeFilter.SHOW_TEXT, (node) => (node.textContent === text ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP));
+    return walker.nextNode() as Text;
+  }
+
+  /** Start a composition of `text` as Chromium does. Chromium reads the
+   *  selection once compositionstart is handled and puts the text there, in
+   *  a text node of its own in an empty text block. Then it puts the caret at
+   *  the text offset where the selection started before compositionstart,
+   *  plus the text's length, which is `caret` after the editor changed the
+   *  document. ProseMirror reads that caret with the text. Returns the text
+   *  node, which stays the composition's as long as it is in the document. */
+  async function startComposition(view: EditorView, text: string, caret: [Node, number]): Promise<Text> {
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const { focusNode, focusOffset } = document.getSelection()!;
+    const block = focusNode as Element;
+    const node = document.createTextNode(text);
+    block.insertBefore(node, block.childNodes[focusOffset] ?? null);
+    block.querySelector("br")?.remove();
+    document.getSelection()!.collapse(...caret);
+    await settle();
+    return node;
+  }
+
+  /** End the composition with `text` committed, and let ProseMirror and the
+   *  editor read its end. */
+  async function endComposition(view: EditorView, text: string): Promise<void> {
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: text, bubbles: true }));
+    await vi.advanceTimersByTimeAsync(100);
+  }
+
+  /** Start a composition of `text` over the browser's selection, as Chromium
+   *  types one over selected text or a selected image in a line. Chromium
+   *  removes what the selection holds and puts the text at the caret that
+   *  leaves, in the text node there or in a new one. */
+  async function composeOverSelection(view: EditorView, text: string): Promise<void> {
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const selection = document.getSelection()!;
+    selection.getRangeAt(0).deleteContents();
+    const { focusNode, focusOffset } = selection;
+    if (focusNode instanceof Text) {
+      focusNode.insertData(focusOffset, text);
+      selection.collapse(focusNode, focusOffset + text.length);
+    } else {
+      const node = document.createTextNode(text);
+      focusNode!.insertBefore(node, focusNode!.childNodes[focusOffset] ?? null);
+      selection.collapse(node, text.length);
+    }
+    await settle();
+  }
+
+  /** Start a composition over the selected block after the paragraph that
+   *  reads `above`, and empty it, which ends it. The test sends its end. */
+  async function emptyComposition(view: EditorView, above = "Above."): Promise<void> {
+    const composed = await startComposition(view, "か", [textNode(view, above), above.length]);
+    composed.remove();
+    await settle();
+  }
+
+  it("replaces an image selected between two paragraphs as it starts, and one undo brings the image back", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    const above = textNode(view, "Above.");
+    // Chromium puts the caret at the end of the paragraph above. ProseMirror
+    // took that paragraph's text for the composition's and drew the new
+    // paragraph's text again, which ended the composition.
+    const composed = await startComposition(view, "漢字", [above, above.length]);
+    expect(composed.isConnected).toBe(true);
+    expect(document.getSelection()!.focusNode).toBe(composed);
+    await endComposition(view, "漢字");
+    expect(editor!.getMarkdown()).toBe(["Above.", "漢字", "Below."].join("\n\n") + "\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+  });
+
+  it("puts the image back, selected, when the composition commits nothing, and leaves the undo history as it was", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    // An edit that was undone, so that redo can bring it back.
+    view.dispatch(view.state.tr.insertText(" Typed", "Above.".length + 1));
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    view.dispatch(view.state.tr.setSelection(selectImage(view.state.doc)));
+    const depths = [undoDepth(view.state), redoDepth(view.state)];
+    const composed = await startComposition(view, "か", [textNode(view, "Above."), 6]);
+    expect(find(view.state.doc, (node) => node.type.name === "image-block")).toBe(-1);
+    // The composition is emptied, which ends it.
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+    expect([undoDepth(view.state), redoDepth(view.state)]).toEqual(depths);
+    // Redo brings back the edit, and not the empty paragraph the composition
+    // started in, which would replace the image.
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(["Above. Typed", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
+  });
+
+  it("puts the image back as the composition ends, before a key or another composition can come", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    await emptyComposition(view);
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "", bubbles: true }));
+    // A key, such as Ctrl+Z, or the next composition comes in a later task,
+    // after the microtasks of this one. A timer put the image back too late
+    // for them: undo brought it back and left a redo step that replaced it,
+    // and the next composition started from the empty paragraph.
+    await Promise.resolve();
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+    expect(undo(view.state, view.dispatch)).toBe(false);
+    await emptyComposition(view);
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "", bubbles: true }));
+    await Promise.resolve();
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+  });
+
+  it("puts the image back however long the composition's first step took", async () => {
+    // The first step then starts an undo step of its own after the
+    // replacement's, which an undo of one step did not take back.
+    const view = await open(imageBetweenParagraphs, selectImage, true);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(600);
+    const { focusNode, focusOffset } = document.getSelection()!;
+    const composed = document.createTextNode("か");
+    focusNode!.insertBefore(composed, focusNode!.childNodes[focusOffset] ?? null);
+    await settle();
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+  });
+
+  it("keeps text committed after a composition that ended empty out of the undo step of the edit before it", async () => {
+    const selectAbove = (doc: ProseNode) => NodeSelection.create(doc, 0);
+    const view = await open(imageBetweenParagraphs, selectAbove, true);
+    // An edit right before, which a change next to it soon after joins.
+    view.dispatch(view.state.tr.insertText("!", "Above.".length + 1));
+    view.dispatch(view.state.tr.setSelection(selectAbove(view.state.doc)));
+    const composed = await startComposition(view, "明", [textNode(view, "Below."), 0]);
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(view.state.selection.eq(selectAbove(view.state.doc))).toBe(true);
+    const commit = new InputEvent("beforeinput", { inputType: "insertText", data: "明", bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(commit);
+    await settle();
+    expect(editor!.getMarkdown()).toBe(["明", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(["Above.!", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
+  });
+
+  it("leaves focus in another field that took it as the composition ended, when a code block comes back", async () => {
+    // Crepe's code block view takes focus in its code when it is selected.
+    const view = await open(codeBetweenParagraphs, selectCode);
+    await emptyComposition(view);
+    const field = document.body.appendChild(document.createElement("input"));
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "", bubbles: true }));
+    field.focus();
+    await settle();
+    expect(editor!.getMarkdown()).toBe(codeBetweenParagraphs);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it.each([
+    ["an image in a link", "[![Pic](pic.png)](https://example.org) tail\n", "image", "[漢字](https://example.org) tail\n"],
+    ["an image in a link inside a line", "head [![Pic](pic.png)](https://example.org) tail\n", "image", "head [漢字](https://example.org) tail\n"],
+    ["a bold image", "**![Pic](pic.png)** tail\n", "image", "**漢字** tail\n"],
+    ["an emphasized formula", "*$x$* tail\n", "math_inline", "*漢字* tail\n"],
+  ])("gives text composed over %s the marks a key's text gets, and one undo brings it back selected", async (_node, markdown, type, composed) => {
+    const select = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === type));
+    const view = await open(markdown, select);
+    const typed = view.state.tr.insertText("漢字").doc;
+    await composeOverSelection(view, "漢字");
+    await endComposition(view, "漢字");
+    expect(view.state.doc.eq(typed)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(composed);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(markdown);
+    // ProseMirror read the browser's range around an image as selected text
+    // as the composition started, and the undo selected that text.
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
+  });
+
+  it.each([
+    ["a heading whose text a later heading shares", "# Notes\n\nFirst.\n\n# Notes\n", (doc: ProseNode) => NodeSelection.create(doc, 0)],
+    ["a formula whose space changes its heading's id", "# A$x$B\n\nBody.\n", (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "math_inline"))],
+  ])("puts back %s when the composition commits nothing", async (_content, markdown, select) => {
+    // Milkdown gives each heading an id from its text as the document
+    // changes, and a later heading with the same text gets a number after
+    // its id. So the change that readied the selection also renamed a
+    // heading, and the document no longer matched the one the composition
+    // was to leave.
+    const view = await open(markdown, select);
+    const before = view.state.doc;
+    const { selection } = view.state;
+    if (selection instanceof NodeSelection && selection.node.isInline) {
+      // The composition types over the space that took the formula's place,
+      // and its last step empties it.
+      await composeOverSelection(view, "か");
+      const { focusNode, focusOffset } = document.getSelection()!;
+      (focusNode as Text).deleteData(focusOffset - 1, 1);
+      await settle();
+    } else {
+      await emptyComposition(view, "First.");
+    }
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(markdown);
+    expect(view.state.doc.eq(before)).toBe(true);
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
+    expect(undoDepth(view.state)).toBe(0);
+  });
+
+  it("puts a formula back when its composition ends before any text replaced the space that took its place", async () => {
+    // The space stayed, selected, and the document no longer matched the one
+    // the composition was to leave.
+    const markdown = "*$x$* tail\n";
+    const select = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "math_inline"));
+    const view = await open(markdown, select);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(find(view.state.doc, (node) => node.type.name === "math_inline")).toBe(-1);
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(markdown);
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
+    expect(undoDepth(view.state)).toBe(0);
+  });
+
+  it("leaves another edit made during a composition that commits nothing, and its undo step", async () => {
+    // An edit that ends during the composition, such as an image whose new
+    // file was read meanwhile, can change only an attribute. The composition
+    // was taken back with the undo history from before that edit.
+    const markdown = ["![First](first.png)", "Middle.", "![Pic](pic.png)", "Below."].join("\n\n") + "\n";
+    const select = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "image-block" && node.attrs.src === "pic.png"));
+    const view = await open(markdown, select);
+    await emptyComposition(view, "Middle.");
+    view.dispatch(view.state.tr.setNodeAttribute(find(view.state.doc, (node) => node.type.name === "image-block"), "src", "other.png"));
+    await endComposition(view, "");
+    const withoutPic = ["![First](other.png)", "Middle.", "<br />", "Below."].join("\n\n") + "\n";
+    expect(editor!.getMarkdown()).toBe(withoutPic);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(withoutPic.replace("other.png", "first.png"));
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(markdown);
+  });
+
+  it("lets redo put back a typed formula as a formula after a composition that commits nothing", async () => {
+    // The math delimiters' guard keeps a record for each redo step of a
+    // typed closing mark that waited, which the replacement cut back. It took
+    // the change that took the composition back for an undo, and redo put the
+    // formula back as text.
+    const view = await open(imageBetweenParagraphs, selectImage);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, "Above.".length + 1)));
+    type(view, " $x$");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    view.dispatch(view.state.tr.setSelection(selectImage(view.state.doc)));
+    await emptyComposition(view);
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    type(view, " y");
+    expect(editor!.getMarkdown()).toBe(["Above. $x$ y", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
+  });
+
+  it.each([
+    ["an image", imageBetweenParagraphs, selectImage],
+    ["a code block", codeBetweenParagraphs, selectCode],
+  ])("still replaces %s with text committed without a composition after one that ended empty", async (_block, markdown, select) => {
+    // IBus empties the composition, which ends it, and then commits its text
+    // without one. If the block is back by then, that text replaces it. Crepe's
+    // code block view takes focus in its code when it is selected, and the
+    // text went there.
+    const view = await open(markdown, select);
+    const composed = await startComposition(view, "明", [textNode(view, "Above."), 6]);
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(view.hasFocus()).toBe(true);
+    expect(view.state.selection.eq(select(view.state.doc))).toBe(true);
+    const commit = new InputEvent("beforeinput", { inputType: "insertText", data: "明", bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(commit);
+    expect(commit.defaultPrevented).toBe(true);
+    await settle();
+    expect(editor!.getMarkdown()).toBe(["Above.", "明", "Below."].join("\n\n") + "\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor!.getMarkdown()).toBe(markdown);
+  });
+
+  it("replaces selected table cells as a key does", async () => {
+    const view = await open(["Above.", table].join("\n\n") + "\n", (doc) => {
+      const cell = (text: string) => find(doc, (node) => node.type.spec.tableRole === "cell" && node.textContent === text);
+      return CellSelection.create(doc, cell("one"), cell("two"));
+    });
+    // The cell the text goes in lost the text before it, so Chromium's caret
+    // lands that much further on.
+    const composed = await startComposition(view, "漢字", [textNode(view, "three"), 1]);
+    expect(composed.isConnected).toBe(true);
+    await endComposition(view, "漢字");
+    // The text goes in the cell where the selection ends, and the other
+    // selected cell is emptied. Milkdown pads the columns of a table it writes.
+    expect(editor!.getMarkdown()).toBe(["Above.", "| A     | B    |\n| ----- | ---- |\n|       | 漢字   |\n| three | four |"].join("\n\n") + "\n");
+  });
+
+  it("leaves a composition over selected text or at a caret to the browser", async () => {
+    const view = await open(imageBetweenParagraphs, (doc) => TextSelection.create(doc, 1, 3));
+    for (const selection of [TextSelection.create(view.state.doc, 1, 3), TextSelection.create(view.state.doc, 3)]) {
+      view.dispatch(view.state.tr.setSelection(selection));
+      const { doc } = view.state;
+      view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      expect(view.state.doc).toBe(doc);
+      expect(view.state.selection.eq(selection)).toBe(true);
+      await endComposition(view, "");
+      expect(view.state.doc).toBe(doc);
+    }
   });
 });

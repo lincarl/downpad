@@ -729,6 +729,25 @@ interface Guard {
  *  meta, a position or null. */
 const waitingKey = new PluginKey<Guard>("mdEasyWaitingMark");
 
+/** A transaction puts back the guard's whole state with this key's meta
+ *  (`putBackWaitingMarks`). */
+const putBackKey = new PluginKey<Guard>("mdEasyWaitingMarkPutBack");
+
+/** The guard's state in `state`, to put back later with
+ *  `putBackWaitingMarks`. */
+export function waitingMarks(state: EditorState): Guard | undefined {
+  return waitingKey.getState(state);
+}
+
+/** Has `tr` put back `guard`, the guard's state that `waitingMarks` read, as
+ *  a change that takes back other changes and puts back the undo history
+ *  from before them does, such as the one after a composition over a
+ *  selected block that commits nothing (lineEnd.ts). The guard takes a
+ *  change that carries the history's meta for an undo otherwise. */
+export function putBackWaitingMarks(tr: Transaction, guard: Guard | undefined): Transaction {
+  return guard ? tr.setMeta(putBackKey, guard) : tr;
+}
+
 /** The waiting mark in `state`, or null. */
 const waitingIn = (state: EditorState): Waiting | null => waitingKey.getState(state)?.waiting ?? null;
 
@@ -876,6 +895,8 @@ export const closingDelimiterGuard = $prose(() => {
        *  history must come first in the editor's plugins, so `after` holds
        *  its new depth. */
       apply(tr, guard, before, after): Guard {
+        const putBack: Guard | undefined = tr.getMeta(putBackKey);
+        if (putBack) return putBack;
         let { waiting, done, undone } = guard;
         const kept = keep(before, waiting);
         if (isHistoryTransaction(tr)) {
