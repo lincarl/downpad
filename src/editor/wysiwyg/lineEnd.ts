@@ -52,13 +52,15 @@
 // the plugin puts that caret right (`caretAfterFirstText`). The change and
 // the composition are one undo step, which brings the block or the cells
 // back. A composition that commits nothing, as when it is cancelled, is
-// undone that way once it ends, with the undo history and focus put back as
-// they were before it, so the block or the cells are selected as before.
+// taken back once ProseMirror has read its end, in the same task, with the
+// undo history and focus as they were before it, so the block or the cells
+// are selected as before and no key or other composition comes in between.
 
 import { historyProviderPlugin } from "@milkdown/kit/plugin/history";
-import { closeHistory, undo, undoDepth } from "@milkdown/kit/prose/history";
+import { closeHistory } from "@milkdown/kit/prose/history";
 import type { Node as ProseNode, ResolvedPos } from "@milkdown/kit/prose/model";
-import { Plugin, TextSelection, type EditorState, type Selection, type Transaction } from "@milkdown/kit/prose/state";
+import { Plugin, TextSelection, type EditorState, type Selection, type SelectionBookmark, type Transaction } from "@milkdown/kit/prose/state";
+import type { Step } from "@milkdown/kit/prose/transform";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 
@@ -96,15 +98,59 @@ function coversNonText(selection: Selection): boolean {
   return !(selection instanceof TextSelection) && !selection.empty;
 }
 
-/** Replaces the selection as a typed key does, but with no text, and leaves
- *  the caret where the key's text would go. */
-function clearAsKey(state: EditorState): Transaction {
+/** A selection that is not text that a composition replaced, until the
+ *  composition ends. */
+interface Replaced {
+  /** The document the composition leaves if it commits nothing. */
+  empty: ProseNode;
+  /** The steps that take `empty` back to the document before. */
+  back: Step[];
+  /** The selection before. */
+  selection: SelectionBookmark;
+  /** The undo history before, from Milkdown's history plugin. */
+  history: unknown;
+}
+
+/** Replaces a selection that is not text, which a composition is about to
+ *  replace, as a typed key does but with no text, and leaves the caret where
+ *  the key's text would go. Returns the change and what the composition
+ *  replaces. */
+function readyForComposition(state: EditorState): { tr: Transaction; replaced: Replaced } {
   // ProseMirror types a key over a selection that is not text with
   // insertText, which wraps the text in a paragraph where a block was and
   // puts the caret after it. Type a space that way and take it out again.
   const tr = state.tr.insertText(" ");
   const end = tr.selection.from;
-  return tr.delete(end - 1, end).scrollIntoView();
+  tr.delete(end - 1, end);
+  const replaced: Replaced = {
+    empty: tr.doc,
+    back: tr.steps.map((step, index) => step.invert(tr.docs[index]!)).reverse(),
+    selection: state.selection.getBookmark(),
+    history: historyProviderPlugin.key()?.getState(state),
+  };
+  return { tr: tr.scrollIntoView(), replaced };
+}
+
+/** Takes back the replacement of a selection that is not text, whose
+ *  composition committed nothing, with its selection and undo history from
+ *  before, and gives focus back to the document view if it had it. */
+function putBack(view: EditorView, replaced: Replaced): void {
+  const tr = view.state.tr;
+  for (const step of replaced.back) tr.step(step);
+  tr.setSelection(replaced.selection.resolve(tr.doc)).scrollIntoView();
+  // Carry the undo history from before as prosemirror-history's next state,
+  // as an undo does with its own. An undo would keep the replacement as a
+  // redo step, and redo would replace the content again.
+  const key = historyProviderPlugin.key();
+  if (key) tr.setMeta(key, { redo: false, historyState: replaced.history });
+  const focused = view.hasFocus();
+  view.dispatch(tr);
+  // Crepe's code block view takes focus in its code when it is selected, so
+  // a code block, a math block or a Mermaid diagram took it. Text that IBus
+  // commits after the composition then went into the code. Give focus back
+  // to the document view, as before the composition, so the block stays
+  // selected and the next key or text replaces it.
+  if (focused && !view.hasFocus()) view.focus();
 }
 
 /** Moves the caret past the inline atoms that start its line, keeping the
@@ -164,15 +210,13 @@ export const endPastAtoms = $prose(() => {
   });
   return new Plugin({
     view: (view) => {
-      /** The document and the undo depth right after a composition started
-       *  over a selection that is not text replaced it, and the undo history
-       *  from before that, until a composition starts or this one has ended. */
-      let cleared: { doc: ProseNode; depth: number; history: unknown } | null = null;
+      /** What the composition that runs replaced, until it ends. */
+      let replaced: Replaced | null = null;
       /** Removes a selection that a composition is about to replace, or
        *  replaces one that is not text as a key does. */
       const removeSelection = () => {
         readExtended(view);
-        cleared = null;
+        replaced = null;
         caretAfterFirstText.disconnect();
         if (crossesBreakEdge(view.state.selection)) {
           view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
@@ -187,57 +231,41 @@ export const endPastAtoms = $prose(() => {
         // composition right after Page Up goes where Page Up put the caret.
         view.dom.ownerDocument.dispatchEvent(new Event("selectionchange"));
         if (!coversNonText(view.state.selection)) return;
-        // The undo history from before the replacement, which a composition
-        // that commits nothing puts back (see putBackIfEmpty).
-        const history: unknown = historyProviderPlugin.key()?.getState(view.state);
+        const replacement = readyForComposition(view.state);
         // Start a new undo step. The composition's first change joins it, as
         // it comes right after this one and next to it, and its later changes
         // join that one, as they carry the same composition id.
-        view.dispatch(closeHistory(clearAsKey(view.state)));
-        cleared = { doc: view.state.doc, depth: undoDepth(view.state), history };
+        view.dispatch(closeHistory(replacement.tr));
+        replaced = replacement.replaced;
         const { node } = view.domAtPos(view.state.selection.head);
         caretAfterFirstText.observe(node, { childList: true, characterData: true, subtree: true });
       };
-      /** Undoes the replacement of a selection that is not text once a
-       *  composition that committed nothing has ended, which brings the block
-       *  or the cells back as an undo does, selected and with focus in the
-       *  document view, and puts back the undo history from before. */
-      const putBackIfEmpty = () => {
+      /** Takes back the replacement of a selection that is not text when its
+       *  composition ends having committed nothing. */
+      const putBackIfEmpty = (event: CompositionEvent) => {
         caretAfterFirstText.disconnect();
-        const started = cleared;
-        if (!started) return;
-        // ProseMirror reads the composition's last change by the next task.
-        // The last undo step then holds only the replacement and changes of
-        // the composition that left nothing, unless an edit came since.
-        setTimeout(() => {
-          if (view.isDestroyed || cleared !== started) return;
-          cleared = null;
-          if (!view.state.doc.eq(started.doc) || undoDepth(view.state) !== started.depth) return;
-          const focused = view.hasFocus();
-          // The undo's transaction carries the history's state after it in
-          // the history's meta, which keeps the replacement as a redo step.
-          // Redo would then replace the block with an empty paragraph again,
-          // and the redo steps from before the composition would be gone.
-          // Carry the history from before the replacement instead.
-          const key = historyProviderPlugin.key();
-          undo(view.state, (tr) => view.dispatch(key ? tr.setMeta(key, { ...tr.getMeta(key), historyState: started.history }) : tr));
-          // Crepe's code block view takes focus in its code when it is
-          // selected, so a code block, a math block or a Mermaid diagram took
-          // it. Text that IBus commits after the composition then went into
-          // the code. Give focus back to the document view, as before the
-          // composition, so the block stays selected and the next key or text
-          // replaces it.
-          if (focused && !view.hasFocus()) view.focus();
+        const started = replaced;
+        replaced = null;
+        if (!started || event.data) return;
+        // ProseMirror reads the composition's last change by the end of its
+        // own compositionend handler, which runs before this one, or in a
+        // microtask that it queues there. Run after that, in the same task,
+        // so no key, such as Ctrl+Z, and no other composition comes between.
+        queueMicrotask(() => {
+          if (!view.isDestroyed && view.state.doc.eq(started.empty)) putBack(view, started);
         });
       };
-      // Listen in the capture phase, before ProseMirror and Milkdown.
+      // Ready the selection in the capture phase, before ProseMirror and
+      // Milkdown. Take it back in the bubble phase. ProseMirror listens on its
+      // element from when the view is made, before this, so this listener
+      // runs after ProseMirror's.
       view.dom.addEventListener("compositionstart", removeSelection, true);
-      view.dom.addEventListener("compositionend", putBackIfEmpty, true);
+      view.dom.addEventListener("compositionend", putBackIfEmpty);
       return {
         destroy: () => {
           caretAfterFirstText.disconnect();
           view.dom.removeEventListener("compositionstart", removeSelection, true);
-          view.dom.removeEventListener("compositionend", putBackIfEmpty, true);
+          view.dom.removeEventListener("compositionend", putBackIfEmpty);
         },
       };
     },

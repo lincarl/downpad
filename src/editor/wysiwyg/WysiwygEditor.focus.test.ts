@@ -25,9 +25,9 @@
 // it reads a move of the DOM selection that it has not read yet.
 //
 // A composition cannot be cancelled, so the patch leaves it to Chromium. The
-// document view's compositionstart handler (lineEnd.ts) replaces such a
-// selection as a key does first, and undoes that if the composition commits
-// nothing.
+// document view's composition handlers (lineEnd.ts) ready such a selection
+// first, so the composition replaces it as a key does, and take that back if
+// the composition commits nothing.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
@@ -364,9 +364,10 @@ describe("a composition over a selection that is not text", () => {
   }
 
   /** Open `markdown` and give it the selection `select` makes, with focus
-   *  in the document view. */
-  async function open(markdown: string, select: (doc: ProseNode) => Selection): Promise<EditorView> {
-    const view = await mount(markdown);
+   *  in the document view. With `clock` set, the clock runs only when the
+   *  test says so. */
+  async function open(markdown: string, select: (doc: ProseNode) => Selection, clock = false): Promise<EditorView> {
+    const view = await mount(markdown, clock);
     view.dom.focus();
     view.dispatch(view.state.tr.setSelection(select(view.state.doc)));
     // Crepe's code block view takes focus in its code when it is selected,
@@ -378,6 +379,8 @@ describe("a composition over a selection that is not text", () => {
   }
 
   const selectImage = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "image-block"));
+  const codeBetweenParagraphs = ["Above.", "```js\nconst x = 1;\n```", "Below."].join("\n\n") + "\n";
+  const selectCode = (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "code_block"));
 
   /** The first text node in the document view that reads `text`. */
   function textNode(view: EditorView, text: string): Text {
@@ -409,6 +412,14 @@ describe("a composition over a selection that is not text", () => {
   async function endComposition(view: EditorView, text: string): Promise<void> {
     view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: text, bubbles: true }));
     await vi.advanceTimersByTimeAsync(100);
+  }
+
+  /** Start a composition over the selected block after the paragraph that
+   *  reads `above`, and empty it, which ends it. The test sends its end. */
+  async function emptyComposition(view: EditorView, above = "Above."): Promise<void> {
+    const composed = await startComposition(view, "か", [textNode(view, above), above.length]);
+    composed.remove();
+    await settle();
   }
 
   it("replaces an image selected between two paragraphs as it starts, and one undo brings the image back", async () => {
@@ -449,9 +460,45 @@ describe("a composition over a selection that is not text", () => {
     expect(editor!.getMarkdown()).toBe(["Above. Typed", "![Pic](pic.png)", "Below."].join("\n\n") + "\n");
   });
 
+  it("puts the image back as the composition ends, before a key or another composition can come", async () => {
+    const view = await open(imageBetweenParagraphs, selectImage);
+    await emptyComposition(view);
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "", bubbles: true }));
+    // A key, such as Ctrl+Z, or the next composition comes in a later task,
+    // after the microtasks of this one. A timer put the image back too late
+    // for them: undo brought it back and left a redo step that replaced it,
+    // and the next composition started from the empty paragraph.
+    await Promise.resolve();
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+    expect(undo(view.state, view.dispatch)).toBe(false);
+    await emptyComposition(view);
+    view.dom.dispatchEvent(new CompositionEvent("compositionend", { data: "", bubbles: true }));
+    await Promise.resolve();
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+  });
+
+  it("puts the image back however long the composition's first step took", async () => {
+    // The first step then starts an undo step of its own after the
+    // replacement's, which an undo of one step did not take back.
+    const view = await open(imageBetweenParagraphs, selectImage, true);
+    view.dom.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(600);
+    const { focusNode, focusOffset } = document.getSelection()!;
+    const composed = document.createTextNode("か");
+    focusNode!.insertBefore(composed, focusNode!.childNodes[focusOffset] ?? null);
+    await settle();
+    composed.remove();
+    await settle();
+    await endComposition(view, "");
+    expect(editor!.getMarkdown()).toBe(imageBetweenParagraphs);
+    expect(view.state.selection.eq(selectImage(view.state.doc))).toBe(true);
+  });
+
   it.each([
     ["an image", imageBetweenParagraphs, selectImage],
-    ["a code block", ["Above.", "```js\nconst x = 1;\n```", "Below."].join("\n\n") + "\n", (doc: ProseNode) => NodeSelection.create(doc, find(doc, (node) => node.type.name === "code_block"))],
+    ["a code block", codeBetweenParagraphs, selectCode],
   ])("still replaces %s with text committed without a composition after one that ended empty", async (_block, markdown, select) => {
     // IBus empties the composition, which ends it, and then commits its text
     // without one. If the block is back by then, that text replaces it. Crepe's
