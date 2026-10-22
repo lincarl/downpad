@@ -4,124 +4,62 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-  pull_request_target:
+  pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Pull request number, required for PR builds
+        description: Optional PR number for a maintainer retry or CI migration
         required: false
         type: string
       expected_sha:
-        description: Full immutable PR head SHA, required with pr_number
+        description: Immutable PR head SHA, required with pr_number
         required: false
         type: string
-      retry:
-        description: Explicitly retry CI for a previously attempted revision
-        required: false
-        default: false
-        type: boolean
       version:
-        description: Optional version override for a non-release test build
+        description: Optional version override for a main or tag test build
         required: false
         type: string
 
 permissions:
   contents: read
 
-# PR pushes cancel obsolete runs. Dispatches serialize within the same PR, so a
-# second request cannot start duplicate installers while the first is running.
-# Each main push has its own group, preserving every main build.
+# PR pushes cancel obsolete runs and replace queued intermediate revisions.
+# Manual PR retries use a separate group during migration from the old gate.
+# Every main run is preserved, and tag runs serialize rather than cancel.
 concurrency:
-  group: installers-${{ github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) || inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) || github.ref == 'refs/heads/main' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || (inputs.pr_number == '' && github.ref != 'refs/heads/main') }}
+  group: installers-auto-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || inputs.pr_number != '' && format('manual-pr-{0}', inputs.pr_number) || github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main') }}
 
 jobs:
-  initialize:
-    name: Wait for reviewed CI
-    if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      statuses: write
-      pull-requests: read
-    steps:
-      - name: Check out trusted controls
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - name: Require reviews and an explicit request
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: node scripts/reviewed-ci.mjs initialize
-
   prepare:
-    name: Validate reviewed CI request
-    if: github.event_name != 'pull_request_target'
+    name: Select build revision
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:
-      actions: read
-      checks: read
       contents: read
-      issues: read
       pull-requests: read
-      statuses: write
     outputs:
-      mode: ${{ steps.gate.outputs.mode }}
-      head_sha: ${{ steps.gate.outputs.head_sha }}
-      head_repository: ${{ steps.gate.outputs.head_repository }}
-      should_build: ${{ steps.gate.outputs.should_build }}
-      control_sha: ${{ steps.controls.outputs.sha }}
-      control_trusted: ${{ steps.controls.outputs.trusted }}
-      default_branch: ${{ steps.controls.outputs.default_branch }}
+      mode: ${{ steps.revision.outputs.mode }}
+      head_sha: ${{ steps.revision.outputs.head_sha }}
+      head_repository: ${{ steps.revision.outputs.head_repository }}
+      head_branch: ${{ steps.revision.outputs.head_branch }}
+      default_branch: ${{ steps.revision.outputs.default_branch }}
+      pr_number: ${{ steps.revision.outputs.pr_number }}
     steps:
-      - name: Select trusted gate controls
-        id: controls
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-        run: |
-          set -euo pipefail
-          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
-          control_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$default_branch" --jq .sha)
-          printf 'default_branch=%s\n' "$default_branch" >> "$GITHUB_OUTPUT"
-          if result=$(gh api --method GET "repos/$GITHUB_REPOSITORY/contents/scripts/reviewed-ci.mjs" -f ref="$control_sha" 2>&1); then
-            printf 'sha=%s\ntrusted=true\n' "$control_sha" >> "$GITHUB_OUTPUT"
-          else
-            [[ "$result" == *"(HTTP 404)"* ]] || { printf '%s\n' "$result" >&2; exit 1; }
-            # Bootstrap only while the default branch has no gate. A maintainer
-            # must explicitly select this repository's exact PR head workflow.
-            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
-            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ && "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
-            [[ "$GITHUB_SHA" == "$EXPECTED_SHA" ]]
-            role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .role_name)
-            [[ "$role" == admin || "$role" == maintain ]]
-            read -r head_sha head_repository < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.head.sha, .head.repo.full_name] | @tsv')
-            [[ "$head_sha" == "$EXPECTED_SHA" && "$head_repository" == "$GITHUB_REPOSITORY" ]]
-            printf 'sha=%s\ntrusted=false\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Check out trusted gate controls
+      - name: Check out the requested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ steps.controls.outputs.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Verify CodeRabbit review and the immutable head
-        id: gate
+      - name: Select the immutable source
+        id: revision
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          RETRY: ${{ inputs.retry }}
-          VERSION: ${{ inputs.version }}
-        run: node scripts/reviewed-ci.mjs request
+        run: node scripts/ci.mjs prepare
   build:
     needs: prepare
-    if: needs.prepare.outputs.should_build == 'true'
     permissions:
       actions: read
       contents: read
@@ -182,24 +120,33 @@ jobs:
 
       - name: Reuse an existing build of this commit
         id: existing
-        if: needs.prepare.outputs.control_trusted == 'true'
+        if: needs.prepare.outputs.head_repository == github.repository
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_PREFIX: ${{ matrix.artifact }}
           BUILD_SHA: ${{ needs.prepare.outputs.head_sha }}
           DEFAULT_BRANCH: ${{ needs.prepare.outputs.default_branch }}
+          BUILD_MODE: ${{ needs.prepare.outputs.mode }}
+          HEAD_BRANCH: ${{ needs.prepare.outputs.head_branch }}
         run: |
           set -euo pipefail
           version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
           artifact="$ARTIFACT_PREFIX-$version-$BUILD_SHA"
           printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
           printf 'reused=false\n' >> "$GITHUB_OUTPUT"
-          # Fork and manual PR runs cannot supply installers to this cache.
+          # PR retries reuse only same-repository PR builds. Releases reuse only
+          # successful default-branch pushes, keeping release provenance intact.
+          cache_event=push
+          cache_branch="$DEFAULT_BRANCH"
+          if [[ "$BUILD_MODE" == pr ]]; then
+            cache_event=pull_request
+            cache_branch="$HEAD_BRANCH"
+          fi
           if ! run_ids=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/build-installers.yml/runs" \
-            -f head_sha="$BUILD_SHA" -f branch="$DEFAULT_BRANCH" -f event=push \
+            -f head_sha="$BUILD_SHA" -f branch="$cache_branch" -f event="$cache_event" \
             -f status=success -f per_page=100 \
-            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .event == \"push\" and .head_sha == \"$BUILD_SHA\" and .head_repository.full_name == \"$GITHUB_REPOSITORY\") | .id"); then
+            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID and .event == \"$cache_event\" and .head_sha == \"$BUILD_SHA\" and .head_repository.full_name == \"$GITHUB_REPOSITORY\") | .id"); then
             printf 'Installer cache lookup failed. Building fresh.\n'
             exit 0
           fi
@@ -293,31 +240,41 @@ jobs:
           path: ${{ matrix.paths }}
 
   reviewed-ci:
-    name: Publish reviewed CI result
+    name: reviewed-ci
     needs: [prepare, build]
-    if: always() && needs.prepare.outputs.mode == 'pr' && needs.prepare.outputs.should_build == 'true'
+    if: always() && (github.event_name == 'pull_request' || inputs.pr_number != '')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every build and test to pass
+        env:
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: test "$PREPARE_RESULT/$BUILD_RESULT" = success/success
+
+  legacy-pr-status:
+    name: Report migration CI result
+    needs: [prepare, build, reviewed-ci]
+    if: always() && needs.prepare.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.pr_number != ''
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:
-      actions: read
-      checks: read
       contents: read
-      issues: read
       pull-requests: read
       statuses: write
     steps:
-      - name: Check out the validated gate controls
+      - name: Check out the validated workflow revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ needs.prepare.outputs.control_sha }}
+          ref: ${{ needs.prepare.outputs.head_sha }}
           persist-credentials: false
-      - name: Verify reviews and publish the actual build result
+      - name: Replace the previous gate's status with the actual CI result
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          BUILD_RESULT: ${{ needs.build.result }}
-        run: node scripts/reviewed-ci.mjs finalize
+          CI_PREPARE_RESULT: ${{ needs.prepare.result }}
+          CI_BUILD_RESULT: ${{ needs.build.result }}
+          CI_GATE_RESULT: ${{ needs.reviewed-ci.result }}
+        run: node scripts/ci.mjs finish
 
   release:
     name: GitHub Release

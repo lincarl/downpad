@@ -17,13 +17,13 @@
     "start": "electron .",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder --publish never",
-    "test": "vitest run && pnpm test:version && pnpm test:desktop && pnpm test:reviewed-ci",
+    "test": "vitest run && pnpm test:version && pnpm test:desktop && pnpm test:ci",
     "test:version": "node --test scripts/apply-version-from-tag.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:electron": "playwright test --config playwright.electron.config.ts",
     "test:desktop": "vitest run --config electron/vitest.config.ts",
-    "test:reviewed-ci": "node --test scripts/reviewed-ci.test.mjs"
+    "test:ci": "node --test scripts/ci.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
