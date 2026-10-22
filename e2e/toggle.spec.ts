@@ -150,6 +150,7 @@ test("the find card opens with Ctrl+F, follows the Markdown view and closes on E
   page,
 }) => {
   // Find is a floating card, closed until it is asked for.
+  await page.setViewportSize({ width: 600, height: 720 });
   const findBar = page.locator(".find-bar");
   const findInput = page.getByRole("textbox", { name: "Find in document" });
   await expect(findBar).toBeHidden();
@@ -168,8 +169,52 @@ test("the find card opens with Ctrl+F, follows the Markdown view and closes on E
   await expect(findInput).toBeFocused();
   await expect(page.locator(".cm-search")).toHaveCount(0);
 
+  // The first source line shares columns with the card in a narrow window.
+  // Find must add room above it, including when Replace makes the card taller.
+  const raw = page.locator(rawContent);
+  await page.keyboard.press("Escape");
+  await raw.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText("needle on the first line.\n\nSecond paragraph.\n");
+  const pane = page.locator(".editor-pane-raw:not([hidden])");
+  const paddingBefore = await pane.evaluate((element) => getComputedStyle(element).paddingTop);
+  await page.keyboard.press("Control+f");
+  await findInput.fill("needle");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  const geometry = () =>
+    pane.evaluate((element) => {
+      const card = document.querySelector(".find-bar")!.getBoundingClientRect();
+      const area = document.querySelector(".main-region")!.getBoundingClientRect();
+      const match = element.querySelector(".md-find-current")!.getBoundingClientRect();
+      const frame = element.getBoundingClientRect();
+      return {
+        top: Math.round(card.top - area.top),
+        right: Math.round(area.right - card.right),
+        height: card.height,
+        sharesColumns: match.right > card.left && match.left < card.right,
+        clear: match.top >= card.bottom - 0.5 && match.bottom <= frame.top + element.clientHeight + 0.5,
+        room: parseFloat(element.style.getPropertyValue("--find-room")) || 0,
+        padding: parseFloat(getComputedStyle(element).paddingTop),
+      };
+    });
+  await expect.poll(async () => (await geometry()).clear).toBe(true);
+  const findOnly = await geometry();
+  expect([findOnly.top, findOnly.right]).toEqual([12, 24]);
+  expect(findOnly.sharesColumns).toBe(true);
+  expect(findOnly.room).toBeGreaterThan(0);
+  expect(findOnly.padding).toBe(findOnly.room);
+  await page.keyboard.press("Control+h");
+  await expect(page.getByRole("textbox", { name: "Replace with" })).toBeVisible();
+  await expect.poll(async () => (await geometry()).clear).toBe(true);
+  const withReplace = await geometry();
+  expect([withReplace.top, withReplace.right]).toEqual([12, 24]);
+  expect(withReplace.height).toBeGreaterThan(findOnly.height);
+  expect(withReplace.room).toBeGreaterThan(findOnly.room);
+
   await page.keyboard.press("Escape");
   await expect(findBar).toBeHidden();
+  await expect.poll(() => pane.evaluate((element) => element.style.getPropertyValue("--find-room"))).toBe("");
+  await expect(pane).toHaveCSS("padding-top", paddingBefore);
 });
 
 test("a mouse click on a find option keeps typing in the field it was in", async ({ page }) => {

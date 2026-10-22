@@ -6,7 +6,7 @@
 //     the search ran, so a new editor asks for its marks.
 //   - ProseMirror's scrollIntoView does nothing while focus is in the find card,
 //     so the current match is scrolled to directly. The card floats over the
-//     bottom right of the page, and the match is scrolled clear of it
+//     top right of the page, and the match is scrolled clear of it
 //     (`revealSpan`), also in the Markdown view and the frontmatter table.
 
 import { EditorSelection, StateEffect, StateField, type Extension } from "@codemirror/state";
@@ -174,22 +174,22 @@ export function codeMirrorSpan(cm: CodeMirror, from: number, to: number): Span |
   return start && end ? spanBetween(start, end, () => textBox(cm.domAtPos(from), cm.domAtPos(to))) : null;
 }
 
-/** How far above the find card the room below a page's last line lets that line rise. */
+/** How far below the find card the room above a page's first line lets that line sit. */
 const CARD_GAP = 12;
 
-/** Pages that `revealSpan` gave room below their last line. */
+/** Pages that `revealSpan` gave room above their first line. */
 const pagesWithRoom = new Set<HTMLElement>();
 
 /**
  * Scroll the page around `inside` so `span` is visible and clear of the find
- * card, which floats over the bottom right of the page. A span out of view or
- * under the card is centred in the part of the page above the card, and a page
+ * card, which floats over the top right of the page. A span out of view or
+ * under the card is centred in the part of the page below the card, and a page
  * that scrolls sideways centres it that way too. A span that is visible and
  * clear of the card stays put.
  *
- * Near the end of the document the page can stop before the span is clear of
- * the card. The page then gets room below its last line, as tall as the card
- * reaches up into the page plus a gap, until `releaseFindRoom`.
+ * Near the start of the document the page can stop before the span is clear of
+ * the card. The page then gets room above its first line, as tall as the card
+ * reaches down into the page plus a gap, until `releaseFindRoom`.
  *
  * With `sideways` false, nothing scrolls sideways, for a span that another
  * scroll is about to move across.
@@ -201,20 +201,25 @@ export function revealSpan(inside: Element, span: Span, { sideways = true } = {}
   if (!page) return;
   const top = page.getBoundingClientRect().top + page.clientTop;
   const bottom = top + page.clientHeight;
-  // A span that shares columns with the card shows above it, unless a very
+  // A span that shares columns with the card shows below it, unless a very
   // short page leaves no room for it there.
   const card = cardOver(span.left - dx, span.right - dx);
-  const end = card && card.top - top >= span.bottom - span.top ? Math.min(bottom, card.top) : bottom;
-  if (span.top >= top && span.bottom <= end) return;
+  const start = card && bottom - card.bottom >= span.bottom - span.top ? Math.max(top, card.bottom) : top;
+  if (span.top >= start && span.bottom <= bottom) return;
   const from = page.scrollTop;
-  const target = from + (span.top + span.bottom) / 2 - (top + end) / 2;
+  const target = from + (span.top + span.bottom) / 2 - (start + bottom) / 2;
   page.scrollTop = target;
-  if (end === bottom || span.bottom - (page.scrollTop - from) <= end + 0.5) return;
-  makeRoom(page, bottom - end + CARD_GAP);
-  page.scrollTop = target;
+  const scrolled = page.scrollTop - from;
+  if (start === top || span.top - scrolled >= start - 0.5) return;
+  // Top padding moves the match as well as extending the scroll range. Measure
+  // that movement, including any browser scroll anchoring, before scrolling again.
+  const before = inside.getBoundingClientRect().top;
+  makeRoom(page, start - top + CARD_GAP);
+  const shift = inside.getBoundingClientRect().top - before;
+  page.scrollTop += target - from - scrolled + shift;
 }
 
-/** Give `page` at least `room` pixels below its last line. The pages' CSS
+/** Give `page` at least `room` pixels above its first line. The pages' CSS
  *  reads it from --find-room. */
 function makeRoom(page: HTMLElement, room: number): void {
   if (room > (parseFloat(page.style.getPropertyValue("--find-room")) || 0)) {
@@ -223,10 +228,15 @@ function makeRoom(page: HTMLElement, room: number): void {
   pagesWithRoom.add(page);
 }
 
-/** Take away the room `revealSpan` gave pages below their last line, once the
- *  find card's search is over. A page scrolled into that room moves back. */
+/** Remove find's extra top space while keeping the visible content in place,
+ *  unless the page has reached its start. */
 export function releaseFindRoom(): void {
-  for (const page of pagesWithRoom) page.style.removeProperty("--find-room");
+  for (const page of pagesWithRoom) {
+    const height = page.scrollHeight;
+    const from = page.scrollTop;
+    page.style.removeProperty("--find-room");
+    if (from > 0) page.scrollTop = Math.max(0, from - (height - page.scrollHeight));
+  }
   pagesWithRoom.clear();
 }
 

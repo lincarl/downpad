@@ -140,12 +140,12 @@ function AppContent({ store }: { store: Store }) {
             )}
             hidden={!editorVisible}
           >
-            {/* Find can give the page more room below its last line, to lift a
+            {/* Find can give the page more room above its first line, to keep a
                 match there clear of the find card (findReveal.ts). */}
             <div
               className={cn(
                 "editor-column mx-auto w-full max-w-[var(--editor-width)]",
-                "px-6 pt-4 pb-[max(4rem,var(--find-room,0px))]",
+                "px-6 pt-[max(1rem,var(--find-room,0px))] pb-16",
               )}
             >
               <EditorIsland
@@ -155,15 +155,15 @@ function AppContent({ store }: { store: Store }) {
               />
             </div>
           </div>
-          {/* The find card floats over the bottom right of the document, 12px
-              above the status bar and clear of the 12px scroll bar, like
-              Mervin's panel stack. It grows upward when the replace row opens.
+          {/* The find card floats over the top right of the document, 12px
+              below the tabs and clear of the 12px scroll bar.
+              It grows downward when the replace row opens.
               Its left end stays at least 12px from the left edge, and a narrower card
               moves its options under the find field (findBar.tsx). Find
               scrolls each match clear of it (findReveal.ts). */}
           <div
             ref={findHostRef}
-            className="find-host pointer-events-none absolute right-6 bottom-3 z-20 flex max-w-[calc(100%-36px)] justify-end"
+            className="find-host pointer-events-none absolute top-3 right-6 z-20 flex max-w-[calc(100%-36px)] justify-end"
             hidden={!editorVisible}
           />
           <div
