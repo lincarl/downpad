@@ -51,3 +51,52 @@ test("the empty-row plus opens the block menu in place and nonempty rows still i
   await expect(editor.locator(":scope > h2")).toHaveText("Section title");
   await expect(editor.locator(":scope > p")).toHaveCount(1);
 });
+
+for (const { label, tag, task } of [
+  { label: "Bullet List", tag: "ul", task: false },
+  { label: "Ordered List", tag: "ol", task: false },
+  { label: "Task List", tag: "ul", task: true },
+]) {
+  test(`${label} replaces an empty heading only when chosen and undo restores the heading`, async ({ page }) => {
+    const editor = page.getByRole("textbox", { name: "Document editor", exact: true });
+    const add = page.locator('.milkdown-block-handle[data-show="true"] > .operation-item').first();
+    const menu = page.locator('.milkdown-slash-menu[data-show="true"]');
+    // Crepe also mounts its virtual cursor directly inside the editor.
+    const rows = editor.locator(":scope > :not(.prosemirror-virtual-cursor)");
+    await editor.click();
+    await page.keyboard.type("## ");
+    const heading = editor.locator(":scope > h2");
+    await expect(heading).toHaveText("");
+    await heading.hover();
+    await add.click();
+    await expect(menu).toBeVisible();
+    await expect(rows).toHaveCount(1);
+    await expect(heading).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(heading).toHaveCount(1);
+    await expect(rows).toHaveCount(1);
+
+    await heading.hover();
+    await add.click();
+    await menu.getByRole("option", { name: label, exact: true }).click();
+    await expect(menu).toHaveCount(0);
+    const list = editor.locator(`:scope > ${tag}`);
+    await expect(list).toHaveCount(1);
+    await expect(list.locator("li")).toHaveCount(1);
+    await expect(list.locator("li p")).toHaveText("");
+    await expect(list.getByRole("img", { name: "Not done", exact: true })).toHaveCount(task ? 1 : 0);
+    await expect(heading).toHaveCount(0);
+    // Crepe keeps a trailing paragraph after a list for continued editing.
+    await expect(editor.locator(":scope > p")).toHaveCount(1);
+    await expect(rows).toHaveCount(2);
+
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(heading).toHaveText("");
+    await expect(rows).toHaveCount(1);
+    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await expect(list).toHaveCount(1);
+    await page.keyboard.insertText("Item");
+    await expect(list.locator("li p")).toHaveText("Item");
+  });
+}

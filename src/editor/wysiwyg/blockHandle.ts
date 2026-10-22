@@ -4,7 +4,9 @@
 // On an empty paragraph or heading, + opens Crepe's menu in that row. Crepe
 // normally inserts another paragraph first. The handle's positioning hook
 // records its block, so this uses the hovered row even if the caret is
-// elsewhere. Other blocks keep Crepe's insertion behavior.
+// elsewhere. List actions turn an empty heading into a paragraph when chosen,
+// because list items must start with a paragraph. Other blocks keep Crepe's
+// insertion behavior.
 //
 // A press on the handle selects its block and focuses the document view.
 // The handle lies outside the view and takes no focus, so Chromium then moved
@@ -30,8 +32,12 @@
 // pointer shows it again beside the block under it, and md-easy's styles have
 // it appear there at once rather than slide.
 
+import type { BlockEditFeatureConfig } from "@milkdown/crepe/feature/block-edit";
+import { editorViewCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
-import type { ActiveNode, BlockProviderOptions } from "@milkdown/kit/plugin/block";
+import type { ActiveNode } from "@milkdown/kit/plugin/block";
+import { paragraphSchema } from "@milkdown/kit/preset/commonmark";
+import { closeHistory } from "@milkdown/kit/prose/history";
 import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
@@ -43,13 +49,32 @@ const HANDLE = ".milkdown-block-handle";
 /** The block Crepe last positioned each handle beside. */
 const handleBlocks = new WeakMap<HTMLElement, ActiveNode>();
 
-/** Configure Crepe's BlockEdit handle together with the blockHandle plugin.
- *  Its supported positioning hook gives us the hovered block while keeping
- *  Crepe's default spacing. */
-export const blockHandleConfig: Pick<BlockProviderOptions, "getOffset"> = {
-  getOffset: ({ active, blockDom }) => {
-    handleBlocks.set(blockDom, active);
-    return 16;
+/** Configure Crepe's handle and menu together with the blockHandle plugin. */
+export const blockEditConfig: BlockEditFeatureConfig = {
+  blockHandle: {
+    // Record the hovered block through Crepe's supported positioning hook,
+    // keeping its default spacing.
+    getOffset: ({ active, blockDom }) => {
+      handleBlocks.set(blockDom, active);
+      return 16;
+    },
+  },
+  buildMenu(builder) {
+    for (const item of builder.getGroup("list").group.items) {
+      const run = item.onRun;
+      if (!run || !["bullet-list", "ordered-list", "task-list"].includes(item.key)) continue;
+      item.onRun = (ctx) => {
+        const view = ctx.get(editorViewCtx);
+        const { selection } = view.state;
+        const { $from } = selection;
+        if (selection.empty && $from.depth === 1 && $from.parent.type.name === "heading" && $from.parent.content.size === 0) {
+          // Normalize only when applying a list action. Start a new undo event
+          // so undo restores the empty heading, even just after typing it.
+          view.dispatch(closeHistory(view.state.tr.setBlockType($from.pos, $from.pos, paragraphSchema.type(ctx))));
+        }
+        run(ctx);
+      };
+    }
   },
 };
 

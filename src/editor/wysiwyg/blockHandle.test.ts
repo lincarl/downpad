@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
-import { undo } from "@milkdown/kit/prose/history";
+import { redo, undo } from "@milkdown/kit/prose/history";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
@@ -47,7 +47,7 @@ function row(view: EditorView, text: string): number {
   return found;
 }
 
-/** Empty a row without deleting the paragraph that holds it. */
+/** Empty a row without changing its block type. */
 function clearRow(view: EditorView, text: string): number {
   const pos = row(view, text);
   view.dispatch(view.state.tr.delete(pos + 1, pos + 1 + text.length));
@@ -132,8 +132,14 @@ describe("the block handle's + button", () => {
     expect(editor.getMarkdown()).toBe("Before.\n\n### Middle\n\nAfter.\n");
   });
 
-  it.each(["Escape", "blur"])("dismisses with %s without changing the document or undo history", async (dismiss) => {
-    const { editor, view, outside, onChange } = await open("");
+  it.each([
+    { markdown: "", dismiss: "Escape" },
+    { markdown: "", dismiss: "blur" },
+    { markdown: "##\n", dismiss: "Escape" },
+    { markdown: "##\n", dismiss: "blur" },
+  ])("dismisses $markdown with $dismiss without changing the document or undo history", async ({ markdown, dismiss }) => {
+    const { editor, view, outside, onChange } = await open(markdown);
+    const beforeMarkdown = editor.getMarkdown();
     const before = view.state.doc;
     const menu = await add(view, 0);
     if (dismiss === "Escape") key(view, "Escape");
@@ -141,7 +147,7 @@ describe("the block handle's + button", () => {
     expect(menu.dataset.show).toBe("false");
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(view.state.doc).toBe(before);
-    expect(editor.getMarkdown()).toBe("");
+    expect(editor.getMarkdown()).toBe(beforeMarkdown);
     expect(onChange).not.toHaveBeenCalled();
     expect(undo(view.state, view.dispatch)).toBe(false);
   });
@@ -153,6 +159,58 @@ describe("the block handle's + button", () => {
     expect(view.state.doc).toBe(before);
     expect(view.state.doc.firstChild?.type.name).toBe("heading");
     expect(view.state.selection.from).toBe(1);
+  });
+
+  it.each([
+    { label: "Bullet List", type: "bullet_list", checked: null, markdown: "- Item" },
+    { label: "Ordered List", type: "ordered_list", checked: null, markdown: "1. Item" },
+    { label: "Task List", type: "bullet_list", checked: false, markdown: "- [ ] Item" },
+  ])("converts an empty heading to $label in place and undoes back to the heading", async ({ label, type, checked, markdown }) => {
+    const { editor, view } = await open("Before.\n\n## Target.\n\nAfter.\n");
+    const pos = clearRow(view, "Target.");
+    const before = view.state.doc;
+    const menu = await add(view, pos);
+    expect(view.state.doc).toBe(before);
+    pick(menu, label);
+    expect(menu.dataset.show).toBe("false");
+    const inserted = view.state.doc;
+    expect(inserted.childCount).toBe(before.childCount);
+    expect(inserted.child(0)).toBe(before.child(0));
+    expect(inserted.child(2)).toBe(before.child(2));
+    const list = inserted.child(1);
+    expect(list.type.name).toBe(type);
+    expect(list.childCount).toBe(1);
+    expect(list.firstChild?.type.name).toBe("list_item");
+    expect(list.firstChild?.attrs.checked).toBe(checked);
+    expect(list.firstChild?.firstChild?.type.name).toBe("paragraph");
+    expect(view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(view.state.selection.$from.node(1)).toBe(list);
+
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(before)).toBe(true);
+    expect(view.state.selection.$from.parent.type.name).toBe("heading");
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(inserted)).toBe(true);
+    view.dispatch(view.state.tr.insertText("Item"));
+    expect(editor.getMarkdown()).toBe(`Before.\n\n${markdown}\n\nAfter.\n`);
+  });
+
+  it.each([
+    { name: "empty paragraph", initial: "", label: "Bullet List", expected: "- Item\n" },
+    { name: "nonempty heading", initial: "## Kept.\n", label: "Ordered List", expected: "## Kept.\n\n1. Item\n" },
+    { name: "existing list", initial: "- Kept.\n", label: "Task List", expected: "- Kept.\n\n* [ ] Item\n" },
+  ])("keeps $name list insertion behavior", async ({ initial, label, expected }) => {
+    const { editor, view } = await open(initial);
+    const before = view.state.doc;
+    const pos = row(view, initial ? "Kept." : "");
+    const menu = await add(view, pos);
+    pick(menu, label);
+    expect(menu.dataset.show).toBe("false");
+    expect(view.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(view.state.selection.$from.node(2).type.name).toBe("list_item");
+    if (initial) expect(view.state.doc.firstChild?.eq(before.firstChild!)).toBe(true);
+    view.dispatch(view.state.tr.insertText("Item"));
+    expect(editor.getMarkdown()).toBe(expected);
   });
 
   it("still inserts after a nonempty row even when the caret is in an empty row", async () => {
