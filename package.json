@@ -1,6 +1,6 @@
 {
   "name": "md-easy",
-  "version": "0.2.2",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "A lightweight, pure-WYSIWYG markdown editor",
@@ -122,17 +122,9 @@
     },
     "win": {
       "target": [
-        "nsis",
         "msi"
       ],
       "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
     },
     "msi": {
       "oneClick": false,

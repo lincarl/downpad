@@ -143,7 +143,6 @@ jobs:
             artifact: md-easy-windows
             paths: |
               release/*.msi
-              release/*.exe
 
     steps:
       - name: Check out source
@@ -219,17 +218,21 @@ jobs:
               continue
             fi
             if [[ "$ARTIFACT_PREFIX" == md-easy-linux ]]; then
-              first=("$cache_directory"/*.deb)
-              second=("$cache_directory"/*.AppImage)
+              debs=("$cache_directory"/*.deb)
+              appimages=("$cache_directory"/*.AppImage)
+              [[ ${#debs[@]} -eq 1 && ${#appimages[@]} -eq 1 ]] || continue
+              files=("${debs[0]}" "${appimages[0]}")
             else
-              first=("$cache_directory"/*.msi)
-              second=("$cache_directory"/*.exe)
+              files=("$cache_directory"/*.msi)
+              [[ ${#files[@]} -eq 1 ]] || continue
             fi
-            [[ ${#first[@]} -eq 1 && ${#second[@]} -eq 1 ]] || continue
-            [[ -f "${first[0]}" && ! -L "${first[0]}" && -s "${first[0]}" ]] || continue
-            [[ -f "${second[0]}" && ! -L "${second[0]}" && -s "${second[0]}" ]] || continue
+            valid=true
+            for file in "${files[@]}"; do
+              [[ -f "$file" && ! -L "$file" && -s "$file" ]] || valid=false
+            done
+            [[ "$valid" == true ]] || continue
             mkdir -p release
-            cp -- "${first[0]}" "${second[0]}" release/
+            cp -- "${files[@]}" release/
             printf 'reused=true\n' >> "$GITHUB_OUTPUT"
             break
           done
@@ -360,13 +363,12 @@ jobs:
           appimages=(artifacts/md-easy-linux/*.AppImage)
           debs=(artifacts/md-easy-linux/*.deb)
           msis=(artifacts/md-easy-windows/*.msi)
-          nsis=(artifacts/md-easy-windows/*.exe)
-          [[ ${#appimages[@]} -eq 1 && ${#debs[@]} -eq 1 && ${#msis[@]} -eq 1 && ${#nsis[@]} -eq 1 ]] || {
-            printf 'Expected one AppImage, DEB, MSI and NSIS installer, found %s, %s, %s and %s\n' \
-              "${#appimages[@]}" "${#debs[@]}" "${#msis[@]}" "${#nsis[@]}" >&2
+          [[ ${#appimages[@]} -eq 1 && ${#debs[@]} -eq 1 && ${#msis[@]} -eq 1 ]] || {
+            printf 'Expected one AppImage, DEB and MSI installer, found %s, %s and %s\n' \
+              "${#appimages[@]}" "${#debs[@]}" "${#msis[@]}" >&2
             exit 1
           }
-          files=("${appimages[0]}" "${debs[0]}" "${msis[0]}" "${nsis[0]}")
+          files=("${appimages[0]}" "${debs[0]}" "${msis[0]}")
           for file in "${files[@]}"; do
             [[ -f "$file" && ! -L "$file" && -s "$file" ]] || { printf 'Invalid installer %s\n' "$file" >&2; exit 1; }
           done
