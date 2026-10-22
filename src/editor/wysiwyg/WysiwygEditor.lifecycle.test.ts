@@ -22,7 +22,6 @@ const fakeCrepe = vi.hoisted(() => ({
   destroyPromise: Promise.resolve() as Promise<void>,
   createCalls: 0,
   destroyCalls: 0,
-  markdownUpdated: null as (() => void) | null,
 }));
 
 vi.mock("@milkdown/crepe", () => ({
@@ -37,14 +36,6 @@ vi.mock("@milkdown/crepe", () => ({
       action: () => undefined,
       remove: async () => {},
     };
-
-    on(register: (listener: { markdownUpdated(cb: () => void): void }) => void): void {
-      register({
-        markdownUpdated: (cb) => {
-          fakeCrepe.markdownUpdated = cb;
-        },
-      });
-    }
 
     create(): Promise<void> {
       fakeCrepe.createCalls += 1;
@@ -70,7 +61,6 @@ beforeEach(() => {
   fakeCrepe.destroyPromise = Promise.resolve();
   fakeCrepe.createCalls = 0;
   fakeCrepe.destroyCalls = 0;
-  fakeCrepe.markdownUpdated = null;
 });
 
 afterEach(() => {
@@ -110,10 +100,9 @@ describe("WysiwygEditor lifecycle", () => {
     await Promise.resolve();
     expect(fakeCrepe.destroyCalls).toBe(1);
 
-    // The mount's zero-delay activation must not survive destruction and allow a
-    // delayed Milkdown update to publish into a dead host.
+    // Abandoned creation must not publish an initial change. Pending edits on
+    // a mounted editor are exercised with real transactions in the source tests.
     await vi.runAllTimersAsync();
-    fakeCrepe.markdownUpdated?.();
     expect(onChange).not.toHaveBeenCalled();
 
     destroy.resolve();

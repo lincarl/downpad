@@ -189,8 +189,10 @@ describe("ScrollSync", () => {
     sync.connect(a, b);
     sync.connect(a, b); // again — must not double-bind
 
+    const before = writesOf(b);
     a.scrollTop = 500;
     fireScroll(a);
     expect(b.scrollTop).toBe(200);
+    expect(writesOf(b) - before).toBe(1);
   });
 });
