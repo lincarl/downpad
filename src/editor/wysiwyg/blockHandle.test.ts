@@ -98,6 +98,13 @@ function key(view: EditorView, name: string): void {
   view.dom.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
 }
 
+/** Keep edits in one history window without freezing Crepe's debounce timers. */
+function keepHistoryTogether(view: EditorView): void {
+  const dispatch = view.dispatch;
+  const time = Date.now();
+  vi.spyOn(view, "dispatch").mockImplementation((tr) => dispatch(tr.setTime(time)));
+}
+
 describe("the block handle's + button", () => {
   it("keeps the only empty row and applies a menu command through the keyboard", async () => {
     const { editor, view } = await open("");
@@ -165,34 +172,107 @@ describe("the block handle's + button", () => {
     { label: "Bullet List", type: "bullet_list", checked: null, markdown: "- Item" },
     { label: "Ordered List", type: "ordered_list", checked: null, markdown: "1. Item" },
     { label: "Task List", type: "bullet_list", checked: false, markdown: "- [ ] Item" },
-  ])("converts an empty heading to $label in place and undoes back to the heading", async ({ label, type, checked, markdown }) => {
-    const { editor, view } = await open("Before.\n\n## Target.\n\nAfter.\n");
-    const pos = clearRow(view, "Target.");
-    const before = view.state.doc;
-    const menu = await add(view, pos);
-    expect(view.state.doc).toBe(before);
-    pick(menu, label);
-    expect(menu.dataset.show).toBe("false");
-    const inserted = view.state.doc;
-    expect(inserted.childCount).toBe(before.childCount);
-    expect(inserted.child(0)).toBe(before.child(0));
-    expect(inserted.child(2)).toBe(before.child(2));
-    const list = inserted.child(1);
-    expect(list.type.name).toBe(type);
-    expect(list.childCount).toBe(1);
-    expect(list.firstChild?.type.name).toBe("list_item");
-    expect(list.firstChild?.attrs.checked).toBe(checked);
-    expect(list.firstChild?.firstChild?.type.name).toBe("paragraph");
-    expect(view.state.selection.$from.parent.type.name).toBe("paragraph");
-    expect(view.state.selection.$from.node(1)).toBe(list);
+  ].flatMap((item) => ["", item.label.split(" ")[0].toLowerCase()].map((filter) => ({ ...item, filter }))))(
+    "converts an empty heading to $label with filter $filter and undoes the command",
+    async ({ label, type, checked, markdown, filter }) => {
+      const { editor, view } = await open("Before.\n\n## Target.\n\nAfter.\n");
+      keepHistoryTogether(view);
+      const pos = clearRow(view, "Target.");
+      const before = view.state.doc;
+      const menu = await add(view, pos);
+      expect(view.state.doc).toBe(before);
+      if (filter) {
+        view.dispatch(view.state.tr.insertText(filter));
+        await vi.waitFor(() => expect(menu.querySelectorAll("li[data-index]")).toHaveLength(1));
+      }
+      const beforeCommand = view.state.doc;
+      pick(menu, label);
+      expect(menu.dataset.show).toBe("false");
+      const inserted = view.state.doc;
+      expect(inserted.childCount).toBe(before.childCount);
+      expect(inserted.child(0)).toBe(before.child(0));
+      expect(inserted.child(2)).toBe(before.child(2));
+      const list = inserted.child(1);
+      expect(list.type.name).toBe(type);
+      expect(list.childCount).toBe(1);
+      expect(list.firstChild?.type.name).toBe("list_item");
+      expect(list.firstChild?.attrs.checked).toBe(checked);
+      expect(list.firstChild?.firstChild?.type.name).toBe("paragraph");
+      expect(list.textContent).toBe("");
+      expect(view.state.selection.$from.parent.type.name).toBe("paragraph");
+      expect(view.state.selection.$from.node(1)).toBe(list);
 
+      expect(undo(view.state, view.dispatch)).toBe(true);
+      expect(view.state.doc.toJSON()).toEqual(beforeCommand.toJSON());
+      expect(view.state.selection.$from.parent.type.name).toBe("heading");
+      expect(redo(view.state, view.dispatch)).toBe(true);
+      expect(view.state.doc.eq(inserted)).toBe(true);
+      view.dispatch(view.state.tr.insertText("Item"));
+      expect(editor.getMarkdown()).toBe(`Before.\n\n${markdown}\n\nAfter.\n`);
+    },
+  );
+
+  it.each([
+    { prefix: "", label: "Heading 2", type: "heading", level: 2, filter: "" },
+    { prefix: "## ", label: "Heading 3", type: "heading", level: 3, filter: "" },
+    { prefix: "## ", label: "Text", type: "paragraph", level: undefined, filter: "" },
+    { prefix: "## ", label: "Heading 3", type: "heading", level: 3, filter: "heading 3" },
+  ])("undoes $label with filter $filter separately from recent edits in $prefix", async ({ prefix, label, type, level, filter }) => {
+    const { view } = await open(`${prefix}Target.\n\nAfter.\n`);
+    keepHistoryTogether(view);
+    const original = view.state.doc;
+    clearRow(view, "Target.");
+    const menu = await add(view, 0);
+    if (filter) {
+      view.dispatch(view.state.tr.insertText(filter));
+      await vi.waitFor(() => expect(menu.querySelectorAll("li[data-index]")).toHaveLength(1));
+    }
+    const beforeCommand = view.state.doc;
+    pick(menu, label);
+    const applied = view.state.doc;
+    expect(applied.firstChild?.type.name).toBe(type);
+    expect(applied.firstChild?.attrs.level).toBe(level);
+    expect(applied.firstChild?.textContent).toBe("");
+    expect(applied.child(1)).toBe(original.child(1));
     expect(undo(view.state, view.dispatch)).toBe(true);
-    expect(view.state.doc.eq(before)).toBe(true);
-    expect(view.state.selection.$from.parent.type.name).toBe("heading");
+    expect(view.state.doc.eq(beforeCommand)).toBe(true);
+    // Earlier typing and deletion keep ProseMirror's normal grouping.
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(original)).toBe(true);
     expect(redo(view.state, view.dispatch)).toBe(true);
-    expect(view.state.doc.eq(inserted)).toBe(true);
-    view.dispatch(view.state.tr.insertText("Item"));
-    expect(editor.getMarkdown()).toBe(`Before.\n\n${markdown}\n\nAfter.\n`);
+    expect(view.state.doc.eq(beforeCommand)).toBe(true);
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(applied)).toBe(true);
+  });
+
+  it("keeps edit grouping when the menu is dismissed and has no stale row for a later slash command", async () => {
+    const { view } = await open("## Target.\n\n## After.\n");
+    keepHistoryTogether(view);
+    const original = view.state.doc;
+    clearRow(view, "Target.");
+    const menu = await add(view, 0);
+    key(view, "Escape");
+    view.dispatch(view.state.tr.insertText("Changed."));
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(original)).toBe(true);
+
+    const pos = clearRow(view, "After.");
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos + 1)).insertText("/task"));
+    await vi.waitFor(() => {
+      expect(menu.dataset.show).toBe("true");
+      expect(menu.querySelectorAll("li[data-index]")).toHaveLength(1);
+    });
+    const beforeCommand = view.state.doc;
+    pick(menu, "Task List");
+    const applied = view.state.doc;
+    expect(applied.firstChild?.eq(original.firstChild!)).toBe(true);
+    expect(applied.child(1).type.name).toBe("bullet_list");
+    expect(applied.child(1).firstChild?.attrs.checked).toBe(false);
+    expect(applied.child(1).textContent).toBe("");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(beforeCommand)).toBe(true);
+    expect(redo(view.state, view.dispatch)).toBe(true);
+    expect(view.state.doc.eq(applied)).toBe(true);
   });
 
   it.each([

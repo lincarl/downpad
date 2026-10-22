@@ -4,9 +4,11 @@
 // On an empty paragraph or heading, + opens Crepe's menu in that row. Crepe
 // normally inserts another paragraph first. The handle's positioning hook
 // records its block, so this uses the hovered row even if the caret is
-// elsewhere. List actions turn an empty heading into a paragraph when chosen,
-// because list items must start with a paragraph. Other blocks keep Crepe's
-// insertion behavior.
+// elsewhere. List actions turn a heading into a paragraph when chosen,
+// because list items must start with a paragraph, and clear any menu filter
+// in the same transaction. Menu commands start a separate undo event, so
+// undo restores the row before the command without undoing a recent deletion.
+// Other blocks keep Crepe's insertion behavior.
 //
 // A press on the handle selects its block and focuses the document view.
 // The handle lies outside the view and takes no focus, so Chromium then moved
@@ -60,18 +62,25 @@ export const blockEditConfig: BlockEditFeatureConfig = {
     },
   },
   buildMenu(builder) {
-    for (const item of builder.getGroup("list").group.items) {
+    for (const item of builder.build().flatMap((group) => group.items)) {
       const run = item.onRun;
-      if (!run || !["bullet-list", "ordered-list", "task-list"].includes(item.key)) continue;
+      if (!run) continue;
       item.onRun = (ctx) => {
         const view = ctx.get(editorViewCtx);
         const { selection } = view.state;
         const { $from } = selection;
-        if (selection.empty && $from.depth === 1 && $from.parent.type.name === "heading" && $from.parent.content.size === 0) {
-          // Normalize only when applying a list action. Start a new undo event
-          // so undo restores the empty heading, even just after typing it.
-          view.dispatch(closeHistory(view.state.tr.setBlockType($from.pos, $from.pos, paragraphSchema.type(ctx))));
+        const tr = closeHistory(view.state.tr);
+        if (
+          selection.empty && $from.depth === 1 && $from.parent.type.name === "heading"
+          && ["bullet-list", "ordered-list", "task-list"].includes(item.key)
+        ) {
+          // Clear the filter and normalize together so Crepe's list wrapper
+          // joins the same undo event. Its own text clearing is then a no-op.
+          tr.delete($from.start(), $from.end()).setBlockType($from.start(), $from.start(), paragraphSchema.type(ctx));
         }
+        // Separate the command from preceding edits, including filter typing.
+        // Opening or dismissing the menu never changes history grouping.
+        view.dispatch(tr);
         run(ctx);
       };
     }
