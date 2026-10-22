@@ -14,6 +14,8 @@ required for normal pull requests.
 ## Build revisions and retries
 
 Pull requests build their immutable head commit, including fork contributions.
+Source preparation uses the workflow revision so older PR branches do not need
+to contain the latest CI helper.
 Build jobs have read-only permissions and do not retain checkout credentials.
 They run the application checks, tests, desktop build, desktop tests, and
 installer packaging for Linux and Windows.

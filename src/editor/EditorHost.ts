@@ -666,15 +666,15 @@ export class EditorHost implements FindController {
       : this.activeWysiwyg()?.currentCounts() ?? NO_MATCHES;
   }
 
-  /** A Find/replace op scrolls the document to the match (per keystroke during
-   *  incremental search). In the split, tell the scroll sync that this scroll
-   *  is app-originated, so it does not drive the Markdown pane and jerk it on
-   *  every keystroke (§5.3). */
+  /** Find/replace operations and cleanup can scroll the document. In the split,
+   *  tell the scroll sync that this scroll is app-originated, so it does not
+   *  drive the Markdown pane (§5.3). */
   private suppressMirrorScroll(): void {
     if (this.layout === "split") this.scrollSync.suppressNext();
   }
   clear(): void {
-    // The search is over, so the room find made below the last line goes too.
+    // Removing find's top padding compensates the scroll to keep text in place.
+    this.suppressMirrorScroll();
     releaseFindRoom();
     if (this.disposed) return;
     if (this.layout === "markdown") this.activeRaw()?.clearSearch();

@@ -47,11 +47,12 @@ jobs:
       default_branch: ${{ steps.revision.outputs.default_branch }}
       pr_number: ${{ steps.revision.outputs.pr_number }}
     steps:
-      - name: Check out the requested revision
+      # The PR head may predate this helper. Load controls from the same revision
+      # as the workflow, then keep application builds pinned to the event head.
+      - name: Check out workflow controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Select the immutable source
         id: revision

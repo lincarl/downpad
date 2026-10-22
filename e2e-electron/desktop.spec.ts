@@ -6059,6 +6059,54 @@ test("find in the Markdown view gives the first line room below the card and cle
   expect(await roomAbove()).toBe(roomBefore);
 });
 
+test("closing find after scrolling keeps both split panes' visible lines in place", async () => {
+  await openSplit("find-close-split.md", `needle on the first line.\n\n${LONG_DOCUMENT.replace(/needle$/, "finish")}`);
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
+  const documentPane = page.locator(".editor-pane-wysiwyg:not([hidden])");
+  const markdownPane = page.locator(".editor-pane-raw:not([hidden])");
+  await page.keyboard.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in document" }).fill("needle");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await expect.poll(currentMatchProblem).toBe("");
+  // At this width the card covers the document's first line, which needs
+  // extra top padding before the user scrolls away from the match.
+  await expect.poll(() => documentPane.evaluate((element) =>
+    parseFloat(element.style.getPropertyValue("--find-room")) || 0,
+  )).toBeGreaterThan(16);
+  // Let find's suppression window expire so the user's wheel scroll syncs.
+  await page.waitForTimeout(200);
+  await documentPane.hover({ position: { x: 80, y: 250 } });
+  await page.mouse.wheel(0, 400);
+  await expect.poll(() => documentPane.evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
+  await expect.poll(() => markdownPane.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await twoFrames();
+  const visibleLines = await page.evaluate(() => [
+    { pane: ".editor-pane-wysiwyg:not([hidden])", line: ".ProseMirror p" },
+    { pane: ".editor-pane-raw:not([hidden])", line: ".cm-line" },
+  ].map(({ pane, line }) => {
+    const element = document.querySelector(pane)!;
+    const frame = element.getBoundingClientRect();
+    const visible = [...element.querySelectorAll(line)].find((candidate) => {
+      const box = candidate.getBoundingClientRect();
+      return candidate.textContent?.trim() && box.top >= frame.top && box.bottom <= frame.bottom;
+    });
+    if (!visible) throw new Error(`No visible line in ${pane}.`);
+    return { pane, line, text: visible.textContent, top: visible.getBoundingClientRect().top };
+  }));
+
+  await page.getByRole("button", { name: "Close find" }).click();
+  await expect(page.locator(".find-bar")).toBeHidden();
+  // Wait for the compensated scroll and any resulting mirror scroll event.
+  await twoFrames();
+  for (const { pane, line, text, top } of visibleLines) {
+    await expect.poll(() => page.locator(pane).evaluate((element, { line, text }) =>
+      [...element.querySelectorAll(line)].find((candidate) => candidate.textContent === text)?.getBoundingClientRect().top,
+    { line, text }), { message: `Closing find keeps ${pane}'s visible line in place.` }).toBeCloseTo(top, 1);
+  }
+  expect(await documentPane.evaluate((element) => element.style.getPropertyValue("--find-room"))).toBe("");
+});
+
 /** The text of `line`, a paragraph or a source line that wraps, from its
  *  start through the first word on its second line. */
 function throughSecondLine(line: Locator): Promise<string> {
