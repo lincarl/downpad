@@ -1,5 +1,10 @@
-// Focus after a press on Crepe's block handle, and the handle after the
-// document view changes width.
+// Add blocks on empty rows, focus after a press on Crepe's block handle,
+// and the handle after the document view changes width.
+//
+// On an empty paragraph or heading, + opens Crepe's menu in that row. Crepe
+// normally inserts another paragraph first. The handle's positioning hook
+// records its block, so this uses the hovered row even if the caret is
+// elsewhere. Other blocks keep Crepe's insertion behavior.
 //
 // A press on the handle selects its block and focuses the document view.
 // The handle lies outside the view and takes no focus, so Chromium then moved
@@ -25,13 +30,57 @@
 // pointer shows it again beside the block under it, and md-easy's styles have
 // it appear there at once rather than slide.
 
-import { Plugin } from "@milkdown/kit/prose/state";
+import type { Ctx } from "@milkdown/kit/ctx";
+import type { ActiveNode, BlockProviderOptions } from "@milkdown/kit/plugin/block";
+import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 
 /** Crepe's block handle, which it puts in the element that holds the
  *  document view. */
 const HANDLE = ".milkdown-block-handle";
+
+/** The block Crepe last positioned each handle beside. */
+const handleBlocks = new WeakMap<HTMLElement, ActiveNode>();
+
+/** Configure Crepe's BlockEdit handle together with the blockHandle plugin.
+ *  Its supported positioning hook gives us the hovered block while keeping
+ *  Crepe's default spacing. */
+export const blockHandleConfig: Pick<BlockProviderOptions, "getOffset"> = {
+  getOffset: ({ active, blockDom }) => {
+    handleBlocks.set(blockDom, active);
+    return 16;
+  },
+};
+
+/** Crepe does not export this context slice. slashMenuBlur uses the same API. */
+type SlashMenuAPI = { show: (pos: number) => void };
+
+/** Open the existing menu on an empty row before Crepe inserts a new one. */
+function menuOnEmptyRow(ctx: Ctx, view: EditorView, holder: HTMLElement): () => void {
+  const release = (event: PointerEvent): void => {
+    if (event.button !== 0 || !view.editable || !(event.target instanceof Element)) return;
+    const add = event.target.closest<HTMLElement>(`${HANDLE} > .operation-item:first-child`);
+    const handle = add?.parentElement;
+    if (!add || !handle || handle.parentElement !== holder || handle.dataset.show !== "true") return;
+    const active = handleBlocks.get(handle);
+    if (!active || active.$pos.doc !== view.state.doc) return;
+    // A nested handle can represent a whole list, quote or table. In a list
+    // Crepe also disallows its slash menu, even on an empty continuation row.
+    if (active.$pos.depth !== 0 || !["paragraph", "heading"].includes(active.node.type.name) || active.node.content.size !== 0) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    add.classList.remove("active");
+    const pos = active.$pos.pos + 1;
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView());
+    handle.dataset.show = "false";
+    ctx.get<SlashMenuAPI, "menuAPICtx">("menuAPICtx").show(pos);
+  };
+  holder.addEventListener("pointerup", release, true);
+  return () => holder.removeEventListener("pointerup", release, true);
+}
 
 /** Focus the view once a press on its block handle ends with a release or
  *  the end of a drag, unless something else has taken focus by then (see the
@@ -77,16 +126,15 @@ function hideHandleOnResize(view: EditorView, holder: HTMLElement): () => void {
   return () => observer.disconnect();
 }
 
-/** ProseMirror plugin that focuses the document view after a press on Crepe's
- *  block handle and hides the handle when the view's width changes (see the
- *  header). Crepe puts the handle in the element that holds the view. */
+/** Keep an empty row for the menu, restore focus after handle presses, and
+ *  hide the handle when the view's width changes (see the header). */
 export const blockHandle = $prose(
-  () =>
+  (ctx) =>
     new Plugin({
       view(view) {
         const holder = view.dom.parentElement;
         if (!holder) return {};
-        const stops = [focusAfterHandlePress(view, holder), hideHandleOnResize(view, holder)];
+        const stops = [menuOnEmptyRow(ctx, view, holder), focusAfterHandlePress(view, holder), hideHandleOnResize(view, holder)];
         return { destroy: () => stops.forEach((stop) => stop()) };
       },
     }),

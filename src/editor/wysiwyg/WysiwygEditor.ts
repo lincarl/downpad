@@ -38,7 +38,7 @@ import { linkViewPlugin } from "./linkView";
 import { shiftClicks } from "./shiftClicks";
 import { listLabelClicks } from "./listLabelClicks";
 import { paddingPresses } from "./paddingPresses";
-import { blockHandle } from "./blockHandle";
+import { blockHandle, blockHandleConfig } from "./blockHandle";
 import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
@@ -69,6 +69,7 @@ import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibilit
 import { tabExit } from "./tabExit";
 import { slashMenuBlur } from "./slashMenuBlur";
 import { toolbarBlur } from "./toolbarBlur";
+import { selectionToolbar } from "./selectionToolbar";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import { linkEdges } from "./linkEdges";
 import {
@@ -238,6 +239,8 @@ export class WysiwygEditor {
       // split.body === initial when there is no frontmatter.
       defaultValue: split.body,
       featureConfigs: {
+        [Crepe.Feature.Toolbar]: selectionToolbar,
+        [Crepe.Feature.BlockEdit]: { blockHandle: blockHandleConfig },
         // Render ```mermaid code blocks as diagrams below the source (§5.2),
         // show the find card's matches inside code blocks (§5.13), add a
         // cursor on Ctrl or Cmd+click only in a block that has focus, put the
