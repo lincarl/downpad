@@ -541,10 +541,10 @@ body {
 
 /* Give the document pane comfortable margins in the split (the dropped column
    padding used to provide them); the raw pane carries CodeMirror's own padding.
-   Find can give the pane more room below its last line, to lift a match there
+   Find can give the pane more room above its first line, to keep a match there
    clear of the find card (findReveal.ts). */
 .editor-area.split .editor-pane-wysiwyg {
-  padding: 16px 24px max(64px, var(--find-room, 0px));
+  padding: max(16px, var(--find-room, 0px)) 24px 64px;
 }
 
 /* One pane per (tab, view); the inactive ones are kept alive (to preserve undo,
@@ -620,10 +620,11 @@ body {
   align-self: stretch;
 }
 
-/* Find can give the Markdown view room below its last line, to lift a match
+/* Find can give the Markdown view room above its first line, to keep a match
    there clear of the find card (findReveal.ts). */
+.editor-area.split .editor-pane-raw,
 .editor-area.markdown-only .editor-pane-raw {
-  padding-bottom: var(--find-room, 0);
+  padding-top: var(--find-room, 0);
 }
 
 /* The source gutter shares the page's fill and has no edge. It stretches to

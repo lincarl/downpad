@@ -2564,30 +2564,37 @@ test("a click below the end of the Markdown puts the cursor at its end, in the s
   await expect.poll(() => readFile(file, "utf8")).toBe("Ffg");
 });
 
-test("a click in the room find adds below the Markdown view puts the cursor at the end of the Markdown", async () => {
-  const file = path.join(directory, "below-end-find-room.md");
-  await writeFile(file, LONG_DOCUMENT);
+test("a click in the room find adds above the Markdown view keeps focus in the find card", async () => {
+  const file = path.join(directory, "above-start-find-room.md");
+  const markdown = `needle on the first line.\n\n${LONG_DOCUMENT.replace(/needle$/, "finish")}`;
+  await writeFile(file, markdown);
   await launch(file);
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   await expect(pane.locator(".cm-line").first()).toBeVisible();
   await page.keyboard.press("ControlOrMeta+f");
-  await page.getByRole("textbox", { name: "Find in document" }).fill("needle");
+  const find = page.getByRole("textbox", { name: "Find in document" });
+  await find.fill("needle");
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
   await expect.poll(currentMatchProblem).toBe("");
-  // The press kept focus in the find card, where the next key went.
+  // Above the editor, a press on the page keeps focus where it was.
   const room = await pane.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
+    element.scrollTop = 0;
     const editor = element.querySelector(".cm-editor")!.getBoundingClientRect();
-    const { bottom } = element.getBoundingClientRect();
-    return { x: editor.left + 80, y: (editor.bottom + bottom) / 2, height: bottom - editor.bottom };
+    const { top } = element.getBoundingClientRect();
+    const card = document.querySelector(".find-bar")!.getBoundingClientRect();
+    return { x: editor.left + 8, y: (editor.top + top) / 2, height: editor.top - top, cardLeft: card.left };
   });
   expect(room.height).toBeGreaterThan(40);
+  expect(room.x).toBeLessThan(room.cardLeft);
   await page.mouse.click(room.x, room.y);
-  await expect(pane.locator(".cm-content")).toBeFocused();
+  await expect(find).toBeFocused();
   await page.keyboard.type("Z");
+  await expect(find).toHaveValue("needleZ");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(LONG_DOCUMENT + "Z");
+  await expect.poll(() => readFile(file, "utf8")).toBe(markdown);
 });
 
 test("the buttons that add a table's row or column put the next key in the new line, also from the find card or a code block", async () => {
@@ -5809,13 +5816,13 @@ function currentMatchProblem(): Promise<string> {
   });
 }
 
-/** How far the find card sits from the bottom and right of the editor area,
- *  which ends at the status bar, and the card's height. */
-function cardInsets(): Promise<{ bottom: number; right: number; height: number }> {
+/** How far the find card sits from the top and right of the editor area,
+ *  below the tab strip, and the card's height. */
+function cardInsets(): Promise<{ top: number; right: number; height: number }> {
   return page.evaluate(() => {
     const card = document.querySelector(".find-bar")!.getBoundingClientRect();
     const area = document.querySelector(".main-region")!.getBoundingClientRect();
-    return { bottom: Math.round(area.bottom - card.bottom), right: Math.round(area.right - card.right), height: Math.round(card.height) };
+    return { top: Math.round(card.top - area.top), right: Math.round(area.right - card.right), height: Math.round(card.height) };
   });
 }
 
@@ -5833,8 +5840,7 @@ const LONG_DOCUMENT = [
 
 test("find leaves a match at the top of the page in view and clear of the card", async () => {
   // A match in the frontmatter table and one at the end of a long first line.
-  // Both sat under the card when it floated over the top right of the page,
-  // which cannot scroll any higher.
+  // Both can sit under the card at the top of a page that cannot scroll higher.
   const files = {
     "top-frontmatter.md": "---\ntitle: Quarterly needle notes\nowner: Ann\n---\n\n# Planning\n\nThe group meets on Monday.\n",
     "top-first-line.md": "The first line of these notes is long, and it runs on to a needle at its end and then wraps onto a second line of text so the paragraph is long.\n\nSecond paragraph.\n",
@@ -5855,15 +5861,16 @@ test("find leaves a match at the top of the page in view and clear of the card",
     await expect(page.getByRole("textbox", { name: "Replace with" })).toBeVisible();
     await twoFrames();
     expect(await currentMatchProblem()).toBe("");
-    // The match was in view and clear of the card, so the page stayed at the top.
+    // Extra top padding clears the match without scrolling past the start.
     expect(await page.locator(".editor-area").evaluate((area) => area.scrollTop)).toBe(0);
     await page.keyboard.press("Escape");
+    expect(await page.locator(".editor-area").evaluate((area) => area.style.getPropertyValue("--find-room"))).toBe("");
   }
 });
 
-test("find lifts a match at the end of a long document clear of the card", async () => {
+test("find keeps the last match in view and moves a covered match below the card in a long document", async () => {
   const file = path.join(directory, "find-end.md");
-  await writeFile(file, LONG_DOCUMENT);
+  await writeFile(file, LONG_DOCUMENT.replace("Paragraph 40 of the notes.", `A line ${"word ".repeat(10)}middle`));
   await launch(file);
   await expect(page.locator(".milkdown .ProseMirror p").first()).toHaveText("Paragraph 1 of the notes.");
   const area = page.locator(".editor-area");
@@ -5872,45 +5879,49 @@ test("find lifts a match at the end of a long document clear of the card", async
   await find.fill("needle");
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
   await expect.poll(currentMatchProblem).toBe("");
-  // The card sits 12px above the status bar, clear of the scroll bar, and the
-  // replace row makes it grow upward.
+  // The card sits 12px below the tabs, clear of the scroll bar, and the
+  // replace row makes it grow downward.
   const findOnly = await cardInsets();
-  expect([findOnly.bottom, findOnly.right]).toEqual([12, 24]);
+  expect([findOnly.top, findOnly.right]).toEqual([12, 24]);
   await page.keyboard.press("Control+h");
   const withReplace = await cardInsets();
-  expect([withReplace.bottom, withReplace.right]).toEqual([12, 24]);
+  expect([withReplace.top, withReplace.right]).toEqual([12, 24]);
   expect(withReplace.height).toBeGreaterThan(findOnly.height);
   await twoFrames();
   expect(await currentMatchProblem()).toBe("");
 
-  // The user scrolls up until the match is under the card. The next find step
-  // lifts it clear.
+  // In the split the card covers the top right of the Markdown pane, and the
+  // document pane keeps the last match in view.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await expect.poll(currentMatchProblem).toBe("");
+  expect(await cardInsets()).toEqual(withReplace);
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await find.fill("middle");
+  await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await expect.poll(currentMatchProblem).toBe("");
+
+  // The user scrolls down until the middle match is under the card. The next
+  // find step moves it below the card.
   const places = () =>
     page.evaluate(() => {
       const match = document.querySelector(".md-find-current")!.getBoundingClientRect();
       const card = document.querySelector(".find-bar")!.getBoundingClientRect();
-      return { matchTop: match.top, matchBottom: match.bottom, cardTop: card.top };
+      return { matchTop: match.top, cardTop: card.top, cardBottom: card.bottom };
     });
-  const scrollUp = (by: number) => area.evaluate((element, by) => (element.scrollTop -= by), by);
-  const lifted = await places();
-  await scrollUp(lifted.cardTop + 8 - lifted.matchTop);
+  const scrollDown = (by: number) => area.evaluate((element, by) => (element.scrollTop += by), by);
+  const revealed = await places();
+  await scrollDown(revealed.matchTop - revealed.cardTop - 8);
   expect(await currentMatchProblem()).toContain("under the card");
   await find.press("Enter");
   await expect.poll(currentMatchProblem).toBe("");
   // A match in view and clear of the card stays where it is, though it is not
-  // centred above the card.
+  // centred below the card.
   const clear = await places();
-  const scrolled = await scrollUp(Math.floor((clear.cardTop - clear.matchBottom) / 2));
+  const scrolled = await scrollDown(Math.floor((clear.matchTop - clear.cardBottom) / 2));
   await find.press("Enter");
   await twoFrames();
   expect(await currentMatchProblem()).toBe("");
   expect(await area.evaluate((element) => element.scrollTop)).toBe(scrolled);
-
-  // In the split the card covers the bottom right of the Markdown pane, and the
-  // document pane keeps the match in view.
-  await page.getByRole("radio", { name: "Split", exact: true }).click();
-  await expect.poll(currentMatchProblem).toBe("");
-  expect(await cardInsets()).toEqual(withReplace);
 });
 
 /** The find card's fields, buttons and check boxes that end outside the
@@ -5933,9 +5944,9 @@ function cardControlProblems(): Promise<string[]> {
   });
 }
 
-test("the find card fits a narrow window and find lifts a match clear of it", async () => {
+test("the find card fits a narrow window and find moves a match below it", async () => {
   const file = path.join(directory, "find-narrow.md");
-  await writeFile(file, LONG_DOCUMENT);
+  await writeFile(file, `${LONG_DOCUMENT}\n\n${Array.from({ length: 40 }, (_, index) => `Following paragraph ${index + 1}.`).join("\n\n")}`);
   await launch(file);
   await expect(page.locator(".milkdown .ProseMirror p").first()).toHaveText("Paragraph 1 of the notes.");
   const find = page.getByRole("textbox", { name: "Find in document" });
@@ -5959,80 +5970,83 @@ test("the find card fits a narrow window and find lifts a match clear of it", as
     await expect(replace).toBeVisible();
     expect(await cardControlProblems()).toEqual([]);
     // The fields keep the width they have in a wide window, and the card
-    // keeps its place 12px above the status bar and clear of the scroll bar.
+    // keeps its place 12px below the tabs and clear of the scroll bar.
     expect(await fieldWidths()).toEqual(wideFields);
     const insets = await cardInsets();
-    expect([insets.bottom, insets.right]).toEqual([12, 24]);
+    expect([insets.top, insets.right]).toEqual([12, 24]);
     await twoFrames();
     expect(await currentMatchProblem()).toBe("");
     await page.keyboard.press("Escape");
     await expect(page.locator(".find-bar")).toBeHidden();
   }
 
-  // The card is taller in a narrow window. The user scrolls up until the match
-  // is under it, and the next find step lifts the match clear.
+  // The card is taller in a narrow window. The user scrolls down until the
+  // match is under it, and the next find step moves the match below it.
   await page.keyboard.press("ControlOrMeta+h");
   await expect(replace).toBeVisible();
   await expect.poll(currentMatchProblem).toBe("");
   await page.locator(".editor-area").evaluate((element) => {
     const match = document.querySelector(".md-find-current")!.getBoundingClientRect();
-    element.scrollTop -= document.querySelector(".find-bar")!.getBoundingClientRect().top + 8 - match.top;
+    element.scrollTop += match.top - document.querySelector(".find-bar")!.getBoundingClientRect().top - 8;
   });
   expect(await currentMatchProblem()).toContain("under the card");
   await find.press("Enter");
   await expect.poll(currentMatchProblem).toBe("");
 });
 
-test("find in the Markdown view lifts a match on the last line clear of the card", async () => {
-  const file = path.join(directory, "find-end-markdown.md");
-  await writeFile(file, LONG_DOCUMENT);
+test("find in the Markdown view gives the first line room below the card and cleans it up", async () => {
+  const file = path.join(directory, "find-start-markdown.md");
+  await writeFile(file, `needle on the first line.\n\n${LONG_DOCUMENT.replace(/needle$/, "finish")}`);
   await launch(file);
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
-  const firstLine = pane.locator(".cm-line").filter({ hasText: "Paragraph 1 of the notes." });
+  const firstLine = pane.locator(".cm-line").filter({ hasText: "needle on the first line." });
   await expect(firstLine).toBeVisible();
-  // How far the pane scrolls past the source's last line.
-  const roomBelow = () =>
+  // The distance from the pane's top to the source's first line.
+  const roomAbove = () =>
     pane.evaluate(async (element) => {
-      element.scrollTop = element.scrollHeight;
+      element.scrollTop = 0;
       // CodeMirror draws the lines it scrolled to in its next frame.
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      element.scrollTop = element.scrollHeight;
-      const last = [...element.querySelectorAll(".cm-line")].at(-1)!;
-      return Math.round(element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom);
+      const first = element.querySelector(".cm-line")!;
+      return Math.round(first.getBoundingClientRect().top - element.getBoundingClientRect().top);
     });
-  const roomBefore = await roomBelow();
-  await pane.evaluate((element) => { element.scrollTop = 0; });
+  const roomBefore = await roomAbove();
 
   const find = page.getByRole("textbox", { name: "Find in document" });
   await page.keyboard.press("ControlOrMeta+f");
   await find.fill("needle");
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
-  // The source has almost no room below its last line, so the page gets
-  // enough to lift that line clear of the card.
+  // The source has almost no room above its first line, so the page gets
+  // enough to show that line below the card.
   await expect.poll(currentMatchProblem).toBe("");
-  expect((await cardInsets()).bottom).toBe(12);
-  // The replace row makes the card reach over the match, and opening it
-  // searches again, which makes more room and lifts the match clear.
+  expect((await cardInsets()).top).toBe(12);
+  const findRoom = await roomAbove();
+  expect(findRoom).toBeGreaterThan(roomBefore);
+  // Opening Replace searches again and makes room for the taller card.
   await page.keyboard.press("Control+h");
   await expect(page.getByRole("textbox", { name: "Replace with" })).toBeVisible();
   await expect.poll(currentMatchProblem).toBe("");
-  expect((await cardInsets()).bottom).toBe(12);
-  // F3 from the source also lifts the match clear.
+  expect((await cardInsets()).top).toBe(12);
+  expect(await roomAbove()).toBeGreaterThan(findRoom);
+  // F3 from the source also moves the match below the card.
   await pane.evaluate((element) => { element.scrollTop = 0; });
-  await firstLine.click();
+  await pane.locator(".cm-line").filter({ hasText: "Paragraph 1 of the notes." }).click();
   await expect(page.locator(".find-count")).toHaveText("0 of 1");
   await page.keyboard.press("F3");
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
   await expect.poll(currentMatchProblem).toBe("");
 
-  // Closing find takes the room away. A page scrolled away from the end stays put.
+  // Closing find takes the room away. A page scrolled away from the top stays put.
   await pane.evaluate((element) => { element.scrollTop = 200; });
   await page.locator(".find-bar").getByRole("button", { name: "Close find" }).click();
   await expect(page.locator(".find-bar")).toBeHidden();
   await twoFrames();
   expect(await pane.evaluate((element) => element.scrollTop)).toBe(200);
-  expect(await roomBelow()).toBe(roomBefore);
+  expect(await pane.evaluate((element) => element.style.getPropertyValue("--find-room"))).toBe("");
+  expect(await roomAbove()).toBe(roomBefore);
 });
 
 /** The text of `line`, a paragraph or a source line that wraps, from its
@@ -6054,13 +6068,13 @@ function throughSecondLine(line: Locator): Promise<string> {
   });
 }
 
-test("find lifts a match that wraps onto another line clear of the card", async () => {
-  // The match runs from the start of the last paragraph to the first word on
+test("find moves a match that wraps onto another line below the card", async () => {
+  // The match runs from the start of a paragraph to the first word on
   // its second line. Both of its ends lie left of the card, while its first
   // line runs on under the card.
   const terms = Array.from({ length: 60 }, (_, index) => `term${index + 1}`).join(" ");
   const file = path.join(directory, "find-wrapped.md");
-  await writeFile(file, [...Array.from({ length: 80 }, (_, index) => `Paragraph ${index + 1} of the notes.`), terms].join("\n\n"));
+  await writeFile(file, [...Array.from({ length: 80 }, (_, index) => `Paragraph ${index + 1} of the notes.`), terms, ...Array.from({ length: 40 }, (_, index) => `Following paragraph ${index + 1}.`)].join("\n\n"));
   await launch(file);
   await expect(page.locator(".milkdown .ProseMirror p").first()).toHaveText("Paragraph 1 of the notes.");
   const find = page.getByRole("textbox", { name: "Find in document" });
@@ -6070,20 +6084,25 @@ test("find lifts a match that wraps onto another line clear of the card", async 
   ] as const) {
     await page.getByRole("radio", { name: layout, exact: true }).click();
     const pane = page.locator(scroller);
-    // CodeMirror draws the last line once the page scrolls to it.
-    await pane.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-    const query = await throughSecondLine(pane.locator(line).filter({ hasText: "term1 " }));
-    await pane.evaluate((element) => { element.scrollTop = 0; });
-    // The replace row makes the card reach higher.
+    // A short search brings the wrapped source line into CodeMirror's viewport.
     await page.keyboard.press("Control+h");
+    await find.fill("term1 ");
+    await expect(page.locator(".find-count")).toHaveText("1 of 1");
+    const wrapped = pane.locator(line).filter({ hasText: "term1 " });
+    await expect(wrapped).toBeInViewport();
+    await find.fill("");
+    await expect(pane.locator(".md-find-current")).toHaveCount(0);
+    const query = await throughSecondLine(wrapped);
+    await pane.evaluate((element) => { element.scrollTop = 0; });
+    // The replace row makes the card reach farther down.
     await find.fill(query);
     await expect(page.locator(".find-count")).toHaveText("1 of 1");
     await expect.poll(currentMatchProblem).toBe("");
-    // The user scrolls up until the match's first line is under the card. The
-    // next find step lifts it clear.
+    // The user scrolls down until the match's first line is under the card.
+    // The next find step moves it below the card.
     await pane.evaluate((element) => {
       const match = [...document.querySelectorAll(".md-find-current")].find((part) => part.getClientRects().length)!;
-      element.scrollTop -= document.querySelector(".find-bar")!.getBoundingClientRect().top + 8 - match.getClientRects()[0]!.top;
+      element.scrollTop += match.getClientRects()[0]!.top - document.querySelector(".find-bar")!.getBoundingClientRect().top - 8;
     });
     expect(await currentMatchProblem()).toContain("under the card");
     await find.press("Enter");
