@@ -228,10 +228,15 @@ function makeRoom(page: HTMLElement, room: number): void {
   pagesWithRoom.add(page);
 }
 
-/** Take away the room `revealSpan` gave pages above their first line, once the
- *  find card's search is over. A page scrolled into that room moves back. */
+/** Remove find's extra top space while keeping the visible content in place,
+ *  unless the page has reached its start. */
 export function releaseFindRoom(): void {
-  for (const page of pagesWithRoom) page.style.removeProperty("--find-room");
+  for (const page of pagesWithRoom) {
+    const height = page.scrollHeight;
+    const from = page.scrollTop;
+    page.style.removeProperty("--find-room");
+    if (from > 0) page.scrollTop = Math.max(0, from - (height - page.scrollHeight));
+  }
   pagesWithRoom.clear();
 }
 

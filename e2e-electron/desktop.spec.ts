@@ -6039,12 +6039,22 @@ test("find in the Markdown view gives the first line room below the card and cle
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
   await expect.poll(currentMatchProblem).toBe("");
 
-  // Closing find takes the room away. A page scrolled away from the top stays put.
+  // Closing find takes the room away without shifting the visible text.
   await pane.evaluate((element) => { element.scrollTop = 200; });
+  await twoFrames();
+  const visibleLine = await pane.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    const line = [...element.querySelectorAll(".cm-line")].find((line) =>
+      line.textContent?.trim() && line.getBoundingClientRect().top >= top,
+    )!;
+    return { text: line.textContent, top: line.getBoundingClientRect().top };
+  });
   await page.locator(".find-bar").getByRole("button", { name: "Close find" }).click();
   await expect(page.locator(".find-bar")).toBeHidden();
   await twoFrames();
-  expect(await pane.evaluate((element) => element.scrollTop)).toBe(200);
+  await expect.poll(() => pane.evaluate((element, text) =>
+    [...element.querySelectorAll(".cm-line")].find((line) => line.textContent === text)?.getBoundingClientRect().top,
+  visibleLine.text)).toBeCloseTo(visibleLine.top, 1);
   expect(await pane.evaluate((element) => element.style.getPropertyValue("--find-room"))).toBe("");
   expect(await roomAbove()).toBe(roomBefore);
 });
