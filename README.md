@@ -55,7 +55,7 @@ pnpm package
 pnpm dist
 ```
 
-`pnpm package` creates an unpacked desktop app under `release/`. `pnpm dist` creates installers for the host platform, with publishing disabled. Linux builds produce AppImage and DEB files. Windows builds produce NSIS and MSI installers. macOS has a DMG target configured but is not part of the installer CI matrix.
+`pnpm package` creates an unpacked desktop app under `release/`. `pnpm dist` creates installers for the host platform, with publishing disabled. Linux builds produce AppImage and DEB files. Windows builds produce MSI installers. macOS has a DMG target configured but is not part of the installer CI matrix.
 
 Build Windows installers on Windows and verify them there. Installer CI builds Linux and Windows packages, retains artifacts for 30 days, and publishes a GitHub release when a stable version tag is pushed. The release tag supplies the app version through `scripts/apply-version-from-tag.mjs`.
 

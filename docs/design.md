@@ -136,7 +136,7 @@ Attachment writes stage complete bytes in a sibling temporary file before public
 
 ## Desktop integration
 
-Electron provides native windows, file associations, single-instance behavior, native open/save dialogs, opening links and folders, system appearance settings, and printing. Linux builds provide AppImage and DEB installers. Windows builds provide NSIS and MSI installers.
+Electron provides native windows, file associations, single-instance behavior, native open/save dialogs, opening links and folders, system appearance settings, and printing. Linux builds provide AppImage and DEB installers. Windows builds provide MSI installers.
 
 Undo and Redo in the native menus (the spell-check menu that Shift+right-click opens, and the macOS Edit menu) go to the renderer, which runs the focused editor's undo history. Chromium's own undo knows nothing of those histories. A plain text field, such as the find card's, keeps Chromium's undo.
 
