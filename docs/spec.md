@@ -5,6 +5,8 @@ md-easy is a desktop Markdown editor for Windows and Linux. It is designed for p
 ## Core experience
 
 - Edit Markdown in a clean WYSIWYG document view.
+- Format selected text with a floating toolbar whose first buttons are H1, H2, H3, and H4. These set the heading level of the selected text blocks. The toolbar also offers bold, italic, strikethrough, inline code, and links, with no math button. Math remains available through Markdown and the block menu.
+- Click the block handle's "+" on an empty paragraph or heading to open the block menu on that row without inserting a new row. On other blocks, "+" inserts a paragraph after the block and opens the menu there.
 - Switch between Document, Markdown, and side-by-side Split views. A view chosen while a document opens or reloads takes effect once the document is shown, and choosing another view or tab before then does nothing. If the Document view cannot show a file, for example one with thousands of nested quotes, that tab opens in the Markdown view and the notice bar under the tabs says why. Try again shows the Document view once the text allows it, for example after a fix in the Markdown view. Other tabs keep the chosen view, and printing such a file prints its Markdown.
 - Keep the rendered document and Markdown source synchronized, including edits made in the Markdown view while the Document view opens.
 - Work with multiple documents in tabs.
