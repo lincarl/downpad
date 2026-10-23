@@ -1,7 +1,7 @@
 // Autosave + crash-recovery snapshots (spec §5.11). Two timers:
 //   - recovery snapshots are ALWAYS on: every recoverySnapshotIntervalSeconds,
-//     while the doc is dirty, write the buffer to disk; once clean again, delete
-//     the snapshot (so a clean shutdown leaves nothing to recover).
+//     write each dirty tab's buffer to disk, including background tabs. Delete
+//     its snapshot once saved or closed, and clear all on an accepted shutdown.
 //   - autosave-to-file is opt-in: every autosaveIntervalSeconds, if enabled and
 //     the doc has a path and is dirty, save it.
 // No-op outside Electron.
@@ -14,7 +14,10 @@ import { isElectron } from "../ipc/env";
 export class SnapshotScheduler {
   private recoveryTimer: ReturnType<typeof setInterval> | null = null;
   private autosaveTimer: ReturnType<typeof setInterval> | null = null;
-  private wroteSnapshot = false;
+  private readonly snapshotIds = new Set<string>();
+  private readonly pending = new Map<string, Promise<void>>();
+  private clearing: Promise<void> | null = null;
+  private stopVersion = 0;
 
   constructor(
     private readonly store: Store,
@@ -22,7 +25,7 @@ export class SnapshotScheduler {
   ) {}
 
   start(): void {
-    if (!isElectron()) return;
+    if (!isElectron() || this.recoveryTimer !== null || this.clearing) return;
     const s = this.store.get().settings;
     const recoveryMs = Math.max(2, s.recoverySnapshotIntervalSeconds) * 1000;
     const autosaveMs = Math.max(5, s.autosaveIntervalSeconds) * 1000;
@@ -31,33 +34,73 @@ export class SnapshotScheduler {
   }
 
   stop(): void {
+    this.stopVersion++;
     if (this.recoveryTimer) clearInterval(this.recoveryTimer);
     if (this.autosaveTimer) clearInterval(this.autosaveTimer);
     this.recoveryTimer = this.autosaveTimer = null;
   }
 
-  /** Delete this session's snapshot (called on a clean shutdown). */
-  async clear(): Promise<void> {
-    if (isElectron()) await deleteSnapshot(this.store.get().sessionId).catch(() => {});
-    this.wroteSnapshot = false;
+  /** Stop scheduling, finish dispatched writes, then delete this session's
+   *  snapshots. A failed cleanup cancels shutdown and resumes recovery unless
+   *  the caller stopped the scheduler while cleanup was pending. */
+  clear(): Promise<void> {
+    if (!isElectron()) return Promise.resolve();
+    if (this.clearing) return this.clearing;
+    const wasRunning = this.recoveryTimer !== null;
+    this.stop();
+    const version = this.stopVersion;
+    this.clearing = this.clearSnapshots().then(
+      () => { this.clearing = null; },
+      (error: unknown) => {
+        this.clearing = null;
+        if (wasRunning && this.stopVersion === version) this.start();
+        throw error;
+      },
+    );
+    return this.clearing;
   }
 
+  /** Keep every tab's existing-format snapshot independent. A slow operation
+   *  skips only its own tab until the next interval, without queuing stale text. */
   private tickRecovery(): void {
-    const { doc, sessionId } = this.store.get();
-    if (doc.isDirty) {
-      void writeSnapshot({
-        sessionId,
-        savedAt: new Date().toISOString(),
-        filePath: doc.filePath,
-        markdown: doc.markdown,
-        isDirty: true,
-      }).then(() => {
-        this.wroteSnapshot = true;
-      }).catch(() => {});
-    } else if (this.wroteSnapshot) {
-      this.wroteSnapshot = false;
-      void deleteSnapshot(sessionId).catch(() => {});
+    const tabs = new Map(this.store.get().tabs.map((tab) => [tab.id, tab.doc]));
+    for (const id of new Set([...this.snapshotIds, ...tabs.keys()])) {
+      if (this.pending.has(id)) continue;
+      const doc = tabs.get(id);
+      if (doc?.isDirty) {
+        // Tab UUIDs already satisfy snapshot ID validation. Remember ownership
+        // before writing, even if the tab closes or the write reports failure.
+        this.snapshotIds.add(id);
+        this.track(id, writeSnapshot({
+          sessionId: id,
+          savedAt: new Date().toISOString(),
+          filePath: doc.filePath,
+          markdown: doc.markdown,
+          isDirty: true,
+        }));
+      } else if (this.snapshotIds.has(id)) {
+        this.track(id, this.deleteOwnedSnapshot(id));
+      }
     }
+  }
+
+  /** Retain failed work for the next interval and expose completion to clear. */
+  private track(id: string, operation: Promise<void>): void {
+    this.pending.set(id, operation.catch(() => {}).finally(() => { this.pending.delete(id); }));
+  }
+
+  /** Forget ownership only after deletion succeeds, so failures can be retried. */
+  private async deleteOwnedSnapshot(id: string): Promise<void> {
+    await deleteSnapshot(id);
+    this.snapshotIds.delete(id);
+  }
+
+  /** Wait for all cleanup attempts before resuming after any failure. */
+  private async clearSnapshots(): Promise<void> {
+    await Promise.all(this.pending.values());
+    const results = await Promise.allSettled([...this.snapshotIds].map((id) => this.deleteOwnedSnapshot(id)));
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   }
 
   /** Save the active document if autosave is on. A typed closing `$` or `~`

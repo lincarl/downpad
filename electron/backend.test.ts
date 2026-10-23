@@ -393,11 +393,97 @@ describe("Existing settings and history compatibility", () => {
     const old = new Date(Date.now() - 30 * 86_400_000);
     await utimes(join(directory, "recovery", "expired.json"), old, old);
     await writeFile(join(directory, "recovery", "broken.json"), "not-json");
+    await writeFile(join(directory, "recovery", "invalid.json"), JSON.stringify({ ...snapshot, markdown: null }));
+    await writeFile(join(directory, "recovery", "traversal.json"), JSON.stringify({ ...snapshot, sessionId: "../outside" }));
     expect(await store.snapshots()).toEqual([snapshot]);
     expect(await readdir(join(directory, "recovery"))).toEqual(["synthetic-session.json"]);
     await expect(store.writeSnapshot({ ...snapshot, sessionId: "../outside" })).rejects.toThrow("invalid");
+    await expect(store.deleteSnapshot("../outside")).rejects.toThrow("invalid");
     await store.deleteSnapshot(snapshot.sessionId);
     expect(await store.snapshots()).toEqual([]);
+  });
+
+  it.each([
+    { operation: "stat", code: "EIO" },
+    { operation: "stat", code: "EACCES" },
+    { operation: "readFile", code: "EIO" },
+    { operation: "readFile", code: "EACCES" },
+  ])("preserves recovery after $operation fails with $code and loads it on retry", async ({ operation, code }) => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    const snapshot = { sessionId: "recoverable", savedAt: new Date().toISOString(), filePath: null, markdown: "# Unsaved café\r\n完整\r\n", isDirty: true };
+    const healthy = { ...snapshot, sessionId: "healthy", markdown: "Other unsaved work\n" };
+    await store.writeSnapshot(healthy);
+    await store.writeSnapshot(snapshot);
+    const recovery = join(directory, "recovery");
+    const path = join(recovery, "recoverable.json");
+    const older = new Date(Date.now() - 60_000);
+    await utimes(join(recovery, "healthy.json"), older, older);
+    const original = await readFile(path);
+    const failure = Object.assign(new Error("Temporary filesystem failure"), { code });
+    const originalRead = filesystem.readFile;
+    const originalStat = filesystem.stat;
+    const failingCall = operation === "readFile"
+      ? vi.spyOn(filesystem, "readFile").mockImplementation(async (...args) => {
+        if (args[0] === path) throw failure;
+        return originalRead(...args);
+      })
+      : vi.spyOn(filesystem, "stat").mockImplementation(async (...args) => {
+        if (args[0] === path) throw failure;
+        return originalStat(...args);
+      });
+    try {
+      syncBuiltinESMExports();
+      expect(await store.snapshots()).toEqual([healthy]);
+      expect(await readdir(recovery)).toContain("recoverable.json");
+      expect(await originalRead(path)).toEqual(original);
+    } finally {
+      failingCall.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(await store.snapshots()).toEqual([snapshot, healthy]);
+    expect(await readFile(path)).toEqual(original);
+  });
+
+  it("retains the 50 newest readable snapshots by mtime without pruning an unreadable neighbor", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    const now = Date.now();
+    const snapshots = Array.from({ length: 51 }, (_, index) => ({
+      sessionId: `session-${index}`, savedAt: new Date(now - index * 1_000).toISOString(),
+      filePath: null, markdown: `Unsaved document ${index}\n`, isDirty: true,
+    }));
+    const recovery = join(directory, "recovery");
+    for (const [index, snapshot] of snapshots.entries()) {
+      await store.writeSnapshot(snapshot);
+      const modified = new Date(now - 100_000 + index * 1_000);
+      await utimes(join(recovery, `${snapshot.sessionId}.json`), modified, modified);
+    }
+    const unreadable = { ...snapshots[0]!, sessionId: "unreadable", savedAt: "2000-01-01T00:00:00.000Z" };
+    await store.writeSnapshot(unreadable);
+    const path = join(recovery, "unreadable.json");
+    const original = await readFile(path);
+    const originalRead = filesystem.readFile;
+    const reading = vi.spyOn(filesystem, "readFile").mockImplementation(async (...args) => {
+      if (args[0] === path) throw new Error("Snapshot temporarily unavailable");
+      return originalRead(...args);
+    });
+    try {
+      syncBuiltinESMExports();
+      expect(await store.snapshots()).toEqual(snapshots.slice(1).reverse());
+      expect((await readdir(recovery)).sort()).toEqual([
+        ...snapshots.slice(1).map((snapshot) => `${snapshot.sessionId}.json`), "unreadable.json",
+      ].sort());
+      expect(await originalRead(path)).toEqual(original);
+    } finally {
+      reading.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(await store.snapshots()).toEqual([unreadable, ...snapshots.slice(2).reverse()]);
+    expect(await readFile(path)).toEqual(original);
+    expect(await readdir(recovery)).toHaveLength(50);
   });
 
   it("finishes a pending snapshot before its clean-shutdown deletion", async () => {

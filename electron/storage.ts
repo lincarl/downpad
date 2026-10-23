@@ -141,6 +141,7 @@ export class ConfigStore {
     });
   }
 
+  /** List retained snapshots, leaving unreadable files for a later attempt. */
   async snapshots(): Promise<Snapshot[]> {
     const directory = await this.recoveryDirectory();
     const settings = await this.settings();
@@ -149,10 +150,13 @@ export class ConfigStore {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const path = join(directory, entry.name);
+      const info = await stat(path).catch(() => null);
+      if (!info) continue;
+      if (info.mtimeMs < oldest) { await unlink(path).catch(() => {}); continue; }
+      const text = await readFile(path, "utf8").catch(() => null);
+      if (text === null) continue;
       try {
-        const info = await stat(path);
-        if (info.mtimeMs < oldest) { await unlink(path); continue; }
-        const snapshot = validateSnapshot(JSON.parse(await readFile(path, "utf8")) as unknown);
+        const snapshot = validateSnapshot(JSON.parse(text) as unknown);
         snapshots.push({ path, modified: info.mtimeMs, snapshot });
       } catch { await unlink(path).catch(() => {}); }
     }

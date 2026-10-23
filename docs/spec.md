@@ -58,7 +58,7 @@ In the document view, End moves the caret to the end of a line that starts with 
 
 The Recent view lists previously opened documents, with starred favorites pinned at the top. Its search field finds documents by file name, by content, or both.
 
-The app periodically stores recovery snapshots for unsaved work and offers to restore them after an interrupted session. Optional autosave can save changes to files that already have a path.
+The app periodically stores a separate recovery snapshot for each tab with unsaved work, including background tabs, and offers to restore them after an interrupted session. Saving or discarding one tab clears only its snapshot. An accepted shutdown waits for pending snapshot writes before clearing the session's snapshots. If opening an original file fails, the recovery dialog shows an error and keeps the recovered work available to open or retry. Optional autosave can save changes to files that already have a path.
 
 ## Appearance and preferences
 

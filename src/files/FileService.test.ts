@@ -320,8 +320,8 @@ describe("saving document snapshots", () => {
 });
 
 describe("reloading an open file", () => {
-  it("rereads disk into the same tab and keeps other tabs", async () => {
-    const { store, presenter, files } = setup();
+  it.each([false, true])("rereads disk into the same tab and keeps other tabs when dirty is %s", async (dirty) => {
+    const { store, presenter, files } = setup(dirty);
     const tabId = store.get().activeTabId;
     const tabs = store.get().tabs.map((tab) => tab.id);
 
@@ -332,14 +332,85 @@ describe("reloading an open file", () => {
     expect(store.get().tabs.map((tab) => tab.id)).toEqual(tabs);
     expect(store.get().doc).toMatchObject({
       markdown: onDisk.content,
+      filePath,
       eol: "crlf",
+      hadBom: onDisk.hadBom,
       modifiedMs: 200,
       isDirty: false,
       savedMarkdown: onDisk.content,
       frontmatterCollapsed: true,
     });
     expect(presenter.reloadActiveDoc).toHaveBeenCalledOnce();
-    expect(native.ask).not.toHaveBeenCalled();
+    expect(native.ask).toHaveBeenCalledTimes(dirty ? 1 : 0);
+  });
+
+  it("reloads its original tab after another tab becomes active during the read", async () => {
+    const { store, presenter, files } = setup();
+    const owner = store.get().activeTabId!;
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const loading = files.openPath(filePath, { reload: true });
+    await vi.waitFor(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
+    const other = { ...blankDoc(), markdown: "# Other unsaved edits\n", isDirty: true };
+    const otherId = store.addTab(other);
+
+    read.resolve(onDisk);
+    await loading;
+
+    expect(store.get().activeTabId).toBe(owner);
+    expect(store.get().doc).toMatchObject({ filePath, markdown: onDisk.content, isDirty: false });
+    expect(store.get().tabs.find((tab) => tab.id === otherId)?.doc).toEqual(other);
+    expect(presenter.reloadActiveDoc).toHaveBeenCalledOnce();
+  });
+
+  it.each(["/docs/unsaved.md", filePath])("keeps the surviving tab at %s when the reload owner closes during the read", async (survivingPath) => {
+    const { store, presenter, files } = setup();
+    const owner = store.get().activeTabId!;
+    const surviving = {
+      ...blankDoc(),
+      filePath: survivingPath,
+      markdown: "# Irreplaceable edits\n",
+      savedMarkdown: "# Previously saved\n",
+      isDirty: true,
+      hadBom: true,
+      modifiedMs: 300,
+    };
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const loading = files.openPath(filePath, { reload: true });
+    await vi.waitFor(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
+    store.closeTab(owner);
+    const survivor = store.addTab(surviving);
+    const before = store.get();
+
+    read.resolve(onDisk);
+    await loading;
+
+    expect(store.get().doc).toEqual(surviving);
+    expect(store.get().activeTabId).toBe(survivor);
+    expect(store.get().tabs).toEqual(before.tabs);
+    expect(store.get()).toBe(before);
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+    expect(presenter.showActiveDoc).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate a tab when all tabs close during the read", async () => {
+    const { store, presenter, files } = setup();
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const loading = files.openPath(filePath, { reload: true });
+    await vi.waitFor(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
+    for (const tab of store.get().tabs) store.closeTab(tab.id);
+    store.set({ view: "recent" });
+    const before = store.get();
+
+    read.resolve(onDisk);
+    await loading;
+
+    expect(store.get().tabs).toEqual([]);
+    expect(store.get().activeTabId).toBeNull();
+    expect(store.get()).toBe(before);
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
   });
 
   it("preserves unsaved content when the user cancels reload", async () => {

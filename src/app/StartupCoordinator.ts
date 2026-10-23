@@ -120,20 +120,22 @@ export class StartupCoordinator {
     let loaded = false;
     await this.recoveryDialog.open(snapshots, {
       openRecovered: (snapshot) => {
-        this.loadRecovered(snapshot);
-        loaded = true;
+        const opened = this.loadRecovered(snapshot);
+        loaded ||= opened;
+        return opened;
       },
       openOriginal: async (snapshot) => {
-        await this.openOriginalFor(snapshot);
-        loaded = true;
+        const opened = await this.openOriginalFor(snapshot);
+        loaded ||= opened;
+        return opened;
       },
-      discard: (snapshot) => void deleteSnapshot(snapshot.sessionId).catch(() => {}),
+      discard: (snapshot) => deleteSnapshot(snapshot.sessionId),
     });
     return loaded;
   }
 
-  private loadRecovered(snapshot: Snapshot): void {
-    if (this.dependencies.isDisposed()) return;
+  private loadRecovered(snapshot: Snapshot): boolean {
+    if (this.dependencies.isDisposed()) return false;
     const { editorHost, files, store } = this.dependencies;
     editorHost.flush();
     store.addTab({
@@ -149,13 +151,16 @@ export class StartupCoordinator {
     });
     void deleteSnapshot(snapshot.sessionId).catch(() => {});
     if (snapshot.filePath) files.watch(snapshot.filePath);
+    return true;
   }
 
-  private async openOriginalFor(snapshot: Snapshot): Promise<void> {
+  /** Keep recovery until the original opens, and let the dialog show failures. */
+  private async openOriginalFor(snapshot: Snapshot): Promise<boolean> {
+    if (this.dependencies.isDisposed() || !snapshot.filePath) return false;
+    await this.dependencies.files.openPath(snapshot.filePath);
+    if (this.dependencies.isDisposed()) return false;
     await deleteSnapshot(snapshot.sessionId).catch(() => {});
-    if (!this.dependencies.isDisposed() && snapshot.filePath) {
-      await this.dependencies.files.openPath(snapshot.filePath).catch(() => {});
-    }
+    return true;
   }
 
   private async loadWelcome(): Promise<void> {

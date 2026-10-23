@@ -65,7 +65,8 @@ export class FileService {
    * Open a known path (drag-drop, the Recent view, launch args). If the file is
    * already open, focuses that tab; if the active tab is an empty untitled
    * buffer, replaces it; otherwise opens a new tab. Reload rereads an existing
-   * tab from disk after confirming any unsaved changes.
+   * tab from disk after confirming any unsaved changes. If that tab closes
+   * during the read, its result is discarded.
    */
   async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
     this.present.flush();
@@ -85,6 +86,9 @@ export class FileService {
     }
 
     const payload = await readFile(path);
+    // A closed reload owner must not redirect the read into the active tab,
+    // even if that tab has since opened the same path.
+    if (existing && !this.store.get().tabs.some((tab) => tab.id === existing.id)) return;
     const doc: DocumentState = {
       markdown: payload.content,
       filePath: path,

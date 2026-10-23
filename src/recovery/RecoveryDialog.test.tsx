@@ -35,6 +35,81 @@ afterEach(() => {
 });
 
 describe("RecoveryDialog", () => {
+  it("keeps a cancelled original open available for recovery", async () => {
+    const dialog = new RecoveryDialog();
+    const actions = handlers();
+    actions.openOriginal = vi.fn(async () => false);
+    const closed = dialog.open([older], actions);
+    const user = userEvent.setup();
+    try {
+      await waitForDialogPointerInput();
+      await user.click(screen.getByRole("button", { name: "Open original" }));
+      expect(document.querySelector(".recovery-dialog")).not.toBeNull();
+      await user.click(screen.getByRole("button", { name: "Open recovered" }));
+      await closed;
+      expect(actions.openRecovered).toHaveBeenCalledExactlyOnceWith(older);
+    } finally { dialog.destroy(); }
+  });
+
+  it("retains a snapshot row when discarding fails and allows a later retry", async () => {
+    const dialog = new RecoveryDialog();
+    const actions = handlers();
+    actions.discard = vi.fn().mockRejectedValueOnce(new Error("Disk busy")).mockResolvedValue(undefined);
+    const closed = dialog.open([newer], actions);
+    const user = userEvent.setup();
+    try {
+      await waitForDialogPointerInput();
+      await user.click(screen.getByRole("button", { name: "Discard" }));
+      expect((await screen.findByRole("alert")).textContent).toBe("Could not discard the recovered work. Please try again.");
+      expect(names()).toEqual(["Untitled document"]);
+      await user.click(screen.getByRole("button", { name: "Discard" }));
+      await closed;
+      expect(actions.discard).toHaveBeenCalledTimes(2);
+    } finally { dialog.destroy(); }
+  });
+
+  it("shows an original-open error and keeps recovered text available without an unhandled rejection", async () => {
+    const dialog = new RecoveryDialog();
+    const actions = handlers();
+    actions.openOriginal = vi.fn(async () => { throw new Error("File is missing"); });
+    const closed = dialog.open([older], actions);
+    const user = userEvent.setup();
+    try {
+      await waitForDialogPointerInput();
+      await user.click(screen.getByRole("button", { name: "Open original" }));
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(
+        "Could not open the original file. Your recovered work is still available.",
+      ));
+      expect(document.querySelector(".recovery-dialog")).not.toBeNull();
+      expect(actions.openRecovered).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Open recovered" }));
+      await closed;
+      expect(actions.openRecovered).toHaveBeenCalledExactlyOnceWith(older);
+      await waitFor(() => expect(document.querySelector(".recovery-dialog")).toBeNull());
+    } finally { dialog.destroy(); }
+  });
+
+  it("blocks competing actions while an original open is pending and allows retry after failure", async () => {
+    const dialog = new RecoveryDialog();
+    const actions = handlers();
+    let fail!: (reason: Error) => void;
+    actions.openOriginal = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }))
+      .mockResolvedValue(undefined);
+    const closed = dialog.open([older, newer], actions);
+    const user = userEvent.setup();
+    try {
+      await waitForDialogPointerInput();
+      await user.click(screen.getByRole("button", { name: "Open original" }));
+      expect(screen.getAllByRole("button").every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+      fail(new Error("Temporarily unavailable"));
+      await screen.findByRole("alert");
+      await user.click(screen.getByRole("button", { name: "Open original" }));
+      await closed;
+      expect(actions.openOriginal).toHaveBeenCalledTimes(2);
+    } finally { dialog.destroy(); }
+  });
+
   it("lists snapshots newest first with a plain-text preview and ignores Escape", async () => {
     const dialog = new RecoveryDialog();
     void dialog.open([older, newer], handlers());

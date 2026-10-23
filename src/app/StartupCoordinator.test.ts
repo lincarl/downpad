@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { EditorHost } from "../editor/EditorHost";
 import { FileService } from "../files/FileService";
@@ -21,6 +21,12 @@ const snapshot: Snapshot = {
 const native = vi.hoisted(() => ({
   listRecoverySnapshots: vi.fn<() => Promise<Snapshot[]>>(),
   deleteSnapshot: vi.fn<(sessionId: string) => Promise<void>>(),
+  readFile: vi.fn<typeof import("../ipc/commands").readFile>(),
+  recordFileOpened: vi.fn(async () => {}),
+  getLaunchArgs: vi.fn(async () => null),
+}));
+const recovery = vi.hoisted(() => ({
+  open: vi.fn<(snapshots: Snapshot[], handlers: RecoveryHandlers) => Promise<void>>(),
 }));
 
 vi.mock("../ipc/env", () => ({ isElectron: () => true }));
@@ -28,24 +34,138 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   listRecoverySnapshots: native.listRecoverySnapshots,
   deleteSnapshot: native.deleteSnapshot,
+  readFile: native.readFile,
+  recordFileOpened: native.recordFileOpened,
+  getLaunchArgs: native.getLaunchArgs,
 }));
-// The user picks "Open recovered" for the first snapshot.
 vi.mock("../recovery/RecoveryDialog", () => ({
   RecoveryDialog: class {
-    /** Open the first snapshot as recovered text. */
-    async open(snapshots: Snapshot[], handlers: RecoveryHandlers): Promise<void> {
-      await handlers.openRecovered(snapshots[0]!);
-    }
+    open = recovery.open;
     /** Nothing to close. */
     destroy(): void {}
   },
 }));
 
 let host: EditorHost | null = null;
+beforeEach(() => {
+  vi.resetAllMocks();
+  native.listRecoverySnapshots.mockResolvedValue([snapshot]);
+  native.deleteSnapshot.mockResolvedValue();
+  recovery.open.mockImplementation(async (snapshots, handlers) => { await handlers.openRecovered(snapshots[0]!); });
+});
 afterEach(async () => {
   await host?.dispose();
   host = null;
   vi.restoreAllMocks();
+});
+
+/** Exercise startup with real file-service reads and a controlled dialog choice. */
+function setup() {
+  const store = createAppStore();
+  store.set((state) => ({ settings: { ...state.settings, hasSeenWelcome: true } }));
+  const presenter = {
+    flush: () => {},
+    showActiveDoc: async () => {},
+    reloadActiveDoc: vi.fn(async () => {}),
+  };
+  const files = new FileService(store, presenter);
+  vi.spyOn(files, "watch").mockImplementation(() => {});
+  host = new EditorHost(document.createElement("div"), store);
+  const lifecycle = { disposed: false };
+  const startup = new StartupCoordinator({
+    store, files, editorHost: host,
+    settings: new SettingsModel(store, () => {}),
+    isDisposed: () => lifecycle.disposed,
+  });
+  return { store, startup, lifecycle, presenter };
+}
+
+it("keeps recovery and reports failed original opens without claiming startup loaded a document", async () => {
+  const { store, startup } = setup();
+  native.readFile.mockRejectedValue(new Error("Original file is missing"));
+  let failure: unknown;
+  recovery.open.mockImplementation(async (snapshots, handlers) => {
+    try { await handlers.openOriginal(snapshots[0]!); } catch (error) { failure = error; }
+    // The user closes the recovery dialog after seeing the error.
+  });
+
+  expect(await startup.resolve()).toBe(false);
+  expect(native.readFile).toHaveBeenCalledWith(snapshot.filePath);
+  expect(native.deleteSnapshot).not.toHaveBeenCalled();
+  expect(failure).toEqual(new Error("Original file is missing"));
+  expect(store.get().tabs).toHaveLength(0);
+});
+
+it("can open the recovered text after an original open fails", async () => {
+  const { store, startup } = setup();
+  native.readFile.mockRejectedValue(new Error("Original file is missing"));
+  recovery.open.mockImplementation(async (snapshots, handlers) => {
+    const offered = snapshots[0]!;
+    await expect(handlers.openOriginal(offered)).rejects.toThrow("Original file is missing");
+    expect(native.deleteSnapshot).not.toHaveBeenCalled();
+    await handlers.openRecovered(offered);
+  });
+
+  expect(await startup.resolve()).toBe(true);
+  expect(store.get().doc).toMatchObject({ markdown: snapshot.markdown, isDirty: true });
+  expect(native.deleteSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot.sessionId);
+});
+
+it("deletes recovery only after the original file has opened successfully", async () => {
+  const { store, startup } = setup();
+  let finishRead!: (value: Awaited<ReturnType<typeof native.readFile>>) => void;
+  native.readFile.mockImplementation(() => new Promise((resolve) => { finishRead = resolve; }));
+  recovery.open.mockImplementation(async (snapshots, handlers) => { await handlers.openOriginal(snapshots[0]!); });
+  const resolving = startup.resolve();
+  await vi.waitFor(() => expect(native.readFile).toHaveBeenCalledOnce());
+  expect(native.deleteSnapshot).not.toHaveBeenCalled();
+  finishRead({ content: "# Original\n", eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: 11 });
+  expect(await resolving).toBe(true);
+  expect(store.get().doc).toMatchObject({ markdown: "# Original\n", isDirty: false });
+  expect(native.deleteSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot.sessionId);
+});
+
+it("preserves recovery when disposal interrupts an original open", async () => {
+  const { startup, lifecycle } = setup();
+  native.readFile.mockImplementation(async () => {
+    lifecycle.disposed = true;
+    return { content: "# Original\n", eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: 11 };
+  });
+  recovery.open.mockImplementation(async (snapshots, handlers) => { await handlers.openOriginal(snapshots[0]!); });
+  expect(await startup.resolve()).toBe(false);
+  expect(native.deleteSnapshot).not.toHaveBeenCalled();
+});
+
+it("does not count a recovered open after disposal as successful", async () => {
+  const { startup, lifecycle } = setup();
+  recovery.open.mockImplementation(async (snapshots, handlers) => {
+    lifecycle.disposed = true;
+    await handlers.openRecovered(snapshots[0]!);
+  });
+  expect(await startup.resolve()).toBe(false);
+  expect(native.deleteSnapshot).not.toHaveBeenCalled();
+});
+
+it("keeps recovery when the original file was read but could not be shown", async () => {
+  const { startup, presenter } = setup();
+  native.readFile.mockResolvedValue({ content: "# Original\n", eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: 11 });
+  presenter.reloadActiveDoc.mockRejectedValue(new Error("Editor unavailable"));
+  recovery.open.mockImplementation(async (snapshots, handlers) => {
+    await expect(handlers.openOriginal(snapshots[0]!)).rejects.toThrow("Editor unavailable");
+  });
+  expect(await startup.resolve()).toBe(false);
+  expect(native.deleteSnapshot).not.toHaveBeenCalled();
+});
+
+it("does not delete an untitled recovery entry or count it as an opened original", async () => {
+  const { startup } = setup();
+  native.listRecoverySnapshots.mockResolvedValue([{ ...snapshot, filePath: null }]);
+  recovery.open.mockImplementation(async (snapshots, handlers) => {
+    expect(await handlers.openOriginal(snapshots[0]!)).toBe(false);
+  });
+  expect(await startup.resolve()).toBe(false);
+  expect(native.readFile).not.toHaveBeenCalled();
+  expect(native.deleteSnapshot).not.toHaveBeenCalled();
 });
 
 describe("opening a recovered snapshot", () => {
