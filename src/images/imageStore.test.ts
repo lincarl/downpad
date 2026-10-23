@@ -76,10 +76,11 @@ describe("bytesToBase64", () => {
     expect(atob(bytesToBase64(bytes))).toBe(String.fromCharCode(...bytes));
   });
 
-  it("handles buffers larger than one chunk without throwing", () => {
-    const big = new Uint8Array(0x8000 * 2 + 5).fill(7);
-    expect(() => bytesToBase64(big)).not.toThrow();
-    expect(bytesToBase64(big).length).toBeGreaterThan(0);
+  it("round-trips every byte across multiple chunks and a partial final chunk", () => {
+    const big = Uint8Array.from({ length: 0x8000 * 2 + 5 }, (_, index) =>
+      (index * 37 + Math.floor(index / 0x8000)) % 256);
+    const decoded = Uint8Array.from(atob(bytesToBase64(big)), (character) => character.charCodeAt(0));
+    expect(decoded).toEqual(big);
   });
 });
 
@@ -90,7 +91,7 @@ describe("storeImage", () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const result = await storeImage({ bytes, mime: "image/png", settings: settings(), filePath: null });
     expect(result.decision).toBe("embed");
-    expect(result.src).toBe(`data:image/png;base64,${bytesToBase64(bytes)}`);
+    expect(result.src).toBe("data:image/png;base64,AQID");
   });
 
   it("writes an attachment and returns the relative link for over-limit images", async () => {

@@ -18,6 +18,7 @@ let editor: WysiwygEditor | null = null;
 afterEach(async () => {
   await editor?.destroy();
   editor = null;
+  vi.useRealTimers();
   document.body.replaceChildren();
 });
 
@@ -71,6 +72,28 @@ function pressUndo(): void {
 const SOURCE = "Title\n=====\n\nLine  \nnext\n\nSee [docs][d].\n\n[d]: https://x.y\n";
 
 describe("the document view's Markdown", () => {
+  it("reports a live edit but cancels a pending report when destroyed", async () => {
+    const { editor, onChange } = await open("Start.\n");
+    await settle();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onChange.mockClear();
+
+    // Establish that a live edit reaches the report callback before checking
+    // that destruction cancels the next edit's report.
+    replace(editor, "Start", "Updated");
+    expect(onChange).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onChange).toHaveBeenLastCalledWith("Updated.\n");
+    onChange.mockClear();
+
+    replace(editor, "Updated", "Pending");
+    expect(editor.getMarkdown()).toBe("Pending.\n");
+    expect(onChange).not.toHaveBeenCalled();
+    await editor.destroy();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("is the exact text of a file Milkdown would rewrite", { timeout: 60_000 }, async () => {
     const { editor, onChange } = await open(SOURCE);
     expect(editor.getMarkdown()).toBe(SOURCE);

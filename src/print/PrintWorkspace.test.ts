@@ -305,6 +305,12 @@ describe("PrintWorkspace React view", () => {
 
   it("keeps native PDF options and default-printer persistence semantics", async () => {
     enableElectron();
+    let complete!: (result: { ok: boolean }) => void;
+    const unlisten = vi.fn();
+    nativeMocks.onPrintCompleted.mockImplementationOnce((handler) => {
+      complete = handler;
+      return Promise.resolve(unlisten);
+    });
     nativeMocks.listPrinters.mockResolvedValueOnce([
       { name: "Office", isDefault: true },
     ]);
@@ -332,7 +338,6 @@ describe("PrintWorkspace React view", () => {
     );
     act(() => savePdf!.click());
     await flush();
-    await flush();
 
     expect(nativeMocks.saveDialog).toHaveBeenCalledWith({
       defaultPath: "notes.pdf",
@@ -347,12 +352,44 @@ describe("PrintWorkspace React view", () => {
         pageRanges: "1-2",
       }),
     );
+    // Accepting the native command is not completion. Keep the sheets available
+    // to Electron until its completion event arrives.
+    expect(workspace!.isOpen()).toBe(true);
+    expect(document.documentElement.classList.contains("printing")).toBe(true);
+    expect(document.querySelector("body > .print-root")).not.toBeNull();
+    expect(unlisten).not.toHaveBeenCalled();
+    act(() => complete({ ok: true }));
+    await flush();
+
     expect(workspace!.isOpen()).toBe(false);
     expect(saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ printerName: "Office", printCopies: 3 }),
     );
     expect(document.documentElement.classList.contains("printing")).toBe(false);
     expect(document.querySelector("body > .print-root")).toBeNull();
+    expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the preview usable when the PDF dialog is cancelled", async () => {
+    enableElectron();
+    act(() => workspace!.open(JOB));
+    await flush();
+    const preview = document.querySelector(".print-ws-scaler > .print-root");
+    expect(preview).not.toBeNull();
+
+    act(() => button("Save as PDF").click());
+    await flush();
+
+    expect(nativeMocks.saveDialog).toHaveBeenCalledOnce();
+    expect(nativeMocks.printWebviewToPdf).not.toHaveBeenCalled();
+    expect(nativeMocks.onPrintCompleted).not.toHaveBeenCalled();
+    expect(workspace!.isOpen()).toBe(true);
+    expect(document.querySelector(".print-ws-scaler > .print-root")).toBe(preview);
+    expect(document.documentElement.classList.contains("printing")).toBe(false);
+    act(() => radio("Markdown").click());
+    expect(printRenderMocks.renderPrintPages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ version: "markdown" }),
+    );
   });
 
   it("holds Print and Save as PDF until the custom range names existing pages", async () => {
@@ -390,10 +427,9 @@ describe("PrintWorkspace React view", () => {
   });
 
   it("cancels the browser afterprint waiter when the workspace closes", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const print = vi.spyOn(window, "print").mockImplementation(() => {});
     const removeEventListener = vi.spyOn(window, "removeEventListener");
-    const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
 
     act(() => workspace!.open(JOB));
     act(() => button("Print").click());
@@ -404,15 +440,20 @@ describe("PrintWorkspace React view", () => {
     await flush();
 
     expect(removeEventListener).toHaveBeenCalledWith("afterprint", expect.any(Function));
-    expect(clearTimeout).toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(document.querySelector(".print-root")).toBeNull();
+    expect(document.documentElement.classList.contains("printing")).toBe(false);
   });
 
-  it("releases a pending native completion listener when closed", async () => {
-    vi.useFakeTimers();
+  it("releases a native listener that finishes registering after the workspace closes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     enableElectron();
     const unlisten = vi.fn();
-    const clearTimeout = vi.spyOn(globalThis, "clearTimeout");
-    nativeMocks.onPrintCompleted.mockImplementationOnce(() => Promise.resolve(unlisten));
+    let registered!: (dispose: () => void) => void;
+    nativeMocks.onPrintCompleted.mockImplementationOnce(() => new Promise((resolve) => {
+      registered = resolve;
+    }));
 
     act(() => workspace!.open(JOB));
     act(() => button("Print").click());
@@ -420,8 +461,15 @@ describe("PrintWorkspace React view", () => {
 
     act(() => workspace!.close());
     await flush();
+    expect(unlisten).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(vi.getTimerCount()).toBe(0);
+
+    registered(unlisten);
+    await flush();
 
     expect(unlisten).toHaveBeenCalledOnce();
-    expect(clearTimeout).toHaveBeenCalled();
+    expect(document.querySelector(".print-root")).toBeNull();
+    expect(document.documentElement.classList.contains("printing")).toBe(false);
   });
 });

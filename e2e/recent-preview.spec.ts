@@ -1,179 +1,282 @@
-import { test } from "@playwright/test";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
+import { test, expect, type Page } from "@playwright/test";
+import type { RecentDataSource } from "../src/home/recentData";
+import type { RecentEntry } from "../src/state/types";
 
-// Visual verification of the Recent view (spec §5.8, after Mervin PDF's Recent
-// page). Mounts the real RecentView component (served by Vite in dev) against an
-// in-page mock data source so we can screenshot fully-populated states without an
-// Electron backend. Screenshots land in e2e/__screens__/ for manual comparison to
-// the spec; this is a screenshot harness, not an assertion test.
-
-const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "__screens__");
-
-const DAY = 86_400_000;
-
-// Entries carry extra fields (exists/size/content/line) the mock reads; the
-// RecentView itself only uses path/lastOpenedMs/favorite.
-const ENTRIES = [
-  { path: "C:\\Users\\me\\notes\\draft.md", days: 0, favorite: true, exists: true, size: 12_288, content: "the pasted graph below shows growth", line: 2 },
-  { path: "C:\\Users\\me\\notes\\meeting-notes.md", days: 1, favorite: false, exists: true, size: 4096, content: "agenda and action items", line: 5 },
-  { path: "C:\\Users\\me\\projects\\md-easy\\docs\\spec.md", days: 5, favorite: true, exists: true, size: 49_152, content: "the recent view lists recently opened files", line: 144 },
-  { path: "C:\\Users\\me\\notes\\old-todo.md", days: 23, favorite: false, exists: false, size: 0, content: "", line: 1 },
-  { path: "C:\\Users\\me\\very\\deeply\\nested\\folder\\structure\\that\\overflows\\README.md", days: 64, favorite: true, exists: true, size: 2048, content: "readme overview section", line: 1 },
-  { path: "C:\\Users\\me\\notes\\budget-2026.md", days: 370, favorite: false, exists: true, size: 800, content: "quarterly budget totals", line: 9 },
-];
-
-// The same history with nothing starred, so the list has no section captions.
-const UNSTARRED = ENTRIES.map((e) => ({ ...e, favorite: false }));
-
-async function mount(page: import("@playwright/test").Page, opts: { entries?: typeof ENTRIES; dark?: boolean } = {}): Promise<void> {
-  await page.goto("/");
-  await page.waitForSelector("#app");
-  await page.evaluate(
-    async ([entries, dark, now]) => {
-      if (dark) document.documentElement.setAttribute("data-theme", "dark");
-      const byPath: Record<string, any> = {};
-      const list = (entries as any[]).map((e) => {
-        const entry = { path: e.path, lastOpenedMs: now - e.days * 86_400_000, favorite: e.favorite };
-        byPath[e.path] = { ...e, ...entry };
-        return entry;
-      });
-      const data = {
-        async list() {
-          return list;
-        },
-        async stat(paths: string[]) {
-          return paths.map((p) => {
-            const e = byPath[p];
-            return {
-              path: p,
-              exists: e ? e.exists : true,
-              sizeBytes: e ? e.size : 0,
-              folderExists: true,
-            };
-          });
-        },
-        async setFavorite(p: string, fav: boolean) {
-          if (byPath[p]) byPath[p].favorite = fav;
-          return byPath[p] ?? null;
-        },
-        async remove() {},
-        async searchContents(_id: string, q: string, cb: any) {
-          cb.onProgress(entries.length);
-          let matched = 0;
-          for (const e of entries as any[]) {
-            if (e.content && e.content.toLowerCase().includes(q.toLowerCase())) {
-              matched++;
-              cb.onHit(e.path, e.line, e.content);
-            }
-          }
-          return { matched, scanned: (entries as any[]).length, cancelled: false };
-        },
-        cancelContentSearch() {},
-      };
-      const mod = await import("/src/home/RecentView.tsx");
-      const app = document.querySelector("#app") as HTMLElement;
-      app.innerHTML = "";
-      app.style.height = "100vh";
-      app.style.overflow = "auto";
-      app.style.background = "var(--window)";
-      const rv = new mod.RecentView(data, () => 100, {
-        onOpenFile() {},
-        onSummaryChange(t: string) {
-          (window as any).__summary = t;
-        },
-        async pickFile() {
-          return null;
-        },
-        reveal() {},
-        copy() {},
-      });
-      app.appendChild(rv.element);
-      (window as any).__rv = rv;
-      await rv.refresh();
-    },
-    [opts.entries ?? ENTRIES, !!opts.dark, Date.now()] as const,
-  );
-  // Let ensureStats() resolve and re-render with sizes / missing state.
-  await page.waitForTimeout(250);
+interface FixtureEntry extends RecentEntry {
+  exists: boolean;
+  content: string;
+  line: number;
 }
 
-test("recent — favourites pinned (light)", async ({ page }) => {
+declare global {
+  interface Window {
+    __recentCalls: {
+      opened: string[];
+      favorites: Array<Pick<RecentEntry, "path" | "favorite">>;
+      removed: string[];
+    };
+  }
+}
+
+// Newest first, with name-only, content-only and overlapping search matches.
+const ENTRIES: FixtureEntry[] = [
+  { path: "C:/samples/report.md", lastOpenedMs: 5000, favorite: false, exists: true, content: "weekly plan overview", line: 19 },
+  { path: "C:/samples/plan.md", lastOpenedMs: 4000, favorite: true, exists: true, content: "a plan for release", line: 7 },
+  { path: "C:/samples/plan-archive.md", lastOpenedMs: 3000, favorite: false, exists: true, content: "archived milestones", line: 3 },
+  { path: "C:/samples/plan/guide.md", lastOpenedMs: 2000, favorite: true, exists: true, content: "reference material", line: 1 },
+  { path: "C:/samples/missing.md", lastOpenedMs: 1000, favorite: false, exists: false, content: "", line: 1 },
+];
+
+/** Mount the production view with synthetic data and record its external effects. */
+async function mount(page: Page, entries = ENTRIES): Promise<void> {
+  // Serve an empty host so no App runtime owns the DOM used by this fixture.
+  // Vite's TSX modules still need its React refresh preamble.
+  await page.route("/", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<!doctype html>
+      <html lang="en" data-theme="dark">
+        <head>
+          <meta charset="utf-8">
+          <link rel="stylesheet" href="/src/styles/app.css">
+          <script type="module">
+            import { injectIntoGlobalHook } from "/@react-refresh";
+            injectIntoGlobalHook(window);
+            window.$RefreshReg$ = () => {};
+            window.$RefreshSig$ = () => (type) => type;
+          </script>
+        </head>
+        <body><div id="app"></div></body>
+      </html>`,
+  }));
+  await page.goto("/");
+  await page.evaluate(async (fixtures) => {
+    window.__recentCalls = { opened: [], favorites: [], removed: [] };
+    const byPath = new Map(fixtures.map((entry) => [entry.path, entry]));
+    const data: RecentDataSource = {
+      async list() {
+        return Array.from(byPath.values(), ({ path, lastOpenedMs, favorite }) => ({ path, lastOpenedMs, favorite }));
+      },
+      async stat(paths) {
+        return paths.map((path) => ({
+          path,
+          exists: byPath.get(path)?.exists ?? false,
+          sizeBytes: 4096,
+          folderExists: true,
+        }));
+      },
+      async setFavorite(path, favorite) {
+        window.__recentCalls.favorites.push({ path, favorite });
+        const entry = byPath.get(path);
+        if (entry) entry.favorite = favorite;
+        return entry ?? null;
+      },
+      async remove(path) {
+        window.__recentCalls.removed.push(path);
+        byPath.delete(path);
+      },
+      async searchContents(_id, query, callbacks) {
+        let matched = 0;
+        for (const entry of byPath.values()) {
+          if (entry.exists && entry.content.toLowerCase().includes(query.toLowerCase())) {
+            matched++;
+            callbacks.onHit(entry.path, entry.line, entry.content);
+          }
+        }
+        callbacks.onProgress(byPath.size);
+        return { matched, scanned: byPath.size, cancelled: false };
+      },
+      cancelContentSearch() {},
+    };
+    // The browser imports the same source module through Vite's URL.
+    const moduleUrl = "/src/home/RecentView.tsx";
+    const { RecentView }: typeof import("../src/home/RecentView") = await import(moduleUrl);
+    const app = document.querySelector<HTMLElement>("#app");
+    if (!app) throw new Error("Application host is missing");
+    app.style.height = "100vh";
+    const view = new RecentView(data, () => 100, {
+      onOpenFile(path) { window.__recentCalls.opened.push(path); },
+      onSummaryChange() {},
+      async pickFile() { return null; },
+      reveal() {},
+      copy() {},
+    });
+    app.append(view.element);
+    await view.refresh();
+  }, entries);
+  await expect(page.getByRole("textbox", { name: "Search recent file names", exact: true })).toBeFocused();
+}
+
+/** Find a file row through its exact accessible open action. */
+function row(page: Page, name: string) {
+  return page.locator(".recent-row").filter({
+    has: page.getByRole("button", { name: `Open ${name}`, exact: true }),
+  });
+}
+
+test("favorites keep their position while toggling, then regroup on a new query", async ({ page }) => {
   await mount(page);
-  await page.screenshot({ path: path.join(OUT, "recent-all-light.png"), fullPage: true });
+  const names = page.locator(".recent-name");
+  const initial = ["plan.md", "guide.md", "report.md", "plan-archive.md", "missing.md"];
+  await expect(names).toHaveText(initial);
+  await expect(page.locator(".recent-caption")).toHaveText(["Favorites", "Recent"]);
+
+  const plan = row(page, "plan.md");
+  await plan.getByRole("button", { name: "Remove from favorites" }).click();
+  await expect(plan.getByRole("button", { name: "Add to favorites" })).toBeFocused();
+  await expect(names).toHaveText(initial);
+  await plan.getByRole("button", { name: "Add to favorites" }).click();
+  await expect(plan.getByRole("button", { name: "Remove from favorites" })).toBeFocused();
+  await expect(names).toHaveText(initial);
+
+  await plan.getByRole("button", { name: "Remove from favorites" }).click();
+  await row(page, "guide.md").getByRole("button", { name: "Remove from favorites" }).click();
+  await expect(names).toHaveText(initial);
+  await expect.poll(() => page.evaluate(() => window.__recentCalls)).toEqual({
+    opened: [], removed: [], favorites: [
+      { path: "C:/samples/plan.md", favorite: false },
+      { path: "C:/samples/plan.md", favorite: true },
+      { path: "C:/samples/plan.md", favorite: false },
+      { path: "C:/samples/plan/guide.md", favorite: false },
+    ],
+  });
+
+  await page.getByRole("textbox").fill(".md");
+  await expect(names).toHaveText(["report.md", "plan.md", "plan-archive.md", "guide.md", "missing.md"]);
+  await expect(page.locator(".recent-caption")).toHaveCount(0);
 });
 
-test("recent — nothing starred (light)", async ({ page }) => {
-  // With no favourites the list is the plain history, without captions.
-  await mount(page, { entries: UNSTARRED });
-  await page.screenshot({ path: path.join(OUT, "recent-unstarred-light.png"), fullPage: true });
-});
-
-test("recent — favourites pinned (dark)", async ({ page }) => {
-  await mount(page, { dark: true });
-  await page.screenshot({ path: path.join(OUT, "recent-all-dark.png"), fullPage: true });
-});
-
-test("recent — Names search highlights the match", async ({ page }) => {
+test("Names search highlights filenames and clearing restores the list and focus", async ({ page }) => {
   await mount(page);
-  // Names is the default scope; the matched run of each filename is marked.
-  await page.locator(".recent-search-input").fill("note");
-  await page.waitForTimeout(300); // 200ms name debounce + render
-  await page.screenshot({ path: path.join(OUT, "recent-name-search.png"), fullPage: true });
+  const search = page.getByRole("textbox", { name: "Search recent file names", exact: true });
+  await expect(page.getByRole("button", { name: "Names", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await search.fill("PLAN");
+  await expect(page.locator(".recent-name")).toHaveText(["plan.md", "plan-archive.md"]);
+  await expect(page.locator(".recent-name .recent-match")).toHaveText(["plan", "plan"]);
+  await expect(page.locator(".recent-snippet")).toHaveCount(0);
+  await row(page, "plan-archive.md").getByRole("button", { name: "Open plan-archive.md", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__recentCalls.opened)).toEqual(["C:/samples/plan-archive.md"]);
+
+  await search.focus();
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("");
+  await expect(page.locator(".recent-name")).toHaveCount(5);
+  await expect(page.locator(".recent-match")).toHaveCount(0);
 });
 
-test("recent — Contents search results", async ({ page }) => {
+test("Contents search maps each hit's snippet, highlight and line to the opened path", async ({ page }) => {
   await mount(page);
   await page.getByRole("button", { name: "Contents", exact: true }).click();
-  await page.locator(".recent-search-input").fill("the");
-  await page.waitForTimeout(700); // 400ms debounce + render
-  // "the" matches the content of several entries, so each result row shows its
-  // own snippet between the filename and the path, with "the" marked.
-  await page.screenshot({ path: path.join(OUT, "recent-inside-search.png"), fullPage: true });
+  await expect(page.getByRole("button", { name: "Contents", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("textbox", { name: "Search inside recent documents" }).fill("PLAN");
+  await expect(page.locator(".recent-progress")).toHaveText("2 files found");
+  await expect(page.locator(".recent-name")).toHaveText(["plan.md", "report.md"]);
+  await expect(page.locator(".recent-name .recent-match")).toHaveCount(0);
+  await expect(page.locator(".recent-snippet")).toHaveText(["a plan for release", "weekly plan overview"]);
+  await expect(page.locator(".recent-snippet .recent-match")).toHaveText(["plan", "plan"]);
+
+  for (const [name, path, line] of [
+    ["plan.md", "C:/samples/plan.md", 7],
+    ["report.md", "C:/samples/report.md", 19],
+  ] as const) {
+    await expect(row(page, name)).toHaveAttribute("title", `${path}\nMatch on line ${line}`);
+    await row(page, name).getByRole("button", { name: `Open ${name}`, exact: true }).click();
+  }
+  await expect.poll(() => page.evaluate(() => window.__recentCalls.opened)).toEqual([
+    "C:/samples/plan.md", "C:/samples/report.md",
+  ]);
 });
 
-test("recent — Contents search results (dark)", async ({ page }) => {
-  await mount(page, { dark: true });
-  await page.getByRole("button", { name: "Contents", exact: true }).click();
-  await page.locator(".recent-search-input").fill("the");
-  await page.waitForTimeout(700);
-  await page.screenshot({ path: path.join(OUT, "recent-inside-search-dark.png"), fullPage: true });
-});
-
-test("recent — All search lists name matches, then content hits", async ({ page }) => {
+test("All search lists name matches before content-only hits without duplicate rows", async ({ page }) => {
   await mount(page);
   await page.getByRole("button", { name: "All", exact: true }).click();
-  await page.locator(".recent-search-input").fill("notes");
-  await page.waitForTimeout(700);
-  await page.screenshot({ path: path.join(OUT, "recent-all-search.png"), fullPage: true });
+  await expect(page.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("textbox", { name: "Search recent file names and documents" }).fill("PLAN");
+  await expect(page.locator(".recent-progress")).toHaveText("3 files found");
+  await expect(page.locator(".recent-name")).toHaveText(["plan.md", "plan-archive.md", "report.md"]);
+  await expect(page.locator(".recent-name .recent-match")).toHaveText(["plan", "plan"]);
+  await expect(row(page, "plan.md").locator(".recent-snippet")).toHaveCount(0);
+  await expect(row(page, "plan-archive.md").locator(".recent-snippet")).toHaveCount(0);
+  await expect(page.locator(".recent-snippet")).toHaveText(["weekly plan overview"]);
+  await expect(row(page, "report.md").locator(".recent-match")).toHaveText("plan");
+  await expect(row(page, "report.md")).toHaveAttribute("title", "C:/samples/report.md\nMatch on line 19");
 });
 
-test("recent — keyboard focus on a row", async ({ page }) => {
-  await mount(page, { dark: true });
-  await page.locator(".recent-search-input").focus();
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("ArrowDown");
-  await page.screenshot({ path: path.join(OUT, "recent-keyboard-focus-dark.png"), fullPage: true });
-});
-
-test("recent — empty state", async ({ page }) => {
-  await mount(page, { entries: [] });
-  await page.screenshot({ path: path.join(OUT, "recent-empty.png"), fullPage: true });
-});
-
-test("recent — missing-file dialog", async ({ page }) => {
+test("keyboard navigation opens files with Enter and Space and activates stars independently", async ({ page }) => {
   await mount(page);
-  await page.locator(".recent-row", { hasText: "old-todo.md" }).click();
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: path.join(OUT, "recent-missing-dialog.png"), fullPage: true });
+  const search = page.getByRole("textbox");
+  const first = page.getByRole("button", { name: "Open plan.md", exact: true });
+  const second = page.getByRole("button", { name: "Open guide.md", exact: true });
+  await page.keyboard.press("ArrowDown");
+  await expect(first).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => window.__recentCalls.opened)).toEqual(["C:/samples/plan.md"]);
+  await page.keyboard.press("ArrowDown");
+  await expect(second).toBeFocused();
+  await expect(page.locator(".recent-row-open[tabindex='0']")).toHaveAccessibleName("Open guide.md");
+  await page.keyboard.press("Space");
+  await expect.poll(() => page.evaluate(() => window.__recentCalls.opened)).toEqual([
+    "C:/samples/plan.md", "C:/samples/plan/guide.md",
+  ]);
+  await page.keyboard.press("ArrowRight");
+  await expect(row(page, "guide.md").getByRole("button", { name: "Remove from favorites" })).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(row(page, "guide.md").getByRole("button", { name: "Add to favorites" })).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.__recentCalls.favorites)).toEqual([
+    { path: "C:/samples/plan/guide.md", favorite: false },
+  ]);
+  await page.keyboard.press("ArrowLeft");
+  await expect(second).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(first).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(search).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.__recentCalls.opened)).toEqual([
+    "C:/samples/plan.md", "C:/samples/plan/guide.md",
+  ]);
 });
 
-test("toolbar — Recent pill active vs editor", async ({ page }) => {
-  // The real app shell in browser mode: editor first, then the Recent view.
+test("missing-file actions restore focus on cancel and refresh to an empty history on removal", async ({ page }) => {
+  await mount(page, ENTRIES.filter((entry) => !entry.exists));
+  const open = page.getByRole("button", { name: "Open missing.md", exact: true });
+  await expect(row(page, "missing.md")).toHaveClass(/\bmissing\b/);
+  await open.click();
+  const dialog = page.getByRole("dialog", { name: "File not found" });
+  await expect(dialog).toContainText('"missing.md" could not be found.');
+  await expect(dialog.getByRole("button", { name: "Locate", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(open).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.__recentCalls)).toEqual({ opened: [], favorites: [], removed: [] });
+
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Remove from history" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".recent-row")).toHaveCount(0);
+  await expect(page.locator(".recent-empty")).toHaveText("No recent files yet");
+  await expect.poll(() => page.evaluate(() => window.__recentCalls)).toEqual({
+    opened: [], favorites: [], removed: ["C:/samples/missing.md"],
+  });
+});
+
+test("the real app's Recent button switches views without replacing the existing document", async ({ page }) => {
   await page.goto("/");
-  await page.waitForSelector(".toolbar-recent");
-  await page.screenshot({ path: path.join(OUT, "toolbar-editor.png") });
-  await page.locator(".toolbar-recent").click();
-  await page.waitForTimeout(200);
-  await page.screenshot({ path: path.join(OUT, "toolbar-recent-active.png") });
+  const heading = page.locator(".ProseMirror h1");
+  await expect(heading).toHaveText("Welcome to md-easy");
+  const recent = page.getByRole("button", { name: "Recent", exact: true });
+  await expect(recent).not.toHaveClass(/\bactive\b/);
+  await recent.click();
+  await expect(recent).toHaveClass(/\bactive\b/);
+  await expect(page.locator(".recent-host")).toBeVisible();
+  await expect(heading).toBeHidden();
+  await expect(page.getByRole("textbox", { name: "Search recent file names", exact: true })).toBeFocused();
+  await expect(page.locator(".recent-empty")).toHaveText("No recent files yet");
+  await page.getByRole("tab").click();
+  await expect(recent).not.toHaveClass(/\bactive\b/);
+  await expect(page.locator(".recent-host")).toBeHidden();
+  await expect(heading).toBeVisible();
+  await expect(heading).toHaveText("Welcome to md-easy");
+  await expect(page.locator(".tab")).toHaveCount(1);
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Store } from "../state/store";
 import type { AppState } from "../state/types";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
@@ -71,8 +71,12 @@ describe("applyEditorMarkdownForTab", () => {
   it("returns false and changes nothing when content is unchanged", () => {
     const store = makeStore("same");
     const tabId = store.get().activeTabId!;
+    const before = store.get();
+    const changed = vi.fn();
+    store.subscribe(changed);
     expect(applyEditorMarkdownForTab(store, tabId, "same")).toBe(false);
-    expect(store.get().doc.isDirty).toBe(false);
+    expect(store.get()).toBe(before);
+    expect(changed).not.toHaveBeenCalled();
   });
 
   it("returns true and writes to the target tab on a real change", () => {
@@ -103,7 +107,12 @@ describe("applyEditorMarkdownForTab", () => {
 
   it("returns false for an unknown tab id", () => {
     const store = makeStore("x");
+    const before = store.get();
+    const changed = vi.fn();
+    store.subscribe(changed);
     expect(applyEditorMarkdownForTab(store, "nope", "y")).toBe(false);
+    expect(store.get()).toBe(before);
+    expect(changed).not.toHaveBeenCalled();
   });
 
   it("marks an edit back to the saved text saved again", () => {
