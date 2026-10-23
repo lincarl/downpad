@@ -1,6 +1,6 @@
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Snapshot } from "@/ipc/contracts";
 import { absoluteTime, relativeTime } from "@/home/relativeTime";
 import { baseName } from "@/paste/dropHandler";
@@ -25,10 +25,18 @@ import { disposeReactRoot } from "@/app/disposeReactRoot";
 import { cn } from "@/lib/utils";
 
 export interface RecoveryHandlers {
-  openRecovered(snap: Snapshot): void | Promise<void>;
-  openOriginal(snap: Snapshot): void | Promise<void>;
+  /** Return false if opening was cancelled. Reject to keep the recovery choices
+   *  visible with an error. Only a completed open closes the dialog. */
+  openRecovered(snap: Snapshot): boolean | void | Promise<boolean | void>;
+  openOriginal(snap: Snapshot): boolean | void | Promise<boolean | void>;
   discard(snap: Snapshot): void | Promise<void>;
 }
+
+const failureMessages = {
+  openRecovered: "Could not open the recovered work. Please try again.",
+  openOriginal: "Could not open the original file. Your recovered work is still available.",
+  discard: "Could not discard the recovered work. Please try again.",
+} satisfies Record<keyof RecoveryHandlers, string>;
 
 export class RecoveryDialog {
   private root: Root | null = null;
@@ -92,6 +100,33 @@ function RecoveryDialogView({
   const [remaining, setRemaining] = useState(() =>
     [...snapshots].sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt)),
   );
+  const busy = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<{ id: string; message: string } | null>(null);
+
+  /** Finish one choice before allowing another to open or discard its fallback. */
+  async function act(action: keyof RecoveryHandlers, snapshot: Snapshot): Promise<void> {
+    if (busy.current) return;
+    busy.current = true;
+    setPending(true);
+    setFailure(null);
+    try {
+      if (await handlers[action](snapshot) === false) return;
+      if (action === "discard") {
+        const next = remaining.filter((item) => item !== snapshot);
+        setRemaining(next);
+        if (next.length === 0) onClose();
+      } else {
+        onClose();
+      }
+    } catch {
+      setFailure({ id: snapshot.sessionId, message: failureMessages[action] });
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  }
+
   return (
     <Dialog open>
       <DialogPortal>
@@ -117,13 +152,9 @@ function RecoveryDialogView({
                   <RecoveryItem
                     key={snapshot.sessionId}
                     snapshot={snapshot}
-                    handlers={handlers}
-                    onOpened={onClose}
-                    onDiscarded={() => {
-                      const next = remaining.filter((item) => item !== snapshot);
-                      setRemaining(next);
-                      if (next.length === 0) onClose();
-                    }}
+                    pending={pending}
+                    failure={failure?.id === snapshot.sessionId ? failure.message : undefined}
+                    onAction={(action) => void act(action, snapshot)}
                   />
                 ))}
               </div>
@@ -134,6 +165,7 @@ function RecoveryDialogView({
               type="button"
               variant="outline"
               className={cn("dialog-btn", dialogButtonClassName)}
+              disabled={pending}
               onClick={onClose}
             >
               Close
@@ -148,14 +180,14 @@ function RecoveryDialogView({
 /** One snapshot row: name and age, the original path, a text preview and its actions. */
 function RecoveryItem({
   snapshot,
-  handlers,
-  onOpened,
-  onDiscarded,
+  pending,
+  failure,
+  onAction,
 }: {
   snapshot: Snapshot;
-  handlers: RecoveryHandlers;
-  onOpened(): void;
-  onDiscarded(): void;
+  pending: boolean;
+  failure?: string;
+  onAction(action: keyof RecoveryHandlers): void;
 }) {
   return (
     <div className="recovery-item border-t border-line px-3 pb-3 pt-2.5 first:border-t-0">
@@ -183,16 +215,15 @@ function RecoveryItem({
       <div className="recovery-item-preview mt-1.5 line-clamp-2 text-ink">
         {snippet(snapshot.markdown)}
       </div>
+      {failure && <p role="alert" className="mb-0 mt-2 text-ink-danger">{failure}</p>}
       <div className="recovery-item-actions mt-2.5 flex flex-wrap justify-end gap-1.5">
         <Button
           type="button"
           variant="outline"
           size="sm"
           className={cn("dialog-btn", dialogButtonClassName)}
-          onClick={async () => {
-            await handlers.openRecovered(snapshot);
-            onOpened();
-          }}
+          disabled={pending}
+          onClick={() => onAction("openRecovered")}
         >
           Open recovered
         </Button>
@@ -202,10 +233,8 @@ function RecoveryItem({
             variant="outline"
             size="sm"
             className={cn("dialog-btn", dialogButtonClassName)}
-            onClick={async () => {
-              await handlers.openOriginal(snapshot);
-              onOpened();
-            }}
+            disabled={pending}
+            onClick={() => onAction("openOriginal")}
           >
             Open original
           </Button>
@@ -215,10 +244,8 @@ function RecoveryItem({
           variant="outline"
           size="sm"
           className={cn("dialog-btn", dialogButtonClassName)}
-          onClick={async () => {
-            await handlers.discard(snapshot);
-            onDiscarded();
-          }}
+          disabled={pending}
+          onClick={() => onAction("discard")}
         >
           Discard
         </Button>
