@@ -6135,8 +6135,11 @@ test("find in the Markdown view gives the first line room below the card and cle
   await expect.poll(currentMatchProblem).toBe("");
 
   // Closing find takes the room away without shifting the visible text.
+  // F3 publishes its count before its queued scroll has finished.
+  await twoFrames();
   await pane.evaluate((element) => { element.scrollTop = 200; });
   await twoFrames();
+  expect(await pane.evaluate((element) => element.scrollTop)).toBe(200);
   const visibleLine = await pane.evaluate((element) => {
     const top = element.getBoundingClientRect().top;
     const line = [...element.querySelectorAll(".cm-line")].find((line) =>
