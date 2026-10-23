@@ -4003,6 +4003,101 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await expect(page).toHaveTitle("recovered.md — md-easy");
 });
 
+test("a failed Open original preserves recovery and still allows Open recovered", async () => {
+  const file = path.join(directory, "unavailable-original.md");
+  const recovery = path.join(directory, "profile", "recovery");
+  await mkdir(recovery);
+  const markdown = "# Recovered after failure\n\nUnsaved work that must survive.\n";
+  const snapshot = { sessionId: "recoverable-session", savedAt: new Date().toISOString(), filePath: file, markdown, isDirty: true };
+  const snapshotFile = path.join(recovery, "recoverable-session.json");
+  const original = JSON.stringify(snapshot);
+  await writeFile(snapshotFile, original);
+  await launch(undefined, { duringStartup: true });
+  const dialog = page.getByRole("dialog", { name: "Recover unsaved work" });
+  await dialog.getByRole("button", { name: "Open original", exact: true }).click();
+
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  expect(await readFile(snapshotFile, "utf8")).toBe(original);
+  await expect(page.getByTestId("app-shell")).toHaveAttribute("data-started", "false");
+  await dialog.getByRole("button", { name: "Open recovered", exact: true }).click();
+  await untilStarted();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(heading)).toHaveText("Recovered after failure");
+  await expect(page).toHaveTitle("● unavailable-original.md — md-easy");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
+  await expect.poll(clipboardText).toBe(markdown);
+});
+
+test("recovery preserves dirty background tabs and removes only saved documents", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), [
+    "hasSeenWelcome = true",
+    "hasCheckedDefaultHandler = true",
+    'defaultView = "markdown"',
+    "recoverySnapshotIntervalSeconds = 2",
+  ].join("\n") + "\n");
+  const first = path.join(directory, "first.md");
+  const second = path.join(directory, "second.md");
+  const clean = path.join(directory, "clean.md");
+  for (const file of [first, second, clean]) await writeFile(file, "Saved.\n");
+  await launch(first);
+  const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
+  const snapshots = (savedSince = 0) => page.evaluate(async (since) =>
+    (await window.mdEasy!.invoke("list_recovery_snapshots"))
+      .filter((snapshot) => Date.parse(snapshot.savedAt) >= since)
+      .map(({ filePath, markdown }) => ({ filePath, markdown }))
+      .sort((a, b) => (a.filePath ?? "").localeCompare(b.filePath ?? "")),
+    savedSince,
+  );
+
+  await markdown.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText("First unsaved edit.\n");
+  await expect.poll(() => snapshots()).toEqual([{ filePath: first, markdown: "First unsaved edit.\n" }]);
+
+  await chooseOpen(second);
+  await expect(page.getByRole("tab", { name: "second.md", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(markdown).toContainText("Saved.");
+  await markdown.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText("Second unsaved edit.\n");
+  await expect.poll(() => snapshots()).toEqual([
+    { filePath: first, markdown: "First unsaved edit.\n" },
+    { filePath: second, markdown: "Second unsaved edit.\n" },
+  ]);
+
+  await chooseOpen(clean);
+  await expect(page.getByRole("tab", { name: "clean.md", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: /first\.md/ }).click();
+  await expect(markdown).toContainText("First unsaved edit.");
+  await markdown.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText("Latest first edit.\n");
+  await page.getByRole("tab", { name: "clean.md", exact: true }).click();
+  await expect(page).toHaveTitle("clean.md — md-easy");
+  const cleanSelectedAt = await page.evaluate(() => Date.now());
+  // Fresh timestamps prove both background snapshots update while the clean
+  // tab is active, rather than observing files before the next interval.
+  await expect.poll(() => snapshots(cleanSelectedAt)).toEqual([
+    { filePath: first, markdown: "Latest first edit.\n" },
+    { filePath: second, markdown: "Second unsaved edit.\n" },
+  ]);
+
+  await page.getByRole("tab", { name: /first\.md/ }).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(first, "utf8")).toBe("Latest first edit.\n");
+  await page.getByRole("tab", { name: "clean.md", exact: true }).click();
+  await expect.poll(() => snapshots()).toEqual([{ filePath: second, markdown: "Second unsaved edit.\n" }]);
+  expect(await readFile(second, "utf8")).toBe("Saved.\n");
+
+  await app!.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+  });
+  await app!.close();
+  app = undefined;
+  expect(await readdir(path.join(directory, "profile", "recovery"))).toEqual([]);
+});
+
 test("the first-run welcome document opens as saved with its exact text", async () => {
   await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = false\nhasCheckedDefaultHandler = true\n");
   // The renderer reads the copy that the build puts next to index.html.

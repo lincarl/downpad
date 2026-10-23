@@ -69,6 +69,8 @@ export interface DefaultHandler {
 
 /** A crash-recovery snapshot (§5.11). */
 export interface Snapshot {
+  /** Stable snapshot ID. New snapshots use the tab UUID; the field name keeps
+   *  recovery files from earlier session-based snapshots compatible. */
   sessionId: string;
   savedAt: string;
   filePath: string | null;
