@@ -14,23 +14,26 @@ import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage,
 import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
-import { ConfigStore, RecentSearch, statFiles } from "./storage";
+import { adoptLegacyData, ConfigStore, RecentSearch, statFiles } from "./storage";
 import { watchPath } from "./watchers";
 
-app.setName("md-easy");
-const isolatedData = process.env.MD_EASY_USER_DATA_DIR;
+app.setName("Downpad");
+const isolatedData = process.env.DOWNPAD_USER_DATA_DIR;
 if (isolatedData) {
   const directory = absolutePath(isolatedData);
   mkdirSync(directory, { recursive: true });
   app.setPath("userData", directory);
+} else {
+  // The app was called md-easy before, and kept its data in a folder by that name.
+  adoptLegacyData(join(app.getPath("appData"), "md-easy"), app.getPath("userData"));
 }
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: "md-easy-file", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+  { scheme: "downpad-file", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ]);
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const developmentUrl = developmentEntryUrl(process.env.MD_EASY_DEV_URL, app.isPackaged);
+const developmentUrl = developmentEntryUrl(process.env.DOWNPAD_DEV_URL, app.isPackaged);
 const entryUrl = developmentUrl ?? pathToFileURL(join(appRoot, "dist", "index.html")).href;
 const config = new ConfigStore(app.getPath("userData"));
 const imageAccess = new ImageAccess();
@@ -60,7 +63,7 @@ const pendingOpenPaths: string[] = initialLaunchPath ? [initialLaunchPath] : [];
 
 function emit<K extends keyof DesktopEventPayloads>(event: K, payload: DesktopEventPayloads[K]): void {
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() && !mainWindow.webContents.isCrashed()) {
-    mainWindow.webContents.send(`md-easy:event:${event}`, payload);
+    mainWindow.webContents.send(`downpad:event:${event}`, payload);
   }
 }
 
@@ -81,7 +84,7 @@ function requestOpen(path: string): void {
     mainWindow.show();
     mainWindow.focus();
   } else if (startupCompleted) {
-    void createWindow().catch((error: unknown) => console.error("md-easy could not reopen its window", error));
+    void createWindow().catch((error: unknown) => console.error("Downpad could not reopen its window", error));
   }
 }
 
@@ -95,8 +98,8 @@ if (!app.requestSingleInstanceLock()) {
     else if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
   });
   void start().catch((error: unknown) => {
-    console.error("md-easy could not start", error);
-    dialog.showErrorBox("md-easy could not start", error instanceof Error ? error.message : String(error));
+    console.error("Downpad could not start", error);
+    dialog.showErrorBox("Downpad could not start", error instanceof Error ? error.message : String(error));
     app.exit(1);
   });
 }
@@ -189,7 +192,7 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "get_launch_args": return pendingOpenPaths.shift() ?? null;
     case "get_default_md_handler": return defaultMdHandler();
     case "open_default_apps_settings": {
-      if (process.platform !== "win32") throw new Error("Choose md-easy in your file manager's Open with settings.");
+      if (process.platform !== "win32") throw new Error("Choose Downpad in your file manager's Open with settings.");
       return shell.openExternal("ms-settings:defaultapps");
     }
     case "get_system_accent_color": {
@@ -240,7 +243,7 @@ async function defaultMdHandler(): Promise<DefaultHandler> {
     await registryValue(`HKCR\\${progId}\\shell\\open\\command`);
   const executable = command.startsWith('"') ? command.slice(1).split('"')[0] ?? "" : /^(.*?\.exe)/i.exec(command)?.[1] ?? "";
   const normalized = executable.replace(/\\/g, "/").toLowerCase();
-  return { progId, isDefault: normalized === process.execPath.replace(/\\/g, "/").toLowerCase() || /(?:^|\/)md-easy\.exe$/i.test(normalized) || /md[-_]easy/i.test(progId) };
+  return { progId, isDefault: normalized === process.execPath.replace(/\\/g, "/").toLowerCase() || /(?:^|\/)downpad\.exe$/i.test(normalized) || /^downpad\./i.test(progId) };
 }
 
 function filters(source: Record<string, unknown>): Electron.FileFilter[] | undefined {
@@ -265,8 +268,8 @@ function dialogOptions(value: unknown): Pick<OpenDialogOptions & SaveDialogOptio
 }
 
 function registerIpc(): void {
-  ipcMain.handle("md-easy:invoke", (event, command: unknown, args: unknown) => { trustedSender(event); return invoke(command, args); });
-  ipcMain.handle("md-easy:dialog-open", async (event, value: unknown) => {
+  ipcMain.handle("downpad:invoke", (event, command: unknown, args: unknown) => { trustedSender(event); return invoke(command, args); });
+  ipcMain.handle("downpad:dialog-open", async (event, value: unknown) => {
     trustedSender(event);
     const options = record(value);
     const multiple = options.multiple === undefined ? false : boolean(options, "multiple");
@@ -274,43 +277,43 @@ function registerIpc(): void {
     if (result.canceled || result.filePaths.length === 0) return null;
     return multiple ? result.filePaths : result.filePaths[0];
   });
-  ipcMain.handle("md-easy:dialog-save", async (event, value: unknown) => {
+  ipcMain.handle("downpad:dialog-save", async (event, value: unknown) => {
     trustedSender(event);
     const result = await dialog.showSaveDialog(mainWindow!, { ...dialogOptions(value), properties: ["showOverwriteConfirmation", "createDirectory"] });
     if (result.canceled || !result.filePath) return null;
     return result.filePath;
   });
-  ipcMain.handle("md-easy:dialog-ask", async (event, message: unknown, value: unknown) => {
+  ipcMain.handle("downpad:dialog-ask", async (event, message: unknown, value: unknown) => {
     trustedSender(event);
     if (typeof message !== "string") throw new Error("A dialog message is required.");
     const options = record(value);
     const kind = options.kind ?? "question";
     if (kind !== "question" && kind !== "info" && kind !== "warning" && kind !== "error") throw new Error("Unknown dialog type.");
     const result = await dialog.showMessageBox(mainWindow!, {
-      type: kind, title: options.title === undefined ? "md-easy" : string(options, "title"), message,
+      type: kind, title: options.title === undefined ? "Downpad" : string(options, "title"), message,
       buttons: [options.cancelLabel === undefined ? "Cancel" : string(options, "cancelLabel"), options.okLabel === undefined ? "OK" : string(options, "okLabel")],
       defaultId: 0, cancelId: 0, noLink: true,
     });
     return result.response === 1;
   });
-  ipcMain.handle("md-easy:open-external", (event, url: unknown) => { trustedSender(event); return shell.openExternal(externalUrl(url)); });
-  ipcMain.handle("md-easy:image-url", (event, imagePath: unknown) => { trustedSender(event); return imageAccess.imageUrl(imagePath); });
-  ipcMain.handle("md-easy:reveal-item", (event, target: unknown) => { trustedSender(event); shell.showItemInFolder(absolutePath(target)); });
-  ipcMain.handle("md-easy:set-theme", (event, theme: unknown) => {
+  ipcMain.handle("downpad:open-external", (event, url: unknown) => { trustedSender(event); return shell.openExternal(externalUrl(url)); });
+  ipcMain.handle("downpad:image-url", (event, imagePath: unknown) => { trustedSender(event); return imageAccess.imageUrl(imagePath); });
+  ipcMain.handle("downpad:reveal-item", (event, target: unknown) => { trustedSender(event); shell.showItemInFolder(absolutePath(target)); });
+  ipcMain.handle("downpad:set-theme", (event, theme: unknown) => {
     trustedSender(event);
     if (theme !== "system" && theme !== "light" && theme !== "dark") throw new Error("Unknown window theme.");
     nativeTheme.themeSource = theme;
   });
-  ipcMain.handle("md-easy:close-window", (event) => {
+  ipcMain.handle("downpad:close-window", (event) => {
     trustedSender(event);
     allowClose = true;
     if (quitRequested) app.quit(); else mainWindow?.close();
   });
-  ipcMain.handle("md-easy:cancel-window-close", (event) => { trustedSender(event); quitRequested = false; });
-  ipcMain.on("md-easy:close-listener", (event, attached: unknown) => {
+  ipcMain.handle("downpad:cancel-window-close", (event) => { trustedSender(event); quitRequested = false; });
+  ipcMain.on("downpad:close-listener", (event, attached: unknown) => {
     try { trustedSender(event); closeListenerAttached = attached === true; } catch { /* Ignore untrusted listener registration. */ }
   });
-  ipcMain.on("md-easy:open-listener", (event, attached: unknown) => {
+  ipcMain.on("downpad:open-listener", (event, attached: unknown) => {
     try {
       trustedSender(event);
       openListenerAttached = attached === true;
@@ -347,7 +350,7 @@ function saveWindowState(window: BrowserWindow): void {
   try {
     writeFileSync(temporary, JSON.stringify({ ...window.getNormalBounds(), maximized: window.isMaximized() }));
     renameSync(temporary, destination);
-  } catch (error) { console.error("md-easy could not save window geometry", error); }
+  } catch (error) { console.error("Downpad could not save window geometry", error); }
 }
 
 async function createWindow(): Promise<void> {
@@ -358,7 +361,7 @@ async function createWindow(): Promise<void> {
   const state = loadWindowState();
   const icon = join(appRoot, "build", "icon.png");
   const window = new BrowserWindow({
-    ...state, title: "md-easy", minWidth: 480, minHeight: 360,
+    ...state, title: "Downpad", minWidth: 480, minHeight: 360,
     // Nord window chrome, the default dark theme, until the renderer paints.
     backgroundColor: "#2e3440", show: false, autoHideMenuBar: true,
     icon: existsSync(icon) ? icon : undefined,
@@ -371,7 +374,7 @@ async function createWindow(): Promise<void> {
   mainWindow = window;
   printing = new PrintService(window, (result) => emit("print-completed", result));
   window.webContents.setWindowOpenHandler(({ url }) => {
-    try { void shell.openExternal(externalUrl(url)).catch((error: unknown) => console.error("md-easy could not open link", error)); }
+    try { void shell.openExternal(externalUrl(url)).catch((error: unknown) => console.error("Downpad could not open link", error)); }
     catch { /* Reject unsupported links without creating a new window. */ }
     return { action: "deny" };
   });
@@ -422,7 +425,7 @@ async function createWindow(): Promise<void> {
     mainWindow = null; printing = null; closeListenerAttached = false; openListenerAttached = false;
   });
   window.once("ready-to-show", () => { if (state.maximized) window.maximize(); window.show(); });
-  window.webContents.on("preload-error", (_event, preloadPath, error) => { console.error("md-easy preload failed", preloadPath, error); });
+  window.webContents.on("preload-error", (_event, preloadPath, error) => { console.error("Downpad preload failed", preloadPath, error); });
   if (developmentUrl) await window.loadURL(developmentUrl);
   else await window.loadFile(join(appRoot, "dist", "index.html"));
 }
@@ -432,7 +435,7 @@ async function start(): Promise<void> {
   await config.initialize();
   Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate(macApplicationMenu(requestHistory)) : null);
   registerIpc();
-  protocol.handle("md-easy-file", async (request) => {
+  protocol.handle("downpad-file", async (request) => {
     try {
       const url = new URL(request.url);
       if (url.hostname !== "local" || url.pathname !== "/image") return new Response("Not found", { status: 404 });

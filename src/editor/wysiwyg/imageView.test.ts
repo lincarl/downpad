@@ -36,8 +36,8 @@ afterEach(() => {
 
 describe("proxyDomURL", () => {
   it("loads a local image through its authorized URL", async () => {
-    native.convertFileSrc.mockResolvedValueOnce("md-easy-file://local/image?token=t");
-    expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://local/image?token=t");
+    native.convertFileSrc.mockResolvedValueOnce("downpad-file://local/image?token=t");
+    expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("downpad-file://local/image?token=t");
     expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/pic.png");
   });
 
@@ -47,7 +47,7 @@ describe("proxyDomURL", () => {
     ["the document is not saved yet", null, () => {}],
   ])("shows a local image as missing when %s", async (_case, filePath, arrange) => {
     arrange();
-    // A relative path here would be requested next to md-easy's own page.
+    // A relative path here would be requested next to Downpad's own page.
     expect(await proxyDomURL(filePath)("missing.png")).toBe("data:,");
   });
 
@@ -63,7 +63,7 @@ describe("proxyDomURL", () => {
   });
 
   it.each([
-    ["an image", "md-easy-file://local/image?token=t", "md-easy-file://local/image?token=t"],
+    ["an image", "downpad-file://local/image?token=t", "downpad-file://local/image?token=t"],
     ["a missing image", null, "data:,"],
   ])("answers at once for %s it has looked up", async (_case, answer, shown) => {
     native.convertFileSrc.mockResolvedValueOnce(answer);
@@ -79,22 +79,22 @@ describe("proxyDomURL", () => {
   });
 
   it("looks a relative image up again once the document is saved elsewhere", async () => {
-    native.convertFileSrc.mockImplementation(async (path) => `md-easy-file://${path}`);
+    native.convertFileSrc.mockImplementation(async (path) => `downpad-file://${path}`);
     let filePath = "/docs/a.md";
     const proxy = proxyDomURL(() => filePath);
     await proxy("pic.png");
 
     filePath = "/other/a.md";
 
-    expect(await proxy("pic.png")).toBe("md-easy-file:///other/pic.png");
+    expect(await proxy("pic.png")).toBe("downpad-file:///other/pic.png");
   });
 
   it("gives a document editor built again the answers at once", async () => {
-    native.convertFileSrc.mockResolvedValueOnce("md-easy-file://local/image?token=t");
+    native.convertFileSrc.mockResolvedValueOnce("downpad-file://local/image?token=t");
     await proxyDomURL("/docs/a.md")("pic.png");
 
     // A layout switch, a settings change or Print builds another editor.
-    expect(proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://local/image?token=t");
+    expect(proxyDomURL("/docs/a.md")("pic.png")).toBe("downpad-file://local/image?token=t");
     expect(native.convertFileSrc).toHaveBeenCalledTimes(1);
   });
 
@@ -103,9 +103,9 @@ describe("proxyDomURL", () => {
     expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("data:,");
 
     forgetImageAnswers();
-    native.convertFileSrc.mockResolvedValueOnce("md-easy-file://local/image?token=t");
+    native.convertFileSrc.mockResolvedValueOnce("downpad-file://local/image?token=t");
 
-    expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://local/image?token=t");
+    expect(await proxyDomURL("/docs/a.md")("pic.png")).toBe("downpad-file://local/image?token=t");
   });
 });
 
@@ -132,11 +132,11 @@ describe("preload", () => {
   it("settles as soon as every image has an answer", async () => {
     // No timer runs, so a wait for one would never end.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
+    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "downpad-file://pic" : null));
 
     await imageConfig("/docs/a.md").preload(["pic.png", "gone.png", "https://example.com/a.png", ""]);
 
-    expect(proxyDomURL("/docs/a.md")("pic.png")).toBe("md-easy-file://pic");
+    expect(proxyDomURL("/docs/a.md")("pic.png")).toBe("downpad-file://pic");
     expect(proxyDomURL("/docs/a.md")("gone.png")).toBe("data:,");
   });
 });

@@ -5,7 +5,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
    if (view.editable && !view.hasFocus()) return false;
    return hasSelection(view);
  }
-+// md-easy patch: whether Chromium, not the user, moved the DOM selection to
++// Downpad patch: whether Chromium, not the user, moved the DOM selection to
 +// the start of the document. Chromium moves a selection it cannot show there
 +// whenever the page takes focus, after the focus events, such as when the
 +// window is activated again or a native dialog closes, and also while the
@@ -27,7 +27,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
 +  var readSel, firstText;
 +  return !(view.state.selection instanceof prosemirrorState.TextSelection) && view.input.selectionMoves == view.domObserver.selectionMoves && selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) && readSel.from <= ((firstText = prosemirrorState.Selection.findFrom(view.state.doc.resolve(0), 1, true)) ? firstText.from : 0);
 +}
-+// md-easy patch: put ProseMirror's selection back in the DOM if the page
++// Downpad patch: put ProseMirror's selection back in the DOM if the page
 +// moved it (see pageReset) and ProseMirror has not read the move yet, before
 +// a key that would otherwise go to the start of the document.
 +function putBackPageReset(view) {
@@ -41,7 +41,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
    };
    this.lastSelectionOrigin = null;
    this.lastSelectionTime = 0;
-+  // md-easy patch: the number of inputs that can move the selection
++  // Downpad patch: the number of inputs that can move the selection
 +  // (see pageReset).
 +  this.selectionMoves = 0;
    this.lastIOSEnter = 0;
@@ -51,7 +51,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
    });
    ensureListeners(view);
  }
-+// md-easy patch: `moves` counts the input in selectionMoves (see
++// Downpad patch: `moves` counts the input in selectionMoves (see
 +// pageReset). A modifier key on its own moves no selection. An input that
 +// leaves the DOM selection where ProseMirror last put or read it, such as
 +// Ctrl+C, moves nothing, so once its event is over it no longer keeps the
@@ -81,7 +81,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
    var event = _event;
    view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
    if (inOrNearComposition(view)) return;
-+  // md-easy patch: the page can move the selection right before a key
++  // Downpad patch: the page can move the selection right before a key
 +  // reaches the view (see pageReset). Put it back before the key counts.
 +  putBackPageReset(view);
    view.input.lastKeyCode = event.keyCode;
@@ -100,7 +100,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
      view.dom.classList.add("ProseMirror-focused");
      view.domObserver.start();
      view.focused = true;
-+    // md-easy patch: a key or click since focus may have moved the DOM
++    // Downpad patch: a key or click since focus may have moved the DOM
 +    // selection before ProseMirror read it (End on a busy page). Putting
 +    // the old selection back would undo that move, so leave it. The
 +    // count of such inputs tells, as the time of the last one can be the
@@ -116,7 +116,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
  };
  handlers.beforeinput = function (view, _event) {
    var event = _event;
-+  // md-easy patch: ProseMirror types a key over a selection that is not
++  // Downpad patch: ProseMirror types a key over a selection that is not
 +  // text, such as a selected block or cells, itself, and left text that
 +  // comes without a key, such as from an input method, the emoji panel or
 +  // dictation, to Chromium. Chromium cannot type into a selection it cannot
@@ -150,7 +150,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
      this.flushingSoon = -1;
      this.observer = null;
      this.currentSelection = new SelectionState();
-+    // md-easy patch: the input's selectionMoves when the selection
++    // Downpad patch: the input's selectionMoves when the selection
 +    // last went into the DOM, or when an input since then ended without
 +    // moving it (see pageReset and setSelectionOrigin).
 +    this.selectionMoves = -1;
@@ -170,7 +170,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
        }
        var readSel = null;
 -      if (from < 0 && newSel && view.input.lastFocus > Date.now() - 200 && Math.max(view.input.lastTouch, view.input.lastClick.time) < Date.now() - 300 && selectionCollapsed(selRange) && (readSel = selectionFromDOM(view)) && readSel.eq(prosemirrorState.Selection.near(view.state.doc.resolve(0), 1))) {
-+      // md-easy patch: not after a key that can move the selection, such as
++      // Downpad patch: not after a key that can move the selection, such as
 +      // Ctrl+Home right after focus, which this took for the browser's move
 +      // and undid (see pageReset).
 +      if (from < 0 && newSel && view.input.lastFocus > Date.now() - 200 && Math.max(view.input.lastTouch, view.input.lastClick.time) < Date.now() - 300 && view.input.selectionMoves == this.selectionMoves && selectionCollapsed(selRange) && (readSel = selectionFromDOM(view)) && readSel.eq(prosemirrorState.Selection.near(view.state.doc.resolve(0), 1))) {
@@ -179,7 +179,7 @@ diff --git a/dist/index.cjs b/dist/index.cjs
          this.currentSelection.set(selRange);
          view.scrollToSelection();
 +      } else if (from < 0 && newSel && pageReset(view, selRange)) {
-+        // md-easy patch: see pageReset.
++        // Downpad patch: see pageReset.
 +        selectionToDOM(view);
        } else if (from > -1 || newSel) {
          if (from > -1) {
@@ -191,7 +191,7 @@ diff --git a/dist/index.js b/dist/index.js
          return false;
      return hasSelection(view);
  }
-+// md-easy patch: whether Chromium, not the user, moved the DOM selection to
++// Downpad patch: whether Chromium, not the user, moved the DOM selection to
 +// the start of the document. Chromium moves a selection it cannot show there
 +// whenever the page takes focus, after the focus events, such as when the
 +// window is activated again or a native dialog closes, and also while the
@@ -216,7 +216,7 @@ diff --git a/dist/index.js b/dist/index.js
 +        selectionCollapsed(domSel) && !!(readSel = selectionFromDOM(view)) &&
 +        readSel.from <= ((firstText = Selection.findFrom(view.state.doc.resolve(0), 1, true)) ? firstText.from : 0);
 +}
-+// md-easy patch: put ProseMirror's selection back in the DOM if the page
++// Downpad patch: put ProseMirror's selection back in the DOM if the page
 +// moved it (see pageReset) and ProseMirror has not read the move yet, before
 +// a key that would otherwise go to the start of the document.
 +function putBackPageReset(view) {
@@ -231,7 +231,7 @@ diff --git a/dist/index.js b/dist/index.js
          this.lastClick = { time: 0, x: 0, y: 0, type: "", button: 0 };
          this.lastSelectionOrigin = null;
          this.lastSelectionTime = 0;
-+        // md-easy patch: the number of inputs that can move the selection
++        // Downpad patch: the number of inputs that can move the selection
 +        // (see pageReset).
 +        this.selectionMoves = 0;
          this.lastIOSEnter = 0;
@@ -242,7 +242,7 @@ diff --git a/dist/index.js b/dist/index.js
      ensureListeners(view);
  }
 -function setSelectionOrigin(view, origin) {
-+// md-easy patch: `moves` counts the input in selectionMoves (see
++// Downpad patch: `moves` counts the input in selectionMoves (see
 +// pageReset). A modifier key on its own moves no selection. An input that
 +// leaves the DOM selection where ProseMirror last put or read it, such as
 +// Ctrl+C, moves nothing, so once its event is over it no longer keeps the
@@ -273,7 +273,7 @@ diff --git a/dist/index.js b/dist/index.js
      view.input.shiftKey = event.keyCode == 16 || event.shiftKey;
      if (inOrNearComposition(view))
          return;
-+    // md-easy patch: the page can move the selection right before a key
++    // Downpad patch: the page can move the selection right before a key
 +    // reaches the view (see pageReset). Put it back before the key counts.
 +    putBackPageReset(view);
      view.input.lastKeyCode = event.keyCode;
@@ -292,7 +292,7 @@ diff --git a/dist/index.js b/dist/index.js
          view.dom.classList.add("ProseMirror-focused");
          view.domObserver.start();
          view.focused = true;
-+        // md-easy patch: a key or click since focus may have moved the DOM
++        // Downpad patch: a key or click since focus may have moved the DOM
 +        // selection before ProseMirror read it (End on a busy page). Putting
 +        // the old selection back would undo that move, so leave it. The
 +        // count of such inputs tells, as the time of the last one can be the
@@ -309,7 +309,7 @@ diff --git a/dist/index.js b/dist/index.js
  };
  handlers.beforeinput = (view, _event) => {
      let event = _event;
-+    // md-easy patch: ProseMirror types a key over a selection that is not
++    // Downpad patch: ProseMirror types a key over a selection that is not
 +    // text, such as a selected block or cells, itself, and left text that
 +    // comes without a key, such as from an input method, the emoji panel or
 +    // dictation, to Chromium. Chromium cannot type into a selection it cannot
@@ -340,7 +340,7 @@ diff --git a/dist/index.js b/dist/index.js
          this.flushingSoon = -1;
          this.observer = null;
          this.currentSelection = new SelectionState;
-+        // md-easy patch: the input's selectionMoves when the selection
++        // Downpad patch: the input's selectionMoves when the selection
 +        // last went into the DOM, or when an input since then ended without
 +        // moving it (see pageReset and setSelectionOrigin).
 +        this.selectionMoves = -1;
@@ -359,7 +359,7 @@ diff --git a/dist/index.js b/dist/index.js
          // If it looks like the browser has reset the selection to the
          // start of the document after focus, restore the selection from
          // the state
-+        // md-easy patch: not after a key that can move the selection, such as
++        // Downpad patch: not after a key that can move the selection, such as
 +        // Ctrl+Home right after focus, which this took for the browser's move
 +        // and undid (see pageReset).
          if (from < 0 && newSel && view.input.lastFocus > Date.now() - 200 &&
@@ -373,7 +373,7 @@ diff --git a/dist/index.js b/dist/index.js
              view.scrollToSelection();
 +        }
 +        else if (from < 0 && newSel && pageReset(view, selRange)) {
-+            // md-easy patch: see pageReset.
++            // Downpad patch: see pageReset.
 +            selectionToDOM(view);
          }
          else if (from > -1 || newSel) {

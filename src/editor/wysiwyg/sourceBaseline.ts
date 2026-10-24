@@ -755,7 +755,7 @@ export class SourceBaseline {
  * With it, the first edit does not have to parse the source a second time.
  */
 export function outlinePlugin(report: (text: string, outline: readonly OutlineNode[] | null) => void) {
-  return $remark("mdEasyOutline", () =>
+  return $remark("downpadOutline", () =>
     function () {
       const parse = this.parser;
       if (!parse) return;

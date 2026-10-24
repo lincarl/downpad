@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Text is saved with the escapes it needs to read back the same, and spaces at
 // its end stay plain spaces that never make a hard line break. These tests use
-// the real editor to check md-easy's text handler (serializer.ts).
+// the real editor to check Downpad's text handler (serializer.ts).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";

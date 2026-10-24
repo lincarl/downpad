@@ -98,7 +98,7 @@ export class SettingsModel {
     if (isElectron()) {
       this.writeChain = this.writeChain.then(() =>
         saveSettings(next).catch((err) => {
-          console.error("md-easy: failed to save settings", err);
+          console.error("Downpad: failed to save settings", err);
         }),
       );
       await this.writeChain;

@@ -17,7 +17,7 @@ const documentSeg = ".toolbar-view button:has-text('Document')";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 test("a freshly opened document is not dirty, even after opening/closing the split", async ({
@@ -33,7 +33,7 @@ test("a freshly opened document is not dirty, even after opening/closing the spl
   await page.locator(splitSeg).click();
   await expect(page.locator(rawContent)).toBeVisible();
   await page.locator(documentSeg).click();
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 
   // Still clean — opening the split with no edits must never raise the unsaved flag.
   await expect(page).not.toHaveTitle(/^●/);

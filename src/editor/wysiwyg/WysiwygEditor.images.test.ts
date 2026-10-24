@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Crepe's image views render a node's raw src until proxyDomURL answers, and
-// Chromium looks a raw relative src up next to md-easy's own page. These tests
+// Chromium looks a raw relative src up next to Downpad's own page. These tests
 // use the real editor to check that local images start at the URL they show,
 // that a late answer never replaces a newer one, that a relocated image shows
 // the file it is pointed at, that an image stored as a file through the upload
@@ -117,12 +117,12 @@ const sources = (root: HTMLElement) => [...root.querySelectorAll("img")].map((im
 
 describe("the first render", () => {
   it("shows local images at their own URL", { timeout: 60_000 }, async () => {
-    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
+    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "downpad-file://pic" : null));
 
     const root = await open(DOCUMENT);
 
-    expect(sources(root)).toEqual(["md-easy-file://pic", "md-easy-file://pic", "data:,"]);
-    // The raw paths would be requested next to md-easy's own page.
+    expect(sources(root)).toEqual(["downpad-file://pic", "downpad-file://pic", "data:,"]);
+    // The raw paths would be requested next to Downpad's own page.
     expect(shownSources).not.toContain("pic.png");
     expect(shownSources).not.toContain("gone.png");
     expect(native.convertFileSrc).toHaveBeenCalledTimes(2);
@@ -208,10 +208,10 @@ describe("an image stored as a file through the upload input", () => {
     await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/attachments/img.png"));
     // The image goes in once the main process answers.
     expect(sources(root)).toEqual([]);
-    answer("md-easy-file://img");
+    answer("downpad-file://img");
 
-    await vi.waitFor(() => expect(sources(root)).toEqual(["md-easy-file://img"]));
-    // The raw path would be requested next to md-easy's own page.
+    await vi.waitFor(() => expect(sources(root)).toEqual(["downpad-file://img"]));
+    // The raw path would be requested next to Downpad's own page.
     expect(shownSources).not.toContain("attachments/img.png");
     expect(editor!.getMarkdown()).toContain("![](attachments/img.png)");
   });
@@ -219,7 +219,7 @@ describe("an image stored as a file through the upload input", () => {
   it("is written and looked up again beside the document when a Save As moves it while the image is looked up", { timeout: 60_000 }, async () => {
     let answerFirst: (url: string) => void = () => {};
     native.convertFileSrc.mockImplementationOnce(() => new Promise((resolve) => (answerFirst = resolve)));
-    native.convertFileSrc.mockImplementation(async (path) => `md-easy-file://${path}`);
+    native.convertFileSrc.mockImplementation(async (path) => `downpad-file://${path}`);
     let filePath = "/docs/a.md";
     const root = await open(EMPTY_IMAGE, undefined, { ...asFiles, getFilePath: () => filePath });
 
@@ -227,9 +227,9 @@ describe("an image stored as a file through the upload input", () => {
     await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/attachments/img.png"));
     // A Save As into another folder ends before the main process answers.
     filePath = "/moved/a.md";
-    answerFirst("md-easy-file:///docs/attachments/img.png");
+    answerFirst("downpad-file:///docs/attachments/img.png");
 
-    await vi.waitFor(() => expect(sources(root)).toEqual(["md-easy-file:///moved/attachments/img.png"]));
+    await vi.waitFor(() => expect(sources(root)).toEqual(["downpad-file:///moved/attachments/img.png"]));
     expect(native.writeAttachment).toHaveBeenCalledTimes(2);
     expect(native.writeAttachment).toHaveBeenLastCalledWith("/moved/a.md", "attachments", expect.stringMatching(/^img-/), expect.any(Uint8Array));
     expect(shownSources).not.toContain("attachments/img.png");
@@ -296,11 +296,11 @@ describe("a relocated image", () => {
     expect(block.classList).toContain("md-image-missing");
 
     // The file is put back, and the user picks it.
-    native.convertFileSrc.mockResolvedValue("md-easy-file://pic");
+    native.convertFileSrc.mockResolvedValue("downpad-file://pic");
     native.openDialog.mockResolvedValue("/docs/pic.png");
     block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("downpad-file://pic"));
     image.dispatchEvent(new Event("load"));
     expect(block.classList).not.toContain("md-image-missing");
     // A click on the found image leaves it alone.
@@ -330,11 +330,11 @@ describe("a missing image located at the path it has", () => {
     const depth = undoDepth(view.state);
 
     // The file is put back, and the user picks it at the path the Markdown has.
-    native.convertFileSrc.mockResolvedValue("md-easy-file://found");
+    native.convertFileSrc.mockResolvedValue("downpad-file://found");
     native.openDialog.mockResolvedValue(picked);
     host.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
 
-    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://found"));
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("downpad-file://found"));
     image.dispatchEvent(new Event("load"));
     expect(host.classList).not.toContain("md-image-missing");
     // Past the 200 ms change report.
@@ -360,7 +360,7 @@ describe("a missing image", () => {
     const block = root.querySelector<HTMLElement>(".milkdown-image-block")!;
     expect(block.dataset.mdPath).toBe("gone.png");
 
-    // The Markdown pane changes the path to another one md-easy cannot load.
+    // The Markdown pane changes the path to another one Downpad cannot load.
     editor!.setMarkdown("![Missing](lost.png)\n");
 
     await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalledWith("/docs/lost.png"));
@@ -394,11 +394,11 @@ describe("a missing image", () => {
     image.dispatchEvent(new Event("error"));
     expect(block.classList).toContain("md-image-missing");
 
-    native.convertFileSrc.mockResolvedValue("md-easy-file://pic");
+    native.convertFileSrc.mockResolvedValue("downpad-file://pic");
     native.openDialog.mockResolvedValue("/docs/pic.png");
     block.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("downpad-file://pic"));
     expect(editor!.getMarkdown()).toBe("![Missing](/docs/pic.png)\n");
     image.dispatchEvent(new Event("load"));
     expect(block.classList).not.toContain("md-image-missing");
@@ -407,7 +407,7 @@ describe("a missing image", () => {
 
 describe("a missing inline image", () => {
   it("shows its path in a chip, which a click locates", { timeout: 60_000 }, async () => {
-    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "md-easy-file://pic" : null));
+    native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "downpad-file://pic" : null));
     const root = await open("![Lost](lost.png)\n\nInline ![inline](pic.png) and ![gone](gone.png).\n");
     // jsdom loads no images, so tell each view how its image fared.
     for (const image of root.querySelectorAll("img")) {
@@ -428,7 +428,7 @@ describe("a missing inline image", () => {
     chip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const image = chip.querySelector("img")!;
-    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("md-easy-file://pic"));
+    await vi.waitFor(() => expect(image.getAttribute("src")).toBe("downpad-file://pic"));
     expect(editor!.getMarkdown()).toBe("![Lost](lost.png)\n\nInline ![inline](pic.png) and ![gone](/docs/pic.png).\n");
     image.dispatchEvent(new Event("load"));
     expect(chip.classList).not.toContain("md-image-missing");

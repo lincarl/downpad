@@ -8,7 +8,7 @@ import type { Settings } from "@/state/types";
 
 export type Scheme = "dark" | "light";
 
-/** The chrome tokens a miniature md-easy window draws with. */
+/** The chrome tokens a miniature Downpad window draws with. */
 export interface UiPalette {
   window: string;
   bar: string;

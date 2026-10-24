@@ -14,7 +14,7 @@ const menu = ".md-context-menu";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 test("right-clicking a tab shows the four-item menu", async ({ page }) => {

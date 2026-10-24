@@ -358,17 +358,17 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                       />
                     </FormRow>
                   </SettingsBox>
-                  {isElectron() && window.mdEasy?.platform === "win32" && (
+                  {isElectron() && window.downpad?.platform === "win32" && (
                     <SettingsBox title="System integration">
                       <ButtonRow
                         label="Set as default…"
                         onClick={() => {
                           void openDefaultAppsSettings().catch((error) => {
-                            console.error("md-easy: could not open default-app settings", error);
+                            console.error("Downpad: could not open default-app settings", error);
                           });
                         }}
                       >
-                        Set md-easy as the default app for .md files.
+                        Set Downpad as the default app for .md files.
                       </ButtonRow>
                     </SettingsBox>
                   )}
@@ -606,7 +606,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                       />
                     </FormRow>
                     <Hint placement="box">
-                      md-easy writes Markdown in this style when you edit in the Document view.
+                      Downpad writes Markdown in this style when you edit in the Document view.
                     </Hint>
                   </SettingsBox>
                 </SettingsPage>
@@ -650,12 +650,12 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                   <div className="flex items-center gap-3.5">
                     <AppIcon size={48} />
                     <div className="flex flex-col">
-                      <span className="text-[18px] font-semibold leading-6 text-ink-primary">md-easy</span>
+                      <span className="text-[18px] font-semibold leading-6 text-ink-primary">Downpad</span>
                       <span className="select-text text-ink-soft">Version {__APP_VERSION__}</span>
                     </div>
                   </div>
                   <div className="my-2.5 h-px bg-separator" />
-                  <p className="m-0">md-easy is free software under the MIT License.</p>
+                  <p className="m-0">Downpad is free software under the MIT License.</p>
                 </SettingsPage>
               </div>
             </div>

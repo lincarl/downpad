@@ -8,7 +8,7 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:1420",
     trace: "retain-on-failure",
-    channel: process.env.MD_EASY_BROWSER_CHANNEL,
+    channel: process.env.DOWNPAD_BROWSER_CHANNEL,
   },
   webServer: {
     command: "pnpm dev:web",

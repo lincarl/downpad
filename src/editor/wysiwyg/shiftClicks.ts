@@ -21,7 +21,7 @@
 // end, and focus stayed there, so the next key replaced the code or Markdown
 // between the caret and that point. On an image Chromium placed no caret, and
 // the next key went into the editor that had focus. prosemirror-tables, which
-// handles a press before the plugins md-easy adds, decided from that
+// handles a press before the plugins Downpad adds, decided from that
 // selection too. A caret left in one cell made a Shift+click into another
 // select both cells, and a cell selection made a Shift+click anywhere in the
 // document select a cell. It cancelled the press, so focus stayed outside and
@@ -279,7 +279,7 @@ export function dragSelect(view: EditorView, anchor: number, head: number): void
 
 /** Milkdown plugin that puts a ProseMirror plugin for presses from outside
  *  the document view before all others, including prosemirror-tables,
- *  which Crepe adds before any plugin md-easy uses. */
+ *  which Crepe adds before any plugin Downpad uses. */
 const fromOutside: MilkdownPlugin = (ctx) => async () => {
   await ctx.wait(SchemaReady);
   const plugin = new Plugin({ props: { handleDOMEvents: { mousedown: shiftPressFromOutside } } });

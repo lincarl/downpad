@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Crepe's table view had ProseMirror draw a table again, with new cells, when
 // only the selection in it changed. These tests use the real editor to check
-// that md-easy's table view keeps the cells then, unless a whole row or column
+// that Downpad's table view keeps the cells then, unless a whole row or column
 // is selected, whose menu Crepe's new view opens, and that it closes a row or
 // column menu once its selection is gone.
 
@@ -83,7 +83,7 @@ function menuShows(role: "col-drag-handle" | "row-drag-handle"): string | undefi
   return document.querySelector<HTMLElement>(`[data-role="${role}"] .button-group`)?.dataset.show;
 }
 
-describe("md-easy's table view", () => {
+describe("Downpad's table view", () => {
   it("keeps the cells when a cell selection ends, so a press on a cell still lands", { timeout: 60_000 }, async () => {
     const view = await open();
     const cells = cellPositions(view.state.doc);

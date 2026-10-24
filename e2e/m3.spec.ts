@@ -15,7 +15,7 @@ const rawBtn = ".toolbar-view button:has-text('Split')";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 // The editable value cell for a given top-level key in the frontmatter table.
@@ -299,7 +299,7 @@ test("settings dialog opens, edits a value, saves, and applies it", async ({ pag
   expect(width).toBe("800px");
 
   // Editor still functioning after the dialog round-trip.
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 test("a fixed page width below 688px narrows the document's side padding in a wide window", async ({
@@ -338,7 +338,7 @@ test("changing the bullet style re-mounts WYSIWYG without losing content", async
   await dialog.getByRole("button", { name: "Save" }).click();
 
   // The WYSIWYG view re-mounts (serializer changed); content is preserved.
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 test("the toolbar theme button changes the document without changing the UI", async ({ page }) => {

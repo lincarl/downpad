@@ -745,7 +745,7 @@ body {
   line-height: 1.5;
 }
 
-/* Crepe captions its slash-menu groups and diagram previews in capitals. md-easy
+/* Crepe captions its slash-menu groups and diagram previews in capitals. Downpad
    writes captions in sentence case, as Mervin's menus do. */
 .editor-host .milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
   padding: 12px 10px 6px;
@@ -1349,7 +1349,7 @@ body {
 }
 
 /* ── Print workspace + printed sheets (spec §5.21) ───────────────────────
-   md-easy lays its own pages out. `printRender.ts` builds one fixed-size
+   Downpad lays its own pages out. `printRender.ts` builds one fixed-size
    `.print-page` per sheet, with margins, running header/footer and any scaling
    baked in, and `paginate.ts` breaks pages between blocks, or between the lines
    or blocks inside a block taller than a page. The very same elements are shown

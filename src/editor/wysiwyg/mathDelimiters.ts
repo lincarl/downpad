@@ -53,7 +53,7 @@ type TokenType = Parameters<Parameters<Construct["tokenize"]>[0]["enter"]>[0];
 
 // remark-math's token types, from which it builds its inline math node.
 // micromark's types list them only where remark-math's own types are loaded,
-// and remark-math is Crepe's dependency, not md-easy's.
+// and remark-math is Crepe's dependency, not Downpad's.
 const MATH = "mathText" as TokenType;
 const MATH_SEQUENCE = "mathTextSequence" as TokenType;
 const MATH_DATA = "mathTextData" as TokenType;
@@ -187,7 +187,7 @@ const singleDollarMath: Construct = {
  *  sees it. Text between two dollar amounts is then read as Markdown like any
  *  other. A run of two or more dollars is left to remark-math. */
 const pandocDollar: Construct = {
-  name: "mdEasyPandocDollar",
+  name: "downpadPandocDollar",
   /** Whether a `$` may start here. As in remark-math, one right after an
    *  unescaped `$` is part of its run, unless that `$` ended a formula. */
   previous(code) {
@@ -308,7 +308,7 @@ function verbInCell(verb: string, delimiter: string): string {
 
 /** `value` written so that a table cell holds it. GFM ends a cell at a `|`
  *  that no backslash escapes, so a `|` is written `\|`, as remark-gfm writes
- *  one in inline code, and GitHub, VS Code and md-easy read it back as `|`. No
+ *  one in inline code, and GitHub, VS Code and Downpad read it back as `|`. No
  *  backslash may come before such a `|`, so TeX's command `\|` is written
  *  `\Vert`, which TeX reads the same, with a space before a letter or `@`,
  *  which KaTeX reads as part of a command's name. The text of `\verb` keeps
@@ -379,7 +379,7 @@ function unescapeCellPipes(node: MdNode, inCell = false): void {
 /** Reads and writes single-dollar math by Pandoc's rules. Must follow Crepe's
  *  remark-math plugin, because micromark tries the syntax added last first, and
  *  this wraps remark-math's writer. */
-export const pandocInlineMath = $remark("mdEasyPandocInlineMath", () =>
+export const pandocInlineMath = $remark("downpadPandocInlineMath", () =>
   /** Adds the reader, wraps remark-math's writer, escapes every `$` in text
    *  and reads `\|` in a formula in a table cell as `|`. */
   function () {
@@ -421,7 +421,7 @@ function replaceNodes(parent: MdNode, replace: (node: MdNode, parent: MdNode) =>
  *  a LaTeX code block. `$$...$$` inside other text stays inline math, and so do
  *  the first line of a list item, which must stay a paragraph, and a formula
  *  fenced with three or more dollars. */
-export const oneLineDisplayMath = $remark("mdEasyOneLineDisplayMath", () => () => (tree: MdNode, file) => {
+export const oneLineDisplayMath = $remark("downpadOneLineDisplayMath", () => () => (tree: MdNode, file) => {
   const source = String(file.value);
   replaceNodes(tree, (node, parent) => {
     if (parent.type === "listItem" && parent.children?.[0] === node) return undefined;
@@ -504,7 +504,7 @@ function plainText(block: ProseNode): string {
 
 /** GFM's class of the character next to a run of tildes: a space, which the
  *  start and end of the paragraph count as, punctuation, or neither.
- *  `character` is one UTF-16 unit, as md-easy's Markdown reader reads it, so
+ *  `character` is one UTF-16 unit, as Downpad's Markdown reader reads it, so
  *  a character outside the Basic Multilingual Plane, such as 😀, is neither. */
 function classOf(character: string): "space" | "punctuation" | undefined {
   if (character === "" || /\s/.test(character)) return "space";
@@ -727,11 +727,11 @@ interface Guard {
 
 /** The guard's state. A transaction sets the waiting mark with this key's
  *  meta, a position or null. */
-const waitingKey = new PluginKey<Guard>("mdEasyWaitingMark");
+const waitingKey = new PluginKey<Guard>("downpadWaitingMark");
 
 /** A transaction puts back the guard's whole state with this key's meta
  *  (`putBackWaitingMarks`). */
-const putBackKey = new PluginKey<Guard>("mdEasyWaitingMarkPutBack");
+const putBackKey = new PluginKey<Guard>("downpadWaitingMarkPutBack");
 
 /** The guard's state in `state`, to put back later with
  *  `putBackWaitingMarks`. */

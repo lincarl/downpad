@@ -16,7 +16,7 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** An editor with Crepe's image block, then md-easy's schema on top, as in WysiwygEditor. */
+/** An editor with Crepe's image block, then Downpad's schema on top, as in WysiwygEditor. */
 async function open(markdown: string): Promise<Editor> {
   editor = await Editor.make()
     .config((ctx) => ctx.set(defaultValueCtx, markdown))

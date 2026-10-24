@@ -1,5 +1,5 @@
 {
-  "name": "md-easy",
+  "name": "downpad",
   "version": "0.3.4",
   "private": true,
   "type": "module",
@@ -81,11 +81,11 @@
   "main": "electron-dist/main.js",
   "license": "MIT",
   "author": {
-    "name": "md-easy contributors"
+    "name": "Downpad contributors"
   },
   "build": {
-    "appId": "se.elysics.md-easy",
-    "productName": "md-easy",
+    "appId": "se.elysics.downpad",
+    "productName": "Downpad",
     "asar": true,
     "directories": {
       "output": "release",
@@ -119,9 +119,17 @@
       ],
       "category": "Office",
       "icon": "build/icons",
-      "executableName": "md-easy",
-      "maintainer": "md-easy contributors",
+      "executableName": "downpad",
+      "maintainer": "Downpad contributors",
       "syncDesktopName": true
+    },
+    "deb": {
+      "fpm": [
+        "--conflicts",
+        "md-easy",
+        "--replaces",
+        "md-easy"
+      ]
     },
     "win": {
       "target": [
@@ -131,7 +139,8 @@
     },
     "msi": {
       "oneClick": false,
-      "perMachine": false
+      "perMachine": false,
+      "upgradeCode": "E35FC5B3-CF65-509C-8B7E-6FC85FF408B6"
     },
     "appx": {
       "backgroundColor": "transparent"
@@ -150,7 +159,7 @@
     "type": "git",
     "url": "https://github.com/lincarl/md-easy.git"
   },
-  "desktopName": "md-easy.desktop",
+  "desktopName": "downpad.desktop",
   "engines": {
     "node": ">=26.12.1"
   }

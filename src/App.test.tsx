@@ -120,7 +120,7 @@ describe("App shell", () => {
     const notice = () => screen.queryByRole("alert")?.querySelector(".banner-message")?.textContent;
 
     expect(notice()).toBe(
-      "md-easy can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.",
+      "Downpad can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.",
     );
     expect(screen.getByRole("radio", { name: "Markdown" }).getAttribute("aria-checked")).toBe("true");
     expect(area.classList.contains("markdown-only")).toBe(true);
@@ -143,12 +143,12 @@ describe("App shell", () => {
       store.setDocumentViewFailure("tab-1", { message: `${"x".repeat(300)}\nat parse`, dismissed: false });
     });
     expect(notice()).toBe(
-      `md-easy can't show ${"n".repeat(20)}…${"n".repeat(13)}-v2.md in the Document view (${"x".repeat(59)}…), so it is open in the Markdown view.`,
+      `Downpad can't show ${"n".repeat(20)}…${"n".repeat(13)}-v2.md in the Document view (${"x".repeat(59)}…), so it is open in the Markdown view.`,
     );
     const message = screen.getByRole("alert").querySelector(".banner-message")!;
     expect(message.classList.contains("line-clamp-2")).toBe(true);
     expect(message.getAttribute("title")).toBe(
-      `md-easy can't show ${name} in the Document view (${"x".repeat(300)}), so it is open in the Markdown view.`,
+      `Downpad can't show ${name} in the Document view (${"x".repeat(300)}), so it is open in the Markdown view.`,
     );
 
     // Other tabs show the window's layout and no notice.

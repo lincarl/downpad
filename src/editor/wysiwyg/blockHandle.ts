@@ -31,7 +31,7 @@
 // the next key replaced it. Once the pointer moved, the handle slid into
 // place over 0.2 s and still took clicks on its way. This plugin hides the
 // handle whenever the view's width changes, so it takes no press until the
-// pointer shows it again beside the block under it, and md-easy's styles have
+// pointer shows it again beside the block under it, and Downpad's styles have
 // it appear there at once rather than slide.
 
 import type { BlockEditFeatureConfig } from "@milkdown/crepe/feature/block-edit";

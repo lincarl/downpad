@@ -30,11 +30,11 @@ describe("Electron preload integration", () => {
   beforeEach(() => {
     bridge = createTestBridge();
     // Vitest widens a generic command mock's return to the union of payloads.
-    window.mdEasy = bridge as ElectronBridge;
+    window.downpad = bridge as ElectronBridge;
   });
 
   afterEach(() => {
-    delete window.mdEasy;
+    delete window.downpad;
     vi.restoreAllMocks();
   });
 
@@ -54,7 +54,7 @@ describe("Electron preload integration", () => {
   });
 
   it("keeps browser dialogs usable and rejects filesystem commands without preload", async () => {
-    delete window.mdEasy;
+    delete window.downpad;
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
 
     expect(isElectron()).toBe(false);
@@ -62,7 +62,7 @@ describe("Electron preload integration", () => {
     await expect(saveDialog({ defaultPath: "notes.md" })).resolves.toBeNull();
     await expect(ask("Discard changes?")).resolves.toBe(false);
     expect(confirm).toHaveBeenCalledWith("Discard changes?");
-    await expect(readFile("/docs/notes.md")).rejects.toThrow("installed md-easy app");
+    await expect(readFile("/docs/notes.md")).rejects.toThrow("installed Downpad app");
   });
 
   it("subscribes before starting content search and ignores another search's results", async () => {

@@ -123,21 +123,21 @@ export class FileService {
   watchActive(): void {
     if (!isElectron()) return;
     const path = this.store.get().doc.filePath;
-    if (path) void watchFile(path).catch((err) => console.error("md-easy: watch failed", err));
+    if (path) void watchFile(path).catch((err) => console.error("Downpad: watch failed", err));
     else void unwatchFile().catch(() => {});
   }
 
   /** Watch a specific path (used by the recovery flow before the editor mounts). */
   watch(path: string): void {
     if (!isElectron()) return;
-    void watchFile(path).catch((err) => console.error("md-easy: watch failed", err));
+    void watchFile(path).catch((err) => console.error("Downpad: watch failed", err));
   }
 
   /** Add/refresh the recent-files entry for a just-opened path (§5.8.1). */
   private recordOpened(path: string): void {
     if (!isElectron()) return;
     void recordFileOpened(path, Date.now()).catch((err) =>
-      console.error("md-easy: failed to record recent file", err),
+      console.error("Downpad: failed to record recent file", err),
     );
   }
 
@@ -271,7 +271,7 @@ export class FileService {
 
   private async confirmDiscard(message: string): Promise<boolean> {
     return ask(message, {
-      title: "md-easy",
+      title: "Downpad",
       kind: "warning",
       okLabel: "Discard",
       cancelLabel: "Cancel",

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // electron-builder calls this hook after it writes the WiX project and before it
-// compiles the MSI. It swaps WiX's stock dialog images for md-easy's bitmaps.
+// compiles the MSI. It swaps WiX's stock dialog images for Downpad's bitmaps.
 
 const bitmaps = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "build", "msi");
 const xml = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");

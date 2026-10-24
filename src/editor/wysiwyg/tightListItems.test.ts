@@ -18,8 +18,8 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-/** An editor with Crepe's presets and md-easy's default Markdown style, then
- *  md-easy's list item schema and join on top, as in WysiwygEditor. The cursor is
+/** An editor with Crepe's presets and Downpad's default Markdown style, then
+ *  Downpad's list item schema and join on top, as in WysiwygEditor. The cursor is
  *  placed at the end of the document. */
 async function open(markdown: string): Promise<EditorView> {
   editor = await Editor.make()

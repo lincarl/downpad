@@ -271,7 +271,7 @@ function paintMatches(view: EditorView): DecorationSet {
 
 /**
  * The find card's highlights, painted like the document view's. CodeMirror's own
- * search highlighter only paints while its search panel is open, and md-easy
+ * search highlighter only paints while its search panel is open, and Downpad
  * drives the search state from the find card instead of that panel.
  */
 const findHighlights = ViewPlugin.fromClass(

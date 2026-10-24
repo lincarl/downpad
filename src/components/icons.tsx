@@ -103,7 +103,7 @@ export function AppIcon({ size = 48, className }: { size?: number; className?: s
 }
 
 /**
- * md-easy's document artwork: a page with a folded corner and the app icon's M
+ * Downpad's document artwork: a page with a folded corner and the app icon's M
  * and chevron, in the icon's blue gradient. Used for Recent rows.
  */
 export function DocumentArtwork({ size = 34, className }: { size?: number; className?: string }) {

@@ -59,7 +59,7 @@ export class StartupCoordinator {
     if (arg) {
       await this.dependencies.files
         .openPath(arg)
-        .catch((error) => console.error("md-easy: open arg failed", error));
+        .catch((error) => console.error("Downpad: open arg failed", error));
       return true;
     }
 
@@ -79,7 +79,7 @@ export class StartupCoordinator {
   /** Offer the Windows default-app settings once, without delaying startup. */
   async maybePromptDefaultHandler(): Promise<void> {
     const { store, settings, isDisposed } = this.dependencies;
-    if (isDisposed() || !isElectron() || window.mdEasy?.platform !== "win32") return;
+    if (isDisposed() || !isElectron() || window.downpad?.platform !== "win32") return;
     const current = store.get().settings;
     if (current.hasCheckedDefaultHandler) return;
 
@@ -91,16 +91,16 @@ export class StartupCoordinator {
     try {
       isDefault = (await getDefaultMdHandler()).isDefault;
     } catch (error) {
-      console.error("md-easy: default-handler check failed", error);
+      console.error("Downpad: default-handler check failed", error);
       return;
     }
     if (isDisposed() || isDefault) return;
 
     const shouldOpen = await ask(
-      "md-easy isn't set as the default app for Markdown (.md) files. " +
+      "Downpad isn't set as the default app for Markdown (.md) files. " +
         "Open Windows settings to set it as the default?",
       {
-        title: "Set md-easy as default?",
+        title: "Set Downpad as default?",
         kind: "info",
         okLabel: "Open settings",
         cancelLabel: "Not now",
@@ -164,7 +164,7 @@ export class StartupCoordinator {
   }
 
   private async loadWelcome(): Promise<void> {
-    let markdown = "# Welcome to md-easy\n\nStart typing, or open a file.\n";
+    let markdown = "# Welcome to Downpad\n\nStart typing, or open a file.\n";
     try {
       const response = await fetch("welcome.md");
       if (response.ok) markdown = await response.text();

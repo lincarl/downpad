@@ -1,7 +1,7 @@
 // Text put in at either end of a link starts plain text outside the link
 // (spec §5.6). Milkdown's link mark is inclusive, as ProseMirror marks are by
 // default, so ProseMirror gave text typed at a link's end, or at the start of
-// a block that begins with a link, the link. md-easy keeps the mark
+// a block that begins with a link, the link. Downpad keeps the mark
 // inclusive. Typing over selected link text needs that to keep the link, and
 // Crepe's virtual cursor handles marks that are not inclusive poorly.
 //
@@ -90,7 +90,7 @@ interface LinkEdgesState {
   plain: number | null;
 }
 
-const linkEdgesKey = new PluginKey<LinkEdgesState>("md-easy-link-edges");
+const linkEdgesKey = new PluginKey<LinkEdgesState>("downpad-link-edges");
 
 /** Make the caret at `pos` after `tr` a plain caret, where text put in stays
  *  out of a link around it while the caret stays there, as right after a

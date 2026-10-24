@@ -9,7 +9,7 @@ metadata:
   category: demo
 ---
 
-# Welcome to md-easy
+# Welcome to Downpad
 
 A lightweight, pure-WYSIWYG markdown editor.
 

@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
   // A short window so the welcome document overflows both panes and is scrollable.
   await page.setViewportSize({ width: 1000, height: 360 });
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   await page.locator(splitSeg).click();
   await expect(page.locator(rawPane)).toBeVisible();
 });

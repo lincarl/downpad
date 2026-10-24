@@ -120,7 +120,7 @@ export class FileDropCoordinator {
         try {
           await insert(file);
         } catch (error) {
-          console.error(`md-easy: could not insert ${name(file)}`, error);
+          console.error(`Downpad: could not insert ${name(file)}`, error);
         }
       }
     } finally {
@@ -158,7 +158,7 @@ export class FileDropCoordinator {
     try {
       await this.dependencies.files.openPath(path);
     } catch (error) {
-      console.error(`md-easy: could not open ${baseName(path)}`, error);
+      console.error(`Downpad: could not open ${baseName(path)}`, error);
     }
   }
 
@@ -181,7 +181,7 @@ export class FileDropCoordinator {
   /** Log that a dropped or pasted file, by its name, went nowhere because its
    *  document was closed. */
   private warnNotInserted(name: string): void {
-    console.warn(`md-easy: ${name} was not inserted, because its document was closed`);
+    console.warn(`Downpad: ${name} was not inserted, because its document was closed`);
   }
 
   /** Whether a tab is still open. */

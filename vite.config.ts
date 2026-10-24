@@ -4,23 +4,23 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const host = process.env.MD_EASY_DEV_HOST;
+const host = process.env.DOWNPAD_DEV_HOST;
 
 // Electron and the Settings dialog use the package version.
 const appVersion = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
 ).version as string;
 
-// On md-easy's file:// page, 'self' matches every local file: URL. Scripts load
+// On Downpad's file:// page, 'self' matches every local file: URL. Scripts load
 // only from there, never inline, through eval or from the web.
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "script-src 'self'",
   // CodeMirror, KaTeX and Mermaid's diagrams add inline styles.
   "style-src 'self' 'unsafe-inline'",
-  // Web and embedded images, local images through md-easy-file: or file: URLs,
+  // Web and embedded images, local images through downpad-file: or file: URLs,
   // and the blob: URL Copy image converts through.
-  "img-src 'self' data: blob: https: http: md-easy-file:",
+  "img-src 'self' data: blob: https: http: downpad-file:",
   // Vite inlines one of KaTeX's fonts as a data: URL.
   "font-src 'self' data:",
   // The welcome document, and Copy image on an embedded image.
@@ -33,7 +33,7 @@ const CONTENT_SECURITY_POLICY = [
  *  React refresh runs an inline script, so development pages go without it. */
 function contentSecurityPolicy(): Plugin {
   return {
-    name: "md-easy-content-security-policy",
+    name: "downpad-content-security-policy",
     apply: "build",
     transformIndexHtml: () => [{
       tag: "meta",
@@ -52,8 +52,8 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: host || "127.0.0.1",
-    allowedHosts: process.env.MD_EASY_DEV_HOSTNAME
-      ? [process.env.MD_EASY_DEV_HOSTNAME]
+    allowedHosts: process.env.DOWNPAD_DEV_HOSTNAME
+      ? [process.env.DOWNPAD_DEV_HOSTNAME]
       : [],
     watch: {
       // dev-temp holds scratch files, often tens of thousands of them, and
@@ -65,7 +65,7 @@ export default defineConfig({
   // Electron loads the packaged frontend from disk.
   build: {
     target: "es2022",
-    sourcemap: !!process.env.MD_EASY_DEBUG,
+    sourcemap: !!process.env.DOWNPAD_DEBUG,
   },
   // Crepe bundles Vue for some of its UI; define Vue's compile-time flags to
   // silence the dev warning and enable production tree-shaking.

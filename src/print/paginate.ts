@@ -965,7 +965,7 @@ function splitText(block: HTMLElement, maxHeightPx: number): HTMLElement[] {
    * baseline, and a box among them, such as an image, inline code or math, sits
    * on the baseline or on the bottom of the line, so nothing on one line sits
    * that much lower than anything else on it, not even a superscript or a small
-   * image. Which way the unit moved across the line does not matter. md-easy
+   * image. Which way the unit moved across the line does not matter. Downpad
    * sets no text direction, so Chromium lays a Hebrew or Arabic paragraph out
    * left to right with each line one right-to-left run, and a line starts at
    * the right end of the run. Judged by direction, as two boxes are below, such

@@ -62,7 +62,7 @@ import { desktopBridge } from "../../ipc/bridge";
 import { resolveMarkdownLinkTarget } from "../../images/pathResolve";
 import type { WysiwygContext } from "./context";
 
-export const linkUrlKey = new PluginKey<LinkUrlState>("md-easy-link-url");
+export const linkUrlKey = new PluginKey<LinkUrlState>("downpad-link-url");
 
 const MAX_URL = 42;
 

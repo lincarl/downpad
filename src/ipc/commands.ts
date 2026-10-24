@@ -152,7 +152,7 @@ export function listRecoverySnapshots(): Promise<Snapshot[]> {
 
 // ── OS integration (§5.12) ──
 
-/** The markdown file md-easy was launched with, if any. */
+/** The markdown file Downpad was launched with, if any. */
 export function getLaunchArgs(): Promise<string | null> {
   return invoke("get_launch_args");
 }
@@ -162,7 +162,7 @@ export function getDefaultMdHandler(): Promise<DefaultHandler> {
   return invoke("get_default_md_handler");
 }
 
-/** Open Windows Default-apps Settings so the user can pick md-easy (§5.12). */
+/** Open Windows Default-apps Settings so the user can pick Downpad (§5.12). */
 export function openDefaultAppsSettings(): Promise<void> {
   return invoke("open_default_apps_settings");
 }
@@ -185,7 +185,7 @@ export function settingsPath(): Promise<string> {
 }
 
 // ── Printing (§5.21) ──────────────────────────────────────────────────────
-// md-easy prints through Electron directly instead of `window.print()`, so the
+// Downpad prints through Electron directly instead of `window.print()`, so the
 // browser's own print dialog — and the URL/date header it stamps on every sheet —
 // never appears. Both commands start the job and return; completion arrives as
 // the `print-completed` event (see ipc/events.ts).
@@ -195,7 +195,7 @@ export function listPrinters(): Promise<PrinterInfo[]> {
   return invoke("list_printers");
 }
 
-/** Print the current page to a printer with md-easy's own page setup. */
+/** Print the current page to a printer with Downpad's own page setup. */
 export function printWebview(options: NativePrintOptions): Promise<void> {
   return invoke("print_webview", { options });
 }

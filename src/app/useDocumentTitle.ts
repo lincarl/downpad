@@ -7,10 +7,10 @@ export function useDocumentTitle(
 ): void {
   useEffect(() => {
     if (activeTabId === null) {
-      document.title = "md-easy";
+      document.title = "Downpad";
       return;
     }
-    document.title = `${isDirty ? "● " : ""}${fileLabel(filePath)} — md-easy`;
+    document.title = `${isDirty ? "● " : ""}${fileLabel(filePath)} — Downpad`;
   }, [activeTabId, filePath, isDirty]);
 }
 

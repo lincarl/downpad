@@ -89,7 +89,7 @@ export class AppRuntime {
     // card is open. The card then shows the new count.
     this.editorHost.setFindChangeHandler(() => this.findBar.syncCounts());
 
-    // Replace the native WebView right-click menu with md-easy's own (§6.1). It
+    // Replace the native WebView right-click menu with Downpad's own (§6.1). It
     // offers the editing commands over editable text and the document actions
     // (Copy as Markdown, Print) everywhere, instead of the browser-level entries
     // the native menu carries. Shift+right-click still opens the native menu so
@@ -332,7 +332,7 @@ export class AppRuntime {
     // Startup has finished. The app shell shows this as `data-started`, which
     // the Electron tests wait for before they act.
     this.store.set({ started: true });
-    // First desktop launch only: offer to make md-easy the default .md app.
+    // First desktop launch only: offer to make Downpad the default .md app.
     void this.startup.maybePromptDefaultHandler();
   }
 
@@ -382,7 +382,7 @@ export class AppRuntime {
     }
   }
 
-  /** Open the print workspace for the active document (§5.21): md-easy's own
+  /** Open the print workspace for the active document (§5.21): Downpad's own
    *  full-window print mode, with a preview of the very sheets that will be
    *  printed and a Document / Markdown version choice. Replaces both the browser
    *  print dialog and the old direct window.print(). */
@@ -552,7 +552,7 @@ export class AppRuntime {
   private run(action: () => Promise<unknown>): void {
     if (this.disposed) return;
     action().catch((err) => {
-      console.error("md-easy: file action failed", err);
+      console.error("Downpad: file action failed", err);
     });
   }
 }

@@ -209,7 +209,7 @@ describe("FileDropCoordinator", () => {
     };
     await coordinator.handle(["/drop/gone.md", "/drop/b.md"], point);
     expect(log).toEqual(["open /drop/b.md"]);
-    expect(logged).toHaveBeenCalledWith("md-easy: could not open gone.md", expect.any(Error));
+    expect(logged).toHaveBeenCalledWith("Downpad: could not open gone.md", expect.any(Error));
     logged.mockRestore();
   });
 
@@ -230,7 +230,7 @@ describe("FileDropCoordinator", () => {
       "open /drop/a.md",
     ]);
     expect(disk.writeAttachment).toHaveBeenCalledWith("/docs/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
-    expect(logged).toHaveBeenCalledWith("md-easy: could not insert gone.png", expect.any(Error));
+    expect(logged).toHaveBeenCalledWith("Downpad: could not insert gone.png", expect.any(Error));
     logged.mockRestore();
   });
 
@@ -320,9 +320,9 @@ describe("FileDropCoordinator", () => {
     await settle();
     const [, folder, name] = disk.writeAttachment.mock.calls[0]!;
     // The image waits for the answer, so its view starts at the image's URL
-    // rather than at its path next to md-easy's own page.
+    // rather than at its path next to Downpad's own page.
     expect(log).toEqual(["aim at the drop point", `look up /docs/${folder}/${name}`]);
-    answer.resolve("md-easy-file://pic");
+    answer.resolve("downpad-file://pic");
     await handled;
     expect(log).toEqual([
       "aim at the drop point",
@@ -346,7 +346,7 @@ describe("FileDropCoordinator", () => {
     await handled;
     expect(disk.writeAttachment).not.toHaveBeenCalled();
     expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
-    expect(warned).toHaveBeenCalledWith("md-easy: data.csv was not inserted, because its document was closed");
+    expect(warned).toHaveBeenCalledWith("Downpad: data.csv was not inserted, because its document was closed");
     warned.mockRestore();
   });
 });
@@ -442,7 +442,7 @@ describe("FileDropCoordinator pasted images", () => {
     expect(disk.writeAttachment).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
     expect(log).toEqual(["aim the paste at the caret in dropped-on", "release dropped-on"]);
-    expect(warned).toHaveBeenCalledWith("md-easy: image.png was not inserted, because its document was closed");
+    expect(warned).toHaveBeenCalledWith("Downpad: image.png was not inserted, because its document was closed");
     warned.mockRestore();
   });
 });

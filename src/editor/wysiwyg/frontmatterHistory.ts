@@ -70,12 +70,12 @@ class FrontmatterStep extends Step {
   /** The history keeps its steps in memory, so nothing reads this back and
    *  the step registers no JSON id. */
   toJSON(): { stepType: string; before: Frontmatter; after: Frontmatter } {
-    return { stepType: "mdEasyFrontmatter", before: this.before, after: this.after };
+    return { stepType: "downpadFrontmatter", before: this.before, after: this.after };
   }
 }
 
 const NO_FRONTMATTER: Frontmatter = { block: null, separator: "" };
-const frontmatterKey = new PluginKey<Frontmatter>("md-easy-frontmatter");
+const frontmatterKey = new PluginKey<Frontmatter>("downpad-frontmatter");
 
 /** The frontmatter after `steps`, starting from `frontmatter`. */
 function afterSteps(frontmatter: Frontmatter, steps: readonly Step[]): Frontmatter {

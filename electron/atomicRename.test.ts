@@ -114,14 +114,14 @@ it.skipIf(nativePlatform !== "win32")("saves after a real Windows handle release
   const { directory, destination } = await fixture();
   const locker = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `
     $ErrorActionPreference = "Stop"
-    $handle = [System.IO.File]::Open($env:MD_EASY_LOCKED_FILE, [System.IO.FileMode]::Open,
+    $handle = [System.IO.File]::Open($env:DOWNPAD_LOCKED_FILE, [System.IO.FileMode]::Open,
       [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
     try {
       [Console]::Out.WriteLine("locked")
       [Console]::Out.Flush()
       [Console]::ReadLine() | Out-Null
     } finally { $handle.Dispose() }
-  `], { env: { ...process.env, MD_EASY_LOCKED_FILE: destination } });
+  `], { env: { ...process.env, DOWNPAD_LOCKED_FILE: destination } });
   const exited = new Promise<void>((resolve) => {
     locker.once("exit", () => resolve());
     locker.once("error", () => resolve());

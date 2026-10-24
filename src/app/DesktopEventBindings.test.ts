@@ -67,7 +67,7 @@ describe("native close decisions", () => {
 
   beforeEach(() => {
     bridge = createTestBridge();
-    window.mdEasy = bridge;
+    window.downpad = bridge;
     const store = createAppStore();
     files = new FileService(store, {
       flush: () => {},
@@ -98,7 +98,7 @@ describe("native close decisions", () => {
   afterEach(async () => {
     bindings.dispose();
     await host.dispose();
-    delete window.mdEasy;
+    delete window.downpad;
     vi.restoreAllMocks();
   });
 
@@ -150,7 +150,7 @@ describe("a file that changed on disk", () => {
   let files: FileService;
 
   beforeEach(() => {
-    window.mdEasy = createTestBridge();
+    window.downpad = createTestBridge();
     store = createAppStore();
     store.patchDoc({ filePath, markdown: "# Mine\n", savedMarkdown: "# Mine\n", isDirty: false, modifiedMs: 100 });
     files = new FileService(store, {
@@ -173,7 +173,7 @@ describe("a file that changed on disk", () => {
   afterEach(async () => {
     bindings.dispose();
     await host.dispose();
-    delete window.mdEasy;
+    delete window.downpad;
     vi.restoreAllMocks();
   });
 

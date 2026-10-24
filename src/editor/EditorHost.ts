@@ -102,7 +102,7 @@ interface AimedDrop {
   /** The element that had focus when the files were dropped, or the one in
    *  the pane that took focus with an earlier file of the drop. */
   focus: Element | null;
-  /** Whether that pane took focus from md-easy, not the user, so the user
+  /** Whether that pane took focus from Downpad, not the user, so the user
    *  was not typing there. */
   focusMoved: boolean;
   /** When the drop happened (`performance.now()`). */
@@ -118,7 +118,7 @@ const TYPING_PAUSE_MS = 1000;
  *  burst of keystrokes so the (heavier) WYSIWYG re-parse doesn't run per key. */
 const SYNC_DEBOUNCE_MS = 120;
 /** How many builds of a document pane in a row may each end behind the tab's
- *  text, because of an edit made while it built, before md-easy gives up
+ *  text, because of an edit made while it built, before Downpad gives up
  *  (`ensurePane`). A rebuild usually finishes before the next keystroke, so
  *  typing while the view opens seldom needs a third build. */
 const MAX_STALE_BUILDS = 5;
@@ -155,7 +155,7 @@ export class EditorHost implements FindController {
    *  forget the image answers (`reloadActiveDoc`). The next document pane built
    *  forgets them first, or the change does as it ends. A document pane already
    *  building keeps the answers it waited for, because one that lost them would
-   *  render its images with their raw paths, looked up next to md-easy's own
+   *  render its images with their raw paths, looked up next to Downpad's own
    *  page. */
   private forgetImagesBeforeBuild = false;
   /** Terminal lifecycle state. `unmount` clears editors but leaves this host
@@ -925,7 +925,7 @@ export class EditorHost implements FindController {
     this.disposePromise = Promise.allSettled([currentPanes, ...allTeardowns]).then((results) => {
       for (const result of results) {
         if (result.status === "rejected") {
-          console.error("md-easy: editor teardown failed", result.reason);
+          console.error("Downpad: editor teardown failed", result.reason);
         }
       }
     });
@@ -1079,7 +1079,7 @@ export class EditorHost implements FindController {
       try {
         wysiwygPane = await this.ensurePane(id, "wysiwyg", rebuild);
       } catch (error) {
-        console.error("md-easy: the Document view could not be built", error);
+        console.error("Downpad: the Document view could not be built", error);
         failure = { message: error instanceof Error ? error.message : String(error), dismissed: false };
       }
       if (this.disposed || (!failure && !wysiwygPane)) return;

@@ -1,3 +1,4 @@
+import { cpSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, unlink } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
 import type { FileStat, SearchHit, SearchSummary, Snapshot } from "../src/ipc/contracts";
@@ -43,6 +44,32 @@ export function validateSnapshot(value: unknown): Snapshot {
     sessionId: source.sessionId, savedAt: source.savedAt, filePath: source.filePath,
     markdown: source.markdown, isDirty: source.isDirty,
   };
+}
+
+/** The files the app keeps in its user data folder: settings, recent history,
+ *  window geometry and crash recovery snapshots. */
+const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recovery"];
+
+/** Move the user data folder that the app kept as md-easy, its earlier name,
+ *  to `directory` on the first launch after the rename. When the folder cannot
+ *  be moved, for example while a running md-easy holds files in it open on
+ *  Windows, copy the app's own files and leave the old folder in place. Does
+ *  nothing once `directory` exists, so it must run before anything writes there. */
+export function adoptLegacyData(legacy: string, directory: string): void {
+  if (existsSync(directory) || !existsSync(legacy)) return;
+  try {
+    renameSync(legacy, directory);
+    return;
+  } catch (error) {
+    console.error("Downpad could not move md-easy's data folder, so it copies its files", error);
+  }
+  mkdirSync(directory, { recursive: true });
+  for (const name of DATA_FILES) {
+    const source = join(legacy, name);
+    if (!existsSync(source)) continue;
+    try { cpSync(source, join(directory, name), { recursive: true }); }
+    catch (error) { console.error(`Downpad could not copy md-easy's ${name}`, error); }
+  }
 }
 
 /** Persist the existing user settings, recent history, and crash recovery formats. */

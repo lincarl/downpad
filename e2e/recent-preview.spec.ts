@@ -264,7 +264,7 @@ test("missing-file actions restore focus on cancel and refresh to an empty histo
 test("the real app's Recent button switches views without replacing the existing document", async ({ page }) => {
   await page.goto("/");
   const heading = page.locator(".ProseMirror h1");
-  await expect(heading).toHaveText("Welcome to md-easy");
+  await expect(heading).toHaveText("Welcome to Downpad");
   const recent = page.getByRole("button", { name: "Recent", exact: true });
   await expect(recent).not.toHaveClass(/\bactive\b/);
   await recent.click();
@@ -277,6 +277,6 @@ test("the real app's Recent button switches views without replacing the existing
   await expect(recent).not.toHaveClass(/\bactive\b/);
   await expect(page.locator(".recent-host")).toBeHidden();
   await expect(heading).toBeVisible();
-  await expect(heading).toHaveText("Welcome to md-easy");
+  await expect(heading).toHaveText("Welcome to Downpad");
   await expect(page.locator(".tab")).toHaveCount(1);
 });

@@ -57,7 +57,7 @@ function Photo({ x, y, w, h, clip, hills, sun }: { x: number; y: number; w: numb
   );
 }
 
-/** md-easy's window in one scheme, in window units: the toolbar, the tab row
+/** Downpad's window in one scheme, in window units: the toolbar, the tab row
  *  with Recent and an active tab, the document page on the canvas, and the
  *  status bar. The active tab label carries the accent. The page photo is
  *  drawn by the caller, once, so a split preview shows no seam across it. */
@@ -107,7 +107,7 @@ export interface UiThemePreviewProps {
   accentFor: (scheme: Scheme) => string;
 }
 
-/** A miniature md-easy window in the previewed scheme, 129x90 at full size. */
+/** A miniature Downpad window in the previewed scheme, 129x90 at full size. */
 export function UiThemePreview({ theme, documentTheme, accentFor }: UiThemePreviewProps) {
   const id = useId();
   const outline = `${id}outline`;
@@ -166,7 +166,7 @@ function SamplePage({ p }: { p: DocumentPalette }) {
   );
 }
 
-/** A sample page in md-easy's document colours, 72x101. "follow-ui" splits the
+/** A sample page in Downpad's document colours, 72x101. "follow-ui" splits the
  *  dark and light page on a slant. */
 export function DocumentThemePreview({ theme }: { theme: Settings["editorTheme"] }) {
   const id = useId();

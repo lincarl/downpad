@@ -62,7 +62,7 @@ export interface Tab {
   /** Stable identity (untitled buffers have no path, so paths can't be the id). */
   id: string;
   doc: DocumentState;
-  /** Set while md-easy cannot build this tab's Document view, for example
+  /** Set while Downpad cannot build this tab's Document view, for example
    *  because the parser overflows its stack. The tab then shows its Markdown
    *  alone, whatever the window's layout (`shownLayout`). */
   documentViewFailure?: DocumentViewFailure;
@@ -233,7 +233,7 @@ export interface Settings {
   printCopies: number;
 
   hasSeenWelcome: boolean;
-  /** Whether the one-time first-run "set md-easy as the default .md app?" check
+  /** Whether the one-time first-run "set Downpad as the default .md app?" check
    *  has run (spec §5.12). Once true it never runs again, so normal launches
    *  spend no time checking the registry or prompting. */
   hasCheckedDefaultHandler: boolean;

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 // The print workspace (spec §5.21 / print/PrintWorkspace): Ctrl+P, the toolbar
-// Print button and the right-click menu all open md-easy's own full-window print
+// Print button and the right-click menu all open Downpad's own full-window print
 // mode instead of printing straight away. The preview shows the very `.print-page`
 // elements that get printed, so these tests assert on the real sheets.
 //
@@ -14,7 +14,7 @@ const wysiwyg = ".milkdown .ProseMirror";
 
 async function openWorkspace(page: import("@playwright/test").Page): Promise<void> {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   await page.click('button[aria-label="Print"]');
   await expect(page.locator(".print-workspace")).toBeVisible();
   await expect(page.locator(".print-page").first()).toBeVisible();
@@ -23,7 +23,7 @@ async function openWorkspace(page: import("@playwright/test").Page): Promise<voi
 /** Replace the welcome document with `markdown`, typed into the split view's Markdown pane. */
 async function typeDocument(page: import("@playwright/test").Page, markdown: string): Promise<void> {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   await page.click(".toolbar-view button:has-text('Split')");
   await page.locator(".editor-pane-raw .cm-content").click();
   await page.keyboard.press("Control+a");
@@ -118,7 +118,7 @@ test("the version chooser switches between the document and the Markdown source"
   await openWorkspace(page);
   // Document version: the rendered heading.
   await expect(page.locator(".print-page .print-doc.milkdown h1")).toContainText(
-    "Welcome to md-easy",
+    "Welcome to Downpad",
   );
   await expect(page.locator(".print-source")).toHaveCount(0);
 
@@ -128,7 +128,7 @@ test("the version chooser switches between the document and the Markdown source"
   // part of the file, and only the Document version hides it (§5.17).
   await expect(page.locator(".print-page .print-source").first()).toBeVisible();
   await expect(page.locator(".print-src-line").first()).toHaveText("---");
-  await expect(page.locator(".print-src-line", { hasText: "# Welcome to md-easy" })).toHaveCount(1);
+  await expect(page.locator(".print-src-line", { hasText: "# Welcome to Downpad" })).toHaveCount(1);
   await expect(page.locator(".print-page h1")).toHaveCount(0);
 });
 
@@ -210,7 +210,7 @@ test("a table taller than a page splits, repeating its header and losing no rows
   );
 
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   await page.click(".toolbar-view button:has-text('Split')");
   const raw = page.locator(".editor-pane-raw .cm-content");
   await raw.click();
@@ -268,7 +268,7 @@ test("an over-tall code block and list split too, keeping line numbers and item 
   const markdown = ["# Long blocks", "", "```ts", ...code, "```", "", ...items].join("\n");
 
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   await page.click(".toolbar-view button:has-text('Split')");
   const raw = page.locator(".editor-pane-raw .cm-content");
   await raw.click();
@@ -410,7 +410,7 @@ test("a paragraph, quote and list item taller than a page continue on the next s
 test("a Hebrew or Arabic paragraph taller than a page continues on the next sheets", async ({
   page,
 }) => {
-  // md-easy sets no text direction, so Chromium lays a Hebrew or Arabic
+  // Downpad sets no text direction, so Chromium lays a Hebrew or Arabic
   // paragraph out left to right with each line one right-to-left run, and a
   // line starts at the right end of the run. The splitter looked for a line
   // start back at the left, found none and shrank each paragraph onto one sheet.
