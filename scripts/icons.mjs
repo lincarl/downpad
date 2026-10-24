@@ -114,11 +114,12 @@ export function msiBannerSvg() {
 
 /**
  * WiX welcome and finish image, 493 x 312 px. The text starts 180 px from the
- * left, so the brand panel stays narrower than that and the rest stays white.
+ * left, so the brand panel stays narrower than that. The rest has the Windows
+ * dialog color, because the finish page's "Run md-easy" check box is opaque.
  */
 export function msiDialogSvg() {
   const panel = 164, glyphSize = 124;
-  return svg(493, 312, `<defs>${tileGradient}</defs><rect width="493" height="312" fill="#fff"/>`
+  return svg(493, 312, `<defs>${tileGradient}</defs><rect width="493" height="312" fill="#f0f0f0"/>`
     + `<rect width="${panel}" height="312" fill="url(#tile)"/>${glyphPaths(glyphSize, (panel - glyphSize) / 2, 84)}`);
 }
 
