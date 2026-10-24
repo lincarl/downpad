@@ -34,7 +34,7 @@ concurrency:
 jobs:
   prepare:
     name: Select build revision
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -50,10 +50,15 @@ jobs:
       # The PR head may predate this helper. Load controls from the same revision
       # as the workflow, then keep application builds pinned to the event head.
       - name: Check out workflow controls
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
       - name: Select the immutable source
         id: revision
         env:
@@ -72,35 +77,46 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: ubuntu-22.04
+            os: ubuntu-26.04
             artifact: md-easy-linux
             paths: |
               release/*.deb
               release/*.AppImage
           - name: Windows
-            os: windows-2022
+            os: windows-2025
             artifact: md-easy-windows
             paths: |
               release/*.msi
 
     steps:
       - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.prepare.outputs.head_repository }}
           ref: ${{ needs.prepare.outputs.head_sha }}
           persist-credentials: false
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      # Older source revisions may lack the current Node pin and CLI installer.
+      - name: Check out workflow controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: 11.5.0
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: dev-temp/workflow-controls
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: dev-temp/workflow-controls/.node-version
           cache: pnpm
+
+      - name: Install pinned GitHub CLI
+        if: needs.prepare.outputs.head_repository == github.repository
+        run: node dev-temp/workflow-controls/scripts/install-github-cli.mjs
 
       - name: Apply release version
         if: needs.prepare.outputs.mode == 'regular' && (startsWith(github.ref, 'refs/tags/') || inputs.version != '')
@@ -190,7 +206,7 @@ jobs:
         if: steps.existing.outputs.reused != 'true'
         run: pnpm install --frozen-lockfile
 
-      # Electron 44 downloads lazily. Install before configuring its sandbox.
+      # Electron downloads lazily. Install before configuring its sandbox.
       - name: Install Electron runtime
         if: steps.existing.outputs.reused != 'true'
         run: pnpm exec install-electron
@@ -208,7 +224,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            libasound2 libatk-bridge2.0-0 libcups2 libgbm1 libgtk-3-0 \
+            libasound2t64 libatk-bridge2.0-0t64 libcups2t64 libgbm1 libgtk-3-0t64 \
             libnss3 libxcomposite1 libxdamage1 libxkbcommon0 libxrandr2 \
             xauth xvfb
 
@@ -232,7 +248,7 @@ jobs:
         run: pnpm exec electron-builder --publish never
 
       - name: Upload installers
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-${{ steps.version.outputs.version }}-${{ needs.prepare.outputs.head_sha }}
           overwrite: true
@@ -244,7 +260,7 @@ jobs:
     name: reviewed-ci
     needs: [prepare, build]
     if: always() && (github.event_name == 'pull_request' || inputs.pr_number != '')
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Require every build and test to pass
@@ -257,18 +273,23 @@ jobs:
     name: Report migration CI result
     needs: [prepare, build, reviewed-ci]
     if: always() && needs.prepare.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.pr_number != ''
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
       statuses: write
     steps:
-      - name: Check out the validated workflow revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check out workflow controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.head_sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
       - name: Replace the previous gate's status with the actual CI result
         env:
           GH_TOKEN: ${{ github.token }}
@@ -281,12 +302,27 @@ jobs:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/') && needs.prepare.outputs.mode == 'regular' && needs.prepare.outputs.head_sha == github.sha && needs.prepare.outputs.head_repository == github.repository
     needs: [prepare, build]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: read
       contents: write
     steps:
+      - name: Check out workflow controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install pinned GitHub CLI
+        run: node scripts/install-github-cli.mjs
+
       - name: Verify release tag
         shell: bash
         env:

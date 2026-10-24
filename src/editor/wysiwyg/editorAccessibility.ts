@@ -32,7 +32,7 @@ const RULES: ReadonlyArray<readonly [selector: string, attributes: Readonly<Reco
   [".milkdown-code-block .language-button", { "aria-haspopup": "listbox", "aria-description": "Code language" }],
   [".milkdown-code-block .language-list", { "aria-label": "Code language" }],
   // Crepe marks the current language with aria-selected, which only options take.
-  ['.milkdown-code-block .language-list li[role="listitem"]', { role: "option" }],
+  ['.language-list li[role="listitem"]', { role: "option" }],
 ];
 
 /** Apply every rule to `scope` and its descendants. */

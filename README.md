@@ -16,7 +16,9 @@ md-easy is a desktop Markdown editor built with Electron, React, TypeScript, Mil
 
 ## Development
 
-Install the latest Node.js 22 release and the pnpm version declared in `package.json`.
+Install Node.js 26.12.1 or newer and the pnpm version declared in `package.json`.
+The `.node-version` file records the version used in CI.
+See [external dependencies](docs/dependencies.md) for overrides and bundled software exceptions.
 
 ```sh
 pnpm install --frozen-lockfile

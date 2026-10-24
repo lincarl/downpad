@@ -14,11 +14,18 @@ required for normal pull requests.
 ## Build revisions and retries
 
 Pull requests build their immutable head commit, including fork contributions.
-Source preparation uses the workflow revision so older PR branches do not need
-to contain the latest CI helper.
+CI helpers and the Node version come from the workflow revision so older PR
+branches do not need to contain those files. Build jobs check out these controls
+under `dev-temp/workflow-controls`, keeping the application source and its pnpm
+version pinned to the PR head.
 Build jobs have read-only permissions and do not retain checkout credentials.
 They run the application checks, tests, desktop build, desktop tests, and
 installer packaging for Linux and Windows.
+
+Builds use Ubuntu 26.04 and Windows Server 2025, the Node version in
+`.node-version`, and the pnpm version in `package.json`. Jobs that use GitHub
+CLI install the pinned release with checksum verification through
+`scripts/install-github-cli.mjs`. The installation stays under `dev-temp`.
 
 A new PR commit cancels obsolete builds for that pull request and replaces queued
 intermediate revisions. A successful build of the same commit and application

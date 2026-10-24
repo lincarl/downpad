@@ -12,7 +12,7 @@
 // a page option.
 
 import { WysiwygEditor } from "../editor/wysiwyg/WysiwygEditor";
-import { EditorView as CodeMirrorView } from "@codemirror/view";
+import { EditorView as CodeMirrorView, lineNumbers } from "@codemirror/view";
 import { serializerStyleFromSettings, type Settings } from "../state/types";
 import type { WysiwygContext } from "../editor/wysiwyg/context";
 import { sanitize } from "./printRender";
@@ -69,8 +69,7 @@ async function renderDocumentNode(req: PrintRequest): Promise<Element | null> {
   }
 }
 
-/** CodeMirror renders visible lines only. Print every source line, including
- *  lines outside the editor viewport or behind a collapsed code section. */
+/** Print every code line, including folded lines and Crepe's offscreen blocks. */
 function cloneCompleteDocument(source: Element): Element {
   const clone = source.cloneNode(true) as Element;
   const liveEditors = source.querySelectorAll<HTMLElement>(".cm-editor");
@@ -120,6 +119,23 @@ function cloneCompleteDocument(source: Element): Element {
     const gutters = copy?.querySelector<HTMLElement>(".cm-gutters");
     if (gutters) gutters.style.minHeight = "";
   });
+  // Crepe replaces whole offscreen editors with plain-text placeholders. Give
+  // those blocks the same complete lines and numbers as mounted editors. The
+  // temporary editor stays detached, and only its static clone reaches print.
+  for (const placeholder of clone.querySelectorAll(".milkdown-code-block-placeholder")) {
+    const host = document.createElement("div");
+    host.className = "codemirror-host";
+    const view = new CodeMirrorView({
+      parent: host,
+      doc: placeholder.textContent ?? "",
+      extensions: [lineNumbers()],
+    });
+    try {
+      placeholder.replaceWith(cloneCompleteDocument(host));
+    } finally {
+      view.destroy();
+    }
+  }
   return sanitize(clone);
 }
 

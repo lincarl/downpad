@@ -1,9 +1,19 @@
+# Milkdown/ProseMirror declare optional peers. Keep installs permissive.
+strictPeerDependencies: false
+autoInstallPeers: true
 allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
-minimumReleaseAgeExclude:
-  - electron@44.7.1
 patchedDependencies:
   '@milkdown/components@7.22.3': patches/@milkdown__components@7.22.3.patch
-  prosemirror-view@1.42.6: patches/prosemirror-view@1.42.6.patch
+  prosemirror-view@1.42.8: patches/prosemirror-view@1.42.8.patch
+overrides:
+  # Keep the editor on the release targeted by its selection fixes.
+  prosemirror-view: 1.42.8
+  # remark-math still requests a KaTeX release with a known trust bypass.
+  katex: 0.19.1
+minimumReleaseAgeExclude:
+  - "@asamuzakjp/dom-selector@10.0.5"
+  - katex@0.19.1
+  - prosemirror-view@1.42.8
