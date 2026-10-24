@@ -146,6 +146,17 @@ The print workspace mounts a rendered copy of the document in the app window. Be
 
 The frontend can also run in a browser-backed development environment with platform operations represented by adapters. This allows most interface and editing behavior to be tested independently of the desktop shell.
 
+## App icon and installer images
+
+The app icon is a blue tile with a white block M above a yellow open chevron, the down arrow of the Markdown mark. `scripts/icons.mjs` draws the icon and every installer image as SVG, and `pnpm icons` renders them into `build/` with Playwright's Chromium, which `pnpm exec playwright install chromium` installs. The generated files are committed. `pnpm test:icons` checks that each file in the generator's list exists with the listed size, and that the generated text files are current.
+
+- Below 64 px the M's straight edges and the chevron's top fall on whole pixels, so the icon stays sharp on a taskbar.
+- The app draws the same M and chevron itself, as the icon on the About page and on the page artwork of Recent rows. `pnpm icons` writes their paths to `src/components/appGlyph.ts`.
+- Windows uses `build/icon.ico`, whose frames from 16 px to 256 px cover display scales from 100% to 400%. Linux packages install the PNG files in `build/icons/` into the hicolor icon theme. The window icon is `build/icon.png`.
+- The macOS icon in `build/icon.icns` follows Apple's grid, a rounded square 824/1024 of the canvas with a soft shadow, so it matches other apps in the Dock.
+- The MSI shows `build/msi/dialog.bmp` on its welcome and finish pages and `build/msi/banner.bmp` across the top of the other pages. `scripts/brand-msi.mjs` adds both to the WiX project that electron-builder writes. The DMG window uses `build/background.png` and `build/background@2x.png`.
+- `build/appx/` holds the images for an MSIX package for the Microsoft Store: the package logo, the taskbar and Start icon at every target size and theme, and the Windows 10 tiles. electron-builder's `appx` target reads them from there. That target is not enabled yet, so no MSIX package has been built from them or checked with the Windows App Certification Kit. `build/store/app-tile-icon.png` is the 300 × 300 px app tile icon for the Store listing in Partner Center.
+
 ## Design priorities
 
 - Keep Markdown portable and directly editable.

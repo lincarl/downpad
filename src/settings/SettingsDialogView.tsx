@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { DocumentArtwork } from "@/components/icons";
+import { AppIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -648,7 +648,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
 
                 <SettingsPage {...pageProps("about")} plain>
                   <div className="flex items-center gap-3.5">
-                    <DocumentArtwork size={48} />
+                    <AppIcon size={48} />
                     <div className="flex flex-col">
                       <span className="text-[18px] font-semibold leading-6 text-ink-primary">md-easy</span>
                       <span className="select-text text-ink-soft">Version {__APP_VERSION__}</span>
