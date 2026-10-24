@@ -1,0 +1,327 @@
+import { crc32, deflateSync } from "node:zlib";
+
+// md-easy's app icon is a blue tile with a white block M above a yellow open chevron.
+// This module builds every icon and installer image as SVG and encodes the results.
+// scripts/generate-icons.mjs renders the SVGs and writes the files listed in `assets`.
+
+export const palette = {
+  tileLight: "#2aa3dc",
+  tileDark: "#0b4e8f",
+  letter: "#ffffff",
+  arrow: "#ffe45c",
+};
+
+const fixed = (value) => +value.toFixed(2);
+const polygon = (points) => `M${points.map(([x, y]) => `${fixed(x)} ${fixed(y)}`).join("L")}Z`;
+
+/** Block M with stems of width `stem` and a middle V about as thick as the stems. */
+function letterM(left, right, top, bottom, stem) {
+  const middle = (left + right) / 2, half = (right - left) / 2 - stem, target = 0.79 * (bottom - top);
+  // Find the V depth whose diagonal thickness fills the rest of the target height.
+  let low = 0, high = target;
+  for (let step = 0; step < 40; step++) {
+    const depth = (low + high) / 2;
+    if (depth + 0.9 * stem * Math.hypot(1, depth / half) > target) high = depth; else low = depth;
+  }
+  const depth = low, thickness = target - depth;
+  return polygon([
+    [left, bottom], [left, top], [left + stem, top], [middle, top + depth], [right - stem, top], [right, top],
+    [right, bottom], [right - stem, bottom], [right - stem, top + thickness], [middle, top + depth + thickness],
+    [left + stem, top + thickness], [left + stem, bottom],
+  ]);
+}
+
+/** Corners of an open V with flat tops. `half` is half the width and `stroke` the perpendicular thickness. */
+function chevronPoints(middle, top, half, height, stroke) {
+  const cut = stroke * Math.hypot(half, height) / height, inner = cut * height / half;
+  return [
+    [middle - half, top], [middle - half + cut, top], [middle, top + height - inner],
+    [middle + half - cut, top], [middle + half, top], [middle, top + height],
+  ];
+}
+
+/**
+ * Returns the M and chevron paths for a `size` px tile. Small sizes snap the
+ * horizontal and vertical edges to whole pixels so they stay sharp on a taskbar.
+ */
+export function glyph(size, snap = size <= 64) {
+  const round = snap ? Math.round : (value) => value;
+  const left = round(0.15 * size), top = round(0.1 * size), stem = Math.max(2, round(0.12 * size));
+  const bottom = top + round(0.46 * size), tip = size - round(0.12 * size), half = round(0.27 * size);
+  const height = tip - (bottom + round(0.08 * size));
+  return {
+    letter: letterM(left, size - left, top, bottom, stem),
+    arrow: polygon(chevronPoints(size / 2, tip - height, half, height, 0.11 * size)),
+  };
+}
+
+const svg = (width, height, body) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`;
+
+const tileGradient = `<linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">`
+  + `<stop offset="0" stop-color="${palette.tileLight}"/><stop offset="1" stop-color="${palette.tileDark}"/></linearGradient>`;
+
+/** The M and chevron for a `size` px tile whose top left corner is at `x`, `y`. */
+function glyphPaths(size, x = 0, y = 0) {
+  const { letter, arrow } = glyph(size);
+  const move = x || y ? ` transform="translate(${fixed(x)} ${fixed(y)})"` : "";
+  return `<g${move}><path d="${letter}" fill="${palette.letter}"/><path d="${arrow}" fill="${palette.arrow}"/></g>`;
+}
+
+/** A `size` px tile with its glyph, placed at `x`, `y`. `square` drops the rounded corners. */
+function tile(size, x = 0, y = 0, square = false) {
+  const corner = square ? "" : ` rx="${fixed(0.156 * size)}"`;
+  return `<rect x="${x}" y="${y}" width="${size}" height="${size}"${corner} fill="url(#tile)"/>${glyphPaths(size, x, y)}`;
+}
+
+/**
+ * The app icon, a rounded tile that fills the canvas. Windows, Linux and the
+ * Store use it. Windows 10 draws its app list icons on a plate, which `square` hides.
+ */
+export function iconSvg(size, { square = false } = {}) {
+  return svg(size, size, `<defs>${tileGradient}</defs>${tile(size, 0, 0, square)}`);
+}
+
+/** A `size` px app icon centered on a transparent canvas, as Windows 10 tiles expect. */
+export function centeredIconSvg(width, height, size) {
+  return svg(width, height, `<defs>${tileGradient}</defs>${tile(size, (width - size) / 2, (height - size) / 2)}`);
+}
+
+/**
+ * The macOS icon follows Apple's grid, an 824 px rounded square with a soft
+ * shadow inside a 1024 px canvas, so it matches other apps in the Dock.
+ */
+export function macIconSvg(size) {
+  // Apple's templates leave 1 px at 16, 2 px at 32 and 100/1024 of the canvas above that.
+  const margin = size <= 32 ? size / 16 : Math.floor(size * 100 / 1024), body = size - 2 * margin, offset = size * 10 / 1024;
+  // Below 64 px the margin leaves no room for the shadow.
+  const shadow = size >= 64
+    ? `<filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="${fixed(offset)}" stdDeviation="${fixed(offset)}" flood-opacity="0.3"/></filter>`
+    : "";
+  return svg(size, size, `<defs>${tileGradient}${shadow}</defs>`
+    // A circular corner within 2.4 px of Apple's continuous corner at 1024 px.
+    + `<rect x="${margin}" y="${margin}" width="${body}" height="${body}" rx="${fixed(0.2237 * body)}" fill="url(#tile)"${shadow && ' filter="url(#shadow)"'}/>`
+    + glyphPaths(body, margin, margin));
+}
+
+/**
+ * WiX banner for the MSI's inner pages, 493 x 58 px. Windows Installer draws the
+ * page title and description in black over its left side, so the icon sits right.
+ */
+export function msiBannerSvg() {
+  return svg(493, 58, `<defs>${tileGradient}</defs><rect width="493" height="58" fill="#fff"/>${tile(44, 442, 7)}`);
+}
+
+/**
+ * WiX welcome and finish image, 493 x 312 px. The text starts 180 px from the
+ * left, so the brand panel stays narrower than that and the rest stays white.
+ */
+export function msiDialogSvg() {
+  const panel = 164, glyphSize = 124;
+  return svg(493, 312, `<defs>${tileGradient}</defs><rect width="493" height="312" fill="#fff"/>`
+    + `<rect width="${panel}" height="312" fill="url(#tile)"/>${glyphPaths(glyphSize, (panel - glyphSize) / 2, 84)}`);
+}
+
+/**
+ * DMG window background, 540 x 380 points, drawn at `scale` pixels per point.
+ * electron-builder centers the app at (130, 220) and the Applications link at
+ * (410, 220). Three of the icon's chevrons, turned to point right, lead from the
+ * app to the folder. Finder draws black labels over a custom background in both
+ * light and dark mode, so the background stays light.
+ */
+export function dmgBackgroundSvg(scale = 1) {
+  const arrows = [0.3, 0.6, 1].map((opacity, index) => {
+    const points = chevronPoints(220, 244 + index * 20, 14, 12, 4.5).map(([x, y]) => [y, x]);
+    return `<path d="${polygon(points)}" fill="${palette.tileDark}" fill-opacity="${opacity}"/>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${540 * scale}" height="${380 * scale}" viewBox="0 0 540 380">`
+    + `<defs><linearGradient id="page" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f7f9fc"/><stop offset="1" stop-color="#e4ebf3"/></linearGradient></defs>`
+    + `<rect width="540" height="380" fill="url(#page)"/>${arrows.join("")}</svg>`;
+}
+
+/** Encodes 8-bit RGBA pixels as a PNG, choosing each row's filter with the usual minimum-sum heuristic. */
+export function encodePng(width, height, rgba) {
+  const stride = width * 4, raw = Buffer.alloc((stride + 1) * height), candidate = Buffer.alloc(stride);
+  const paeth = (a, b, c) => {
+    const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+  };
+  // PNG filter types 0 to 4: None, Sub, Up, Average and Paeth.
+  const predictors = [() => 0, (a) => a, (a, b) => b, (a, b) => (a + b) >> 1, paeth];
+  for (let y = 0; y < height; y++) {
+    const row = y * stride, previous = row - stride;
+    let bestScore = Infinity;
+    for (let type = 0; type < predictors.length; type++) {
+      let score = 0;
+      for (let i = 0; i < stride; i++) {
+        const a = i >= 4 ? rgba[row + i - 4] : 0, b = y > 0 ? rgba[previous + i] : 0, c = i >= 4 && y > 0 ? rgba[previous + i - 4] : 0;
+        const value = (rgba[row + i] - predictors[type](a, b, c)) & 0xff;
+        candidate[i] = value;
+        score += value < 128 ? value : 256 - value;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        raw[y * (stride + 1)] = type;
+        candidate.copy(raw, y * (stride + 1) + 1);
+      }
+    }
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", deflateSync(raw, { level: 9 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** One PNG chunk: length, type, data and the CRC of type and data. */
+function pngChunk(type, data) {
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  chunk.write(type, 4, "latin1");
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(chunk.subarray(4, 8 + data.length)), 8 + data.length);
+  return chunk;
+}
+
+/** Encodes RGBA pixels as an uncompressed 24-bit bottom-up BMP over white, the format WiX dialogs load. */
+export function encodeBmp(width, height, rgba) {
+  const stride = Math.ceil(width * 3 / 4) * 4, size = 54 + stride * height, bmp = Buffer.alloc(size);
+  bmp.write("BM", 0, "latin1");
+  bmp.writeUInt32LE(size, 2);
+  bmp.writeUInt32LE(54, 10);
+  bmp.writeUInt32LE(40, 14);
+  bmp.writeInt32LE(width, 18);
+  bmp.writeInt32LE(height, 22);
+  bmp.writeUInt16LE(1, 26);
+  bmp.writeUInt16LE(24, 28);
+  bmp.writeUInt32LE(stride * height, 34);
+  bmp.writeInt32LE(2835, 38);
+  bmp.writeInt32LE(2835, 42);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const source = (y * width + x) * 4, target = 54 + (height - 1 - y) * stride + x * 3, alpha = rgba[source + 3] / 255;
+      for (let channel = 0; channel < 3; channel++) {
+        bmp[target + 2 - channel] = Math.round(rgba[source + channel] * alpha + 255 * (1 - alpha));
+      }
+    }
+  }
+  return bmp;
+}
+
+/** Packs square PNG images into a Windows ICO file. */
+export function encodeIco(images) {
+  const header = Buffer.alloc(6 + 16 * images.length);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(images.length, 4);
+  let offset = header.length;
+  images.forEach(({ size, png }, index) => {
+    const entry = 6 + 16 * index;
+    header[entry] = header[entry + 1] = size >= 256 ? 0 : size;
+    header.writeUInt16LE(1, entry + 4);
+    header.writeUInt16LE(32, entry + 6);
+    header.writeUInt32LE(png.length, entry + 8);
+    header.writeUInt32LE(offset, entry + 12);
+    offset += png.length;
+  });
+  return Buffer.concat([header, ...images.map(({ png }) => png)]);
+}
+
+/** The alpha mask entry that follows each RGB entry for small macOS icons. */
+export const icnsMasks = { is32: "s8mk", il32: "l8mk" };
+
+/**
+ * Packs images into a macOS ICNS file. PNG types take `png`. The 16 and 32 px types
+ * is32 and il32 take straight RGBA `pixels` instead, because PNG data in the small
+ * types renders scrambled inside an app. Each of those gets its alpha mask entry.
+ */
+export function encodeIcns(images) {
+  const entry = (type, data) => {
+    const header = Buffer.alloc(8);
+    header.write(type, 0, "latin1");
+    header.writeUInt32BE(8 + data.length, 4);
+    return Buffer.concat([header, data]);
+  };
+  const entries = images.flatMap(({ type, png, pixels }) => {
+    if (!icnsMasks[type]) return [entry(type, png)];
+    const channel = (offset) => Buffer.from(pixels.filter((_, index) => index % 4 === offset));
+    return [entry(type, Buffer.concat([0, 1, 2].map((offset) => packBits(channel(offset))))), entry(icnsMasks[type], channel(3))];
+  });
+  const header = Buffer.alloc(8);
+  header.write("icns", 0, "latin1");
+  header.writeUInt32BE(8 + entries.reduce((total, item) => total + item.length, 0), 4);
+  return Buffer.concat([header, ...entries]);
+}
+
+/** ICNS run-length encoding: a run of 3 to 130 equal bytes, or up to 128 literal bytes. */
+function packBits(bytes) {
+  const packed = [], literal = [];
+  const flush = () => {
+    while (literal.length) {
+      const chunk = literal.splice(0, 128);
+      packed.push(chunk.length - 1, ...chunk);
+    }
+  };
+  for (let index = 0; index < bytes.length;) {
+    let run = 1;
+    while (index + run < bytes.length && run < 130 && bytes[index + run] === bytes[index]) run++;
+    if (run >= 3) {
+      flush();
+      packed.push(0x80 + run - 3, bytes[index]);
+      index += run;
+    } else {
+      literal.push(bytes[index++]);
+    }
+  }
+  flush();
+  return Buffer.from(packed);
+}
+
+const image = (file, width, height, svg) => ({ file, width, height, svg });
+const square = (file, size, render = iconSvg) => image(file, size, size, render(size));
+const scaled = (base, scale) => Math.round(base * scale / 100);
+
+// Windows picks the nearest ICO frame for each display scale, from 100% to 400%.
+const windowsSizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256];
+const linuxSizes = [16, 22, 24, 32, 48, 64, 96, 128, 256, 512];
+// The ICNS types iconutil writes. The @2x types reuse the next size up.
+const macTypes = [["is32", 16], ["ic11", 32], ["il32", 32], ["ic12", 64], ["ic07", 128], ["ic13", 256], ["ic08", 256], ["ic14", 512], ["ic09", 512], ["ic10", 1024]];
+// MSIX asset qualifiers. Windows loads the file that matches the display scale or icon size.
+const scales = [100, 125, 150, 200, 400];
+const targetSizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256];
+// Windows 10 Start tiles and the icon's largest share of the tile height that Microsoft allows.
+// Windows 11 has no tiles, but the Store requires the medium tile and electron-builder's manifest names the wide one.
+const tiles = [["SmallTile", 71, 71, 0.66], ["Square150x150Logo", 150, 150, 0.5], ["Wide310x150Logo", 310, 150, 0.5], ["LargeTile", 310, 310, 0.5]];
+// The largest icon size within `limit` that leaves the same whole-pixel margin on both sides.
+const fit = (limit, canvas) => Math.floor(limit) - ((canvas - Math.floor(limit)) % 2);
+
+/** Every generated file under build/, with its pixel size and SVG source. */
+export const assets = [
+  { file: "build/icon.svg", svg: iconSvg(1024) },
+  square("build/icon.png", 512),
+  ...linuxSizes.map((size) => square(`build/icons/${size}x${size}.png`, size)),
+  { file: "build/icon.ico", images: windowsSizes.map((size) => square("", size)) },
+  { file: "build/icon.icns", images: macTypes.map(([type, size]) => ({ ...square("", size, macIconSvg), type })) },
+  image("build/msi/banner.bmp", 493, 58, msiBannerSvg()),
+  image("build/msi/dialog.bmp", 493, 312, msiDialogSvg()),
+  // electron-builder finds these by name and merges them into one Retina TIFF on macOS.
+  image("build/background.png", 540, 380, dmgBackgroundSvg(1)),
+  image("build/background@2x.png", 1080, 760, dmgBackgroundSvg(2)),
+  ...scales.map((scale) => square(`build/appx/StoreLogo.scale-${scale}.png`, scaled(50, scale))),
+  // Windows 10 draws its app list icons on a plate, so these fill their square.
+  ...scales.map((scale) => square(`build/appx/Square44x44Logo.scale-${scale}.png`, scaled(44, scale), (size) => iconSvg(size, { square: true }))),
+  // The taskbar, Start and search use these. Each theme needs its own file, even when identical.
+  ...targetSizes.flatMap((size) => ["", "_altform-unplated", "_altform-lightunplated"]
+    .map((form) => square(`build/appx/Square44x44Logo.targetsize-${size}${form}.png`, size))),
+  ...tiles.flatMap(([name, width, height, share]) => scales.map((scale) => {
+    const tileWidth = scaled(width, scale), tileHeight = scaled(height, scale);
+    return image(`build/appx/${name}.scale-${scale}.png`, tileWidth, tileHeight, centeredIconSvg(tileWidth, tileHeight, fit(share * tileHeight, tileHeight)));
+  })),
+  // Partner Center's 1:1 app tile icon for the Store listing. The Store prefers it over the package logo.
+  square("build/store/app-tile-icon.png", 300),
+];

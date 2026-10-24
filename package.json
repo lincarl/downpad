@@ -15,10 +15,12 @@
     "lint:css": "stylelint \"src/**/*.css\"",
     "preview": "vite preview",
     "start": "electron .",
+    "icons": "node scripts/generate-icons.mjs",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder --publish never",
-    "test": "vitest run && pnpm test:version && pnpm test:desktop && pnpm test:ci",
+    "test": "vitest run && pnpm test:version && pnpm test:icons && pnpm test:desktop && pnpm test:ci",
     "test:version": "node --test scripts/apply-version-from-tag.test.mjs",
+    "test:icons": "node --test scripts/icons.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:electron": "playwright test --config playwright.electron.config.ts",
@@ -97,6 +99,7 @@
       "build/icon.png"
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "msiProjectCreated": "./scripts/brand-msi.mjs",
     "fileAssociations": [
       {
         "ext": [
@@ -115,7 +118,7 @@
         "deb"
       ],
       "category": "Office",
-      "icon": "build/icon.png",
+      "icon": "build/icons",
       "executableName": "md-easy",
       "maintainer": "md-easy contributors",
       "syncDesktopName": true
@@ -129,6 +132,9 @@
     "msi": {
       "oneClick": false,
       "perMachine": false
+    },
+    "appx": {
+      "backgroundColor": "transparent"
     },
     "mac": {
       "target": [
