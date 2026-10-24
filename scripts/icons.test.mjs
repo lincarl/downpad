@@ -148,7 +148,8 @@ test("committed icon and installer images match the generator's list", async () 
     // The Windows App Certification Kit rejects package images of 200 KiB or more.
     if (asset.file.startsWith("build/appx/")) assert.ok(data.length < 204_800, `${asset.file} is ${data.length} bytes`);
     if (asset.text !== undefined) {
-      assert.equal(data.toString("utf8"), asset.text, `${asset.file} is current`);
+      // A Windows checkout can turn the generated text files' line endings into CRLF.
+      assert.equal(data.toString("utf8").replace(/\r\n/g, "\n"), asset.text, `${asset.file} is current`);
     } else if (asset.file.endsWith(".ico")) {
       assert.equal(data.readUInt16LE(4), asset.images.length, asset.file);
       asset.images.forEach((image, index) => {
