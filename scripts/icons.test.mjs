@@ -19,9 +19,10 @@ function decodePng(png) {
     if (type === "IDAT") compressed.push(png.subarray(offset + 8, offset + 8 + length));
     offset += 12 + length;
   }
-  const raw = inflateSync(Buffer.concat(compressed)), pixels = Buffer.alloc(stride * height);
+  const raw = inflateSync(Buffer.concat(compressed)), pixels = Buffer.alloc(stride * height), filters = [];
   for (let y = 0; y < height; y++) {
     const filter = raw[y * (stride + 1)];
+    filters.push(filter);
     for (let i = 0; i < stride; i++) {
       const a = i >= 4 ? pixels[y * stride + i - 4] : 0, b = y > 0 ? pixels[(y - 1) * stride + i] : 0;
       const c = i >= 4 && y > 0 ? pixels[(y - 1) * stride + i - 4] : 0, p = a + b - c;
@@ -30,7 +31,7 @@ function decodePng(png) {
       pixels[y * stride + i] = (raw[y * (stride + 1) + 1 + i] + predictor) & 0xff;
     }
   }
-  return { width, height, pixels };
+  return { width, height, pixels, filters };
 }
 
 /** Splits an ICNS file into its typed entries. */
@@ -93,13 +94,18 @@ test("the glyph is mirror symmetric", () => {
   }
 });
 
-test("PNG encoding round-trips every filter choice", () => {
-  const width = 7, height = 5, rgba = Buffer.alloc(width * height * 4);
-  for (let i = 0; i < rgba.length; i++) rgba[i] = (i * 37 + (i >> 3) * 11) & 0xff;
-  const decoded = decodePng(encodePng(width, height, rgba));
-  assert.deepEqual({ width: decoded.width, height: decoded.height }, { width, height });
+test("PNG encoding round-trips rows under each of the five filters", () => {
+  // Each row suits one filter: flat for None, a ramp for Sub, the same ramp for Up,
+  // the mean of left and above for Average, and curves for Paeth.
+  const width = 8, row = (value) => Array.from({ length: width * 4 }, (_, index) => value(index >> 2));
+  const ramp = row((x) => x * 16), average = [];
+  ramp.forEach((above, index) => average.push(((index >= 4 ? average[index - 4] : 0) + above) >> 1));
+  const rows = [row(() => 0), ramp, ramp, average, row((x) => x * x * 3), row((x) => (x ? (x - 1) ** 2 * 3 : 0))];
+  const rgba = Buffer.from(rows.flat());
+  const decoded = decodePng(encodePng(width, rows.length, rgba));
+  assert.deepEqual({ width: decoded.width, height: decoded.height }, { width, height: rows.length });
+  assert.deepEqual([...new Set(decoded.filters)].sort(), [0, 1, 2, 3, 4]);
   assert.ok(decoded.pixels.equals(rgba));
-  assert.ok(!decodePng(encodePng(width, height, Buffer.alloc(rgba.length))).pixels.equals(rgba), "different input decodes differently");
 });
 
 test("BMP encoding writes bottom-up rows composited over white", () => {
@@ -112,7 +118,7 @@ test("BMP encoding writes bottom-up rows composited over white", () => {
   assert.deepEqual([...bmp.subarray(62, 68)], [0, 0, 255, 255, 255, 255]);
 });
 
-test("ICO and ICNS containers index their PNG images", () => {
+test("ICO and ICNS containers index their images", () => {
   const png = (size) => encodePng(size, size, Buffer.alloc(size * size * 4, 200));
   const ico = encodeIco([{ size: 16, png: png(16) }, { size: 256, png: png(256) }]);
   assert.equal(ico.readUInt16LE(4), 2);
@@ -141,8 +147,8 @@ test("committed icon and installer images match the generator's list", async () 
     const data = await readFile(path.join(root, asset.file));
     // The Windows App Certification Kit rejects package images of 200 KiB or more.
     if (asset.file.startsWith("build/appx/")) assert.ok(data.length < 204_800, `${asset.file} is ${data.length} bytes`);
-    if (asset.file.endsWith(".svg")) {
-      assert.equal(data.toString("utf8"), asset.svg, `${asset.file} is current`);
+    if (asset.text !== undefined) {
+      assert.equal(data.toString("utf8"), asset.text, `${asset.file} is current`);
     } else if (asset.file.endsWith(".ico")) {
       assert.equal(data.readUInt16LE(4), asset.images.length, asset.file);
       asset.images.forEach((image, index) => {

@@ -59,7 +59,7 @@ pnpm dist
 
 `pnpm package` creates an unpacked desktop app under `release/`. `pnpm dist` creates installers for the host platform, with publishing disabled. Linux builds produce AppImage and DEB files. Windows builds produce MSI installers. macOS has a DMG target configured but is not part of the installer CI matrix.
 
-The app icon and installer images in `build/` are generated from `scripts/icons.mjs`. Run `pnpm icons` after changing the artwork. See [App icon and installer images](docs/design.md#app-icon-and-installer-images).
+The app icon and installer images in `build/`, and the glyph paths in `src/components/appGlyph.ts`, are generated from `scripts/icons.mjs`. Run `pnpm icons` after changing the artwork. See [App icon and installer images](docs/design.md#app-icon-and-installer-images).
 
 Build Windows installers on Windows and verify them there. Installer CI builds Linux and Windows packages, retains artifacts for 30 days, and publishes a GitHub release when a stable version tag is pushed. The release tag supplies the app version through `scripts/apply-version-from-tag.mjs`.
 

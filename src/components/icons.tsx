@@ -1,6 +1,7 @@
 import { forwardRef, useId, type ReactNode, type SVGProps } from "react";
 import type { LucideProps } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { appGlyph } from "./appGlyph";
 
 /** Lucide's 24-unit geometry for the glyphs the composites below reuse. */
 const FILE_PATHS = (
@@ -74,12 +75,40 @@ export const FileCopyIcon = badgedIcon("FileCopyIcon", FILE_PATHS);
 /** "Copy folder path": an open folder with a copy badge. */
 export const FolderCopyIcon = badgedIcon("FolderCopyIcon", FOLDER_OPEN_PATHS);
 
+/** The app icon, the blue tile with the white M and yellow chevron, for About. */
+export function AppIcon({ size = 48, className }: { size?: number; className?: string }) {
+  const gradient = useId();
+  const { size: tile, corner, letter, arrow, colors } = appGlyph;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox={`0 0 ${tile} ${tile}`}
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+    >
+      <defs>
+        <linearGradient id={gradient} x2="1" y2="1">
+          <stop stopColor={colors.tileLight} />
+          <stop offset="1" stopColor={colors.tileDark} />
+        </linearGradient>
+      </defs>
+      <rect width={tile} height={tile} rx={corner} fill={`url(#${gradient})`} />
+      <path d={letter} fill={colors.letter} />
+      <path d={arrow} fill={colors.arrow} />
+    </svg>
+  );
+}
+
 /**
- * md-easy's document artwork: a page with a folded corner and the app's "M", in
- * the blue gradient of the application icon. Used for Recent rows and About.
+ * md-easy's document artwork: a page with a folded corner and the app icon's M
+ * and chevron, in the icon's blue gradient. Used for Recent rows.
  */
 export function DocumentArtwork({ size = 34, className }: { size?: number; className?: string }) {
   const gradient = useId();
+  const { size: tile, letter, arrow, colors } = appGlyph;
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -92,13 +121,17 @@ export function DocumentArtwork({ size = 34, className }: { size?: number; class
     >
       <defs>
         <linearGradient id={gradient} x2="1" y2="1">
-          <stop stopColor="#27a0d9" />
-          <stop offset="1" stopColor="#0d5493" />
+          <stop stopColor={colors.tileLight} />
+          <stop offset="1" stopColor={colors.tileDark} />
         </linearGradient>
       </defs>
       <path d="M55 9H157L215 67V226Q215 247 194 247H55Q34 247 34 226V30Q34 9 55 9Z" fill={`url(#${gradient})`} />
       <path d="M157 9V48Q157 67 176 67H215Z" fill="#91d9f5" />
-      <path d="M68 210V98H96L124.5 150L153 98H181V210H157V144L131 190H118L92 144V210Z" fill="#fff" />
+      {/* The glyph of a 170-unit tile, centered on the page below the fold. */}
+      <g transform={`translate(39.5 78) scale(${170 / tile})`}>
+        <path d={letter} fill={colors.letter} />
+        <path d={arrow} fill={colors.arrow} />
+      </g>
     </svg>
   );
 }

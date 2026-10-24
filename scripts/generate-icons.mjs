@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { assets, encodeBmp, encodeIcns, encodeIco, encodePng, icnsMasks } from "./icons.mjs";
 
-// Regenerates the app icon and installer images under build/ from scripts/icons.mjs.
+// Regenerates the app icon and installer images under build/, and the glyph the app
+// draws itself in src/components/appGlyph.ts, from scripts/icons.mjs.
 // Run `pnpm icons` after changing the artwork. Playwright's Chromium rasterizes the SVGs.
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -33,7 +34,8 @@ async function encode(page, asset) {
   const png = async (image) => encodePng(image.width, image.height, await pixels(image));
   switch (path.extname(asset.file)) {
     case ".svg":
-      return asset.svg;
+    case ".ts":
+      return asset.text;
     case ".png":
       return png(asset);
     case ".bmp":
@@ -49,7 +51,7 @@ async function encode(page, asset) {
   }
 }
 
-/** Renders every asset and writes it under build/. */
+/** Renders every asset and writes it to its file. */
 async function main() {
   const browser = await chromium.launch();
   try {
@@ -59,7 +61,7 @@ async function main() {
       await mkdir(path.dirname(file), { recursive: true });
       await writeFile(file, await encode(page, asset));
     }
-    console.log(`Wrote ${assets.length} files under build/.`);
+    console.log(`Wrote ${assets.length} files.`);
   } finally {
     await browser.close();
   }
