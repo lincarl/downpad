@@ -20,6 +20,11 @@ Build jobs have read-only permissions and do not retain checkout credentials.
 They run the application checks, tests, desktop build, desktop tests, and
 installer packaging for Linux and Windows.
 
+Builds use Ubuntu 26.04 and Windows Server 2025, the Node version in
+`.node-version`, and the pnpm version in `package.json`. Jobs that use GitHub
+CLI install the pinned release with checksum verification through
+`scripts/install-github-cli.mjs`. The installation stays under `dev-temp`.
+
 A new PR commit cancels obsolete builds for that pull request and replaces queued
 intermediate revisions. A successful build of the same commit and application
 version can supply retained installers to a repeated run. PR retries reuse only

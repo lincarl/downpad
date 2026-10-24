@@ -11,7 +11,7 @@ export function createGitHubClient(env = process.env, fetcher = fetch) {
       headers: {
         authorization: `Bearer ${env.GH_TOKEN}`,
         accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
+        "X-GitHub-Api-Version": "2026-03-10",
         ...(body ? { "content-type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
