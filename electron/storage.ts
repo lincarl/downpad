@@ -50,25 +50,23 @@ export function validateSnapshot(value: unknown): Snapshot {
  *  window geometry and crash recovery snapshots. */
 const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recovery"];
 
-/** Move the user data folder that the app kept as md-easy, its earlier name,
- *  to `directory` on the first launch after the rename. When the folder cannot
- *  be moved, for example while a running md-easy holds files in it open on
- *  Windows, copy the app's own files and leave the old folder in place. Does
- *  nothing once `directory` exists, so it must run before anything writes there. */
+/** Move the app's own files from the user data folder that it kept as md-easy,
+ *  its earlier name, to `directory` on the first launch after the rename.
+ *  Electron creates `directory` before the app's code runs, so the move happens
+ *  while `directory` holds none of the app's files. A file that cannot be
+ *  moved, for example while a running md-easy holds it open on Windows, is
+ *  copied instead. Chromium's own files stay in the old folder. */
 export function adoptLegacyData(legacy: string, directory: string): void {
-  if (existsSync(directory) || !existsSync(legacy)) return;
-  try {
-    renameSync(legacy, directory);
-    return;
-  } catch (error) {
-    console.error("Downpad could not move md-easy's data folder, so it copies its files", error);
-  }
+  if (!existsSync(legacy) || DATA_FILES.some((name) => existsSync(join(directory, name)))) return;
   mkdirSync(directory, { recursive: true });
   for (const name of DATA_FILES) {
     const source = join(legacy, name);
     if (!existsSync(source)) continue;
-    try { cpSync(source, join(directory, name), { recursive: true }); }
-    catch (error) { console.error(`Downpad could not copy md-easy's ${name}`, error); }
+    try { renameSync(source, join(directory, name)); }
+    catch {
+      try { cpSync(source, join(directory, name), { recursive: true }); }
+      catch (error) { console.error(`Downpad could not take over md-easy's ${name}`, error); }
+    }
   }
 }
 

@@ -144,7 +144,7 @@ Downpad was called md-easy before. The installers and the app take over what an 
 
 - The MSI keeps md-easy's upgrade code, `msi.upgradeCode` in `package.json`, so it replaces an installed md-easy. Without it, electron-builder derives a new code from the new app ID, and Windows would keep both apps.
 - The DEB package conflicts with and replaces the `md-easy` package, so installing it removes md-easy.
-- On its first launch, the app moves md-easy's data folder, with the settings, recent files, window size and recovery snapshots, to its own folder (`adoptLegacyData` in `electron/storage.ts`).
+- On its first launch, the app moves the settings, recent files, window size and recovery snapshots from md-easy's data folder to its own (`adoptLegacyData` in `electron/storage.ts`). Chromium's caches stay in the old folder.
 
 Undo and Redo in the native menus (the spell-check menu that Shift+right-click opens, and the macOS Edit menu) go to the renderer, which runs the focused editor's undo history. Chromium's own undo knows nothing of those histories. A plain text field, such as the find card's, keeps Chromium's undo.
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import synchronousFilesystem, { existsSync } from "node:fs";
+import synchronousFilesystem from "node:fs";
 import filesystem, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, join, resolve } from "node:path";
@@ -500,44 +500,48 @@ describe("Existing settings and history compatibility", () => {
 describe("Data that the app kept as md-easy, its earlier name", () => {
   afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); });
 
+  /** An md-easy folder with the app's files and one of Chromium's, beside the
+   *  Downpad folder that Electron has already created. */
   async function folders(): Promise<{ legacy: string; directory: string }> {
     const root = await fixtureDirectory();
     const legacy = join(root, "md-easy");
+    const directory = join(root, "Downpad");
     await mkdir(join(legacy, "recovery"), { recursive: true });
+    await mkdir(directory);
     await writeFile(join(legacy, "settings.toml"), 'theme = "nord"\n');
     await writeFile(join(legacy, "recent.json"), "[]");
     await writeFile(join(legacy, "recovery", "session.json"), "{}");
     await writeFile(join(legacy, "Local State"), "{}");
-    return { legacy, directory: join(root, "Downpad") };
+    return { legacy, directory };
   }
 
-  it("moves the whole folder on the first launch after the rename", async () => {
+  it("moves the app's files into the folder that Electron created", async () => {
     const { legacy, directory } = await folders();
     adoptLegacyData(legacy, directory);
-    expect(existsSync(legacy)).toBe(false);
-    expect((await readdir(directory)).sort()).toEqual(["Local State", "recent.json", "recovery", "settings.toml"]);
-    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
-  });
-
-  it("leaves both folders alone once the new folder exists", async () => {
-    const { legacy, directory } = await folders();
-    await mkdir(directory);
-    adoptLegacyData(legacy, directory);
-    expect(await readdir(directory)).toEqual([]);
-    expect(await readdir(legacy)).toHaveLength(4);
-  });
-
-  it("copies the app's own files and keeps the old folder when the move fails", async () => {
-    const { legacy, directory } = await folders();
-    const failure = Object.assign(new Error("The folder is in use."), { code: "EPERM" });
-    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementationOnce(() => { throw failure; });
-    syncBuiltinESMExports();
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    adoptLegacyData(legacy, directory);
-    expect(logged).toHaveBeenCalledWith(expect.stringContaining("copies its files"), failure);
     expect((await readdir(directory)).sort()).toEqual(["recent.json", "recovery", "settings.toml"]);
+    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
     expect(await readFile(join(directory, "recovery", "session.json"), "utf8")).toBe("{}");
+    expect(await readdir(legacy)).toEqual(["Local State"]);
+  });
+
+  it("leaves both folders alone once the new folder holds the app's files", async () => {
+    const { legacy, directory } = await folders();
+    await writeFile(join(directory, "recent.json"), '[{"p":"/notes.md","t":1}]');
+    adoptLegacyData(legacy, directory);
+    expect(await readdir(directory)).toEqual(["recent.json"]);
     expect(await readdir(legacy)).toHaveLength(4);
+  });
+
+  it("copies a file that cannot be moved and moves the rest", async () => {
+    const { legacy, directory } = await folders();
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("The file is in use."), { code: "EPERM" });
+    });
+    syncBuiltinESMExports();
+    adoptLegacyData(legacy, directory);
+    expect((await readdir(directory)).sort()).toEqual(["recent.json", "recovery", "settings.toml"]);
+    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
+    expect((await readdir(legacy)).sort()).toEqual(["Local State", "settings.toml"]);
   });
 });
 
