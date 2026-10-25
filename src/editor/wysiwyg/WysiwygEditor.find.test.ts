@@ -86,7 +86,10 @@ const reportedFrontmatter = (onChange: Mock) => splitFrontmatter(String(onChange
 describe("document view find with a frontmatter table", () => {
   it("counts the table's matches before the document's and steps through both", { timeout: 60_000 }, async () => {
     const { editor } = await open(FILE);
+    const toggle = document.querySelector<HTMLButtonElement>(".frontmatter-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(editor.search("draft", OPTS)).toEqual({ total: 4, current: 1 });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(painted("md-find-current")).toEqual(["Draft"]);
     expect(painted("md-find-match")).toEqual(["draft", "draft"]);
     expect(documentCurrent()).toEqual([]);
@@ -96,8 +99,27 @@ describe("document view find with a frontmatter table", () => {
     expect(editor.findNext()).toEqual({ total: 4, current: 4 });
     expect(painted("md-find-current")).toEqual([]);
     expect(documentCurrent()).toEqual(["draft"]);
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(editor.findNext()).toEqual({ total: 4, current: 1 });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(editor.findPrev()).toEqual({ total: 4, current: 4 });
+  });
+
+  it("leaves metadata collapsed for a body-only search and reveals a hidden current match on focus", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open(FILE);
+    const toggle = document.querySelector<HTMLButtonElement>(".frontmatter-toggle")!;
+    expect(editor.search("body", OPTS)).toEqual({ total: 1, current: 1 });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    editor.search("notes", OPTS);
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    editor.focus();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(document.querySelector('[data-line="0"][data-part="value"]'));
+    expect(window.getSelection()?.toString()).toBe("notes");
+    expect(editor.getMarkdown()).toBe(FILE);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("replaces in the YAML line and moves on, past a read-only match", { timeout: 60_000 }, async () => {

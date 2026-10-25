@@ -37,6 +37,8 @@ export interface FrontmatterHost {
   block(): string | null;
   /** The element the table is drawn in. */
   panel(): HTMLElement | null;
+  /** Expand the table synchronously before measuring or focusing a match. */
+  reveal(): void;
   /** The table's matches were found again after it was redrawn or a cell was
    *  edited, so the find card's count may be out of date. */
   changed(): void;
@@ -134,9 +136,11 @@ export class DocumentFind {
    *  way ProseMirror keeps a document match selected. Returns false when the
    *  current match is not in an editable cell of the drawn table. */
   focusCurrent(): boolean {
-    const panel = this.host.panel();
     const match = this.matches[this.current];
-    if (!panel || !match) return false;
+    if (!match) return false;
+    this.host.reveal();
+    const panel = this.host.panel();
+    if (!panel) return false;
     return focusMatch(panel, match);
   }
 
@@ -188,6 +192,8 @@ export class DocumentFind {
 
   /** Paint the table's matches, and with `reveal` scroll the current one into view. */
   private paint(reveal: boolean): void {
+    const shown = this.matches[this.current];
+    if (reveal && shown) this.host.reveal();
     const panel = this.host.panel();
     this.watch(this.query ? panel : null);
     // Created on the first match. jsdom has no Highlight.
@@ -209,7 +215,6 @@ export class DocumentFind {
         CSS.highlights.set("md-find-current", current);
       }
     }
-    const shown = this.matches[this.current];
     if (reveal && panel && shown) revealCell(panel, shown);
   }
 
