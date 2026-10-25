@@ -7,7 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { access, chmod, constants, mkdtemp, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, win32 } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -58,7 +58,7 @@ const SYSTEM_PROGRAM_FOLDERS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
  *  which the package's path is added, or null without pkexec or a package
  *  manager. apt-get also installs dependencies that a new version adds. */
 export function debInstallCommand(exists: (path: string) => boolean = existsSync): string[] | null {
-  const find = (name: string): string | undefined => SYSTEM_PROGRAM_FOLDERS.map((folder) => join(folder, name)).find(exists);
+  const find = (name: string): string | undefined => SYSTEM_PROGRAM_FOLDERS.map((folder) => posix.join(folder, name)).find(exists);
   const pkexec = find("pkexec");
   if (!pkexec) return null;
   const apt = find("apt-get");

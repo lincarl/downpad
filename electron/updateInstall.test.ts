@@ -135,7 +135,7 @@ describe("MSI updates", () => {
   // Runs the real helper with stand-ins for Windows Installer and Downpad,
   // in folders whose names cmd would otherwise misread. START runs a batch
   // file in cmd /k, so each stand-in ends with exit.
-  it.runIf(process.platform === "win32")("installs, records the exit code, removes the copy and starts Downpad again with its file", async () => {
+  it.runIf(process.platform === "win32")("installs, records the exit code, removes the copy and starts Downpad again with its file", { timeout: 60_000 }, async () => {
     const directory = await folder("Downpad & 100% ^test! (1) ");
     // The stand-ins are batch files, which read % in their own text, so their
     // record goes to a plainly named folder.
@@ -149,15 +149,22 @@ describe("MSI updates", () => {
     const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
     const staged = await stageMsi(file, DIGEST);
     await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), msiexec);
+    // Each stand-in opens a console window, which can take seconds on CI.
     let text = "";
-    for (let attempt = 0; attempt < 100 && !text.includes("started"); attempt += 1) {
-      await new Promise((done) => setTimeout(done, 100));
+    let code = "";
+    for (let waited = 0; waited < 40_000 && !(text.includes("started") && code); waited += 250) {
+      await new Promise((done) => setTimeout(done, 250));
       text = await readFile(record, "utf8").catch(() => "");
+      code = await readFile(result, "utf8").catch(() => "");
+    }
+    if (!text.includes("started") || !code) {
+      throw new Error(`The helper did not finish. Record: ${JSON.stringify(text)}. Result: ${JSON.stringify(code)}. ` +
+        `Staging left: ${await stat(staged.staging).then(() => true, () => false)}.`);
     }
     const [installer, started] = text.trim().split(/\r?\n/);
     expect(installer).toBe(`installer /i "${staged.package}" /passive /norestart`);
     expect(started).toBe(`started "${join(directory, "notes & 50%.md")}"`);
-    expect((await readFile(result, "utf8")).trim()).toBe("1618");
+    expect(code.trim()).toBe("1618");
     await expect(stat(staged.staging)).rejects.toThrow();
     expect(await readFile(file)).toEqual(PACKAGE);
   });
