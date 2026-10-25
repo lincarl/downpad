@@ -74,6 +74,7 @@ only to that run, and manual builds publish nothing.
 
 The release job verifies that the tag still points at the built commit and that
 the commit belongs to the default branch. It publishes the AppImage, DEB, and MSI
-installers from that run with a `SHA256SUMS` file. After a stable release it
+installers from that run with a `SHA256SUMS` file. After a stable release, a
+separate job marks the newest stable release as GitHub's latest release and
 deletes the releases that the new release supersedes. Stable releases require an
 explicit user request. [Releases](releasing.md) describes the policy.

@@ -58,19 +58,25 @@ function commitSha(value) {
   return value;
 }
 
-/** Find the candidate tag that an earlier attempt of this CI run created for
- *  `sha`, so a retried run publishes the same candidate. Only candidates newer
- *  than every stable tag are read, which bounds the requests. */
+/** Find the candidate tag that an earlier attempt of this CI run created on
+ *  `sha`, so a rerun publishes the same candidate, also after a stable release
+ *  of its version. The tag listing names each tag's commit, so only the
+ *  annotations of candidate tags on `sha` are read. */
 async function candidateOfRun(request, repository, refs, sha, message) {
-  const versions = refs.map((ref) => ({ ref, version: parseTag(ref.ref.replace(/^refs\/tags\//, "")) })).filter((item) => item.version);
-  const latest = versions.filter(({ version }) => version.rc === null)
-    .reduce((newest, { version }) => (compareBase(version, newest) > 0 ? version : newest), { major: 0, minor: 0, patch: 0 });
-  for (const { ref, version } of versions) {
-    if (version.rc === null || compareBase(version, latest) <= 0 || ref.object?.type !== "tag") continue;
-    const annotation = await request(`/repos/${repository}/git/tags/${commitSha(ref.object.sha)}`);
-    if (annotation.object?.type === "commit" && annotation.object.sha === sha && annotation.message?.trimEnd() === message) {
-      return formatTag(version);
+  const onCommit = new Set();
+  for (let page = 1; ; page += 1) {
+    const batch = await request(`/repos/${repository}/tags?per_page=100&page=${page}`);
+    if (!Array.isArray(batch)) throw new Error("GitHub returned an invalid tag listing.");
+    for (const tag of batch) {
+      if (tag?.commit?.sha === sha && parseTag(tag.name)?.rc != null) onCommit.add(tag.name);
     }
+    if (batch.length < 100) break;
+  }
+  for (const ref of refs) {
+    const name = ref.ref.replace(/^refs\/tags\//, "");
+    if (!onCommit.has(name) || ref.object?.type !== "tag") continue;
+    const annotation = await request(`/repos/${repository}/git/tags/${commitSha(ref.object.sha)}`);
+    if (annotation.object?.type === "commit" && annotation.object.sha === sha && annotation.message?.trimEnd() === message) return name;
   }
   return null;
 }
@@ -179,6 +185,31 @@ async function listReleases(request, repository) {
   return releases;
 }
 
+/** Mark the stable release with the highest version as GitHub's latest release,
+ *  which installed copies read for updates. Every stable publication runs this
+ *  after it publishes, so publications that finish out of order still leave the
+ *  newest version as the latest. */
+export async function markLatest({ request, repository, log = console.log }) {
+  repositoryName(repository);
+  const stable = (await listReleases(request, repository)).map(parseRelease).filter(isStable)
+    .sort((left, right) => compareBase(right.version, left.version));
+  if (stable.length === 0) {
+    log("No stable release to mark as the latest.");
+    return;
+  }
+  const newest = stable[0];
+  const current = await request(`/repos/${repository}/releases/latest`).catch((error) => {
+    if (error.status === 404) return null;
+    throw error;
+  });
+  if (current?.id === newest.id) {
+    log(`${newest.tag} is the latest release.`);
+    return;
+  }
+  await request(`/repos/${repository}/releases/${newest.id}`, { method: "PATCH", body: { make_latest: "true" } });
+  log(`Marked ${newest.tag} as the latest release.`);
+}
+
 /** Delete the release entries and downloads that `cleanupPlan` selects after
  *  `releasedTag`. Without `apply` it only prints the plan. Git tags stay, since
  *  the candidate numbering depends on them. Each deletion first checks the plan
@@ -226,7 +257,8 @@ export async function pruneReleases({ request, repository, releasedTag, apply = 
   }
 }
 
-/** Run `candidate` in CI after a main push, or `prune --released-tag vX.Y.Z [--apply]`. */
+/** Run `candidate` in CI after a main push, `latest` after a stable release, or
+ *  `prune --released-tag vX.Y.Z [--apply]`. */
 async function main(argv = process.argv.slice(2), env = process.env) {
   const [command, ...options] = argv;
   const request = createGitHubClient(env);
@@ -237,6 +269,10 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     else process.stdout.write(output);
     return;
   }
+  if (command === "latest") {
+    await markLatest({ request, repository: env.GITHUB_REPOSITORY ?? "lincarl/downpad" });
+    return;
+  }
   if (command === "prune") {
     const tagIndex = options.indexOf("--released-tag");
     const releasedTag = tagIndex >= 0 ? options[tagIndex + 1] : undefined;
@@ -245,7 +281,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     await pruneReleases({ request, repository: env.GITHUB_REPOSITORY ?? "lincarl/downpad", releasedTag, apply: options.includes("--apply") });
     return;
   }
-  throw new Error("Expected candidate or prune.");
+  throw new Error("Expected candidate, latest or prune.");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

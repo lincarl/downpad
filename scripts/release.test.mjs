@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allocateCandidate, cleanupPlan, nextCandidateTag, parseTag, pruneReleases, releaseAssets } from "./release.mjs";
+import { allocateCandidate, cleanupPlan, markLatest, nextCandidateTag, parseTag, pruneReleases, releaseAssets } from "./release.mjs";
 
 const repository = "example/app";
 const sha = "a".repeat(40);
@@ -35,6 +35,14 @@ function tagServer({ tags = {}, beforeCreate, loseResponse = false, failCreate }
     server.calls.push(`${method} ${route}`);
     if (method === "GET" && route === `/repos/${repository}/git/matching-refs/tags/v`) {
       return Object.entries(server.tags).map(([name, object]) => ({ ref: `refs/tags/${name}`, object }));
+    }
+    const page = /^\/repos\/example\/app\/tags\?per_page=100&page=(\d+)$/.exec(route);
+    if (method === "GET" && page) {
+      // The tag listing names the commit of each tag, also of an annotated one.
+      const listed = Object.entries(server.tags).map(([name, object]) => ({
+        name, commit: { sha: object.type === "tag" ? server.annotations[object.sha]?.object.sha ?? otherSha : object.sha },
+      }));
+      return listed.slice((Number(page[1]) - 1) * 100, Number(page[1]) * 100);
     }
     const annotation = /^\/repos\/example\/app\/git\/tags\/([a-f0-9]{40})$/.exec(route);
     if (method === "GET" && annotation) return server.annotations[annotation[1]];
@@ -82,6 +90,22 @@ test("a retried run returns its own candidate instead of taking another number",
   await allocateCandidate({ request: server.request, repository, sha: otherSha, runId: "43" });
   assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "42" }), first);
   assert.deepEqual(Object.keys(server.tags).sort(), ["v0.3.3", "v0.3.4", "v0.3.5-rc1", "v0.3.5-rc2"]);
+});
+
+test("a rerun after the stable release of its version returns its own candidate", async () => {
+  const server = tagServer({ tags: stableTags });
+  assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "42" }), "v0.3.5-rc1");
+  server.tags["v0.3.5"] = { type: "commit", sha };
+  assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "42" }), "v0.3.5-rc1");
+  assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "43" }), "v0.3.6-rc1");
+});
+
+test("finds the run's candidate among more than a page of tags", async () => {
+  const many = Object.fromEntries(Array.from({ length: 150 }, (_, index) => [`v0.1.${index}`, { type: "commit", sha: otherSha }]));
+  const server = tagServer({ tags: { ...many, ...stableTags } });
+  assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "42" }), "v0.3.5-rc1");
+  assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "42" }), "v0.3.5-rc1");
+  assert.ok(server.calls.includes(`GET /repos/${repository}/tags?per_page=100&page=2`));
 });
 
 test("a concurrent run that takes the name first moves this run to the next number", async () => {
@@ -173,17 +197,26 @@ test("rejects malformed release data before planning deletions", () => {
   assert.throws(() => plan([{ ...release("v0.3.5"), id: "7" }], "v0.3.5"), /Invalid release metadata/);
 });
 
-/** A fake release API with paging and deletion. */
-function releaseServer(releases, { onDelete } = {}) {
-  const server = { releases: [...releases], deleted: [], calls: [] };
-  server.request = async (route, { method = "GET" } = {}) => {
+/** A fake release API with paging, deletion and GitHub's latest release. */
+function releaseServer(releases, { onDelete, latest } = {}) {
+  const server = { releases: [...releases], deleted: [], calls: [], latest };
+  server.request = async (route, { method = "GET", body } = {}) => {
     server.calls.push(`${method} ${route}`);
+    if (route === `/repos/${repository}/releases/latest`) {
+      const current = server.releases.find((item) => item.id === server.latest);
+      if (!current) throw Object.assign(new Error("Not Found"), { status: 404 });
+      return current;
+    }
     const page = /^\/repos\/example\/app\/releases\?per_page=100&page=(\d+)$/.exec(route);
     if (method === "GET" && page) return server.releases.slice((Number(page[1]) - 1) * 100, Number(page[1]) * 100);
     const one = /^\/repos\/example\/app\/releases\/(\d+)$/.exec(route);
     const index = one ? server.releases.findIndex((item) => item.id === Number(one[1])) : -1;
     if (one && index < 0) throw Object.assign(new Error("Not Found"), { status: 404 });
     if (method === "GET" && one) return server.releases[index];
+    if (method === "PATCH" && one && body?.make_latest === "true") {
+      server.latest = server.releases[index].id;
+      return server.releases[index];
+    }
     if (method === "DELETE" && one) {
       server.deleted.push(server.releases[index].tag_name);
       server.releases.splice(index, 1);
@@ -229,4 +262,28 @@ test("stops when a newer stable release appears during cleanup", async () => {
   await pruneReleases({ request: server.request, repository, releasedTag: "v0.3.5", apply: true, log: (line) => lines.push(line) });
   assert.equal(server.deleted.length, 1);
   assert.match(lines.join("\n"), /Stopping cleanup. v0\.3\.5 is no longer the newest stable release/);
+});
+
+test("marks the stable release with the highest version as the latest", async () => {
+  const older = release("v0.3.5");
+  const newer = release("v0.3.6");
+  // v0.3.5 finished publishing last and took the latest mark.
+  const server = releaseServer([newer, release("v0.3.7-rc1"), release("v0.4.0", { draft: true }), older], { latest: older.id });
+  const lines = [];
+  await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
+  assert.equal(server.latest, newer.id);
+  assert.deepEqual(lines, ["Marked v0.3.6 as the latest release."]);
+  await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
+  assert.equal(server.calls.filter((call) => call.startsWith("PATCH")).length, 1);
+  assert.equal(lines.at(-1), "v0.3.6 is the latest release.");
+});
+
+test("marks a release as the latest when none is, and does nothing without a stable release", async () => {
+  const only = release("v0.3.5");
+  const server = releaseServer([only]);
+  await markLatest({ request: server.request, repository, log: () => {} });
+  assert.equal(server.latest, only.id);
+  const empty = releaseServer([release("v0.3.6-rc1")]);
+  await markLatest({ request: empty.request, repository, log: () => {} });
+  assert.equal(empty.calls.some((call) => call.startsWith("PATCH")), false);
 });

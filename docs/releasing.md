@@ -20,8 +20,8 @@ The next candidate targets the patch after the newest stable tag. When a
 candidate for a higher version already exists, such as a hand-pushed
 `v0.4.0-rc1`, later candidates continue that version. Every version tag counts as
 taken, also one without a release. A rerun of a workflow run reuses the tag that
-the run created, as long as the tag still points to the run's commit. Concurrent
-runs take distinct numbers.
+the run created, as long as the tag still points to the run's commit, also after
+a stable release of its version. Concurrent runs take distinct numbers.
 
 To start a new minor or major version, push its first candidate tag by hand on a
 `main` commit whose CI passed. A pushed candidate tag publishes a prerelease like
@@ -44,12 +44,16 @@ git push origin v0.3.5
 ```
 
 The tag must be unused. Do not move or rename an existing tag. The tag push
-builds and tests both platforms again, then publishes the release as the latest
-release. After `v0.3.5` exists, the next automatic candidate is `v0.3.6-rc1`.
+builds and tests both platforms again and publishes the release. A last job then
+marks the stable release with the highest version as GitHub's latest release, so
+releases that finish publishing out of order still end with the newest one as
+the latest, and runs the cleanup below. Rerunning that job after a failure
+repeats only those steps. After `v0.3.5` exists, the next automatic candidate is
+`v0.3.6-rc1`.
 
 ## Release cleanup
 
-After a stable release is published with all its files, the release job keeps the
+After a stable release is published with all its files, the last job keeps the
 three newest stable releases by version and deletes older release entries and
 their downloads. It also deletes published prereleases whose version is at or
 below the new stable version. Candidates for higher versions, drafts and releases
