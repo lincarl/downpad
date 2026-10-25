@@ -284,13 +284,14 @@ jobs:
 
       - name: Test the MSI wizard and installed app
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 12
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $msi = @(Get-ChildItem release -Filter *.msi)
           if ($msi.Count -ne 1) { throw "Expected one MSI, found $($msi.Count)" }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version -replace '-rc\d+$', ''
-          ./dev-temp/workflow-controls/scripts/test-msi.ps1 -Msi $msi[0].FullName -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion "$version.0" -Scenario fresh
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -Msi $msi[0].FullName -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion "$version.0" -Scenario fresh
 
       # PR artifacts use 0.0.0, which cannot expose RC file-version truncation.
       # Package the fixtures normally so they pass through PE resource editing.
@@ -319,18 +320,21 @@ jobs:
 
       - name: Test stable to release candidate MSI upgrade
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 12
         shell: powershell
         run: |
-          ./dev-temp/workflow-controls/scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
 
       - name: Test MSI recovery from a missing executable
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 12
         shell: powershell
         run: |
-          ./dev-temp/workflow-controls/scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -Msi dev-temp/msi-tests/recovery/Downpad-0.0.2-rc2-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/recovery/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario recovery -RecoverMissingExecutable
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -Msi dev-temp/msi-tests/recovery/Downpad-0.0.2-rc2-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/recovery/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario recovery -RecoverMissingExecutable
 
       - name: Upload MSI test diagnostics
-        if: failure() && runner.os == 'Windows'
+        if: always() && runner.os == 'Windows' && steps.existing.outputs.reused != 'true'
+        timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}

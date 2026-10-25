@@ -36,8 +36,18 @@ app. This simulates the missing-executable state without recreating every step
 of a historical failed upgrade.
 
 The tests use isolated app profiles. Their packages stay under `dev-temp/` and
-are never published. Failed runs retain MSI test diagnostics as a separate
-Actions artifact.
+are never published. Each scenario runs in a separate PowerShell process with
+an independent ten-minute deadline. Cleanup shares a two-minute wait budget
+across products and retries. Timestamped progress records identify the last
+operation if a native call stops returning. A supervisor timeout fails the test
+and stops its process tree without terminating the shared Windows Installer
+service. Forced termination can leave a test installation behind on the
+disposable runner, so later installer scenarios do not run after a failure.
+
+CI gives each scenario a twelve-minute outer limit and attempts to retain MSI
+logs, progress records, and screenshots after success, failure, or cancellation.
+The diagnostic artifact cannot be guaranteed if the runner itself stops
+responding or the whole job is terminated.
 
 Builds use Ubuntu 26.04 and Windows Server 2025, the Node version in
 `.node-version`, and the pnpm version in `package.json`. Jobs that use GitHub

@@ -11,10 +11,11 @@ driving the current package's upgrade wizard. Never launches Downpad manually.
 RecoverMissingExecutable requires equal product versions and removes only the
 previous test installation's executable before the upgrade, simulating damage.
 Diagnostics and isolated app data remain under dev-temp/msi-tests/diagnostics.
+Use run-msi-test.mjs to enforce a separate process deadline around native calls.
 .EXAMPLE
-powershell -NoProfile -File scripts/test-msi.ps1 -Msi release/Downpad-0.0.0-win-x64.msi -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion 0.0.0.0 -Scenario fresh
+node scripts/run-msi-test.mjs -Msi release/Downpad-0.0.0-win-x64.msi -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion 0.0.0.0 -Scenario fresh
 .EXAMPLE
-powershell -NoProfile -File scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
+node scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
 #>
 [CmdletBinding()]
 param(
@@ -34,6 +35,18 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'MSI in
 if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
     throw 'MSI integration tests require an interactive desktop, not a Session 0 service.'
 }
+
+# Load this helper from workflow-controls while retaining diagnostics in the
+# source checkout. Create them before native initialization or COM activation.
+$diagnostics = Join-Path (Get-Location).ProviderPath ('dev-temp\msi-tests\diagnostics\{0}-{1}-{2}' -f $Scenario, (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+[void](New-Item -ItemType Directory -Path $diagnostics)
+function Write-TestProgress([string]$Message, [switch]$Quiet) {
+    # Flush each checkpoint so a supervisor timeout preserves the last operation.
+    $line = '[{0}] {1}' -f [DateTime]::UtcNow.ToString('o'), $Message
+    Add-Content -LiteralPath (Join-Path $diagnostics 'progress.log') -Value $line -Encoding UTF8
+    if (-not $Quiet) { Write-Host $line }
+}
+Write-TestProgress "Initialize native helpers for '$Scenario', worker PID $PID"
 
 # Native button messages are asynchronous, so an error modal cannot block the
 # polling loop as a synchronous UIAutomation InvokePattern.Invoke can.
@@ -118,6 +131,7 @@ namespace DownpadMsiTest {
 }
 if (-not [DownpadMsiTest.Native]::HasDesktop()) { throw 'The Windows input desktop is unavailable or locked.' }
 
+Write-TestProgress 'Resolve and hash packaged files'
 $Msi = (Resolve-Path -LiteralPath $Msi).Path
 $ExpectedExecutable = (Resolve-Path -LiteralPath $ExpectedExecutable).Path
 if ($PreviousMsi) { $PreviousMsi = (Resolve-Path -LiteralPath $PreviousMsi).Path }
@@ -125,17 +139,13 @@ $expectedAsar = Join-Path (Split-Path -Parent $ExpectedExecutable) 'resources\ap
 if (-not (Test-Path -LiteralPath $expectedAsar -PathType Leaf)) { throw "Missing built app payload $expectedAsar" }
 $expectedHash = (Get-FileHash -LiteralPath $ExpectedExecutable -Algorithm SHA256).Hash
 $expectedAsarHash = (Get-FileHash -LiteralPath $expectedAsar -Algorithm SHA256).Hash
-$installer = New-Object -ComObject WindowsInstaller.Installer
+$installer = $null
 $installFolder = Join-Path $env:LOCALAPPDATA 'Programs\Downpad'
 $installedExe = Join-Path $installFolder 'Downpad.exe'
 $startedProcesses = New-Object 'System.Collections.Generic.List[System.Diagnostics.Process]'
 $appProcesses = @{}
 $attemptedProducts = New-Object 'System.Collections.Generic.List[string]'
 $testStarted = Get-Date
-# CI can load this helper from its separate workflow checkout. Keep test output
-# under the application checkout, where the workflow collects diagnostics.
-$diagnostics = Join-Path (Get-Location).ProviderPath ('dev-temp\msi-tests\diagnostics\{0}-{1}-{2}' -f $Scenario, (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8)))
-[void](New-Item -ItemType Directory -Path $diagnostics)
 $oldDataDir = $env:DOWNPAD_USER_DATA_DIR
 $oldUpdateUrl = $env:DOWNPAD_UPDATE_API_URL
 $failure = $null
@@ -155,6 +165,7 @@ function Get-PeVersion([string]$Path) {
 
 function Get-MsiMetadata([string]$Path) {
     # Opening the MSI database read-only does not install or repair the product.
+    Write-TestProgress "Read MSI metadata from $Path"
     $database = $installer.OpenDatabase($Path, 0)
     $view = $null
     try {
@@ -183,16 +194,20 @@ function Get-MsiMetadata([string]$Path) {
     } finally {
         if ($view) { [void]$view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
+        Write-TestProgress "Released MSI database for $Path"
     }
 }
 
 function Get-RelatedProducts {
     # WindowsInstaller COM enumerates registrations without Win32_Product repairs.
+    Write-TestProgress 'Enumerate related product registrations'
     foreach ($code in $installer.RelatedProducts($current.UpgradeCode)) { [string]$code }
+    Write-TestProgress 'Finished enumerating related products'
 }
 
 function Assert-Installed($Metadata, [string]$Version, [switch]$CurrentPayload) {
     # Require the updater's registry path and a single fully installed product.
+    Write-TestProgress "Verify installed product $($Metadata.ProductCode)"
     $folder = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Downpad' -Name InstallDir).InstallDir
     if ($folder.TrimEnd('\') -ine $installFolder) { throw "InstallDir is '$folder', expected '$installFolder'" }
     if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) { throw "Missing $installedExe" }
@@ -219,6 +234,7 @@ function Assert-Installed($Metadata, [string]$Version, [switch]$CurrentPayload) 
 function Start-TestMsi([string]$Arguments, [string]$LogName) {
     # Preserve the environment and a process handle for bounded waits and cleanup.
     $log = Join-Path $diagnostics "$LogName.log"
+    Write-TestProgress "Start MSI operation '$LogName'"
     $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList "$Arguments /norestart /L*V! `"$log`"" -PassThru
     [void]$startedProcesses.Add($process)
     [void]$process.Handle
@@ -228,8 +244,10 @@ function Start-TestMsi([string]$Arguments, [string]$LogName) {
 
 function Wait-TestProcess([Diagnostics.Process]$Process, [int]$Seconds = $TimeoutSeconds) {
     # Start-Process -Wait also waits for descendants, including the launched app.
+    Write-TestProgress "Wait for MSI client PID $($Process.Id), limit $Seconds seconds"
     if (-not $Process.WaitForExit($Seconds * 1000)) { throw "Process $($Process.Id) timed out after $Seconds seconds." }
     if ($Process.ExitCode -ne 0) { throw "MSI client $($Process.Id) failed with exit code $($Process.ExitCode)." }
+    Write-TestProgress "MSI client PID $($Process.Id) completed"
 }
 
 function Get-TestAppProcesses {
@@ -249,15 +267,20 @@ function Get-TestAppProcesses {
     }
 }
 
-function Stop-TestApps {
+function Stop-TestApps([datetime]$Deadline) {
     # Include Electron helpers, but never kill by image name or unrelated path.
     for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        [void](Get-RemainingMilliseconds $Deadline)
         [void]@(Get-TestAppProcesses)
         foreach ($process in @($appProcesses.Values)) {
             try {
                 if (-not $process.HasExited) {
+                    Write-TestProgress "Stop test app PID $($process.Id)"
                     [void]$process.CloseMainWindow()
-                    if (-not $process.WaitForExit(3000)) { $process.Kill(); [void]$process.WaitForExit(5000) }
+                    if (-not $process.WaitForExit([Math]::Min(3000, (Get-RemainingMilliseconds $Deadline)))) {
+                        $process.Kill()
+                        [void]$process.WaitForExit([Math]::Min(5000, (Get-RemainingMilliseconds $Deadline)))
+                    }
                     if (-not $process.HasExited) { throw 'Process is still running after termination.' }
                 }
             } catch { [void]$cleanupFailures.Add("Could not stop test app PID $($process.Id). $_") }
@@ -267,6 +290,7 @@ function Stop-TestApps {
 
 function Save-Diagnostics([string]$Label) {
     # Capture before dismissing any error. Screenshot failure must not hide it.
+    Write-TestProgress "Capture diagnostics '$Label'"
     $text = New-Object 'System.Collections.Generic.List[string]'
     foreach ($process in $startedProcesses) {
         foreach ($window in [DownpadMsiTest.Native]::Windows($process.Id)) {
@@ -288,6 +312,7 @@ function Save-Diagnostics([string]$Label) {
             $bitmap.Save((Join-Path $diagnostics "$Label.png"), [Drawing.Imaging.ImageFormat]::Png)
         } finally { $graphics.Dispose(); $bitmap.Dispose() }
     } catch { Write-Warning "Could not capture screenshot. $_" }
+    Write-TestProgress "Finished diagnostic capture '$Label'"
 }
 
 function Invoke-InstallWizard([Diagnostics.Process]$Process) {
@@ -300,9 +325,12 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
     $clickedFinish = $false
     $windowSince = $null
     $log = Join-Path $diagnostics 'wizard.log'
+    Write-TestProgress "Drive installer wizard PID $($Process.Id)"
     while ((Get-Date) -lt $deadline) {
+        Write-TestProgress 'Inspect wizard windows' -Quiet
         $windows = @([DownpadMsiTest.Native]::Windows($Process.Id))
         foreach ($window in $windows) {
+            Write-TestProgress "Inspect wizard controls for window $($window.Handle)" -Quiet
             $children = @([DownpadMsiTest.Native]::Children($window.Handle))
             $dialogText = (@($window.Text) + @($children | ForEach-Object { $_.Text })) -join "`n"
             if ($dialogText -match '(?i)\berror\b|\bfailed\b|prematurely|not marked for installation') {
@@ -346,11 +374,13 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
                 throw "Installer did not respond to '$lastAction'.`n$dialogText"
             }
         }
+        Write-TestProgress 'Read wizard log' -Quiet
         if (Test-Path -LiteralPath $log) {
             $errors = @(Select-String -LiteralPath $log -Pattern 'Error 2753', 'not marked for installation', 'Return value 3\.' | Select-Object -Last 8)
             if ($errors.Count -gt 0) { throw "MSI log reports failure.`n$($errors -join "`n")" }
         }
         $hasWindow = $false
+        Write-TestProgress 'Inspect installed app processes and windows' -Quiet
         foreach ($app in @(Get-TestAppProcesses)) {
             if (-not $clickedFinish) { throw 'Downpad started before the Finish button was clicked.' }
             if (@([DownpadMsiTest.Native]::Windows($app.Id) | Where-Object { $_.ClassName -eq 'Chrome_WidgetWin_1' }).Count -gt 0) {
@@ -360,6 +390,7 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
         if ($hasWindow) {
             if (-not $windowSince) { $windowSince = Get-Date }
         } else { $windowSince = $null }
+        Write-TestProgress 'Check wizard client exit' -Quiet
         if ($Process.HasExited) {
             if ($Process.ExitCode -ne 0) { throw "Wizard exited with code $($Process.ExitCode)." }
             if (-not $clickedFinish) { throw 'Wizard exited without clicking Finish with Run Downpad checked.' }
@@ -378,17 +409,25 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
     throw "Timed out after $TimeoutSeconds seconds waiting for the wizard and installed application window. Last action '$lastAction'."
 }
 
-function Wait-InstallerIdle {
+function Get-RemainingMilliseconds([datetime]$Deadline) {
+    # A shared deadline prevents retries and product cleanup from resetting waits.
+    $remaining = [Math]::Ceiling(($Deadline - (Get-Date)).TotalMilliseconds)
+    if ($remaining -le 0) { throw 'The MSI removal or cleanup time budget expired.' }
+    return [int][Math]::Min([int]::MaxValue, $remaining)
+}
+
+function Wait-InstallerIdle([datetime]$Deadline) {
     # Killing a UI client does not finish its service transaction. In particular,
     # ProductState can still be unknown before that transaction registers the app.
     $mutex = $null
     $acquired = $false
+    Write-TestProgress 'Wait for Windows Installer service transaction to finish'
     try {
         try {
             $rights = [Security.AccessControl.MutexRights]::Synchronize -bor [Security.AccessControl.MutexRights]::Modify
             $mutex = [Threading.Mutex]::OpenExisting('Global\_MSIExecute', $rights)
         } catch [Threading.WaitHandleCannotBeOpenedException] { return }
-        try { $acquired = $mutex.WaitOne($TimeoutSeconds * 1000) }
+        try { $acquired = $mutex.WaitOne((Get-RemainingMilliseconds $Deadline)) }
         catch [Threading.AbandonedMutexException] { $acquired = $true }
         if (-not $acquired) { throw 'Timed out waiting for the Windows Installer service transaction to finish.' }
     } finally {
@@ -397,14 +436,19 @@ function Wait-InstallerIdle {
     }
 }
 
-function Remove-TestProduct([string]$Code, [string]$Label) {
+function Remove-TestProduct([string]$Code, [string]$Label, [datetime]$Deadline = (Get-Date).AddSeconds($TimeoutSeconds)) {
     # Attempt removal even for an unknown product, after its transaction settles.
     # Retry 1618 if a transaction acquires the installer mutex between these calls.
     for ($attempt = 1; $attempt -le 4; $attempt++) {
-        Wait-InstallerIdle
+        [void](Get-RemainingMilliseconds $Deadline)
+        Write-TestProgress "Remove test product $Code, attempt $attempt"
+        Wait-InstallerIdle $Deadline
         $process = Start-TestMsi "/x $Code /qn" "$Label-$attempt"
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw "Uninstall timed out for $Code" }
-        if ($process.ExitCode -eq 1618 -and $attempt -lt 4) { Start-Sleep -Seconds 3; continue }
+        if (-not $process.WaitForExit((Get-RemainingMilliseconds $Deadline))) { throw "Uninstall timed out for $Code" }
+        if ($process.ExitCode -eq 1618 -and $attempt -lt 4) {
+            Start-Sleep -Milliseconds ([Math]::Min(3000, (Get-RemainingMilliseconds $Deadline)))
+            continue
+        }
         if ($process.ExitCode -notin @(0, 1605)) { throw "Uninstall of $Code returned $($process.ExitCode)" }
         return
     }
@@ -419,6 +463,9 @@ function Assert-Removed {
 }
 
 try {
+    Write-TestProgress 'Activate Windows Installer COM'
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    Write-TestProgress 'Windows Installer COM activated'
     $current = Get-MsiMetadata $Msi
     if ((ConvertTo-NumericVersion $current.ProductVersion) -ne $ExpectedVersion -or
         (ConvertTo-NumericVersion $current.ExecutableVersion) -ne $ExpectedVersion -or
@@ -490,35 +537,66 @@ try {
     if ($previous -and $installer.ProductState($previous.ProductCode) -ne -1) { throw 'The previous MSI product is still registered after upgrade.' }
 } catch {
     $failure = $_
+    Write-TestProgress "MSI test failure. $failure"
     $_ | Out-String | Set-Content -LiteralPath (Join-Path $diagnostics 'failure.txt') -Encoding UTF8
     Save-Diagnostics 'failure'
 } finally {
+    $cleanupDeadline = (Get-Date).AddSeconds(120)
+    Write-TestProgress 'Begin cleanup with a shared 120-second wait budget'
     # Stop only clients this script started. Never stop the shared MSI service.
     foreach ($process in $startedProcesses.ToArray()) {
         try {
-            if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) }
+            if (-not $process.HasExited) {
+                Write-TestProgress "Stop MSI client PID $($process.Id)"
+                $process.Kill()
+                [void]$process.WaitForExit([Math]::Min(5000, (Get-RemainingMilliseconds $cleanupDeadline)))
+            }
         } catch { [void]$cleanupFailures.Add("Could not stop MSI client $($process.Id). $_") }
     }
     if ($attemptedProducts.Count -gt 0) {
-        try { Stop-TestApps } catch { [void]$cleanupFailures.Add("Could not stop test app processes. $_") }
+        try { Stop-TestApps $cleanupDeadline } catch { [void]$cleanupFailures.Add("Could not stop test app processes. $_") }
     }
     for ($index = $attemptedProducts.Count - 1; $index -ge 0; $index--) {
-        try { Remove-TestProduct $attemptedProducts[$index] "cleanup-$index" }
+        try { Remove-TestProduct $attemptedProducts[$index] "cleanup-$index" $cleanupDeadline }
         catch { [void]$cleanupFailures.Add("Could not remove test product. $_") }
-    }
-    if ($attemptedProducts.Count -gt 0) {
-        try { Assert-Removed } catch { [void]$cleanupFailures.Add([string]$_) }
     }
     # Also retain and stop a cleanup client if its own timeout fired.
     foreach ($process in $startedProcesses) {
-        try { if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) } }
+        try {
+            if (-not $process.HasExited) {
+                Write-TestProgress "Stop cleanup MSI client PID $($process.Id)"
+                $process.Kill()
+                [void]$process.WaitForExit([Math]::Min(5000, (Get-RemainingMilliseconds $cleanupDeadline)))
+            }
+        }
         catch { [void]$cleanupFailures.Add("Could not stop cleanup MSI client $($process.Id). $_") }
         $process.Dispose()
     }
-    foreach ($process in $appProcesses.Values) { $process.Dispose() }
+    # Exhausting the wait budget must not prevent termination of retained apps.
+    foreach ($process in $appProcesses.Values) {
+        try {
+            if (-not $process.HasExited) {
+                Write-TestProgress "Stop remaining test app PID $($process.Id)"
+                $process.Kill()
+                [void]$process.WaitForExit([Math]::Min(5000, (Get-RemainingMilliseconds $cleanupDeadline)))
+            }
+        } catch { [void]$cleanupFailures.Add("Could not stop remaining test app PID $($process.Id). $_") }
+        $process.Dispose()
+    }
+    if ($attemptedProducts.Count -gt 0) {
+        try {
+            [void](Get-RemainingMilliseconds $cleanupDeadline)
+            Write-TestProgress 'Verify test product removal'
+            Assert-Removed
+        } catch { [void]$cleanupFailures.Add([string]$_) }
+    }
     $env:DOWNPAD_USER_DATA_DIR = $oldDataDir
     $env:DOWNPAD_UPDATE_API_URL = $oldUpdateUrl
-    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
+    if ($installer) {
+        Write-TestProgress 'Release Windows Installer COM'
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
+    }
+    Write-TestProgress 'Cleanup completed'
 }
 if ($failure -or $cleanupFailures.Count -gt 0) {
     foreach ($log in Get-ChildItem -LiteralPath $diagnostics -Filter '*.log') {
