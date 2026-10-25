@@ -243,7 +243,7 @@ describe("Automatic updates", () => {
     const manual = await updater(server().fetch);
     await manual.instance.checkNow();
     await manual.instance.automaticUpdatesOff();
-    expect(await (await updater(server().fetch, { directory: manual.updates })).instance.start(false)).not.toBeNull();
+    expect((await (await updater(server().fetch, { directory: manual.updates })).instance.start(false)).pending).not.toBeNull();
   });
 
   it("installs an automatic download chosen with Restart now also with automatic updates off", async () => {
