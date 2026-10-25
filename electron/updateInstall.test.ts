@@ -172,6 +172,20 @@ describe("MSI installation folder", () => {
     expect(exportedRegistryString(Buffer.from("not an export"), "InstallDir")).toBe("");
   });
 
+  it("finds no installation, instead of failing the start, when no temporary folder can be made", async () => {
+    const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+    const missing = join(await folder(), "missing", "deeper");
+    Object.assign(process.env, { TMPDIR: missing, TEMP: missing, TMP: missing });
+    try {
+      expect(await registeredMsiFolder()).toBe("");
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   it.runIf(process.platform === "win32")("reads a folder name outside the console's code page from the registry", async () => {
     const key = `HKCU\\Software\\DownpadUpdateTest-${randomUUID()}`;
     const folder = "C:\\Users\\Jörg Åström\\AppData\\Local\\Programs\\Downpad\\";

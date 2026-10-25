@@ -164,6 +164,11 @@ export async function stageMsi(file: string, sha256: string): Promise<StagedMsi>
   return { package: staged, staging };
 }
 
+/** Remove a staged MSI that will not be installed. */
+export async function discardStagedMsi(staged: StagedMsi): Promise<void> {
+  await rm(staged.staging, { recursive: true, force: true }).catch(() => {});
+}
+
 /** Start the installation of `staged` in a detached helper (msiHelper), which
  *  writes the installer's exit code to `result`. The caller must quit at once,
  *  so the installer can replace Downpad's files. If the helper cannot start,
@@ -201,13 +206,14 @@ export function exportedRegistryString(exported: Buffer, name: string): string {
  *  query prints in the console's code page, which can garble a folder name
  *  such as one under C:\\Users\\Jörg, so the value comes from an export instead. */
 export async function registeredMsiFolder(key = "HKCU\\Software\\Downpad"): Promise<string> {
-  const folder = await mkdtemp(join(tmpdir(), "downpad-registry-"));
+  let folder: string | undefined;
   try {
+    folder = await mkdtemp(join(tmpdir(), "downpad-registry-"));
     const file = join(folder, "key.reg");
     await executeFile(win32.join(systemFolder(), "reg.exe"), ["export", key, file, "/y"], { timeout: 5000, windowsHide: true });
     return exportedRegistryString(await readFile(file), "InstallDir");
   } catch { return ""; } finally {
-    await rm(folder, { recursive: true, force: true });
+    if (folder) await rm(folder, { recursive: true, force: true }).catch(() => {});
   }
 }
 

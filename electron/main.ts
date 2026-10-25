@@ -15,7 +15,7 @@ import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
 import { adoptLegacyData, ConfigStore, RecentSearch, statFiles } from "./storage";
-import { debInstallCommand, installDeb, installedPackageKind, replaceAppImage, stageMsi, startMsiInstaller } from "./updateInstall";
+import { debInstallCommand, discardStagedMsi, installDeb, installedPackageKind, replaceAppImage, stageMsi, startMsiInstaller } from "./updateInstall";
 import { Updater, type PendingUpdate } from "./updater";
 import type { PackageKind } from "./updatePlan";
 import { watchPath } from "./watchers";
@@ -481,8 +481,13 @@ async function installPendingUpdate(pending: PendingUpdate): Promise<{ restartin
       // installation, so the download is forgotten before it starts, or every
       // start would try it. The verified copy it installs is staged first.
       const staged = await stageMsi(pending.file, pending.sha256);
-      await updates().handedToInstaller(pending.version);
-      await startMsiInstaller(staged, process.execPath, updates().installerResultFile(), firstFileArgument(process.argv) ?? undefined);
+      try {
+        await updates().handedToInstaller(pending.version);
+        await startMsiInstaller(staged, process.execPath, updates().installerResultFile(), firstFileArgument(process.argv) ?? undefined);
+      } catch (error) {
+        await discardStagedMsi(staged);
+        throw error;
+      }
       app.exit(0);
       return { restarting: true };
     }
@@ -514,7 +519,11 @@ async function start(): Promise<void> {
     await config.saveSettings({ ...await config.settings(), hasCheckedDefaultHandler: false })
       .catch((error: unknown) => console.error("Downpad could not reset its default-app check", error));
   }
-  packageKind = await installedPackageKind({ isPackaged: app.isPackaged, version: app.getVersion() });
+  // A copy whose installation cannot be told never updates itself, and still starts.
+  packageKind = await installedPackageKind({ isPackaged: app.isPackaged, version: app.getVersion() }).catch((error: unknown) => {
+    console.error("Downpad could not tell how it was installed", error);
+    return null;
+  });
   updater = new Updater({
     version: app.getVersion(), kind: packageKind, directory: join(app.getPath("userData"), "updates"),
     fetch: (url, init) => net.fetch(url, init),
