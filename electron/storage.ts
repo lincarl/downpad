@@ -60,7 +60,8 @@ const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recove
  *  the old folder and is tried again on a later launch, unless Downpad has made
  *  its own by then, as it does with its settings and recovery folder at
  *  startup. Chromium's own files stay in the old folder. Returns whether the
- *  app took over md-easy's settings. */
+ *  app took over md-easy's settings. Call it only from the launch that holds
+ *  the single-instance lock, so that two launches never move the same files. */
 export function adoptLegacyData(legacy: string, directory: string): boolean {
   if (!existsSync(legacy)) return false;
   let adoptedSettings = false;
@@ -71,10 +72,14 @@ export function adoptLegacyData(legacy: string, directory: string): boolean {
     mkdirSync(directory, { recursive: true });
     try { renameSync(source, target); }
     catch {
-      try { cpSync(source, target, { recursive: true }); }
-      catch (error) {
-        // Remove a partial copy, so the next launch tries again.
-        rmSync(target, { recursive: true, force: true });
+      // Copy under a name of this launch's own and rename it into place, so a
+      // failed copy only ever removes its own partial files.
+      const partial = `${target}.${process.pid}.partial`;
+      try {
+        cpSync(source, partial, { recursive: true });
+        renameSync(partial, target);
+      } catch (error) {
+        rmSync(partial, { recursive: true, force: true });
         console.error(`Downpad could not take over md-easy's ${name}`, error);
         continue;
       }

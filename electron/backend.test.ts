@@ -551,6 +551,21 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "light"\n');
   });
 
+  it("keeps a folder that another launch moved first", async () => {
+    const { legacy, directory } = await folders();
+    const rename = synchronousFilesystem.renameSync;
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementation((source, target) => {
+      rename(source, target);
+      // Another launch moved the recovery folder first, so this launch finds no source.
+      if (String(source).endsWith("recovery")) throw Object.assign(new Error("No such file or directory"), { code: "ENOENT" });
+    });
+    syncBuiltinESMExports();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(await readFile(join(directory, "recovery", "session.json"), "utf8")).toBe("{}");
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+  });
+
   it("tries a file again on the next launch when it can be neither moved nor copied", async () => {
     const { legacy, directory } = await folders();
     const failure = Object.assign(new Error("Access is denied."), { code: "EACCES" });

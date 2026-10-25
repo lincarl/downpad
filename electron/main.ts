@@ -24,9 +24,6 @@ if (isolatedData) {
   const directory = absolutePath(isolatedData);
   mkdirSync(directory, { recursive: true });
   app.setPath("userData", directory);
-} else {
-  // The app was called md-easy before, and kept its data in a folder by that name.
-  adoptedLegacySettings = adoptLegacyData(join(app.getPath("appData"), "md-easy"), app.getPath("userData"));
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -93,6 +90,11 @@ app.on("open-file", (event, path) => { event.preventDefault(); requestOpen(path)
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // The app was called md-easy before, and kept its data in a folder by that
+  // name. Only the launch that holds the lock moves it: launches started
+  // together, such as for several files opened at once, would otherwise move
+  // the same files, and one's failed copy could remove what another moved.
+  if (!isolatedData) adoptedLegacySettings = adoptLegacyData(join(app.getPath("appData"), "md-easy"), app.getPath("userData"));
   app.on("second-instance", (_event, argv, cwd) => {
     const path = firstFileArgument(argv, cwd);
     if (path) requestOpen(path);
