@@ -2571,7 +2571,8 @@ test("a click in the room find adds above the Markdown view keeps focus in the f
   await launch(file);
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   await expect(pane.locator(".cm-line").first()).toBeVisible();
   await page.keyboard.press("ControlOrMeta+f");
@@ -6097,7 +6098,8 @@ test("find in the Markdown view gives the first line room below the card and cle
   await launch(file);
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   const firstLine = pane.locator(".cm-line").filter({ hasText: "needle on the first line." });
   await expect(firstLine).toBeVisible();
