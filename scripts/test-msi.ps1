@@ -470,7 +470,8 @@ try {
     if ((ConvertTo-NumericVersion $current.ProductVersion) -ne $ExpectedVersion -or
         (ConvertTo-NumericVersion $current.ExecutableVersion) -ne $ExpectedVersion -or
         (Get-PeVersion $ExpectedExecutable) -ne $ExpectedVersion) {
-        throw "Target versions disagree. Expected $ExpectedVersion, MSI $($current.ProductVersion), File table $($current.ExecutableVersion), PE $(Get-PeVersion $ExpectedExecutable)"
+        throw ("Target versions disagree. Expected $ExpectedVersion, MSI $($current.ProductVersion), File table $($current.ExecutableVersion), PE $(Get-PeVersion $ExpectedExecutable). " +
+            'Check that scripts/apply-version-from-tag.mjs sets a numeric build.buildVersion before packaging. Branches that predate the numeric-version fix must include it before retrying.')
     }
     $previous = $null
     if ($PreviousMsi) {

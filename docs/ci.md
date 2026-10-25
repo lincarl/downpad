@@ -28,6 +28,8 @@ and uninstalls the test copy. A second scenario builds synthetic `0.0.1` and
 `0.0.2-rc1` packages through the normal release-version and packaging steps, then
 upgrades the stable installation to the candidate. This catches incorrect
 numeric Windows executable versions even when the PR artifact uses `0.0.0`.
+Fixtures use the application's release-version script from the PR head.
+Older branches must include the numeric-version fix to pass these checks.
 
 A recovery scenario removes only the executable from a registered `0.0.2-rc1`
 test installation, then upgrades to `0.0.2-rc2`. Both packages have the same
