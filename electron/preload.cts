@@ -7,10 +7,11 @@ const commands = new Set<keyof DesktopCommandArgs>([
   "search_recent_contents", "cancel_search", "write_snapshot", "delete_snapshot", "list_recovery_snapshots",
   "get_launch_args", "get_default_md_handler", "open_default_apps_settings", "get_system_accent_color",
   "load_settings", "save_settings", "settings_path", "list_printers", "print_webview", "print_webview_to_pdf",
+  "update_info", "check_for_updates", "restart_to_update",
 ]);
 const events = new Set<keyof DesktopEventPayloads>([
   "settings-changed", "file-changed", "open-file-requested", "print-completed", "search-result", "close-requested",
-  "history-requested",
+  "history-requested", "update-changed",
 ]);
 let closeListeners = 0;
 let openListeners = 0;

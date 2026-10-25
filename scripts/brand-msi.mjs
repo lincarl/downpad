@@ -3,8 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // electron-builder calls this hook after it writes the WiX project and before it
-// compiles the MSI. It swaps WiX's stock dialog images for Downpad's bitmaps, and
-// gives the file types the ProgIds of md-easy, the app's earlier name.
+// compiles the MSI. It swaps WiX's stock dialog images for Downpad's bitmaps,
+// gives the file types the ProgIds of md-easy, the app's earlier name, and
+// records the installation folder for the updater.
 
 const bitmaps = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "build", "msi");
 const xml = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -23,12 +24,26 @@ function keepLegacyProgIds(project, projectFile) {
   return kept;
 }
 
-/** Adds the banner and welcome bitmaps to the WiX project at `projectFile` and
- *  keeps md-easy's ProgIds. */
+/** Adds a component that writes the installation folder to Software\Downpad,
+ *  InstallDir, under HKMU: HKCU for an installation for the current user and
+ *  HKLM for one for all users. A copy that runs from the folder recorded in
+ *  HKCU installs updates itself (electron/updateInstall.ts). The component's
+ *  GUID must stay the same in every release. */
+function recordInstallFolder(project, projectFile) {
+  const group = /(<ComponentGroup Id="ProductComponents"[^>]*>[\s\S]*?)(<\/ComponentGroup>)/;
+  if (!group.test(project)) throw new Error(`Cannot record the installation folder in ${projectFile}: no ProductComponents group.`);
+  const component = '<Component Id="downpadInstallFolder" Guid="{6BAD51B4-ED13-4291-97F4-6AB9EBBA7FEB}">\n' +
+    '        <RegistryValue Root="HKMU" Key="Software\\Downpad" Name="InstallDir" Type="string" Value="[APPLICATIONFOLDER]" KeyPath="yes"/>\n' +
+    "      </Component>\n    ";
+  return project.replace(group, (_match, start, end) => `${start}  ${component}${end}`);
+}
+
+/** Adds the banner and welcome bitmaps to the WiX project at `projectFile`,
+ *  keeps md-easy's ProgIds and records the installation folder. */
 export default async function brandMsi(projectFile) {
   const original = await readFile(projectFile, "utf8");
   if (!original.includes("</Product>")) throw new Error(`Cannot brand ${projectFile}: no WiX Product element.`);
-  const project = keepLegacyProgIds(original, projectFile);
+  const project = recordInstallFolder(keepLegacyProgIds(original, projectFile), projectFile);
   // light.exe runs in the project's folder. A relative path also resolves under Wine.
   const source = (name) => xml(path.relative(path.dirname(projectFile), path.join(bitmaps, name)).split(path.sep).join("\\"));
   const variables = `<WixVariable Id="WixUIBannerBmp" Value="${source("banner.bmp")}"/>\n`

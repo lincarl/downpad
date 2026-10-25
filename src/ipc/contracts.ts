@@ -114,3 +114,27 @@ export interface AppError {
   kind: string;
   message: string;
 }
+
+/** Where an update check or download stands, as Settings > Updates shows it. */
+export type UpdateState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "up-to-date" }
+  | { status: "downloading"; version: string; percent: number | null }
+  /** Downloaded and verified. It installs the next time Downpad starts. */
+  | { status: "ready"; version: string }
+  /** Newer than this copy, which cannot install it itself. */
+  | { status: "available"; version: string; pageUrl: string }
+  | { status: "failed"; message: string };
+
+/** The update state of this copy of Downpad. */
+export interface UpdateInfo {
+  /** This copy's version, such as `1.2.3` or `1.2.3-rc1`. */
+  version: string;
+  /** Whether this copy installs updates itself: a copy installed from the MSI,
+   *  AppImage or DEB package of a release. */
+  selfUpdate: boolean;
+  /** The last successful check, in epoch milliseconds, or null before one. */
+  lastCheckMs: number | null;
+  state: UpdateState;
+}

@@ -70,6 +70,14 @@ Settings are stored locally in `settings.toml` and can be changed from the app o
 
 If the file contains invalid TOML, the app uses defaults for the session and preserves the original file. Settings changes apply in memory, but saving them requires repairing the file's syntax first.
 
+## Updates
+
+Copies installed from a release's MSI installer, AppImage or DEB package update themselves. With Update automatically on, which is the default, Downpad checks GitHub for the latest stable release when it starts at least 30 days after its last successful check, or when it has never checked. A failed check stays due and runs again on the next start. A newer release downloads in the background in the same package format, and Downpad keeps it only if it matches the SHA-256 digest that GitHub lists for it. The next start installs it before any window opens and starts the new version. The MSI installer shows its progress, the AppImage file is replaced, and the DEB package installs after the system asks for a password. If that start cannot install the download, or the password prompt is dismissed, Downpad deletes the download and waits for the next check, and an installation error is shown once the window opens. On Windows, Downpad starts again after the installer, also after a failed installation, and then shows the installer's error. A cancelled installation shows nothing.
+
+Settings > Updates shows the version, the automatic update switch and Check for updates. Check for updates reports that Downpad is up to date or that the check failed, or shows the download's progress, and then offers Restart now. Restart now asks about unsaved documents first, then starts Downpad again, which installs the update. A download from Check for updates also installs on the next start with automatic updates off. Switching automatic updates off deletes a download that only they would install.
+
+Installed copies update only to stable releases. A release candidate updates to the release of its own version or a newer one. Each package format keeps its own check date and download, so an AppImage beside the DEB installation never installs or deletes the DEB's update. Copies that cannot update themselves show no switch, and Check for updates offers the release's download page instead. These include development builds, builds from source, an AppImage in a folder Downpad cannot write, copies of the installed folder, and MSI installations for all users of a computer.
+
 ## Platform and scope
 
 Downpad is a local, single-user Electron application for Windows and Linux. Documents remain ordinary Markdown files on disk. The app does not provide cloud sync, real-time collaboration, mobile clients, or a plugin system.

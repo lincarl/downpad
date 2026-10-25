@@ -15,6 +15,7 @@ import type {
   SearchOpts,
   SearchSummary,
   Snapshot,
+  UpdateInfo,
 } from "./contracts";
 
 export interface DesktopCommandArgs {
@@ -46,6 +47,9 @@ export interface DesktopCommandArgs {
   list_printers: undefined;
   print_webview: { options: NativePrintOptions };
   print_webview_to_pdf: { path: string; options: NativePrintOptions };
+  update_info: undefined;
+  check_for_updates: undefined;
+  restart_to_update: undefined;
 }
 
 export interface DesktopCommandResults {
@@ -77,6 +81,9 @@ export interface DesktopCommandResults {
   list_printers: PrinterInfo[];
   print_webview: void;
   print_webview_to_pdf: void;
+  update_info: UpdateInfo;
+  check_for_updates: void;
+  restart_to_update: void;
 }
 
 /** Undo or Redo, chosen in a native menu. */
@@ -90,6 +97,7 @@ export interface DesktopEventPayloads {
   "search-result": { searchId: string; hit: SearchHit };
   "close-requested": void;
   "history-requested": HistoryCommand;
+  "update-changed": UpdateInfo;
 }
 
 export interface FileDialogFilter {

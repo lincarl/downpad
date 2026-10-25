@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, screen, shell, systemPreferences,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, screen, shell, systemPreferences,
   type IpcMainEvent, type IpcMainInvokeEvent, type OpenDialogOptions, type SaveDialogOptions,
 } from "electron";
 import { execFile } from "node:child_process";
@@ -15,6 +15,9 @@ import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
 import { adoptLegacyData, ConfigStore, RecentSearch, statFiles } from "./storage";
+import { debInstallCommand, discardStagedMsi, installDeb, installedPackageKind, replaceAppImage, stageMsi, startMsiInstaller } from "./updateInstall";
+import { Updater, type PendingUpdate } from "./updater";
+import type { PackageKind } from "./updatePlan";
 import { watchPath } from "./watchers";
 
 app.setName("Downpad");
@@ -45,6 +48,10 @@ let openListenerAttached = false;
 let allowClose = false;
 let startupCompleted = false;
 let quitRequested = false;
+let updater: Updater | undefined;
+let packageKind: PackageKind | null = null;
+/** Restart Now in Settings > Updates asked to quit and start again. */
+let restartForUpdate = false;
 
 function firstFileArgument(argv: string[], cwd = process.cwd()): string | null {
   for (const argument of argv.slice(app.isPackaged ? 1 : 2)) {
@@ -172,7 +179,15 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     }
     case "read_image_bytes": return readImage(path(args));
     case "load_settings": return config.settings();
-    case "save_settings": return config.saveSettings(args.settings);
+    case "save_settings": {
+      await config.saveSettings(args.settings);
+      // Deleting an automatic download waits for a running download, which
+      // must not hold up the next settings save.
+      if (!(await config.settings()).autoUpdate) {
+        void updates().automaticUpdatesOff().catch((error: unknown) => console.error("Downpad could not delete the automatic update", error));
+      }
+      return;
+    }
     case "settings_path": return config.settingsPath;
     case "get_recent_files": return config.recent(args.limit === null || args.limit === undefined ? undefined : number(args, "limit"));
     case "record_file_opened": return config.recordOpened(path(args), number(args, "openedAtMs"));
@@ -214,6 +229,9 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
       printing.start(validatePrintOptions(args.options), command === "print_webview_to_pdf" ? path(args) : undefined);
       return;
     }
+    case "update_info": return updates().info();
+    case "check_for_updates": void updates().checkNow(); return;
+    case "restart_to_update": return restartToUpdate();
     default: throw new Error("Unknown desktop command.");
   }
 }
@@ -313,7 +331,7 @@ function registerIpc(): void {
     allowClose = true;
     if (quitRequested) app.quit(); else mainWindow?.close();
   });
-  ipcMain.handle("downpad:cancel-window-close", (event) => { trustedSender(event); quitRequested = false; });
+  ipcMain.handle("downpad:cancel-window-close", (event) => { trustedSender(event); quitRequested = false; restartForUpdate = false; });
   ipcMain.on("downpad:close-listener", (event, attached: unknown) => {
     try { trustedSender(event); closeListenerAttached = attached === true; } catch { /* Ignore untrusted listener registration. */ }
   });
@@ -434,6 +452,67 @@ async function createWindow(): Promise<void> {
   else await window.loadFile(join(appRoot, "dist", "index.html"));
 }
 
+function updates(): Updater {
+  if (!updater) throw new Error("Updates are unavailable.");
+  return updater;
+}
+
+/** The program that starts this copy again. An AppImage starts from its file,
+ *  since the mounted image that runs now disappears when it quits. */
+function relaunchExecutable(): string {
+  return packageKind === "appimage" && process.env.APPIMAGE ? process.env.APPIMAGE : process.execPath;
+}
+
+/** Quit, through the usual prompt about unsaved documents, and start again,
+ *  which installs the downloaded update. */
+async function restartToUpdate(): Promise<void> {
+  if (!(await updates().approve())) throw new Error("No downloaded update is waiting.");
+  restartForUpdate = true;
+  app.quit();
+}
+
+/** Install the verified update that waits for this start, before any window
+ *  opens, and start the new version with this launch's arguments. Returns
+ *  whether Downpad is restarting, or a failure to report once the window is up. */
+async function installPendingUpdate(pending: PendingUpdate): Promise<{ restarting: boolean; failure?: string }> {
+  try {
+    if (packageKind === "msi") {
+      // The helper starts Downpad again also after a failed or cancelled
+      // installation, so the download is forgotten before it starts, or every
+      // start would try it. The verified copy it installs is staged first.
+      const staged = await stageMsi(pending.file, pending.sha256);
+      try {
+        await updates().handedToInstaller(pending.version);
+        await startMsiInstaller(staged, process.execPath, updates().installerResultFile(), firstFileArgument(process.argv) ?? undefined);
+      } catch (error) {
+        await discardStagedMsi(staged);
+        throw error;
+      }
+      app.exit(0);
+      return { restarting: true };
+    }
+    if (packageKind === "appimage") await replaceAppImage(pending.file, pending.sha256, process.env.APPIMAGE!);
+    else if (packageKind === "deb") {
+      const command = debInstallCommand();
+      if (!command) throw new Error("pkexec or a package manager is missing.");
+      if ((await installDeb(pending.file, pending.sha256, command)) === "cancelled") {
+        await updates().dropPending();
+        return { restarting: false };
+      }
+    } else return { restarting: false };
+  } catch (error) {
+    const failure = `Couldn't install Downpad ${pending.version}. ${error instanceof Error ? error.message : String(error)}`;
+    await updates().dropPending(failure).catch(() => {});
+    return { restarting: false, failure };
+  }
+  // The package is in place. Forget it, so a package whose app reports an older
+  // version than its release cannot install again on every start.
+  await updates().dropPending().catch(() => {});
+  app.relaunch({ execPath: relaunchExecutable(), args: process.argv.slice(1) });
+  app.exit(0);
+  return { restarting: true };
+}
+
 async function start(): Promise<void> {
   await app.whenReady();
   await config.initialize();
@@ -443,6 +522,25 @@ async function start(): Promise<void> {
     await config.saveSettings({ ...await config.settings(), hasCheckedDefaultHandler: false })
       .catch((error: unknown) => console.error("Downpad could not reset its default-app check", error));
   }
+  // A copy whose installation cannot be told never updates itself, and still starts.
+  packageKind = await installedPackageKind({ isPackaged: app.isPackaged, version: app.getVersion() }).catch((error: unknown) => {
+    console.error("Downpad could not tell how it was installed", error);
+    return null;
+  });
+  updater = new Updater({
+    version: app.getVersion(), kind: packageKind, directory: join(app.getPath("userData"), "updates"),
+    fetch: (url, init) => net.fetch(url, init),
+    // For tests: a release server on this computer instead of GitHub.
+    apiUrl: process.env.DOWNPAD_UPDATE_API_URL || undefined,
+    onChange: (info) => emit("update-changed", info),
+  });
+  const { autoUpdate } = await config.settings();
+  const { pending, failure: installerFailure } = await updater.start(autoUpdate).catch((error: unknown) => {
+    console.error("Downpad could not read its update state", error);
+    return { pending: null, failure: null };
+  });
+  const installation = pending ? await installPendingUpdate(pending) : { restarting: false };
+  if (installation.restarting) return;
   Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate(macApplicationMenu(requestHistory)) : null);
   registerIpc();
   protocol.handle("downpad-file", async (request) => {
@@ -458,12 +556,29 @@ async function start(): Promise<void> {
       } });
     } catch { return new Response("Image unavailable", { status: 403 }); }
   });
-  unwatchSettings = watchPath(config.settingsPath, () => { void config.settings().then((settings) => emit("settings-changed", settings)); });
+  unwatchSettings = watchPath(config.settingsPath, () => {
+    void config.settings().then((settings) => {
+      emit("settings-changed", settings);
+      if (!settings.autoUpdate) {
+        void updater?.automaticUpdatesOff().catch((error: unknown) => console.error("Downpad could not delete the automatic update", error));
+      }
+    }).catch((error: unknown) => console.error("Downpad could not read its settings", error));
+  });
   await createWindow();
   startupCompleted = true;
   app.on("activate", () => { if (!mainWindow) void createWindow(); });
+  // A failed installation by this start, or by the Windows installer before it.
+  const updateFailure = installation.failure ?? installerFailure;
+  if (updateFailure && mainWindow) {
+    void dialog.showMessageBox(mainWindow, { type: "warning", title: "Downpad", message: "The update could not be installed.", detail: updateFailure });
+  }
+  void updater.checkIfDue(autoUpdate).catch((error: unknown) => console.error("Downpad could not check for updates", error));
 }
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("before-quit", () => { quitRequested = true; });
-app.on("will-quit", () => { unwatchDocument?.(); unwatchSettings?.(); });
+app.on("will-quit", () => {
+  unwatchDocument?.(); unwatchSettings?.();
+  // The new copy installs the downloaded update when it starts.
+  if (restartForUpdate) app.relaunch({ execPath: relaunchExecutable(), args: process.argv.slice(1).filter((argument) => argument.startsWith("-")) });
+});

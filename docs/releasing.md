@@ -55,6 +55,15 @@ keeps one waiting job per group, so if a third stable release finishes while
 one job runs and another waits, the waiting one is cancelled. Rerun it. After
 `v0.3.5` exists, the next automatic candidate is `v0.3.6-rc1`.
 
+## Installed copies
+
+Installed copies of Downpad update only to stable releases. A copy running
+`0.3.5-rc2` updates to `0.3.5` when that release is published. The updater
+downloads the release file named for its package format and checks it against
+the SHA-256 digest that GitHub lists for the file, so keep the file names that
+the release job publishes. The [specification](spec.md#updates) describes the
+update behavior.
+
 ## Release cleanup
 
 After a stable release is published with all its files, the last job keeps the
@@ -95,4 +104,4 @@ installed before. Windows lists that shared version among the installed apps.
 Settings > About in Downpad shows the public version.
 
 Builds without a release tag, such as local and pull request builds, use the
-version `0.0.0` from `package.json`.
+version `0.0.0` from `package.json`. Such builds never update themselves.

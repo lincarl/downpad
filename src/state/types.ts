@@ -237,6 +237,11 @@ export interface Settings {
    *  has run (spec §5.12). Once true it never runs again, so normal launches
    *  spend no time checking the registry or prompting. */
   hasCheckedDefaultHandler: boolean;
+
+  /** Check for a new release every 30 days, download it, and install it the
+   *  next time Downpad starts. Only copies installed from a release package
+   *  update themselves. */
+  autoUpdate: boolean;
 }
 
 export interface RecentEntry {

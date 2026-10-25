@@ -2,9 +2,14 @@
 
 import { desktopBridge, type HistoryCommand } from "./bridge";
 import type { Settings } from "../state/types";
-import type { PrintCompleted } from "./contracts";
+import type { PrintCompleted, UpdateInfo } from "./contracts";
 
 type UnlistenFn = () => void;
+
+/** Fired when an update check, download or its state changes. */
+export function onUpdateChanged(handler: (info: UpdateInfo) => void): Promise<UnlistenFn> {
+  return Promise.resolve(desktopBridge().listen("update-changed", handler));
+}
 
 /** Fired by the settings.toml watcher when the file changes on disk (§5.9). */
 export function onSettingsChanged(handler: (settings: Settings) => void): Promise<UnlistenFn> {
