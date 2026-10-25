@@ -75,12 +75,13 @@ function makeData(entries: RecentEntry[], { hold = false } = {}): MockData {
 }
 
 let summary = "";
+let opened: string[] = [];
 
 async function mount(data: RecentDataSource, visibleCount = 100, preferences: RecentPreferences = {
   ...DEFAULT_SETTINGS, recentFilesVisibleCount: visibleCount,
 }): Promise<RecentView> {
   const rv = new RecentView(data, () => preferences, {
-    onOpenFile() {},
+    onOpenFile(path) { opened.push(path); },
     onSummaryChange(text) {
       summary = text;
     },
@@ -145,6 +146,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   document.body.innerHTML = "";
   summary = "";
+  opened = [];
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -244,6 +246,30 @@ describe("RecentView preferences", () => {
     expect(names(rv)).toEqual([]);
     await rv.refresh();
     await flush();
+    expect(names(rv)).toEqual(["bravo.md"]);
+    rv.destroy();
+  });
+
+  it.each([false, true])("ignores an older row-open result reporting exists=%s", async (exists) => {
+    const data = makeData(fresh(BRAVO));
+    type Stats = Awaited<ReturnType<RecentDataSource["stat"]>>;
+    let resolveListing!: (stats: Stats) => void;
+    let resolveOpen!: (stats: Stats) => void;
+    vi.spyOn(data, "stat")
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveListing = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOpen = resolve; }));
+    const rv = await mount(data);
+    $<HTMLButtonElement>(rv, ".recent-row-open")!.click();
+    rv.onLeave();
+    await rv.refresh();
+    await flush();
+    const missing = [{ path: BRAVO.path, exists: false, sizeBytes: 0, folderExists: true }];
+    resolveOpen([{ ...missing[0], exists }]);
+    resolveListing(missing);
+    await flush();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(opened).toEqual([]);
+    await search(rv, "bravo");
     expect(names(rv)).toEqual(["bravo.md"]);
     rv.destroy();
   });

@@ -537,7 +537,12 @@ export class RecentView {
   private async openEntry(entry: RecentEntry): Promise<void> {
     let stat = this.stats.get(entry.path);
     if (!stat) {
+      const statsSeq = this.statsSeq;
+      const refreshSeq = this.refreshSeq;
       const [resolved] = await this.data.stat([entry.path]).catch(() => []);
+      // A click from an earlier visit must not change the refreshed list or
+      // open a file or missing-file dialog after the user has moved on.
+      if (this.destroyed || this.entering || statsSeq !== this.statsSeq || refreshSeq !== this.refreshSeq) return;
       if (resolved) {
         this.stats.set(resolved.path, resolved);
         stat = resolved;
