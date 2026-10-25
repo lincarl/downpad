@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ElectronBridge } from "./bridge";
 import { readFile, searchRecentContents } from "./commands";
-import { ask, openDialog, saveDialog } from "./dialogs";
+import { ask, confirmSaveChanges, openDialog, saveDialog } from "./dialogs";
 import { isElectron } from "./env";
 
 function createTestBridge() {
@@ -14,6 +14,7 @@ function createTestBridge() {
     openDialog: vi.fn<ElectronBridge["openDialog"]>(async () => null),
     saveDialog: vi.fn<ElectronBridge["saveDialog"]>(async () => null),
     ask: vi.fn<ElectronBridge["ask"]>(async () => false),
+    confirmSaveChanges: vi.fn<ElectronBridge["confirmSaveChanges"]>(async () => "cancel"),
     openExternal: async () => {},
     revealItemInFolder: async () => {},
     setTheme: async () => {},
@@ -63,6 +64,48 @@ describe("Electron preload integration", () => {
     await expect(ask("Discard changes?")).resolves.toBe(false);
     expect(confirm).toHaveBeenCalledWith("Discard changes?");
     await expect(readFile("/docs/notes.md")).rejects.toThrow("installed Downpad app");
+  });
+
+  it.each(["save", "discard", "cancel"] as const)("returns the native unsaved choice %s", async (choice) => {
+    bridge.confirmSaveChanges.mockResolvedValueOnce(choice);
+    const confirm = vi.spyOn(window, "confirm");
+
+    await expect(confirmSaveChanges("Save changes to notes.md?")).resolves.toBe(choice);
+    expect(bridge.confirmSaveChanges).toHaveBeenCalledExactlyOnceWith("Save changes to notes.md?");
+    expect(bridge.ask).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expectTypeOf(confirmSaveChanges).returns.toEqualTypeOf<Promise<"save" | "discard" | "cancel">>();
+    expectTypeOf<ElectronBridge["confirmSaveChanges"]>().returns.toEqualTypeOf<Promise<"save" | "discard" | "cancel">>();
+  });
+
+  it.each([
+    [true, "discard"],
+    [false, "cancel"],
+  ] as const)("maps browser confirmation %s to %s", async (confirmed, choice) => {
+    delete window.downpadDesktop;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(confirmed);
+
+    await expect(confirmSaveChanges("Save changes to notes.md?")).resolves.toBe(choice);
+    expect(confirm).toHaveBeenCalledExactlyOnceWith(
+      "Save changes to notes.md?\n\nSelect OK to discard changes, or Cancel to keep editing.",
+    );
+  });
+
+  it("propagates a failed native prompt without offering a browser discard", async () => {
+    bridge.confirmSaveChanges.mockRejectedValueOnce(new Error("Dialog unavailable"));
+    const confirm = vi.spyOn(window, "confirm");
+
+    await expect(confirmSaveChanges("Save changes?")).rejects.toThrow("Dialog unavailable");
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("keeps the native discard-only ask result %s", async (confirmed) => {
+    bridge.ask.mockResolvedValueOnce(confirmed);
+    const options = { kind: "warning", okLabel: "Discard", cancelLabel: "Cancel" } as const;
+
+    await expect(ask("Discard changes and reload?", options)).resolves.toBe(confirmed);
+    expect(bridge.ask).toHaveBeenCalledExactlyOnceWith("Discard changes and reload?", options);
+    expect(bridge.confirmSaveChanges).not.toHaveBeenCalled();
   });
 
   it("subscribes before starting content search and ignores another search's results", async () => {

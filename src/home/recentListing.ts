@@ -3,11 +3,11 @@
 // search status and the window status bar. Pure functions, so the rules are
 // unit-tested without React or IPC.
 
-import type { RecentEntry } from "../state/types";
+import type { RecentEntry, Settings } from "../state/types";
 import { filterByName } from "./recentFormat";
 
 /** Where the search looks: file names, document contents, or names then contents. */
-export type SearchScope = "names" | "contents" | "all";
+export type SearchScope = Settings["recentFilesDefaultSearch"];
 
 /**
  * Content search lifecycle. `pending` is the pause after typing, `running` the

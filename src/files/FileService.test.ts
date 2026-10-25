@@ -11,11 +11,12 @@ const native = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<FilePayload>>(),
   writeFile: vi.fn<(path: string, content: string, eol: Eol) => Promise<FileMeta>>(),
   ask: vi.fn<(message: string) => Promise<boolean>>(),
+  confirmSaveChanges: vi.fn<(message: string) => Promise<"save" | "discard" | "cancel">>(),
   saveDialog: vi.fn<(options: unknown) => Promise<string | null>>(),
 }));
 
 vi.mock("../ipc/commands", () => ({ readFile: native.readFile, writeFile: native.writeFile }));
-vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog }));
+vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog, confirmSaveChanges: native.confirmSaveChanges }));
 
 const filePath = "/docs/notes.md";
 const onDisk: FilePayload = {
@@ -50,6 +51,7 @@ beforeEach(() => {
   native.readFile.mockResolvedValue(onDisk);
   native.writeFile.mockResolvedValue({ modifiedMs: 200 });
   native.ask.mockResolvedValue(true);
+  native.confirmSaveChanges.mockResolvedValue("save");
   native.saveDialog.mockResolvedValue(null);
 });
 
@@ -316,6 +318,146 @@ describe("saving document snapshots", () => {
     expect(await retry).toBe(true);
     expect(native.writeFile).toHaveBeenNthCalledWith(2, filePath, "# Retry buffer\n", "lf");
     expect(store.get().doc).toMatchObject({ markdown: "# Retry buffer\n", isDirty: false });
+  });
+});
+
+describe("saving before close", () => {
+  it("saves the inactive closing tab without changing the active document", async () => {
+    const { store, files } = setup(true);
+    const owner = store.get().activeTabId!;
+    const other = store.addTab({ ...blankDoc(), markdown: "Other edits\n", isDirty: true });
+
+    expect(await files.confirmCloseTab(owner, "notes.md")).toBe("close");
+    expect(native.writeFile).toHaveBeenCalledExactlyOnceWith(filePath, "# Original content\n", "lf");
+    expect(store.get().activeTabId).toBe(other);
+    expect(store.get().doc).toMatchObject({ markdown: "Other edits\n", isDirty: true });
+    expect(files.canCloseTabs([owner])).toBe(true);
+    expect(files.canCloseTabs()).toBe(false);
+  });
+
+  it("saves named and untitled tabs in order and awaits the last write", async () => {
+    const { store, files } = setup(true);
+    const untitled = store.addTab({ ...blankDoc(), markdown: "New document\n", isDirty: true });
+    const lastWrite = deferred<FileMeta>();
+    native.saveDialog.mockResolvedValueOnce("/docs/new.md");
+    native.writeFile.mockResolvedValueOnce({ modifiedMs: 200 }).mockReturnValueOnce(lastWrite.promise);
+    const complete = vi.fn();
+    const closing = files.confirmCloseAll().then((decision) => { complete(); return decision; });
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
+    expect(complete).not.toHaveBeenCalled();
+    expect(native.writeFile).toHaveBeenNthCalledWith(2, "/docs/new.md", "New document\n", "lf");
+    lastWrite.resolve({ modifiedMs: 300 });
+
+    expect(await closing).toBe("close");
+    expect(native.confirmSaveChanges).toHaveBeenCalledExactlyOnceWith("2 documents have unsaved changes. Save before closing?");
+    expect(store.get().tabs).toHaveLength(3);
+    expect(store.get().activeTabId).toBe(untitled);
+    expect(files.canCloseTabs()).toBe(true);
+  });
+
+  it.each(["cancel", "discard"] as const)("does not write when the close prompt returns %s", async (choice) => {
+    const { store, files } = setup(true);
+    native.confirmSaveChanges.mockResolvedValueOnce(choice);
+    expect(await files.confirmCloseTab(store.get().activeTabId!, "notes.md")).toBe(choice);
+    expect(native.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc.isDirty).toBe(true);
+  });
+
+  it("cancels the whole close if an untitled tab's Save As is cancelled", async () => {
+    const { store, files } = setup(true);
+    store.addTab({ ...blankDoc(), markdown: "Untitled edits\n", isDirty: true });
+    store.addTab({ ...blankDoc(), filePath: "/docs/last.md", markdown: "Last edits\n", isDirty: true });
+
+    expect(await files.confirmCloseAll()).toBe("cancel");
+    expect(native.writeFile).toHaveBeenCalledTimes(1);
+    expect(store.get().tabs).toHaveLength(4);
+    expect(store.get().tabs[1]!.doc.isDirty).toBe(false);
+    expect(store.get().tabs[2]!.doc.isDirty).toBe(true);
+  });
+
+  it("keeps every tab when a close save fails", async () => {
+    const { store, files } = setup(true);
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+
+    await expect(files.confirmCloseAll()).rejects.toThrow("Disk unavailable");
+    expect(store.get().tabs).toHaveLength(2);
+    expect(store.get().doc).toMatchObject({ isDirty: true, savedMarkdown: "# Saved before\n" });
+  });
+
+  it("rejects later typing that only reaches the store in the final editor flush", async () => {
+    const { store, presenter, files } = setup(true);
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const closing = files.confirmCloseAll();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    presenter.flush.mockImplementation(() => store.patchDoc({ markdown: "Later typing\n", isDirty: true }));
+    write.resolve({ modifiedMs: 200 });
+
+    expect(await closing).toBe("cancel");
+    expect(store.get().doc).toMatchObject({ markdown: "Later typing\n", isDirty: true });
+  });
+
+  it("rechecks earlier saved tabs after waiting for the last tab", async () => {
+    const { store, files } = setup(true);
+    const first = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), filePath: "/docs/second.md", markdown: "Second\n", isDirty: true });
+    const lastWrite = deferred<FileMeta>();
+    native.writeFile.mockResolvedValueOnce({ modifiedMs: 200 }).mockReturnValueOnce(lastWrite.promise);
+    const closing = files.confirmCloseAll();
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
+    applyEditorMarkdownForTab(store, first, "Edited after save\n");
+    lastWrite.resolve({ modifiedMs: 300 });
+
+    expect(await closing).toBe("cancel");
+    expect(files.canCloseTabs()).toBe(false);
+  });
+
+  it("keeps a saved tab open while dropped assets are pending", async () => {
+    const { store, files } = setup(true);
+    const owner = store.get().activeTabId!;
+    store.setFilesPending(owner, true);
+
+    expect(await files.confirmCloseTab(owner, "notes.md")).toBe("cancel");
+    expect(store.get().doc.isDirty).toBe(false);
+    expect(files.canCloseTabs([owner])).toBe(false);
+  });
+
+  it("follows an existing Save As through the save queue without reopening its dialog", async () => {
+    const { store, files } = setup(true);
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const saving = files.saveAs();
+    await vi.waitFor(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    store.patchDoc({ markdown: "Latest edits\n", isDirty: true });
+    const closing = files.confirmCloseAll();
+    await vi.waitFor(() => expect(native.confirmSaveChanges).toHaveBeenCalledOnce());
+    dialog.resolve("/docs/moved.md");
+
+    expect(await saving).toBe(true);
+    expect(await closing).toBe("close");
+    expect(native.writeFile).toHaveBeenNthCalledWith(2, "/docs/moved.md", "Latest edits\n", "lf");
+    expect(native.saveDialog).toHaveBeenCalledOnce();
+  });
+
+  it("waits for writes queued after the close save before approving close", async () => {
+    const { store, files } = setup(true);
+    const firstWrite = deferred<FileMeta>();
+    const lastWrite = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(firstWrite.promise).mockReturnValueOnce(lastWrite.promise);
+    const complete = vi.fn();
+    const closing = files.confirmCloseAll().then((decision) => { complete(); return decision; });
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    store.patchDoc({ markdown: "Next save\n", isDirty: true });
+    const saving = files.save();
+    firstWrite.resolve({ modifiedMs: 200 });
+    await vi.waitFor(() => expect(native.writeFile).toHaveBeenCalledTimes(2));
+    expect(complete).not.toHaveBeenCalled();
+    expect(files.canCloseTabs()).toBe(false);
+    lastWrite.resolve({ modifiedMs: 300 });
+
+    expect(await saving).toBe(true);
+    expect(await closing).toBe("close");
+    expect(store.get().doc.savedMarkdown).toBe("Next save\n");
   });
 });
 

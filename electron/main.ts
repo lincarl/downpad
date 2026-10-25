@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import type { DesktopEventPayloads, HistoryCommand } from "../src/ipc/bridge";
+import type { DesktopEventPayloads, HistoryCommand, SaveChangesChoice } from "../src/ipc/bridge";
 import type { DefaultHandler } from "../src/ipc/contracts";
 import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { historyItems, macApplicationMenu } from "./menus";
@@ -317,6 +317,15 @@ function registerIpc(): void {
       defaultId: 0, cancelId: 0, noLink: true,
     });
     return result.response === 1;
+  });
+  ipcMain.handle("downpad:dialog-confirm-save-changes", async (event, message: unknown): Promise<SaveChangesChoice> => {
+    trustedSender(event);
+    if (typeof message !== "string") throw new Error("A dialog message is required.");
+    const result = await dialog.showMessageBox(mainWindow!, {
+      type: "warning", title: "Downpad", message,
+      buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1, noLink: true,
+    });
+    return result.response === 0 ? "save" : result.response === 2 ? "discard" : "cancel";
   });
   ipcMain.handle("downpad:open-external", (event, url: unknown) => { trustedSender(event); return shell.openExternal(externalUrl(url)); });
   ipcMain.handle("downpad:image-url", (event, imagePath: unknown) => { trustedSender(event); return imageAccess.imageUrl(imagePath); });

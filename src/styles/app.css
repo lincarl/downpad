@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+/* General settings keeps its fields reachable at the desktop's minimum width. */
+@media (width < 700px) {
+  .settings-general > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-general .dialog-row {
+    grid-column: 1 / -1;
+    row-gap: 6px;
+  }
+
+  .settings-general .dialog-row > span,
+  .settings-general select {
+    max-width: 100%;
+  }
+}
+
 /* Keyboard focus for hand-built controls: a 2px accent ring outside the control,
    or inside it where neighbours would clip it. Tailwind's outline-none sets the
    outline style to none, so these name the full outline rather than a width. */

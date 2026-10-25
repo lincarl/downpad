@@ -56,7 +56,11 @@ In the document view, End moves the caret to the end of a line that starts with 
 
 ## Recent files and recovery
 
+Unsaved documents show a dot in their tab, while the window title shows only the file name and app name. Closing a tab, all tabs, or the window offers Save, Cancel, and Discard when there is unsaved work. Save writes each affected document and asks for a path for an untitled document. Cancelling a save, a failed write, or work still waiting to be saved keeps the documents open.
+
 The Recent button sits in the menu row, immediately left of Open, and uses the same toolbar styling with a Lucide list-clock icon. The Recent view lists previously opened documents, with starred favorites pinned at the top. Its search field finds documents by file name, by content, or both.
+
+Settings > General > Recent files includes Default search with Names, Contents, and All (names, then contents). Names is the default. The selected default applies whenever Recent opens. Keep removed files in list is off by default, hiding missing files from favorites, recent rows, and search results without deleting their history. Enabling it shows missing entries with their existing locate and remove actions. Returning files appear on the next refresh.
 
 The app periodically stores a separate recovery snapshot for each tab with unsaved work, including background tabs, and offers to restore them after an interrupted session. Saving or discarding one tab clears only its snapshot. An accepted shutdown waits for pending snapshot writes before clearing the session's snapshots. If opening an original file fails, the recovery dialog shows an error and keeps the recovered work available to open or retry. Optional autosave can save changes to files that already have a path.
 

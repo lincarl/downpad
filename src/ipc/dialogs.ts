@@ -1,4 +1,4 @@
-import type { AskDialogOptions, OpenDialogOptions, SaveDialogOptions } from "./bridge";
+import type { AskDialogOptions, OpenDialogOptions, SaveChangesChoice, SaveDialogOptions } from "./bridge";
 import { desktopBridge } from "./bridge";
 import { isElectron } from "./env";
 
@@ -14,4 +14,11 @@ export function ask(message: string, options?: AskDialogOptions): Promise<boolea
   return isElectron()
     ? desktopBridge().ask(message, options)
     : Promise.resolve(window.confirm(message));
+}
+
+/** Offer native save choices, or confirm discarding when running in a browser. */
+export function confirmSaveChanges(message: string): Promise<SaveChangesChoice> {
+  return isElectron()
+    ? desktopBridge().confirmSaveChanges(message)
+    : Promise.resolve(window.confirm(`${message}\n\nSelect OK to discard changes, or Cancel to keep editing.`) ? "discard" : "cancel");
 }

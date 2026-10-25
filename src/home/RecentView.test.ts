@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { RecentView } from "./RecentView";
+import { RecentView, type RecentPreferences } from "./RecentView";
+import { DEFAULT_SETTINGS } from "../settings/defaults";
 import type { ContentSearchCallbacks, ContentSearchSummary, RecentDataSource } from "./recentData";
 import type { RecentEntry } from "../state/types";
 
@@ -74,10 +75,13 @@ function makeData(entries: RecentEntry[], { hold = false } = {}): MockData {
 }
 
 let summary = "";
+let opened: string[] = [];
 
-async function mount(data: RecentDataSource, visibleCount = 100): Promise<RecentView> {
-  const rv = new RecentView(data, () => visibleCount, {
-    onOpenFile() {},
+async function mount(data: RecentDataSource, visibleCount = 100, preferences: RecentPreferences = {
+  ...DEFAULT_SETTINGS, recentFilesVisibleCount: visibleCount,
+}): Promise<RecentView> {
+  const rv = new RecentView(data, () => preferences, {
+    onOpenFile(path) { opened.push(path); },
     onSummaryChange(text) {
       summary = text;
     },
@@ -142,9 +146,133 @@ beforeEach(() => {
   vi.useFakeTimers();
   document.body.innerHTML = "";
   summary = "";
+  opened = [];
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("RecentView preferences", () => {
+  it("keeps a search scope selected while entry history is loading", async () => {
+    const data = makeData(fresh(ALPHA, BRAVO));
+    const rv = await mount(data);
+    rv.onLeave();
+    let resolveList!: (entries: RecentEntry[]) => void;
+    vi.spyOn(data, "list").mockImplementationOnce(() => new Promise((resolve) => { resolveList = resolve; }));
+    const refresh = rv.refresh();
+    clickScope(rv, "Contents");
+    resolveList(fresh(ALPHA, BRAVO));
+    await refresh;
+    await search(rv, "quick");
+    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
+    rv.destroy();
+  });
+
+  it("ignores metadata requested while a later history refresh is loading", async () => {
+    const entries = fresh(BRAVO, entry(CHARLIE.path, false));
+    const data = makeData(entries);
+    const rv = await mount(data, 1);
+    let resolveList!: (entries: RecentEntry[]) => void;
+    let resolveOld!: (stats: Awaited<ReturnType<RecentDataSource["stat"]>>) => void;
+    vi.spyOn(data, "list").mockImplementationOnce(() => new Promise((resolve) => { resolveList = resolve; }));
+    vi.spyOn(data, "stat").mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    const refresh = rv.refresh();
+    await search(rv, "charlie");
+    resolveList(entries);
+    await refresh;
+    await flush();
+    resolveOld([{ path: CHARLIE.path, exists: false, sizeBytes: 0, folderExists: true }]);
+    await flush();
+    expect(names(rv)).toEqual(["charlie.md"]);
+    rv.destroy();
+  });
+
+  it("uses the saved search scope on entry and applies a changed default", async () => {
+    const preferences: RecentPreferences = { ...DEFAULT_SETTINGS, recentFilesDefaultSearch: "contents" };
+    const rv = await mount(makeData(fresh(ALPHA, BRAVO, CHARLIE)), 100, preferences);
+    await search(rv, "quick");
+    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
+    clickScope(rv, "Names");
+    expect(names(rv)).toEqual([]);
+    rv.onLeave();
+    await rv.refresh();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
+
+    preferences.recentFilesDefaultSearch = "names";
+    rv.applyPreferences(true);
+    expect(names(rv)).toEqual([]);
+    expect(progress(rv)).toBe("");
+    rv.destroy();
+  });
+
+  it("hides missing favorites and recent files, fills the visible limit, and retains history", async () => {
+    const preferences: RecentPreferences = { ...DEFAULT_SETTINGS, recentFilesVisibleCount: 1 };
+    const data = makeData(fresh(ALPHA, BRAVO, entry("C:/n/available.md", false)));
+    const remove = vi.spyOn(data, "remove");
+    data.stat = async (paths) => paths.map((path) => ({
+      path, exists: path.endsWith("available.md"), sizeBytes: 0, folderExists: true,
+    }));
+    const rv = await mount(data, 1, preferences);
+    await flush();
+    expect(names(rv)).toEqual(["available.md"]);
+    expect(summary).toBe("Your last 1 opened document");
+    expect(remove).not.toHaveBeenCalled();
+
+    preferences.recentFilesKeepRemoved = true;
+    rv.applyPreferences(false);
+    expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
+    preferences.recentFilesKeepRemoved = false;
+    rv.applyPreferences(false);
+    clickScope(rv, "All");
+    await search(rv, "quick");
+    expect(names(rv)).toEqual([]);
+    expect(remove).not.toHaveBeenCalled();
+    rv.destroy();
+  });
+
+  it("shows a missing file again after it returns and ignores an old metadata response", async () => {
+    const data = makeData(fresh(BRAVO));
+    let resolveOld!: (stats: Awaited<ReturnType<RecentDataSource["stat"]>>) => void;
+    const stat = vi.spyOn(data, "stat").mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    const rv = await mount(data);
+    await rv.refresh();
+    resolveOld([{ path: BRAVO.path, exists: false, sizeBytes: 0, folderExists: true }]);
+    await flush();
+    expect(names(rv)).toEqual(["bravo.md"]);
+    stat.mockResolvedValueOnce([{ path: BRAVO.path, exists: false, sizeBytes: 0, folderExists: true }]);
+    await rv.refresh();
+    await flush();
+    expect(names(rv)).toEqual([]);
+    await rv.refresh();
+    await flush();
+    expect(names(rv)).toEqual(["bravo.md"]);
+    rv.destroy();
+  });
+
+  it.each([false, true])("ignores an older row-open result reporting exists=%s", async (exists) => {
+    const data = makeData(fresh(BRAVO));
+    type Stats = Awaited<ReturnType<RecentDataSource["stat"]>>;
+    let resolveListing!: (stats: Stats) => void;
+    let resolveOpen!: (stats: Stats) => void;
+    vi.spyOn(data, "stat")
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveListing = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOpen = resolve; }));
+    const rv = await mount(data);
+    $<HTMLButtonElement>(rv, ".recent-row-open")!.click();
+    rv.onLeave();
+    await rv.refresh();
+    await flush();
+    const missing = [{ path: BRAVO.path, exists: false, sizeBytes: 0, folderExists: true }];
+    resolveOpen([{ ...missing[0], exists }]);
+    resolveListing(missing);
+    await flush();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(opened).toEqual([]);
+    await search(rv, "bravo");
+    expect(names(rv)).toEqual(["bravo.md"]);
+    rv.destroy();
+  });
 });
 
 describe("RecentView — sections and stars", () => {

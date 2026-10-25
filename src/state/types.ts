@@ -182,6 +182,9 @@ export interface Settings {
 
   recentFilesMaxRetained: number;
   recentFilesVisibleCount: number;
+  recentFilesDefaultSearch: "names" | "contents" | "all";
+  /** Show missing paths without removing their retained history. */
+  recentFilesKeepRemoved: boolean;
 
   /** Which editor layout new documents open in (spec §6.1): the document view,
    *  the side-by-side split ("both"), or the Markdown source. Legacy values from
