@@ -95,6 +95,7 @@ stable release replaces every candidate of its version.
 | App, release and file names | `0.3.5-rc1` | `0.3.5-rc2` | `0.3.5` |
 | Debian package version | `0.3.5~rc1` | `0.3.5~rc2` | `0.3.5` |
 | MSI product version | `0.3.5.0` | `0.3.5.0` | `0.3.5.0` |
+| Windows executable numeric file version | `0.3.5.0` | `0.3.5.0` | `0.3.5.0` |
 
 electron-builder writes the Debian version with `~`, which Debian sorts before
 the version without it. MSI product versions have no suffix, so a version and all
@@ -102,6 +103,14 @@ its candidates share one product version. The MSI accepts an upgrade to the same
 version, so installing a newer candidate or the release replaces the copy
 installed before. Windows lists that shared version among the installed apps.
 Settings > About in Downpad shows the public version.
+
+The release version script keeps the public version in `package.json`'s
+`version` and explicitly sets electron-builder's `build.buildVersion` to
+`MAJOR.MINOR.PATCH.0`. This keeps the executable's numeric file version aligned
+with the MSI product version. Without that setting, electron-builder passes the
+public version to the Windows resource editor, which reads a patch component
+such as `6-rc2` as zero. Candidates and stable releases deliberately share the
+same numeric Windows version and use the same-version upgrade policy above.
 
 Builds without a release tag, such as local and pull request builds, use the
 version `0.0.0` from `package.json`. Such builds never update themselves.

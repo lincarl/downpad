@@ -25,7 +25,7 @@
     "test:e2e": "playwright test",
     "test:electron": "playwright test --config playwright.electron.config.ts",
     "test:desktop": "vitest run --config electron/vitest.config.ts",
-    "test:ci": "node --test scripts/ci.test.mjs",
+    "test:ci": "node --test scripts/ci.test.mjs scripts/run-msi-test.test.mjs",
     "test:release": "node --test scripts/release.test.mjs"
   },
   "devDependencies": {

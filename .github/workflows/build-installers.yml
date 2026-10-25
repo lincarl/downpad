@@ -282,25 +282,66 @@ jobs:
         if: steps.existing.outputs.reused != 'true'
         run: pnpm exec electron-builder --publish never
 
-      # The updater recognizes an MSI installation by the folder that the
-      # installer records for the user (scripts/brand-msi.mjs).
-      - name: Check the MSI installation
+      - name: Test the MSI wizard and installed app
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
-        shell: pwsh
+        timeout-minutes: 12
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $msi = @(Get-ChildItem release -Filter *.msi)
           if ($msi.Count -ne 1) { throw "Expected one MSI, found $($msi.Count)" }
-          $log = Join-Path $env:RUNNER_TEMP 'msi-install.log'
-          $install = Start-Process msiexec.exe -ArgumentList "/i `"$($msi[0].FullName)`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { Get-Content $log -Tail 40; throw "The MSI installation failed with exit code $($install.ExitCode)" }
-          $folder = (Get-ItemProperty -Path 'HKCU:\Software\Downpad' -Name InstallDir).InstallDir
-          $expected = Join-Path $env:LOCALAPPDATA 'Programs\Downpad\'
-          if ($folder -ne $expected) { throw "InstallDir is '$folder', expected '$expected'" }
-          if (-not (Test-Path -LiteralPath (Join-Path $folder 'Downpad.exe'))) { throw "Downpad.exe is not in $folder" }
-          $remove = Start-Process msiexec.exe -ArgumentList "/x `"$($msi[0].FullName)`" /qn /norestart" -Wait -PassThru
-          if ($remove.ExitCode -ne 0) { throw "The MSI removal failed with exit code $($remove.ExitCode)" }
-          if ((Get-ItemProperty -Path 'HKCU:\Software\Downpad' -ErrorAction SilentlyContinue).InstallDir) { throw 'The removal left InstallDir behind' }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version -replace '-rc\d+$', ''
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -Msi $msi[0].FullName -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion "$version.0" -Scenario fresh
+
+      # PR artifacts use 0.0.0, which cannot expose RC file-version truncation.
+      # Package the fixtures normally so they pass through PE resource editing.
+      - name: Build stable and release candidate MSI test packages
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = [IO.File]::ReadAllBytes('package.json')
+          try {
+            node scripts/apply-version-from-tag.mjs v0.0.1
+            if ($LASTEXITCODE -ne 0) { throw 'Could not apply the stable fixture version' }
+            pnpm exec electron-builder --win msi --x64 --publish never "--config.directories.output=dev-temp/msi-tests/stable"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not build the stable fixture' }
+            node scripts/apply-version-from-tag.mjs v0.0.2-rc1
+            if ($LASTEXITCODE -ne 0) { throw 'Could not apply the candidate fixture version' }
+            pnpm exec electron-builder --win msi --x64 --publish never "--config.directories.output=dev-temp/msi-tests/candidate"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not build the candidate fixture' }
+            node scripts/apply-version-from-tag.mjs v0.0.2-rc2
+            if ($LASTEXITCODE -ne 0) { throw 'Could not apply the recovery fixture version' }
+            pnpm exec electron-builder --win msi --x64 --publish never "--config.directories.output=dev-temp/msi-tests/recovery"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not build the recovery fixture' }
+          } finally {
+            [IO.File]::WriteAllBytes('package.json', $manifest)
+          }
+
+      - name: Test stable to release candidate MSI upgrade
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 12
+        shell: powershell
+        run: |
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
+
+      - name: Test MSI recovery from a missing executable
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 12
+        shell: powershell
+        run: |
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -Msi dev-temp/msi-tests/recovery/Downpad-0.0.2-rc2-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/recovery/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario recovery -RecoverMissingExecutable
+
+      - name: Upload MSI test diagnostics
+        if: always() && runner.os == 'Windows' && steps.existing.outputs.reused != 'true'
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}
+          overwrite: true
+          retention-days: 14
+          if-no-files-found: ignore
+          path: dev-temp/msi-tests/diagnostics/
 
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -22,6 +22,35 @@ Build jobs have read-only permissions and do not retain checkout credentials.
 They run the application checks, tests, desktop build, desktop tests, and
 installer packaging for Linux and Windows.
 
+Windows also drives the MSI wizard through its final **Run Downpad** checkbox,
+checks the installed files and registration, waits for the application window,
+and uninstalls the test copy. A second scenario builds synthetic `0.0.1` and
+`0.0.2-rc1` packages through the normal release-version and packaging steps, then
+upgrades the stable installation to the candidate. This catches incorrect
+numeric Windows executable versions even when the PR artifact uses `0.0.0`.
+Fixtures use the application's release-version script from the PR head.
+Older branches must include the numeric-version fix to pass these checks.
+
+A recovery scenario removes only the executable from a registered `0.0.2-rc1`
+test installation, then upgrades to `0.0.2-rc2`. Both packages have the same
+numeric MSI version. The wizard must restore the intended files and launch the
+app. This simulates the missing-executable state without recreating every step
+of a historical failed upgrade.
+
+The tests use isolated app profiles. Their packages stay under `dev-temp/` and
+are never published. Each scenario runs in a separate PowerShell process with
+an independent ten-minute deadline. Cleanup shares a two-minute wait budget
+across products and retries. Timestamped progress records identify the last
+operation if a native call stops returning. A supervisor timeout fails the test
+and stops its process tree without terminating the shared Windows Installer
+service. Forced termination can leave a test installation behind on the
+disposable runner, so later installer scenarios do not run after a failure.
+
+CI gives each scenario a twelve-minute outer limit and attempts to retain MSI
+logs, progress records, and screenshots after success, failure, or cancellation.
+The diagnostic artifact cannot be guaranteed if the runner itself stops
+responding or the whole job is terminated.
+
 Builds use Ubuntu 26.04 and Windows Server 2025, the Node version in
 `.node-version`, and the pnpm version in `package.json`. Jobs that use GitHub
 CLI install the pinned release with checksum verification through
