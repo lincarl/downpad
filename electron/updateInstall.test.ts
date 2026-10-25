@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
@@ -99,6 +99,20 @@ describe("DEB updates", () => {
   });
 });
 
+/** A C# program that records its name and arguments in record.txt beside
+ *  itself. Named "fake msiexec", it exits with 1618, Windows Installer's code
+ *  when another installation is running, and otherwise with 0. */
+const STAND_IN = `using System;
+using System.IO;
+static class StandIn {
+  static int Main(string[] args) {
+    string name = Path.GetFileNameWithoutExtension(AppDomain.CurrentDomain.FriendlyName);
+    File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "record.txt"), name + "|" + string.Join("|", args) + Environment.NewLine);
+    return name == "fake msiexec" ? 1618 : 0;
+  }
+}
+`;
+
 describe("MSI updates", () => {
   const paths = {
     system: "C:\\Windows\\System32",
@@ -133,37 +147,40 @@ describe("MSI updates", () => {
   });
 
   // Runs the real helper with stand-ins for Windows Installer and Downpad,
-  // in folders whose names cmd would otherwise misread. START runs a batch
-  // file in cmd /k, so each stand-in ends with exit.
+  // in a folder whose name cmd would otherwise misread. Like the real ones,
+  // the stand-ins are programs. START would run a batch file in cmd /k, whose
+  // quote handling splits a quoted path that quoted arguments follow.
   it.runIf(process.platform === "win32")("installs, records the exit code, removes the copy and starts Downpad again with its file", { timeout: 60_000 }, async () => {
     const directory = await folder("Downpad & 100% ^test! (1) ");
-    // The stand-ins are batch files, which read % in their own text, so their
-    // record goes to a plainly named folder.
     const plain = await folder();
-    const record = join(plain, "record.txt");
+    await writeFile(join(plain, "standin.cs"), STAND_IN);
+    const csc = join(process.env.SystemRoot ?? "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+    await promisify(execFile)(csc, ["/nologo", `/out:${join(plain, "standin.exe")}`, join(plain, "standin.cs")]);
+    const msiexec = join(directory, "fake msiexec.exe");
+    const executable = join(directory, "fake Downpad.exe");
+    await copyFile(join(plain, "standin.exe"), msiexec);
+    await copyFile(join(plain, "standin.exe"), executable);
+    const record = join(directory, "record.txt");
     const result = join(directory, "install-result.txt");
-    const msiexec = join(directory, "fake msiexec.cmd");
-    const executable = join(directory, "fake Downpad.cmd");
-    await writeFile(msiexec, `@echo installer %*>> "${record}"\r\n@exit 1618\r\n`);
-    await writeFile(executable, `@echo started %*>> "${record}"\r\n@exit\r\n`);
     const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
     const staged = await stageMsi(file, DIGEST);
     await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), msiexec);
     // Each stand-in opens a console window, which can take seconds on CI.
     let text = "";
     let code = "";
-    for (let waited = 0; waited < 40_000 && !(text.includes("started") && code); waited += 250) {
+    for (let waited = 0; waited < 40_000 && !(text.includes("fake Downpad") && code); waited += 250) {
       await new Promise((done) => setTimeout(done, 250));
       text = await readFile(record, "utf8").catch(() => "");
       code = await readFile(result, "utf8").catch(() => "");
     }
-    if (!text.includes("started") || !code) {
+    if (!text.includes("fake Downpad") || !code) {
       throw new Error(`The helper did not finish. Record: ${JSON.stringify(text)}. Result: ${JSON.stringify(code)}. ` +
         `Staging left: ${await stat(staged.staging).then(() => true, () => false)}.`);
     }
-    const [installer, started] = text.trim().split(/\r?\n/);
-    expect(installer).toBe(`installer /i "${staged.package}" /passive /norestart`);
-    expect(started).toBe(`started "${join(directory, "notes & 50%.md")}"`);
+    expect(text.trim().split(/\r?\n/)).toEqual([
+      ["fake msiexec", "/i", staged.package, "/passive", "/norestart"].join("|"),
+      ["fake Downpad", join(directory, "notes & 50%.md")].join("|"),
+    ]);
     expect(code.trim()).toBe("1618");
     await expect(stat(staged.staging)).rejects.toThrow();
     expect(await readFile(file)).toEqual(PACKAGE);
