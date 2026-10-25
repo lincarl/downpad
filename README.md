@@ -67,7 +67,7 @@ Downpad keeps its settings in `settings.toml` in the platform's `Downpad` config
 
 ## Maintainer workspace
 
-Maintainer-only agent instructions and personal project material are kept in the private [md-easy-internal](https://github.com/lincarl/md-easy-internal) companion repository. It is optional and is not required to build or use Downpad.
+Maintainer-only agent instructions and personal project material are kept in the private [downpad-internal](https://github.com/lincarl/downpad-internal) companion repository. It is optional and is not required to build or use Downpad.
 
 ## License
 

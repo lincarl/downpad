@@ -155,10 +155,10 @@
     },
     "npmRebuild": false
   },
-  "homepage": "https://github.com/lincarl/md-easy",
+  "homepage": "https://github.com/lincarl/downpad",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lincarl/md-easy.git"
+    "url": "https://github.com/lincarl/downpad.git"
   },
   "desktopName": "downpad.desktop",
   "engines": {
