@@ -582,6 +582,18 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
   });
 
+  it("goes on when a copy folder cannot be removed", async () => {
+    const { legacy, directory } = await folders();
+    await mkdir(join(directory, ".md-easy-copy-held"));
+    const failure = Object.assign(new Error("The file is in use."), { code: "EBUSY" });
+    vi.spyOn(synchronousFilesystem, "rmSync").mockImplementationOnce(() => { throw failure; });
+    syncBuiltinESMExports();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(logged).toHaveBeenCalledWith(`Downpad could not remove ${join(directory, ".md-easy-copy-held")}`, failure);
+    expect((await readdir(directory)).sort()).toEqual([".md-easy-copy-held", "Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+  });
+
   it("tries a file again on the next launch when it can be neither moved nor copied", async () => {
     const { legacy, directory } = await folders();
     const failure = Object.assign(new Error("Access is denied."), { code: "EACCES" });

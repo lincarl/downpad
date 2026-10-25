@@ -55,6 +55,14 @@ const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recove
  *  before it renames the copy into place. */
 const COPY_FOLDER_PREFIX = ".md-easy-copy-";
 
+/** Remove a copy folder if possible. One that stays only takes space, so a
+ *  failure, such as a file another program holds open on Windows, never stops
+ *  the migration or the launch. */
+function removeCopyFolder(path: string): void {
+  try { rmSync(path, { recursive: true, force: true }); }
+  catch (error) { console.error(`Downpad could not remove ${path}`, error); }
+}
+
 /** Move the files in DATA_FILES from the user data folder that the app kept as
  *  md-easy, its earlier name, to `directory`. Electron creates `directory`
  *  before the app's code runs, so each file moves only while `directory` lacks
@@ -71,7 +79,7 @@ export function adoptLegacyData(legacy: string, directory: string): boolean {
   // Only one launch migrates, so a copy folder found now was left by a launch
   // that stopped during its copy. Its files may be outdated.
   for (const entry of existsSync(directory) ? readdirSync(directory) : []) {
-    if (entry.startsWith(COPY_FOLDER_PREFIX)) rmSync(join(directory, entry), { recursive: true, force: true });
+    if (entry.startsWith(COPY_FOLDER_PREFIX)) removeCopyFolder(join(directory, entry));
   }
   let adoptedSettings = false;
   for (const name of DATA_FILES) {
@@ -94,7 +102,7 @@ export function adoptLegacyData(legacy: string, directory: string): boolean {
         console.error(`Downpad could not take over md-easy's ${name}`, error);
         continue;
       } finally {
-        if (folder) rmSync(folder, { recursive: true, force: true });
+        if (folder) removeCopyFolder(folder);
       }
     }
     if (name === "settings.toml") adoptedSettings = true;
