@@ -46,9 +46,10 @@ export function validateSnapshot(value: unknown): Snapshot {
   };
 }
 
-/** The files the app keeps in its user data folder: settings, recent history,
- *  window geometry and crash recovery snapshots. */
-const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recovery"];
+/** The files in the user data folder that hold the user's data: settings,
+ *  recent history, window geometry, crash recovery snapshots and the words
+ *  added to the spell checker's dictionary, which Chromium keeps. */
+const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recovery", "Custom Dictionary.txt"];
 
 /** Move the app's own files from the user data folder that it kept as md-easy,
  *  its earlier name, to `directory` on the first launch after the rename.

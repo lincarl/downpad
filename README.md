@@ -63,7 +63,7 @@ The app icon and installer images in `build/`, and the glyph paths in `src/compo
 
 Build Windows installers on Windows and verify them there. Installer CI builds Linux and Windows packages, retains artifacts for 30 days, and publishes a GitHub release when a stable version tag is pushed. The release tag supplies the app version through `scripts/apply-version-from-tag.mjs`.
 
-Settings remain in `settings.toml` in the platform's `Downpad` configuration directory. Downpad was called md-easy before, and on its first launch it moves md-easy's settings there. Markdown files remain ordinary files on disk.
+Downpad keeps its settings in `settings.toml` in the platform's `Downpad` configuration directory. Downpad was called md-easy before, and on its first launch it moves md-easy's settings, recent files and recovery snapshots there. Markdown files remain ordinary files on disk.
 
 ## Maintainer workspace
 

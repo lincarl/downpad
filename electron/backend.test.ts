@@ -511,6 +511,7 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     await writeFile(join(legacy, "settings.toml"), 'theme = "nord"\n');
     await writeFile(join(legacy, "recent.json"), "[]");
     await writeFile(join(legacy, "recovery", "session.json"), "{}");
+    await writeFile(join(legacy, "Custom Dictionary.txt"), "Downpad\n");
     await writeFile(join(legacy, "Local State"), "{}");
     return { legacy, directory };
   }
@@ -518,7 +519,7 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
   it("moves the app's files into the folder that Electron created", async () => {
     const { legacy, directory } = await folders();
     adoptLegacyData(legacy, directory);
-    expect((await readdir(directory)).sort()).toEqual(["recent.json", "recovery", "settings.toml"]);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
     expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
     expect(await readFile(join(directory, "recovery", "session.json"), "utf8")).toBe("{}");
     expect(await readdir(legacy)).toEqual(["Local State"]);
@@ -529,7 +530,7 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     await writeFile(join(directory, "recent.json"), '[{"p":"/notes.md","t":1}]');
     adoptLegacyData(legacy, directory);
     expect(await readdir(directory)).toEqual(["recent.json"]);
-    expect(await readdir(legacy)).toHaveLength(4);
+    expect(await readdir(legacy)).toHaveLength(5);
   });
 
   it("copies a file that cannot be moved and moves the rest", async () => {
@@ -539,7 +540,7 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     });
     syncBuiltinESMExports();
     adoptLegacyData(legacy, directory);
-    expect((await readdir(directory)).sort()).toEqual(["recent.json", "recovery", "settings.toml"]);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
     expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
     expect((await readdir(legacy)).sort()).toEqual(["Local State", "settings.toml"]);
   });
