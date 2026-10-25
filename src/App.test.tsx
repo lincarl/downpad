@@ -185,6 +185,8 @@ describe("App shell", () => {
     expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
     await user.tab();
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Recent" })));
+    await user.tab();
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Open"));
 
     await user.click(screen.getByRole("button", { name: "Save options" }));

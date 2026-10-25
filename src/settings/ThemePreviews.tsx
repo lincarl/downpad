@@ -57,8 +57,8 @@ function Photo({ x, y, w, h, clip, hills, sun }: { x: number; y: number; w: numb
   );
 }
 
-/** Downpad's window in one scheme, in window units: the toolbar, the tab row
- *  with Recent and an active tab, the document page on the canvas, and the
+/** Downpad's window in one scheme, in window units: the toolbar with Recent,
+ *  the tab row with an active tab, the document page on the canvas, and the
  *  status bar. The active tab label carries the accent. The page photo is
  *  drawn by the caller, once, so a split preview shows no seam across it. */
 function MiniWindow({ c, page, accent, outline }: { c: UiPalette; page: DocumentPalette; accent: string; outline: string }) {
@@ -66,16 +66,15 @@ function MiniWindow({ c, page, accent, outline }: { c: UiPalette; page: Document
     <g>
       <g clipPath={`url(#${outline})`}>
         <rect width={WINDOW_W} height={13} fill={c.window} />
-        {[5, 12, 19, 30, 37, 44, 55, 62].map((x) => (
+        {[5, 12, 19, 26, 37, 44, 51, 62, 69].map((x) => (
           <rect key={x} x={x} y={4.5} width={4} height={4} rx={1} fill={c.inkSoft} />
         ))}
 
         <rect y={13} width={WINDOW_W} height={10} fill={c.bar} />
-        <rect x={4.5} y={15.5} width={12} height={6} rx={1.5} fill="none" stroke={c.lineStrong} strokeWidth={0.6} />
-        <rect x={21} y={14.5} width={27} height={8.5} fill={c.fill} />
-        <rect x={25} y={18} width={15} height={1.6} fill={accent} />
-        <rect x={53} y={18} width={13} height={1.6} fill={c.inkSoft} />
-        <rect x={72} y={18} width={13} height={1.6} fill={c.inkSoft} />
+        <rect x={4.5} y={14.5} width={27} height={8.5} fill={c.fill} />
+        <rect x={8.5} y={18} width={15} height={1.6} fill={accent} />
+        <rect x={36.5} y={18} width={13} height={1.6} fill={c.inkSoft} />
+        <rect x={55.5} y={18} width={13} height={1.6} fill={c.inkSoft} />
 
         <rect y={23} width={WINDOW_W} height={50} fill={c.canvas} />
         <rect y={22.6} width={WINDOW_W} height={0.8} fill={c.separator} />

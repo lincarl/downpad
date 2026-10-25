@@ -266,15 +266,15 @@ test("the real app's Recent button switches views without replacing the existing
   const heading = page.locator(".ProseMirror h1");
   await expect(heading).toHaveText("Welcome to Downpad");
   const recent = page.getByRole("button", { name: "Recent", exact: true });
-  await expect(recent).not.toHaveClass(/\bactive\b/);
+  await expect(recent).toHaveAttribute("aria-pressed", "false");
   await recent.click();
-  await expect(recent).toHaveClass(/\bactive\b/);
+  await expect(recent).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".recent-host")).toBeVisible();
   await expect(heading).toBeHidden();
   await expect(page.getByRole("textbox", { name: "Search recent file names", exact: true })).toBeFocused();
   await expect(page.locator(".recent-empty")).toHaveText("No recent files yet");
   await page.getByRole("tab").click();
-  await expect(recent).not.toHaveClass(/\bactive\b/);
+  await expect(recent).toHaveAttribute("aria-pressed", "false");
   await expect(page.locator(".recent-host")).toBeHidden();
   await expect(heading).toBeVisible();
   await expect(heading).toHaveText("Welcome to Downpad");

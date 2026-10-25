@@ -17,6 +17,7 @@ import {
   FileText,
   FolderOpen,
   History,
+  ListClock,
   Menu,
   Minus,
   Moon,
@@ -197,6 +198,20 @@ function Toolbar() {
     <header className="toolbar row-start-1 flex min-w-0 items-center gap-1 border-b border-line-toolbar bg-window px-[3px]">
       <AppMenu inEditor={inEditor} documentIsDark={documentIsDark} />
       <ToolSeparator />
+      <TooltipLabel text="Recent files">
+        <Button
+          type="button"
+          variant="tool"
+          size="tool"
+          className="toolbar-recent gap-0.5 px-2.5"
+          aria-label="Recent"
+          aria-pressed={view === "recent"}
+          onClick={() => runtime?.showRecentView()}
+        >
+          <ListClock aria-hidden="true" {...TOOL_ICON} />
+          <span className="max-[935px]:hidden">Recent</span>
+        </Button>
+      </TooltipLabel>
       <SplitButton
         className="toolbar-open"
         icon={FolderOpen}
@@ -224,12 +239,12 @@ function Toolbar() {
           { label: "Copy as Markdown", icon: FileCode2, run: () => runtime?.copyDocumentMarkdown(), separatorBefore: true },
         ]}
       />
-      <ToolSeparator className="max-[574px]:hidden" />
+      <ToolSeparator className="max-[620px]:hidden" />
       <ToggleGroup
         type="single"
         value={inEditor ? editorLayout : ""}
         disabled={!inEditor}
-        className="toolbar-view inline-flex max-[574px]:hidden"
+        className="toolbar-view inline-flex max-[620px]:hidden"
         aria-label="Editor view"
         onValueChange={(value) => {
           if (value) runtime?.selectLayout(value as EditorLayout);
@@ -255,18 +270,18 @@ function Toolbar() {
           );
         })}
       </ToggleGroup>
-      <ToolSeparator className="max-[683px]:hidden" />
+      <ToolSeparator className="max-[729px]:hidden" />
       <ToolButton
-        className="max-[773px]:hidden"
+        className="max-[819px]:hidden"
         label="Decrease text size"
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(-0.1)}
       >
         <Minus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
-      <TextSizeControl className="max-[683px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
+      <TextSizeControl className="max-[729px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
       <ToolButton
-        className="max-[773px]:hidden"
+        className="max-[819px]:hidden"
         label="Increase text size"
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(0.1)}
@@ -519,14 +534,15 @@ function SplitButton({
               type="button"
               className={cn(
                 part,
-                "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[849px]:pr-1",
+                "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[935px]:pr-1",
               )}
+              aria-label={label}
               disabled={disabled}
               onClick={onClick}
             >
               <Icon aria-hidden="true" {...TOOL_ICON} />
               {/* Narrow windows keep the icon and drop the label before anything clips. */}
-              <span className="toolbar-file-label max-[849px]:hidden">{label}</span>
+              <span className="toolbar-file-label max-[935px]:hidden">{label}</span>
             </button>
           </TooltipLabel>
           <PopoverTrigger asChild>
@@ -669,22 +685,6 @@ function TabStrip() {
       className="tabstrip row-start-2 flex min-w-0 items-center gap-2 border-b border-line-chrome-row bg-bar px-2"
       aria-label="Document tabs"
     >
-      <button
-        type="button"
-        className={cn(
-          "toolbar-recent grid h-[29px] shrink-0 cursor-pointer place-items-center rounded-[6px] border border-line-push bg-transparent px-3 text-[12px] leading-4 text-ink-body outline-none",
-          "hover:border-line-strong hover:bg-hover focus-ring",
-          recentActive &&
-            "active border-accent bg-fill font-semibold text-accent hover:border-accent hover:bg-fill dark:font-normal dark:text-ink-primary",
-        )}
-        onClick={() => runtime?.showRecentView()}
-      >
-        {/* The bold copy reserves the active width so the pill never changes size. */}
-        <span aria-hidden="true" className="invisible col-start-1 row-start-1 font-semibold">
-          Recent
-        </span>
-        <span className="col-start-1 row-start-1">Recent</span>
-      </button>
       {/* Tabs shrink to a floor, then the strip scrolls. Its scroll bar stays
           hidden as in Mervin, so the mouse wheel scrolls it sideways. */}
       <div
