@@ -35,8 +35,8 @@ describe("FrontmatterPanel", () => {
       createElement(FrontmatterPanel, { block: YAML, focus: null, onBlockChange }),
     );
 
-    expect(container.querySelector(".frontmatter-table caption .frontmatter-tab")?.textContent).toBe(
-      "Frontmatter",
+    expect(screen.getByRole("table", { name: "Frontmatter" })).toBe(
+      container.querySelector(".frontmatter-table"),
     );
     expect(screen.getAllByRole("rowheader").map((cell) => cell.textContent)).toEqual([
       "title",
@@ -116,6 +116,7 @@ describe("FrontmatterPanel", () => {
     expect(container.querySelector(".frontmatter-raw .frontmatter-code")?.textContent).toBe(
       "# authored note",
     );
+    expect(screen.queryByText("Frontmatter")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
   });
 });

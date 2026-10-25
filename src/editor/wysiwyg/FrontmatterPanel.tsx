@@ -66,13 +66,11 @@ export function FrontmatterPanel({ block, focus, onBlockChange }: FrontmatterPan
       else keyCells.current.delete(lineIndex);
     };
 
-  // Read-only fallback: YAML with no editable fields (for example comments only
-  // or an unsupported deep shape). It remains visibly tagged as frontmatter and
-  // cannot accidentally be treated as document content.
+  // The disclosure labels this read-only fallback when YAML has no table fields,
+  // for example a comments-only block.
   if (table.fields.length === 0 && table.raw.trim() !== "") {
     return (
       <div className="frontmatter-raw">
-        <FrontmatterTab />
         <pre className="frontmatter-code" data-line={0} data-part="value">{table.raw.replace(/\n+$/, "")}</pre>
       </div>
     );
@@ -161,10 +159,7 @@ export function FrontmatterPanel({ block, focus, onBlockChange }: FrontmatterPan
   return (
     <>
       {table.fields.length > 0 && (
-        <table className="frontmatter-table">
-          <caption className="frontmatter-caption">
-            <FrontmatterTab />
-          </caption>
+        <table className="frontmatter-table" aria-label="Frontmatter">
           <tbody>{rows}</tbody>
         </table>
       )}
@@ -450,10 +445,6 @@ function IconButton({ icon, label, onClick }: { icon: LucideIcon; label: string;
  *  button owns the accessible name, so the glyph is hidden from assistive tech. */
 function ControlIcon({ icon: Icon }: { icon: LucideIcon }) {
   return <Icon aria-hidden="true" focusable="false" size={14} absoluteStrokeWidth strokeWidth={1} />;
-}
-
-function FrontmatterTab() {
-  return <span className="frontmatter-tab">Frontmatter</span>;
 }
 
 function preventEnter(event: KeyboardEvent<HTMLElement>): void {

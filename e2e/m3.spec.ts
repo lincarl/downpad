@@ -24,6 +24,14 @@ const valueFor = (page: Page, key: string) =>
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) })
     .locator(".frontmatter-value-edit");
 
+/** Open the sample's disclosure before exercising its editable fields. */
+async function expandFrontmatter(page: Page): Promise<void> {
+  const toggle = page.locator(".editor-pane-wysiwyg:not([hidden]) .frontmatter-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
 // Opens Settings on the given page. The dialog keeps one page visible at a time
 // (General first), so a field must be reached through its nav row.
 async function openSettings(page: Page, section = "General"): Promise<void> {
@@ -32,15 +40,9 @@ async function openSettings(page: Page, section = "General"): Promise<void> {
   await page.locator(".dialog").getByRole("tab", { name: section, exact: true }).click();
 }
 
-test("frontmatter renders as an editable key/value table by default", async ({ page }) => {
-  // §5.17: with showFrontmatterPanel on (the default), the leading `---` block is
-  // shown above the editor as a VS Code-style table — one row per top-level key.
-  await expect(page.locator(".frontmatter-table")).toBeVisible();
-  // The table is labelled with a "Frontmatter" tab so it isn't mistaken for an
-  // editable Markdown table (§5.17).
-  await expect(page.locator(".frontmatter-table caption .frontmatter-tab")).toHaveText(
-    "Frontmatter",
-  );
+test("expanding frontmatter shows an editable key/value table", async ({ page }) => {
+  await expandFrontmatter(page);
+  await expect(page.getByRole("table", { name: "Frontmatter", exact: true })).toBeVisible();
   await expect(page.getByRole("rowheader", { name: "title", exact: true })).toBeVisible();
   await expect(page.getByRole("rowheader", { name: "tags", exact: true })).toBeVisible();
   await expect(valueFor(page, "title")).toHaveText("Welcome");
@@ -68,6 +70,7 @@ test("frontmatter renders as an editable key/value table by default", async ({ p
 test("editing a NESTED value patches its indented YAML line, preserving the rest", async ({
   page,
 }) => {
+  await expandFrontmatter(page);
   await valueFor(page, "category").fill("notes");
   await page.locator(rawBtn).click();
   const raw = page.locator(".editor-pane-raw .cm-content");
@@ -78,6 +81,7 @@ test("editing a NESTED value patches its indented YAML line, preserving the rest
 });
 
 test("adding a field appends a new editable key/value to the YAML", async ({ page }) => {
+  await expandFrontmatter(page);
   await page.getByRole("button", { name: "Add field", exact: true }).click();
   // A new row appears with the placeholder key "key" (focused); set key + value.
   await page.getByRole("rowheader", { name: "key", exact: true }).fill("author");
@@ -90,6 +94,7 @@ test("adding a field appends a new editable key/value to the YAML", async ({ pag
 // The inserter "+" buttons sit in the gaps, in DOM order: before title, before
 // tags, before metadata, before category (a child gap), then the end gap.
 test("the between-row + inserts a top-level field exactly in that gap", async ({ page }) => {
+  await expandFrontmatter(page);
   // §5.17: the 2nd inserter is the gap between `title` and `tags`.
   await page.locator(".frontmatter-inserter-btn").nth(1).click();
   // The new placeholder row lands precisely there — not at the bottom.
@@ -100,6 +105,7 @@ test("the between-row + inserts a top-level field exactly in that gap", async ({
 test("the between-row + in the GROUP-HEADER gap inserts a top-level field BEFORE the mapping (children stay grouped)", async ({
   page,
 }) => {
+  await expandFrontmatter(page);
   // The 3rd inserter is the gap before the `metadata` header. Inserting there must
   // land a TOP-LEVEL field before the mapping, NOT orphan `category` under a new key.
   await page.locator(".frontmatter-inserter-btn").nth(2).click();
@@ -116,6 +122,7 @@ test("the between-row + in the GROUP-HEADER gap inserts a top-level field BEFORE
 });
 
 test("the front gap inserts at the very top, the end gap appends at the bottom", async ({ page }) => {
+  await expandFrontmatter(page);
   // nth(0) is the front gap (above the first row).
   await page.locator(".frontmatter-inserter-btn").nth(0).click();
   const keys = page.locator(".frontmatter-table tbody th.frontmatter-key");
@@ -128,6 +135,7 @@ test("the front gap inserts at the very top, the end gap appends at the bottom",
 test("an inserter '+' is revealed only by hovering THAT gap, not by hovering a row", async ({
   page,
 }) => {
+  await expandFrontmatter(page);
   const gapBtn = page.locator(".frontmatter-inserter-btn").nth(1);
   await expect(gapBtn).toHaveCSS("opacity", "0");
 
@@ -145,6 +153,7 @@ test("an inserter '+' is revealed only by hovering THAT gap, not by hovering a r
 test("the between-row + in a mapping's gap inserts a sibling CHILD, not a top-level field", async ({
   page,
 }) => {
+  await expandFrontmatter(page);
   // The 4th inserter is the gap before `category` (inside the metadata mapping).
   await page.locator(".frontmatter-inserter-btn").nth(3).click();
   const keys = page.locator(".frontmatter-table tbody th.frontmatter-key");
@@ -162,6 +171,7 @@ test("the between-row + in a mapping's gap inserts a sibling CHILD, not a top-le
 test("a group's gutter + adds a field to that mapping (appended after its last child)", async ({
   page,
 }) => {
+  await expandFrontmatter(page);
   await page
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "metadata", exact: true }) })
     .getByRole("button", { name: "Add field to this group", exact: true })
@@ -179,6 +189,7 @@ test("a group's gutter + adds a field to that mapping (appended after its last c
 });
 
 test("a child row also carries the 'add field to this group' gutter +", async ({ page }) => {
+  await expandFrontmatter(page);
   // The same control appears on each child row and appends to the same mapping.
   await page
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "category", exact: true }) })
@@ -189,6 +200,7 @@ test("a child row also carries the 'add field to this group' gutter +", async ({
 });
 
 test("a plain top-level row has no 'add to group' + — only Delete", async ({ page }) => {
+  await expandFrontmatter(page);
   const titleRow = page
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) });
   await expect(titleRow.getByRole("button", { name: "Add field to this group" })).toHaveCount(0);
@@ -196,6 +208,7 @@ test("a plain top-level row has no 'add to group' + — only Delete", async ({ p
 });
 
 test("deleting a field removes it from the YAML", async ({ page }) => {
+  await expandFrontmatter(page);
   await page
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "tags", exact: true }) })
     .getByRole("button", { name: "Delete" })
@@ -209,6 +222,7 @@ test("deleting a field removes it from the YAML", async ({ page }) => {
 });
 
 test("renaming a key works; an invalid key (with a colon) is rejected", async ({ page }) => {
+  await expandFrontmatter(page);
   await page.getByRole("rowheader", { name: "title", exact: true }).fill("heading");
   // A colon in a key would corrupt the line — the edit must be rejected.
   await page.getByRole("rowheader", { name: "tags", exact: true }).fill("ta:gs");
@@ -221,6 +235,7 @@ test("renaming a key works; an invalid key (with a colon) is rejected", async ({
 });
 
 test("deleting every field still leaves a working 'Add field' (no dead end)", async ({ page }) => {
+  await expandFrontmatter(page);
   for (const key of ["title", "tags", "metadata"]) {
     await page
       .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) })
@@ -242,18 +257,18 @@ test("deleting every field still leaves a working 'Add field' (no dead end)", as
 test("editing a table value patches the YAML while preserving the other fields", async ({
   page,
 }) => {
-  // A long value to also exercise wrapping: the cell must wrap (not overflow) and
-  // the table must stay within / centered in the editor column.
+  await expandFrontmatter(page);
+  // The long value must wrap without widening the table past the editor column.
   const long =
     "A deliberately long frontmatter value that should wrap within the table cell instead of widening the table past the editor column";
   await valueFor(page, "title").fill(long);
 
-  // Visual confirmation of shrink-to-content + centering + wrapping (gitignored).
+  // Visual confirmation of shrink-to-content and wrapping (gitignored).
   await page.locator(".editor-pane:not([hidden])").screenshot({
     path: "e2e/__screens__/frontmatter-table-wrap.png",
   });
 
-  // Switch to Markdown view: the flush serializes the table edit back into the doc.
+  // Opening Split flushes the table edit into the Markdown source.
   await page.locator(rawBtn).click();
   const raw = page.locator(".editor-pane-raw .cm-content");
   await expect(raw).toContainText(`title: ${long}`);
@@ -262,6 +277,7 @@ test("editing a table value patches the YAML while preserving the other fields",
 });
 
 test("turning off 'Show frontmatter table' hides it but keeps the YAML", async ({ page }) => {
+  await expandFrontmatter(page);
   await openSettings(page, "Editor");
   const dialog = page.locator(".dialog");
   const toggle = dialog
@@ -272,6 +288,7 @@ test("turning off 'Show frontmatter table' hides it but keeps the YAML", async (
   await expect(page.locator(".dialog")).toHaveCount(0);
 
   // The table is gone and the YAML isn't dumped into the editor body…
+  await expect(page.locator(".frontmatter-toggle")).toHaveCount(0);
   await expect(page.locator(".frontmatter-table")).toHaveCount(0);
   await expect(page.locator(liveWysiwyg)).not.toContainText("title: Welcome");
 

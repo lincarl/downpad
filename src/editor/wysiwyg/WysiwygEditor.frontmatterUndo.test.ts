@@ -4,6 +4,7 @@
 // edits in the order they were made. These tests use the real editor.
 
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { splitFrontmatter } from "../../document/frontmatter";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import type { FindOptions } from "./findEngine";
@@ -52,6 +53,10 @@ async function open(markdown = FILE): Promise<{ editor: WysiwygEditor; onChange:
     requestSave: async () => false,
   });
   await redraw();
+  if (splitFrontmatter(markdown).frontmatter !== null) {
+    await vi.waitFor(() => expect(root.querySelector(".frontmatter-toggle")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>(".frontmatter-toggle")!.click();
+  }
   return { editor, onChange };
 }
 
@@ -81,6 +86,28 @@ function reported(ed: WysiwygEditor, onChange: Mock): string {
 }
 
 describe("undo in the frontmatter table", () => {
+  it("reveals a collapsed table when undo or redo restores its cell", { timeout: 60_000 }, async () => {
+    const { editor, onChange } = await open();
+    type(cell(0, "value"), " v2");
+    expect(reported(editor, onChange)).toContain("# keep v2");
+    const toggle = document.querySelector<HTMLButtonElement>(".frontmatter-toggle")!;
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    body().focus();
+    press(body(), "z");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(cell(0, "value").textContent).toBe("Draft notes # keep");
+    expect(document.activeElement).toBe(cell(0, "value"));
+    expect(editor.getMarkdown()).toBe(FILE);
+
+    toggle.click();
+    body().focus();
+    press(body(), "y");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(cell(0, "value").textContent).toBe("Draft notes # keep v2");
+    expect(document.activeElement).toBe(cell(0, "value"));
+  });
+
   it("takes back what was typed in a cell with Ctrl+Z and brings it back with Ctrl+Y", { timeout: 60_000 }, async () => {
     const { editor, onChange } = await open();
     type(cell(0, "value"), " v2");

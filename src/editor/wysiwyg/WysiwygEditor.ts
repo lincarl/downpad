@@ -63,6 +63,7 @@ import type { WysiwygContext } from "./context";
 import { SourceBaseline, outlinePlugin, type MarkdownTools, type OutlineNode } from "./sourceBaseline";
 import { baselineOf, baselineState, setBaseline, type BaselineSlot } from "./baselineHistory";
 import { FrontmatterPanel, type FrontmatterFocus } from "./FrontmatterPanel";
+import { FrontmatterDisclosure } from "./FrontmatterDisclosure";
 import { changedCell, focusCaret, showsBlock } from "./frontmatterFind";
 import { frontmatterOf, frontmatterState, handleTableHistory, setFrontmatter } from "./frontmatterHistory";
 import { installEditorAccessibility, labelTaskBoxes } from "./editorAccessibility";
@@ -129,6 +130,8 @@ export class WysiwygEditor {
   private fmPanel: HTMLElement | null = null;
   /** React root that owns all content inside `fmPanel`. */
   private fmPanelRoot: Root | null = null;
+  /** Presentation state survives table redraws and retained tab/view switches. */
+  private fmExpanded = false;
   private onChange: ((markdown: string) => void) | null = null;
   /** Told when the find matches may have changed without a find action. */
   private onFindChange: (() => void) | null = null;
@@ -187,6 +190,7 @@ export class WysiwygEditor {
   private readonly find = new DocumentFind({
     block: () => (this.fmPanel ? this.frontmatterBlock : null),
     panel: () => this.fmPanel,
+    reveal: () => this.setFrontmatterExpanded(true),
     changed: () => this.onFindChange?.(),
   });
   /** The targets of drops on this document whose files are not all in yet.
@@ -215,8 +219,8 @@ export class WysiwygEditor {
     // Frontmatter (§5.17): a leading `---` YAML block is ALWAYS split off and kept
     // verbatim (Crepe never sees it, so it can't mangle the YAML into headings).
     // It and the blank lines after it are written back unchanged on serialize.
-    // When showFrontmatterPanel is on (the default) it's shown above the editor
-    // as a VS Code-style editable key/value table; scalar edits patch the YAML
+    // When showFrontmatterPanel is on (the default), an inline disclosure above
+    // the editor reveals an editable key/value table; scalar edits patch the YAML
     // line-for-line, so the file's formatting is preserved. With the setting
     // off, the YAML is hidden here but still preserved and editable in the
     // Markdown view.
@@ -705,7 +709,7 @@ export class WysiwygEditor {
         });
         panel.addEventListener("compositionend", () => (this.composition = null));
         // A press on the table outside its keys, values and buttons, such as
-        // on its caption or in the blank space around them, leaves focus
+        // in the blank space around them, leaves focus
         // where it was. Chromium moved focus to the page, and the next key
         // went nowhere. Each key and value carries data-part
         // (FrontmatterPanel), and a press on one, also a read-only one, stays
@@ -723,7 +727,16 @@ export class WysiwygEditor {
       this.fmPanelRoot = null;
       this.fmPanel.remove();
       this.fmPanel = null;
+      this.fmExpanded = false;
     }
+  }
+
+  /** Reveal or hide metadata without changing the document or undo history. */
+  private setFrontmatterExpanded(expanded: boolean): void {
+    if (!this.fmPanelRoot || this.fmExpanded === expanded) return;
+    this.fmExpanded = expanded;
+    // Find measures its current cell immediately after asking to reveal it.
+    flushSync(() => this.renderFrontmatter());
   }
 
   // ── Find/replace controller (§5.13), driven by the FindBar via EditorHost ──
@@ -912,19 +925,24 @@ export class WysiwygEditor {
   private renderFrontmatter(focus: FrontmatterFocus = null): void {
     if (!this.fmPanelRoot || this.frontmatterBlock == null) return;
     this.fmPanelRoot.render(
-      createElement(FrontmatterPanel, {
-        key: this.fmTableKey,
+      createElement(FrontmatterDisclosure, {
         block: this.frontmatterBlock,
-        focus,
-        onBlockChange: (block: string, nextFocus?: Exclude<FrontmatterFocus, null>) => {
-          this.frontmatterBlock = block;
-          this.withView((view) => this.recordTableEdit(view, block, !nextFocus), undefined);
-          this.emitChange();
-          // Structural changes alter line indices and must refresh the projection.
-          // Plain scalar edits stay in the current contenteditable node so React
-          // never disturbs its selection or caret.
-          if (nextFocus) this.renderFrontmatter(nextFocus);
-        },
+        expanded: this.fmExpanded,
+        onExpandedChange: (expanded: boolean) => this.setFrontmatterExpanded(expanded),
+        children: createElement(FrontmatterPanel, {
+          key: this.fmTableKey,
+          block: this.frontmatterBlock,
+          focus,
+          onBlockChange: (block: string, nextFocus?: Exclude<FrontmatterFocus, null>) => {
+            this.frontmatterBlock = block;
+            this.withView((view) => this.recordTableEdit(view, block, !nextFocus), undefined);
+            this.emitChange();
+            // Structural changes alter line indices and must refresh the projection.
+            // Plain scalar edits stay in the current contenteditable node so React
+            // never disturbs its selection or caret.
+            if (nextFocus) this.renderFrontmatter(nextFocus);
+          },
+        }),
       }),
     );
   }
@@ -975,6 +993,9 @@ export class WysiwygEditor {
     const inEditor = inTable || view.hasFocus();
     this.frontmatterBlock = block;
     this.fmTableKey += 1;
+    // Undo can restore a cell after its table was collapsed. Reveal it before
+    // React redraws and the caret moves, without disturbing a body undo.
+    if (inEditor && view.state.doc === prev.doc) this.fmExpanded = true;
     flushSync(() => this.syncFrontmatterPanel());
     this.find.refresh();
     // The typed-mark guard decides whether a typed closing mark still waits
@@ -983,6 +1004,7 @@ export class WysiwygEditor {
     this.reportPendingChange({ keepTypedMark: true });
 
     const panel = this.fmPanel;
+    if (!panel && inTable) view.focus();
     if (!panel || !inEditor || view.state.doc !== prev.doc) return;
     const cell = before != null && block != null ? changedCell(before, block) : null;
     if ((cell && focusCaret(panel, cell)) || !inTable) return;

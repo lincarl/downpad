@@ -76,6 +76,8 @@ describe("the lines between frontmatter and the body", () => {
   it("keeps them after a frontmatter table edit", { timeout: 60_000 }, async () => {
     const { onChange, root } = await open("---\ntitle: x\n---\n\nFirst line.\n");
     await settle();
+    await vi.waitFor(() => expect(root.querySelector(".frontmatter-toggle")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>(".frontmatter-toggle")!.click();
     const value = root.querySelector<HTMLElement>(".frontmatter-value-edit")!;
     value.textContent = "y";
     fireEvent.input(value);
@@ -98,5 +100,55 @@ describe("the lines between frontmatter and the body", () => {
     editor.insertMarkdown("Hello");
     await settle();
     expect(onChange).toHaveBeenLastCalledWith("---\ntitle: x\n---\nHello\n");
+  });
+});
+
+describe("frontmatter disclosure", () => {
+  it.each([
+    ["a mapping", "---\ntitle: x\n---\n\nBody.\n"],
+    ["an empty block", "---\n---\nBody.\n"],
+    ["comments only", "---\n# note\n---\nBody.\n"],
+    ["a top-level sequence", "---\n- item\n---\nBody.\n"],
+  ])("collapses %s without changing the file", { timeout: 60_000 }, async (_name, markdown) => {
+    const { editor, root, onChange } = await open(markdown);
+    await vi.waitFor(() => expect(root.querySelector(".frontmatter-toggle")).not.toBeNull());
+    const toggle = root.querySelector<HTMLButtonElement>(".frontmatter-toggle")!;
+    const content = root.querySelector<HTMLElement>(".frontmatter-content")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(content.hidden).toBe(true);
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(content.hidden).toBe(false);
+    toggle.click();
+    expect(content.hidden).toBe(true);
+    expect(editor.getMarkdown()).toBe(markdown);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("adds and removes the disclosure with the source and preserves the state across table redraws", { timeout: 60_000 }, async () => {
+    const { editor, root } = await open("Body.\n");
+    expect(root.querySelector(".frontmatter-toggle")).toBeNull();
+    editor.setMarkdown("---\ntitle: first\n---\nBody.\n");
+    const toggle = root.querySelector<HTMLButtonElement>(".frontmatter-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    editor.setMarkdown("---\ntitle: next\n---\nBody.\n");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(root.querySelector(".frontmatter-value-edit")?.textContent).toBe("next");
+    toggle.click();
+    editor.setMarkdown("---\ntitle: final\n---\nBody.\n");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    editor.setMarkdown("Body.\n");
+    expect(root.querySelector(".frontmatter-table-wrap")).toBeNull();
+    editor.setMarkdown("---\n# new block\n---\nBody.\n");
+    expect(root.querySelector(".frontmatter-toggle")?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows no disclosure for disabled frontmatter or an unfinished block", { timeout: 60_000 }, async () => {
+    const { editor, root } = await open("---\ntitle: hidden\n---\nBody.\n", false);
+    expect(root.querySelector(".frontmatter-table-wrap")).toBeNull();
+    await editor.destroy();
+    const unfinished = await open("---\ntitle: unfinished\nBody.\n");
+    expect(unfinished.root.querySelector(".frontmatter-table-wrap")).toBeNull();
   });
 });
