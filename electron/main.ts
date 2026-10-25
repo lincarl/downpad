@@ -505,6 +505,9 @@ async function installPendingUpdate(pending: PendingUpdate): Promise<{ restartin
     await updates().dropPending(failure).catch(() => {});
     return { restarting: false, failure };
   }
+  // The package is in place. Forget it, so a package whose app reports an older
+  // version than its release cannot install again on every start.
+  await updates().dropPending().catch(() => {});
   app.relaunch({ execPath: relaunchExecutable(), args: process.argv.slice(1) });
   app.exit(0);
   return { restarting: true };
@@ -556,8 +559,10 @@ async function start(): Promise<void> {
   unwatchSettings = watchPath(config.settingsPath, () => {
     void config.settings().then((settings) => {
       emit("settings-changed", settings);
-      if (!settings.autoUpdate) void updater?.automaticUpdatesOff();
-    });
+      if (!settings.autoUpdate) {
+        void updater?.automaticUpdatesOff().catch((error: unknown) => console.error("Downpad could not delete the automatic update", error));
+      }
+    }).catch((error: unknown) => console.error("Downpad could not read its settings", error));
   });
   await createWindow();
   startupCompleted = true;
