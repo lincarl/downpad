@@ -470,7 +470,9 @@ try {
                 if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing to remove an executable through a reparse point at $($item.FullName)" }
                 if ($item -is [IO.FileInfo]) { $item = $item.Directory } else { $item = $item.Parent }
             }
-            Remove-Item -LiteralPath $installedExe
+            # electron-builder marks MSI files read-only. Force permits removing
+            # this guarded test file without changing installation permissions.
+            Remove-Item -LiteralPath $installedExe -Force
             if (Test-Path -LiteralPath $installedExe) { throw 'The recovery fixture still has its executable.' }
             if ($installer.ProductState($previous.ProductCode) -ne 5) { throw 'The damaged recovery fixture lost its MSI registration.' }
             Write-Host 'Removed the test executable. The next RC must restore it through a same-version upgrade.'
