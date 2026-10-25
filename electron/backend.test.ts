@@ -566,6 +566,22 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
   });
 
+  it("removes a copy folder that a stopped launch left, so its outdated files never join a later copy", async () => {
+    const { legacy, directory } = await folders();
+    await mkdir(join(directory, ".md-easy-copy-x1y2z3", "recovery"), { recursive: true });
+    await writeFile(join(directory, ".md-easy-copy-x1y2z3", "recovery", "discarded.json"), "{}");
+    const rename = synchronousFilesystem.renameSync;
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementation((source, target) => {
+      // A running md-easy holds its recovery folder, so it can only be copied.
+      if (String(source) === join(legacy, "recovery")) throw Object.assign(new Error("The file is in use."), { code: "EPERM" });
+      rename(source, target);
+    });
+    syncBuiltinESMExports();
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(await readdir(join(directory, "recovery"))).toEqual(["session.json"]);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+  });
+
   it("tries a file again on the next launch when it can be neither moved nor copied", async () => {
     const { legacy, directory } = await folders();
     const failure = Object.assign(new Error("Access is denied."), { code: "EACCES" });

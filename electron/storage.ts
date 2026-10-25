@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, unlink } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
 import type { FileStat, SearchHit, SearchSummary, Snapshot } from "../src/ipc/contracts";
@@ -51,6 +51,10 @@ export function validateSnapshot(value: unknown): Snapshot {
  *  added to the spell checker's dictionary, which Chromium keeps. */
 const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recovery", "Custom Dictionary.txt"];
 
+/** The start of the name of each folder in which adoptLegacyData copies a file
+ *  before it renames the copy into place. */
+const COPY_FOLDER_PREFIX = ".md-easy-copy-";
+
 /** Move the files in DATA_FILES from the user data folder that the app kept as
  *  md-easy, its earlier name, to `directory`. Electron creates `directory`
  *  before the app's code runs, so each file moves only while `directory` lacks
@@ -64,6 +68,11 @@ const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recove
  *  the single-instance lock, so that two launches never move the same files. */
 export function adoptLegacyData(legacy: string, directory: string): boolean {
   if (!existsSync(legacy)) return false;
+  // Only one launch migrates, so a copy folder found now was left by a launch
+  // that stopped during its copy. Its files may be outdated.
+  for (const entry of existsSync(directory) ? readdirSync(directory) : []) {
+    if (entry.startsWith(COPY_FOLDER_PREFIX)) rmSync(join(directory, entry), { recursive: true, force: true });
+  }
   let adoptedSettings = false;
   for (const name of DATA_FILES) {
     const source = join(legacy, name);
@@ -72,16 +81,20 @@ export function adoptLegacyData(legacy: string, directory: string): boolean {
     mkdirSync(directory, { recursive: true });
     try { renameSync(source, target); }
     catch {
-      // Copy under a name of this launch's own and rename it into place, so a
-      // failed copy only ever removes its own partial files.
-      const partial = `${target}.${process.pid}.partial`;
+      // Copy into a new folder of this attempt's own and rename the copy into
+      // place, so a failed copy only removes its own files, and no copy ever
+      // lands among files that an earlier attempt left.
+      let folder: string | undefined;
       try {
-        cpSync(source, partial, { recursive: true });
-        renameSync(partial, target);
+        folder = mkdtempSync(join(directory, COPY_FOLDER_PREFIX));
+        const copy = join(folder, name);
+        cpSync(source, copy, { recursive: true });
+        renameSync(copy, target);
       } catch (error) {
-        rmSync(partial, { recursive: true, force: true });
         console.error(`Downpad could not take over md-easy's ${name}`, error);
         continue;
+      } finally {
+        if (folder) rmSync(folder, { recursive: true, force: true });
       }
     }
     if (name === "settings.toml") adoptedSettings = true;
