@@ -54,11 +54,13 @@ const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recove
 /** Move the files in DATA_FILES from the user data folder that the app kept as
  *  md-easy, its earlier name, to `directory`. Electron creates `directory`
  *  before the app's code runs, so each file moves only while `directory` lacks
- *  it. Nothing Downpad wrote is replaced, and a file that failed to move is
- *  tried again on the next launch. A file that cannot be moved, for example
- *  while a running md-easy holds it open on Windows, is copied instead and the
- *  original stays. Chromium's own files stay in the old folder. Returns whether
- *  the app took over md-easy's settings. */
+ *  it, and nothing Downpad wrote is replaced. A file that cannot be moved, for
+ *  example while a running md-easy holds it open on Windows, is copied instead
+ *  and the original stays. A file that can be neither moved nor copied stays in
+ *  the old folder and is tried again on a later launch, unless Downpad has made
+ *  its own by then, as it does with its settings and recovery folder at
+ *  startup. Chromium's own files stay in the old folder. Returns whether the
+ *  app took over md-easy's settings. */
 export function adoptLegacyData(legacy: string, directory: string): boolean {
   if (!existsSync(legacy)) return false;
   let adoptedSettings = false;
