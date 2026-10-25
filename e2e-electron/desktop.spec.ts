@@ -3569,16 +3569,18 @@ test("a code block's tools show with a focus ring while they have keyboard focus
     .toEqual([]);
 });
 
-test("a toolbar tooltip lets a click through to Recent", async () => {
+test("a toolbar tooltip lets a click through to a document tab", async () => {
   const file = path.join(directory, "tooltip.md");
   await writeFile(file, "# Tooltip\n");
   await launch(file);
   await expect(page.locator(heading)).toHaveText("Tooltip");
-  // Keyboard focus opens the menu button's tooltip over Recent, and it stays open.
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  // Keyboard focus opens the menu tooltip over the first tab and keeps it open.
   await page.getByRole("button", { name: "Application menu", exact: true }).focus();
   await expect(page.getByRole("tooltip", { name: "Menu", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Recent", exact: true }).click({ timeout: 2_000 });
-  await expect(page.locator(".recent-host")).toBeVisible();
+  await page.getByRole("tab").click({ position: { x: 24, y: 8 }, timeout: 2_000 });
+  await expect(page.locator(heading)).toBeVisible();
+  await expect(page.locator(".recent-host")).toBeHidden();
 });
 
 test("a toolbar tooltip stays open while the pointer is over it", async () => {

@@ -43,8 +43,8 @@ test("'Close all tabs' closes every tab and returns to the Recent view", async (
   await page.locator(".tab").first().click({ button: "right" });
   await page.locator(menu).getByRole("menuitem", { name: "Close all tabs" }).click();
 
-  // No tabs remain; the permanent strip keeps Recent/New available while the
-  // Recent view takes over.
+  // No tabs remain; the permanent strip keeps New available while the Recent
+  // view takes over. Recent stays available in the toolbar.
   await expect(page.locator(".tabstrip")).toBeVisible();
   await expect(page.locator(".recent-host")).toBeVisible();
 });

@@ -163,7 +163,8 @@ test("the find card opens with Ctrl+F, follows the Markdown view and closes on E
 
   // Markdown-only routes the same card into CodeMirror; no second CodeMirror
   // panel opens and Ctrl+F returns focus to the card's field.
-  await page.locator(markdownSeg).click();
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
   await page.locator(rawContent).click();
   await page.keyboard.press("Control+f");
   await expect(findInput).toBeFocused();
