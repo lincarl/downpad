@@ -551,6 +551,49 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
     expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "light"\n');
   });
 
+  it("keeps a folder that another launch moved first", async () => {
+    const { legacy, directory } = await folders();
+    const rename = synchronousFilesystem.renameSync;
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementation((source, target) => {
+      rename(source, target);
+      // Another launch moved the recovery folder first, so this launch finds no source.
+      if (String(source).endsWith("recovery")) throw Object.assign(new Error("No such file or directory"), { code: "ENOENT" });
+    });
+    syncBuiltinESMExports();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(await readFile(join(directory, "recovery", "session.json"), "utf8")).toBe("{}");
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+  });
+
+  it("removes a copy folder that a stopped launch left, so its outdated files never join a later copy", async () => {
+    const { legacy, directory } = await folders();
+    await mkdir(join(directory, ".md-easy-copy-x1y2z3", "recovery"), { recursive: true });
+    await writeFile(join(directory, ".md-easy-copy-x1y2z3", "recovery", "discarded.json"), "{}");
+    const rename = synchronousFilesystem.renameSync;
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementation((source, target) => {
+      // A running md-easy holds its recovery folder, so it can only be copied.
+      if (String(source) === join(legacy, "recovery")) throw Object.assign(new Error("The file is in use."), { code: "EPERM" });
+      rename(source, target);
+    });
+    syncBuiltinESMExports();
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(await readdir(join(directory, "recovery"))).toEqual(["session.json"]);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+  });
+
+  it("goes on when a copy folder cannot be removed", async () => {
+    const { legacy, directory } = await folders();
+    await mkdir(join(directory, ".md-easy-copy-held"));
+    const failure = Object.assign(new Error("The file is in use."), { code: "EBUSY" });
+    vi.spyOn(synchronousFilesystem, "rmSync").mockImplementationOnce(() => { throw failure; });
+    syncBuiltinESMExports();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(logged).toHaveBeenCalledWith(`Downpad could not remove ${join(directory, ".md-easy-copy-held")}`, failure);
+    expect((await readdir(directory)).sort()).toEqual([".md-easy-copy-held", "Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+  });
+
   it("tries a file again on the next launch when it can be neither moved nor copied", async () => {
     const { legacy, directory } = await folders();
     const failure = Object.assign(new Error("Access is denied."), { code: "EACCES" });
