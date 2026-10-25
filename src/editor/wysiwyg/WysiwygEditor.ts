@@ -709,7 +709,7 @@ export class WysiwygEditor {
         });
         panel.addEventListener("compositionend", () => (this.composition = null));
         // A press on the table outside its keys, values and buttons, such as
-        // on its caption or in the blank space around them, leaves focus
+        // in the blank space around them, leaves focus
         // where it was. Chromium moved focus to the page, and the next key
         // went nowhere. Each key and value carries data-part
         // (FrontmatterPanel), and a press on one, also a read-only one, stays

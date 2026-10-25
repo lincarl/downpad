@@ -1610,6 +1610,7 @@ test("Shift+click on a code block's code or a frontmatter cell from elsewhere pu
   const file = path.join(directory, "shift-click-code-frontmatter.md");
   await writeFile(file, "---\ntitle: Survey\n---\n\n```\nconst alpha = 1;\nconst beta = 2;\n```\n\nLast line.\n");
   await launch(file);
+  await page.locator(".frontmatter-toggle").click();
   const table = page.locator(".frontmatter-table");
   await expect(table).toBeVisible();
   const code = page.locator(".milkdown .ProseMirror .cm-content");
@@ -1646,27 +1647,47 @@ test("Shift+click on a code block's code or a frontmatter cell from elsewhere pu
   await expect.poll(() => readFile(file, "utf8")).toBe("---\ntiztle: Suryvey\n---\n\n```\nconst alpha = 1;\nconst xbeta = 2;\n```\n\nLast line.\n");
 });
 
-test("a click or Shift+click on the frontmatter table's caption or beside the table leaves focus where it was", async () => {
-  const file = path.join(directory, "frontmatter-caption-click.md");
+test("a click or Shift+click beside the frontmatter table keeps editor focus, while its toggle takes focus and expands or collapses it", async () => {
+  const file = path.join(directory, "frontmatter-focus.md");
   await writeFile(file, "---\ntitle: Survey\n---\n\nFirst line.\n\nLast line.\n");
   await launch(file);
+  const toggle = page.locator(".frontmatter-toggle");
   const table = page.locator(".frontmatter-table");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(table).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(table).toBeVisible();
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  /** A blank point beside the table in the current layout. */
+  const besideTable = async () => {
+    const wrap = (await page.locator(".frontmatter-table-wrap").boundingBox())!;
+    const box = (await table.boundingBox())!;
+    return { x: (box.x + box.width + wrap.x + wrap.width) / 2, y: box.y + box.height / 2 };
+  };
   // Chromium moved focus to the page, and the next key was lost.
   await clickOn("Last line.", -1, 0.75);
-  const wrap = (await page.locator(".frontmatter-table-wrap").boundingBox())!;
-  const box = (await table.boundingBox())!;
-  await page.mouse.click((box.x + box.width + wrap.x + wrap.width) / 2, box.y + box.height / 2);
+  const blank = await besideTable();
+  await page.mouse.click(blank.x, blank.y);
   await expect(page.locator(".milkdown .ProseMirror")).toBeFocused();
   await page.keyboard.type("a");
-  // From the split's Markdown pane, a Shift+click on the caption extended the
-  // pane's selection to its start, and the next key replaced the Markdown
-  // before the caret.
+  // A Shift+click on blank space also keeps the Markdown pane's caret.
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   await caretInMarkdown("First line.");
-  await shiftClickAt(await centerOf(page.locator(".frontmatter-tab")));
+  await shiftClickAt(await besideTable());
   await expect(page.locator(".editor-pane-raw .cm-content")).toBeFocused();
   await page.keyboard.type("b");
+  // The disclosure is a native button, so clicking it takes focus from the
+  // Markdown pane, and Space activates it again without changing the file.
+  await toggle.click({ modifiers: ["Shift"] });
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(table).toBeHidden();
+  await toggle.press("Space");
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(table).toBeVisible();
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: Survey\n---\n\nFirst line.b\n\nLast line.a\n");
 });
@@ -1693,6 +1714,7 @@ test("Shift+click extends a selection in read-only frontmatter text, also while 
   const file = path.join(directory, "frontmatter-read-only-comment.md");
   await writeFile(file, "---\n# First comment second comment\n---\n\nBody line.\n");
   await launch(file);
+  await page.locator(".frontmatter-toggle").click();
   const comment = page.locator(".frontmatter-raw .frontmatter-code");
   await expect(comment).toBeVisible();
   // While nothing had focus, the listener that has the browser take a
@@ -1708,6 +1730,7 @@ test("a double-click selects the text of a read-only key in the frontmatter tabl
   const file = path.join(directory, "frontmatter-read-only-key.md");
   await writeFile(file, "---\ntitle: Survey\ncomplex:\n  - first item\n  - second item\n---\n\nBody line.\n");
   await launch(file);
+  await page.locator(".frontmatter-toggle").click();
   const key = page.locator(".frontmatter-table th.frontmatter-key", { hasText: /^complex$/ });
   await expect(key).toBeVisible();
   // The table kept focus where it was on every press on a read-only key, so
@@ -5760,11 +5783,15 @@ test("a file dropped while the find card's match is in the frontmatter table lea
   const file = path.join(directory, "drop-find-frontmatter.md");
   await writeFile(file, "---\ntitle: Review notes\n---\n\nFirst line.\n\nSecond line.\n");
   await launch(file);
-  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".frontmatter-table")).toBeHidden();
   await page.locator(".ProseMirror p", { hasText: "Second line." }).click();
   await page.keyboard.press("ControlOrMeta+f");
   await page.getByRole("textbox", { name: "Find in document" }).fill("Review");
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
   await dropBelow(page.locator(".ProseMirror p", { hasText: "First line." }), [await csvFile("notes.csv")]);
   await expect(page.locator(".ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
   await page.keyboard.press("Enter");
@@ -5973,13 +6000,17 @@ test("find in the document view searches and replaces the frontmatter table", as
   const file = path.join(directory, "frontmatter-find.md");
   await writeFile(file, '---\ntitle: Draft notes # keep\nmeta:\n  status: "draft"\ntags:\n  - draft\n---\n\nThe draft body.\n');
   await launch(file);
-  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".frontmatter-table")).toBeHidden();
   await page.keyboard.press("ControlOrMeta+f");
   const find = page.getByRole("textbox", { name: "Find in document" });
   const count = page.locator(".find-count");
   await find.fill("draft");
   // The table's three matches come first, as the table sits above the body.
   await expect(count).toHaveText("1 of 4");
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(find).toBeFocused();
   expect(await tableHighlights()).toEqual({ match: ["draft", "draft"], current: ["Draft"] });
   await expect(page.locator(".ProseMirror .md-find-current")).toHaveCount(0);
   for (const step of ["2 of 4", "3 of 4", "4 of 4"]) {
@@ -6012,11 +6043,15 @@ test("the frontmatter table's find highlights go with a layout change or a tab s
   const file = path.join(directory, "frontmatter-find-clear.md");
   await writeFile(file, "---\ntitle: Draft notes\n---\n\nThe draft body.\n");
   await launch(file);
-  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".frontmatter-table")).toBeHidden();
   await page.keyboard.press("ControlOrMeta+f");
   await page.getByRole("textbox", { name: "Find in document" }).fill("draft");
   const count = page.locator(".find-count");
   await expect(count).toHaveText("1 of 2");
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
   expect(await tableHighlights()).toEqual({ match: [], current: ["Draft"] });
   // The card stays open and searches the Markdown source, which has no table.
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
@@ -6034,12 +6069,16 @@ test("closing find on a frontmatter match leaves the caret there", async () => {
   const file = path.join(directory, "frontmatter-find-close.md");
   await writeFile(file, "---\ntitle: Draft notes\n---\n\nFirst paragraph.\n\nThe draft body.\n");
   await launch(file);
-  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".frontmatter-table")).toBeHidden();
   await page.keyboard.press("ControlOrMeta+f");
   const find = page.getByRole("textbox", { name: "Find in document" });
   const count = page.locator(".find-count");
   await find.fill("draft");
   await expect(count).toHaveText("1 of 2");
+  await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".frontmatter-table")).toBeVisible();
+  await expect(find).toBeFocused();
   // Step past the body's match and around to the title, then close the card.
   await find.press("Enter");
   await expect(count).toHaveText("2 of 2");
@@ -6148,9 +6187,18 @@ test("find leaves a match at the top of the page in view and clear of the card",
     await writeFile(file, text);
     await chooseOpen(file);
     await expect(page).toHaveTitle(`${name} — Downpad`);
+    if (name === "top-frontmatter.md") {
+      await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator(".frontmatter-table")).toBeHidden();
+    }
     await page.keyboard.press("ControlOrMeta+f");
     await find.fill("needle");
     await expect(page.locator(".find-count")).toHaveText("1 of 1");
+    if (name === "top-frontmatter.md") {
+      await expect(page.locator(".frontmatter-toggle")).toHaveAttribute("aria-expanded", "true");
+      await expect(page.locator(".frontmatter-table")).toBeVisible();
+      await expect(find).toBeFocused();
+    }
     await expect.poll(currentMatchProblem).toBe("");
     // The replace row makes the card taller, and opening it searches again.
     await page.keyboard.press("Control+h");
@@ -6500,6 +6548,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
   const file = path.join(directory, "frontmatter-undo.md");
   await writeFile(file, "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n");
   await launch(file);
+  await page.locator(".frontmatter-toggle").click();
   const title = page
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) })
     .locator(".frontmatter-value-edit");
@@ -6543,6 +6592,7 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
   const original = "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n";
   await writeFile(file, original);
   await launch(file);
+  await page.locator(".frontmatter-toggle").click();
   // Keep each native menu instead of showing it, so the test can choose its items.
   await app!.evaluate(({ Menu }) => {
     Menu.prototype.popup = function () {
