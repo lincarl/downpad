@@ -303,15 +303,15 @@ jobs:
           try {
             node scripts/apply-version-from-tag.mjs v0.0.1
             if ($LASTEXITCODE -ne 0) { throw 'Could not apply the stable fixture version' }
-            pnpm exec electron-builder --win msi --x64 --publish never -c.directories.output=dev-temp/msi-tests/stable
+            pnpm exec electron-builder --win msi --x64 --publish never "--config.directories.output=dev-temp/msi-tests/stable"
             if ($LASTEXITCODE -ne 0) { throw 'Could not build the stable fixture' }
             node scripts/apply-version-from-tag.mjs v0.0.2-rc1
             if ($LASTEXITCODE -ne 0) { throw 'Could not apply the candidate fixture version' }
-            pnpm exec electron-builder --win msi --x64 --publish never -c.directories.output=dev-temp/msi-tests/candidate
+            pnpm exec electron-builder --win msi --x64 --publish never "--config.directories.output=dev-temp/msi-tests/candidate"
             if ($LASTEXITCODE -ne 0) { throw 'Could not build the candidate fixture' }
             node scripts/apply-version-from-tag.mjs v0.0.2-rc2
             if ($LASTEXITCODE -ne 0) { throw 'Could not apply the recovery fixture version' }
-            pnpm exec electron-builder --win msi --x64 --publish never -c.directories.output=dev-temp/msi-tests/recovery
+            pnpm exec electron-builder --win msi --x64 --publish never "--config.directories.output=dev-temp/msi-tests/recovery"
             if ($LASTEXITCODE -ne 0) { throw 'Could not build the recovery fixture' }
           } finally {
             [IO.File]::WriteAllBytes('package.json', $manifest)
