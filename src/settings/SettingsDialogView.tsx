@@ -31,10 +31,18 @@ import {
 } from "@/components/ui/dialog-layout";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { getSystemAccentColor, openDefaultAppsSettings } from "@/ipc/commands";
+import {
+  checkForUpdates,
+  getSystemAccentColor,
+  openDefaultAppsSettings,
+  openExternalUrl,
+  restartToUpdate,
+  updateInfo,
+} from "@/ipc/commands";
+import type { UpdateInfo } from "@/ipc/contracts";
 import { isElectron } from "@/ipc/env";
+import { onUpdateChanged } from "@/ipc/events";
 import { DEFAULT_ACCENT, normalizeHex } from "@/shell/accent";
-import { checkForUpdates } from "@/shell/updater";
 import type { Settings } from "@/state/types";
 import { layoutFromDefaultView } from "@/state/types";
 import { cn } from "@/lib/utils";
@@ -120,7 +128,6 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     () => normalizeHex(initial.accentColor) ?? DEFAULT_ACCENT,
   );
   const [systemAccent, setSystemAccent] = useState<string | null>(null);
-  const [updateStatus, setUpdateStatus] = useState("");
   // Fields that only apply while their check box is on are disabled with it.
   const [autosaveOn, setAutosaveOn] = useState(initial.autosaveEnabled);
   const [hardWrapOn, setHardWrapOn] = useState(initial.mdHardWrap !== false);
@@ -202,6 +209,8 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const recentFilesVisibleCount = input("recentFilesVisibleCount");
     const fontFamily = input("fontFamily");
     const attachmentsFolderName = input("attachmentsFolderName");
+    // Only copies that install updates themselves show this check box.
+    const autoUpdate = form.elements.namedItem("autoUpdate") as HTMLInputElement | null;
 
     const next: Settings = {
       ...initial,
@@ -241,6 +250,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
         recentFilesVisibleCount,
         initial.recentFilesVisibleCount,
       ),
+      autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
     };
 
     onSave(next);
@@ -628,21 +638,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
 
                 {isElectron() && (
                   <SettingsPage {...pageProps("updates")}>
-                    <SettingsBox title="Updates">
-                      <p className="settings-status col-span-full m-0">
-                        Current version: {__APP_VERSION__}
-                      </p>
-                      <ButtonRow
-                        label="Check for updates"
-                        className="mt-1"
-                        onClick={() => {
-                          setUpdateStatus("Checking…");
-                          void checkForUpdates().then(setUpdateStatus);
-                        }}
-                      >
-                        {updateStatus}
-                      </ButtonRow>
-                    </SettingsBox>
+                    <UpdatesBox autoUpdate={initial.autoUpdate} />
                   </SettingsPage>
                 )}
 
@@ -683,15 +679,114 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   );
 }
 
+/** What the Updates page says about the state of a check or download. */
+function updateStatusText({ version, state }: UpdateInfo): string {
+  switch (state.status) {
+    case "idle":
+      return "";
+    case "checking":
+      return "Checking…";
+    case "up-to-date":
+      return `You're up to date. Downpad ${version} is the latest version.`;
+    case "downloading":
+      return `Downloading Downpad ${state.version}…${state.percent === null ? "" : ` ${state.percent}%`}`;
+    case "ready":
+      return `Downpad ${state.version} is ready. It installs the next time Downpad starts.`;
+    case "available":
+      return `Downpad ${state.version} is available.`;
+    case "failed":
+      return state.message;
+  }
+}
+
+/**
+ * Settings > Updates: this copy's version, the automatic update switch for
+ * copies that install updates themselves, and Check for updates, which
+ * follows the main process's check and download as they progress.
+ */
+function UpdatesBox({ autoUpdate }: { autoUpdate: boolean }) {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    void onUpdateChanged((next) => {
+      if (live) setInfo(next);
+    }).then((stop) => {
+      if (live) unlisten = stop;
+      else stop();
+    });
+    void updateInfo()
+      .then((next) => {
+        if (live) setInfo((current) => current ?? next);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const state = info?.state;
+  const busy = state?.status === "checking" || state?.status === "downloading";
+  const report = (action: Promise<void>): void => {
+    setError("");
+    void action.catch((failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)));
+  };
+
+  return (
+    <SettingsBox title="Updates">
+      <p className="settings-status col-span-full m-0">
+        Current version: {info?.version ?? __APP_VERSION__}
+      </p>
+      {info?.selfUpdate && (
+        <>
+          <CheckRow label="Update automatically" placement="box">
+            <Checkbox name="autoUpdate" defaultChecked={autoUpdate} />
+          </CheckRow>
+          <Hint placement="box">
+            Every 30 days Downpad checks for a new version and downloads it. It installs the
+            next time Downpad starts.
+          </Hint>
+        </>
+      )}
+      <ButtonRow label="Check for updates" className="mt-1" disabled={busy || !info} onClick={() => report(checkForUpdates())}>
+        <span role="status">{error || (info ? updateStatusText(info) : "")}</span>
+      </ButtonRow>
+      {state?.status === "ready" && (
+        <ButtonRow label="Restart now" onClick={() => report(restartToUpdate())}>
+          Unsaved documents are asked about first.
+        </ButtonRow>
+      )}
+      {state?.status === "available" && (
+        <ButtonRow
+          label="Open download page"
+          onClick={() => report(openExternalUrl(state.pageUrl))}
+        >
+          This copy doesn't install updates itself.
+        </ButtonRow>
+      )}
+      {info?.lastCheckMs != null && (
+        <Hint placement="box">
+          Last checked {new Date(info.lastCheckMs).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.
+        </Hint>
+      )}
+    </SettingsBox>
+  );
+}
+
 /** A push button with its status or explanation in ink-soft beside it. */
 function ButtonRow({
   label,
   onClick,
+  disabled,
   className,
   children,
 }: {
   label: string;
   onClick: () => void;
+  disabled?: boolean;
   className?: string;
   children: ReactNode;
 }) {
@@ -701,6 +796,7 @@ function ButtonRow({
         type="button"
         variant="outline"
         className={cn("dialog-btn", dialogButtonClassName)}
+        disabled={disabled}
         onClick={onClick}
       >
         {label}

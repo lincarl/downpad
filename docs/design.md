@@ -153,6 +153,20 @@ The print workspace mounts a rendered copy of the document in the app window. Be
 
 The frontend can also run in a browser-backed development environment with platform operations represented by adapters. This allows most interface and editing behavior to be tested independently of the desktop shell.
 
+## Updates
+
+Downpad updates itself without electron-updater, which cannot install the MSI that Windows builds produce. The main process reads GitHub's latest-release API, which lists only stable releases, and downloads the release file named for its own package format, as the release workflow names it (`assetName` in `electron/updatePlan.ts`). It hashes the download while it streams to disk and keeps it only if the SHA-256 digest matches the digest that the API lists for that file. The trust in an update therefore rests on HTTPS to GitHub's API, since the packages are not code-signed.
+
+`electron/updater.ts` keeps one folder per package format under `updates` in the user data folder, with the format's state file and at most one verified download, so an AppImage beside a DEB installation never touches the DEB's download. The next start installs the download before it opens a window (`electron/updateInstall.ts`). Installation copies the download once more, hashing the bytes it writes, and hands only that verified copy to the installer:
+
+- An AppImage copy goes beside the running image and is renamed over it, so a crash leaves the old or the new image. Downpad then starts the new image.
+- A DEB copy goes to a temporary folder that apt can read, and `pkexec apt-get install -y`, or `dpkg -i` without apt, installs it. Downpad then starts again.
+- An MSI copy goes to a temporary folder, and a detached `cmd` helper runs `msiexec /passive`, removes the copy and starts Downpad, also after a failed or cancelled installation. Downpad forgets the download before it starts the helper, so a failing installation cannot repeat on every start.
+
+A copy updates itself only if it can tell how it was installed: the AppImage runtime's variables for an AppImage in a writable folder, dpkg's file list of the `downpad` package for the DEB, and on Windows the `InstallDir` that the MSI writes to `HKCU\Software\Downpad` (`scripts/brand-msi.mjs`). Copies that do not match, such as unpacked builds, copies of the installed folder and installations for all users, only offer the release page. So do builds with the version `0.0.0`, which have no release tag.
+
+`DOWNPAD_UPDATE_API_URL` replaces GitHub's API for tests and then also accepts plain HTTP from this computer.
+
 ## App icon and installer images
 
 The app icon is a blue tile with a white block M above a yellow open chevron, the down arrow of the Markdown mark. `scripts/icons.mjs` draws the icon and every installer image as SVG, and `pnpm icons` renders them into `build/` with Playwright's Chromium, which `pnpm exec playwright install chromium` installs. The generated files are committed. `pnpm test:icons` checks that each file in the generator's list exists with the listed size, and that the generated text files are current.

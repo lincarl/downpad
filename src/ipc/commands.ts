@@ -14,6 +14,7 @@ import type {
   SearchOpts,
   SearchSummary,
   Snapshot,
+  UpdateInfo,
 } from "./contracts";
 
 /**
@@ -170,6 +171,32 @@ export function openDefaultAppsSettings(): Promise<void> {
 /** The OS accent color as `#rrggbb`, or null if unavailable (§6.2 "Follow system"). */
 export function getSystemAccentColor(): Promise<string | null> {
   return invoke("get_system_accent_color");
+}
+
+/** Open an http, https or mailto address in the default browser or mail app. */
+export function openExternalUrl(url: string): Promise<void> {
+  try {
+    return desktopBridge().openExternal(url);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+/** This copy's version and where its update check stands (Settings > Updates). */
+export function updateInfo(): Promise<UpdateInfo> {
+  return invoke("update_info");
+}
+
+/** Start an update check. Progress and its outcome arrive as update-changed
+ *  events, also when a check is already running. */
+export function checkForUpdates(): Promise<void> {
+  return invoke("check_for_updates");
+}
+
+/** Quit and start again, which installs the downloaded update. The usual
+ *  prompt about unsaved documents can cancel it. */
+export function restartToUpdate(): Promise<void> {
+  return invoke("restart_to_update");
 }
 
 export function loadSettings(): Promise<Settings> {

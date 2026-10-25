@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { UpdateInfo } from "@/ipc/contracts";
 import type { Settings } from "@/state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsDialogView } from "./SettingsDialogView";
@@ -222,5 +223,88 @@ describe("SettingsDialogView accent", () => {
     await user.type(hex, "#123456");
     await user.click(within(popover).getByRole("button", { name: "OK" }));
     expect(await save(user, onSave)).toMatchObject({ accentMode: "custom", accentColor: "#123456" });
+  });
+});
+
+describe("SettingsDialogView updates", () => {
+  type Listener = (info: UpdateInfo) => void;
+
+  /** A desktop bridge that answers the update commands and lets a test send
+   *  update-changed events. */
+  function desktop(info: UpdateInfo) {
+    const listeners = new Set<Listener>();
+    const invoke = vi.fn(async (command: string) => {
+      if (command === "update_info") return info;
+      if (command === "restart_to_update") throw new Error("No downloaded update is waiting.");
+      return null;
+    });
+    const openExternal = vi.fn(async () => {});
+    window.downpadDesktop = {
+      platform: "linux",
+      invoke,
+      openExternal,
+      listen: (_event: string, handler: Listener) => {
+        listeners.add(handler);
+        return () => listeners.delete(handler);
+      },
+    } as unknown as NonNullable<typeof window.downpadDesktop>;
+    const send = (next: UpdateInfo) => act(() => listeners.forEach((listener) => listener(next)));
+    return { invoke, openExternal, send };
+  }
+
+  const installed: UpdateInfo = { version: "1.2.0", selfUpdate: true, lastCheckMs: null, state: { status: "idle" } };
+
+  afterEach(() => {
+    delete window.downpadDesktop;
+  });
+
+  it("saves the automatic update switch of a copy that installs updates itself", async () => {
+    desktop(installed);
+    const { user, onSave } = renderDialog();
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    expect(await screen.findByText("Current version: 1.2.0")).toBeTruthy();
+    const automatic = await screen.findByRole("checkbox", { name: "Update automatically" });
+    expect((automatic as HTMLInputElement).checked).toBe(true);
+    await user.click(automatic);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ autoUpdate: false });
+  });
+
+  it("follows a check through its download to Restart now", async () => {
+    const bridge = desktop(installed);
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    const check = await screen.findByRole("button", { name: "Check for updates" });
+    await waitFor(() => expect((check as HTMLButtonElement).disabled).toBe(false));
+    await user.click(check);
+    expect(bridge.invoke).toHaveBeenCalledWith("check_for_updates", undefined);
+
+    bridge.send({ ...installed, state: { status: "downloading", version: "1.3.0", percent: 42 } });
+    expect(screen.getByRole("status").textContent).toBe("Downloading Downpad 1.3.0… 42%");
+    expect((check as HTMLButtonElement).disabled).toBe(true);
+
+    bridge.send({ ...installed, lastCheckMs: Date.UTC(2026, 9, 25, 12), state: { status: "ready", version: "1.3.0" } });
+    expect(screen.getByRole("status").textContent).toBe("Downpad 1.3.0 is ready. It installs the next time Downpad starts.");
+    expect(screen.getByText(/^Last checked /)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Restart now" }));
+    expect(bridge.invoke).toHaveBeenCalledWith("restart_to_update", undefined);
+    // The main process refused, and the page says why.
+    expect(await screen.findByText("No downloaded update is waiting.")).toBeTruthy();
+  });
+
+  it("offers the download page to a copy that cannot install updates, and keeps its saved switch", async () => {
+    const bridge = desktop({ ...installed, selfUpdate: false });
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, autoUpdate: false });
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await screen.findByText("Current version: 1.2.0");
+    expect(screen.queryByRole("checkbox", { name: "Update automatically" })).toBeNull();
+
+    bridge.send({ ...installed, selfUpdate: false, state: { status: "available", version: "1.3.0", pageUrl: "https://github.com/lincarl/downpad/releases/tag/v1.3.0" } });
+    expect(screen.getByRole("status").textContent).toBe("Downpad 1.3.0 is available.");
+    await user.click(screen.getByRole("button", { name: "Open download page" }));
+    expect(bridge.openExternal).toHaveBeenCalledWith("https://github.com/lincarl/downpad/releases/tag/v1.3.0");
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ autoUpdate: false });
   });
 });

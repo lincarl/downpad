@@ -52,4 +52,6 @@ export const DEFAULT_SETTINGS: Settings = {
 
   hasSeenWelcome: false,
   hasCheckedDefaultHandler: false,
+
+  autoUpdate: true,
 };
