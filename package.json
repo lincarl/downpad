@@ -1,6 +1,6 @@
 {
   "name": "downpad",
-  "version": "0.3.4",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "A lightweight, pure-WYSIWYG markdown editor",
@@ -18,14 +18,15 @@
     "icons": "node scripts/generate-icons.mjs",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder --publish never",
-    "test": "vitest run && pnpm test:version && pnpm test:icons && pnpm test:desktop && pnpm test:ci",
+    "test": "vitest run && pnpm test:version && pnpm test:icons && pnpm test:desktop && pnpm test:ci && pnpm test:release",
     "test:version": "node --test scripts/apply-version-from-tag.test.mjs",
     "test:icons": "node --test scripts/icons.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:electron": "playwright test --config playwright.electron.config.ts",
     "test:desktop": "vitest run --config electron/vitest.config.ts",
-    "test:ci": "node --test scripts/ci.test.mjs"
+    "test:ci": "node --test scripts/ci.test.mjs",
+    "test:release": "node --test scripts/release.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

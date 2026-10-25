@@ -25,10 +25,17 @@ test("applies a stable tag without changing other Electron build metadata", asyn
   });
 });
 
-test("rejects malformed or prerelease tags without changing the version", async (context) => {
+test("applies a release candidate tag with its RC suffix", async (context) => {
   const root = await fixture(context);
-  for (const tag of ["1.2.3", "v01.2.3", "v1.2.3-beta.1"]) {
-    await assert.rejects(() => applyVersionFromTag(tag, root), /expected vMAJOR\.MINOR\.PATCH/);
+
+  assert.equal(await applyVersionFromTag("v1.2.3-rc4", root), "1.2.3-rc4");
+  assert.equal(JSON.parse(await readFile(path.join(root, "package.json"))).version, "1.2.3-rc4");
+});
+
+test("rejects malformed and other prerelease tags without changing the version", async (context) => {
+  const root = await fixture(context);
+  for (const tag of ["1.2.3", "v01.2.3", "v1.2.3-beta.1", "v1.2.3-rc0", "v1.2.3-rc1.1"]) {
+    await assert.rejects(() => applyVersionFromTag(tag, root), /expected vMAJOR\.MINOR\.PATCH or vMAJOR\.MINOR\.PATCH-rcN/);
   }
   assert.equal(JSON.parse(await readFile(path.join(root, "package.json"))).version, "0.2.2");
 });
