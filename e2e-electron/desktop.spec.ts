@@ -2884,16 +2884,15 @@ test("text typed, composed or pasted right after a link goes after it", async ()
   await app!.evaluate(({ clipboard }) => clipboard.writeText("f"));
   await page.keyboard.press("ControlOrMeta+v");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page).toHaveTitle("after-link.md — Downpad");
-  const blocks = (await readFile(file, "utf8")).split("\n\n");
-  expect.soft(blocks.slice(0, 4)).toEqual([
+  await expect.poll(async () => (await readFile(file, "utf8")).split("\n\n")).toEqual([
     "End [one](https://example.com/1)a",
     "Click [two](https://example.com/2)b",
     "Arrow [three](https://example.com/3)c",
     "- item [four](https://example.com/4)d\n- second",
+    expect.stringMatching(/^\| in \[five\]\(https:\/\/example\.com\/5\)e *\|$/m),
+    "Composed [six](https://example.com/6)か",
+    "Pasted [seven](https://example.com/7)f\n",
   ]);
-  expect.soft(blocks[4]).toMatch(/^\| in \[five\]\(https:\/\/example\.com\/5\)e *\|$/m);
-  expect(blocks.slice(5)).toEqual(["Composed [six](https://example.com/6)か", "Pasted [seven](https://example.com/7)f\n"]);
 });
 
 test("typing over a link's selected text keeps the link", async () => {
