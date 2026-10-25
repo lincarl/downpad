@@ -536,6 +536,7 @@ function SplitButton({
                 part,
                 "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[935px]:pr-1",
               )}
+              aria-label={label}
               disabled={disabled}
               onClick={onClick}
             >
