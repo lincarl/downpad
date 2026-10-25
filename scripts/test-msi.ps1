@@ -160,16 +160,17 @@ function Get-MsiMetadata([string]$Path) {
     try {
         $result = @{}
         $view = $database.OpenView('SELECT `Property`, `Value` FROM `Property`')
-        $view.Execute()
+        # Discard COM method results so callers receive only the metadata table.
+        [void]$view.Execute()
         while ($record = $view.Fetch()) {
             $result[$record.StringData(1)] = $record.StringData(2)
             [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record)
         }
-        $view.Close()
+        [void]$view.Close()
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
         $view = $null
         $view = $database.OpenView('SELECT `Version` FROM `File` WHERE `File` = ''mainExecutable''')
-        $view.Execute()
+        [void]$view.Execute()
         $record = $view.Fetch()
         if (-not $record) { throw "No mainExecutable row in $Path" }
         $result.ExecutableVersion = $record.StringData(1)
@@ -180,7 +181,7 @@ function Get-MsiMetadata([string]$Path) {
         }
         return $result
     } finally {
-        if ($view) { $view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
+        if ($view) { [void]$view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
     }
 }
