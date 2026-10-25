@@ -61,7 +61,7 @@ pnpm dist
 
 The app icon and installer images in `build/`, and the glyph paths in `src/components/appGlyph.ts`, are generated from `scripts/icons.mjs`. Run `pnpm icons` after changing the artwork. See [App icon and installer images](docs/design.md#app-icon-and-installer-images).
 
-Build Windows installers on Windows and verify them there. Installer CI builds Linux and Windows packages, retains artifacts for 30 days, and publishes a GitHub release when a stable version tag is pushed. The release tag supplies the app version through `scripts/apply-version-from-tag.mjs`.
+Build Windows installers on Windows and verify them there. Installer CI builds Linux and Windows packages and retains artifacts for 30 days. Every successful push to `main` publishes a release candidate, and a pushed stable version tag publishes a release. The release tag supplies the app version through `scripts/apply-version-from-tag.mjs`. Other builds use the version `0.0.0` from `package.json`. See [Releases](docs/releasing.md).
 
 Downpad keeps its settings in `settings.toml` in the platform's `Downpad` configuration directory. Downpad was called md-easy before, and on its first launch it moves md-easy's settings, recent files and recovery snapshots there. Markdown files remain ordinary files on disk.
 

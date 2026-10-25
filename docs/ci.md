@@ -64,11 +64,17 @@ script, the compatibility step publishes no legacy status. The native
 
 ## Main builds and releases
 
-Every push to `main` keeps its own build. Version tags retain the existing release
-workflow and publish only after both platform builds succeed. Pull request
-builds cannot publish releases. A regular manual build must select `main` or a
-version tag; its optional version override applies only to that run.
+Every push to `main` keeps its own build. Before building, the run tags its
+commit as the next release candidate and builds that version. When both
+platform builds succeed, it publishes the candidate as a GitHub prerelease.
+Pushed version tags publish a candidate or a stable release after both platform
+builds succeed. Pull request builds cannot publish releases. A regular manual
+build must select `main` or a version tag. Its optional version override applies
+only to that run, and manual builds publish nothing.
 
 The release job verifies that the tag still points at the built commit and that
 the commit belongs to the default branch. It publishes the AppImage, DEB, and MSI
-installers from that run. Stable releases require an explicit user request.
+installers from that run with a `SHA256SUMS` file. After a stable release, a
+separate job marks the newest stable release as GitHub's latest release and
+deletes the releases that the new release supersedes. Stable releases require an
+explicit user request. [Releases](releasing.md) describes the policy.

@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       version:
-        description: Optional version override for a main or tag test build
+        description: Optional version override for a main or tag test build, which publishes nothing
         required: false
         type: string
 
@@ -26,7 +26,8 @@ permissions:
 
 # PR pushes cancel obsolete runs and replace queued intermediate revisions.
 # Manual PR retries use a separate group during migration from the old gate.
-# Every main run is preserved, and tag runs serialize rather than cancel.
+# Every main run is preserved and publishes its own release candidate, and tag
+# runs serialize rather than cancel.
 concurrency:
   group: installers-auto-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || inputs.pr_number != '' && format('manual-pr-{0}', inputs.pr_number) || github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main') }}
@@ -64,8 +65,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci.mjs prepare
-  build:
+
+  # GITHUB_TOKEN-created tags do not start workflows, so this run builds and
+  # publishes the candidate itself. See docs/releasing.md.
+  candidate:
+    name: Tag release candidate
     needs: prepare
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Check out workflow controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Tag the next release candidate
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs candidate
+
+  build:
+    needs: [prepare, candidate]
+    # Main pushes build the version of their candidate tag. Other runs skip that
+    # job. Without a tag, the build still runs its tests but publishes nothing.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     permissions:
       actions: read
       contents: read
@@ -119,10 +154,10 @@ jobs:
         run: node dev-temp/workflow-controls/scripts/install-github-cli.mjs
 
       - name: Apply release version
-        if: needs.prepare.outputs.mode == 'regular' && (startsWith(github.ref, 'refs/tags/') || inputs.version != '')
+        if: needs.prepare.outputs.mode == 'regular' && (needs.candidate.outputs.tag != '' || startsWith(github.ref, 'refs/tags/') || inputs.version != '')
         shell: bash
         env:
-          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+          RELEASE_TAG: ${{ needs.candidate.outputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || format('v{0}', inputs.version) }}
         run: node scripts/apply-version-from-tag.mjs "$RELEASE_TAG"
 
       # Reuse installers only when both the source commit and app version match.
@@ -298,15 +333,19 @@ jobs:
           CI_GATE_RESULT: ${{ needs.reviewed-ci.result }}
         run: node scripts/ci.mjs finish
 
+  # A main push publishes its candidate as a prerelease. A pushed stable tag
+  # publishes a release, which the finalize job then makes the latest release.
   release:
     name: GitHub Release
-    if: startsWith(github.ref, 'refs/tags/') && needs.prepare.outputs.mode == 'regular' && needs.prepare.outputs.head_sha == github.sha && needs.prepare.outputs.head_repository == github.repository
-    needs: [prepare, build]
+    needs: [prepare, candidate, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name == 'push' && needs.prepare.outputs.mode == 'regular' && needs.prepare.outputs.head_sha == github.sha && needs.prepare.outputs.head_repository == github.repository && (needs.candidate.outputs.tag != '' || startsWith(github.ref, 'refs/tags/')) }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: write
+    env:
+      RELEASE_TAG: ${{ needs.candidate.outputs.tag || github.ref_name }}
     steps:
       - name: Check out workflow controls
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -329,7 +368,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          read -r type target < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '[.object.type, .object.sha] | @tsv')
+          read -r type target < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '[.object.type, .object.sha] | @tsv')
           if [[ "$type" == tag ]]; then
             read -r type target < <(gh api "repos/$GITHUB_REPOSITORY/git/tags/$target" --jq '[.object.type, .object.sha] | @tsv')
           fi
@@ -344,30 +383,77 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_SHA: ${{ needs.prepare.outputs.head_sha }}
         run: |
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "downpad-linux-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/downpad-linux
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "downpad-windows-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/downpad-windows
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "downpad-linux-${RELEASE_TAG#v}-$BUILD_SHA" --dir artifacts/downpad-linux
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "downpad-windows-${RELEASE_TAG#v}-$BUILD_SHA" --dir artifacts/downpad-windows
 
+      # The release must carry exactly these files. The cleanup after a stable
+      # release checks for the same names (scripts/release.mjs).
       - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          version=${RELEASE_TAG#v}
+          files=(
+            "artifacts/downpad-linux/Downpad-$version-linux-x86_64.AppImage"
+            "artifacts/downpad-linux/Downpad-$version-linux-amd64.deb"
+            "artifacts/downpad-windows/Downpad-$version-win-x64.msi"
+          )
           shopt -s nullglob
-          appimages=(artifacts/downpad-linux/*.AppImage)
-          debs=(artifacts/downpad-linux/*.deb)
-          msis=(artifacts/downpad-windows/*.msi)
-          [[ ${#appimages[@]} -eq 1 && ${#debs[@]} -eq 1 && ${#msis[@]} -eq 1 ]] || {
-            printf 'Expected one AppImage, DEB and MSI installer, found %s, %s and %s\n' \
-              "${#appimages[@]}" "${#debs[@]}" "${#msis[@]}" >&2
-            exit 1
-          }
-          files=("${appimages[0]}" "${debs[0]}" "${msis[0]}")
+          found=(artifacts/*/*)
+          [[ ${#found[@]} -eq ${#files[@]} ]] || { printf 'Expected only %s, found %s\n' "${files[*]}" "${found[*]}" >&2; exit 1; }
           for file in "${files[@]}"; do
-            [[ -f "$file" && ! -L "$file" && -s "$file" ]] || { printf 'Invalid installer %s\n' "$file" >&2; exit 1; }
+            [[ -f "$file" && ! -L "$file" && -s "$file" ]] || { printf 'Missing or invalid installer %s\n' "$file" >&2; exit 1; }
           done
-          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+          for file in "${files[@]}"; do
+            printf '%s  %s\n' "$(sha256sum "$file" | cut -d ' ' -f 1)" "$(basename "$file")"
+          done > SHA256SUMS
+          kind=()
+          [[ "$version" != *-rc* ]] || kind=(--prerelease)
+          # Only the finalize job marks the latest release, by version.
+          gh release create "$RELEASE_TAG" "${files[@]}" SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
-            --title "Downpad ${GITHUB_REF_NAME#v}"
+            --title "Downpad $version" \
+            --latest=false \
+            "${kind[@]}"
+
+  # A separate job, so a rerun of a failed cleanup does not publish again.
+  # Stable releases finish one at a time, across tags.
+  finalize:
+    name: Finish stable release
+    needs: [prepare, release]
+    if: ${{ !cancelled() && needs.release.result == 'success' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-rc') }}
+    concurrency:
+      group: finish-stable-release
+      cancel-in-progress: false
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out workflow controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      # Installed copies update to the latest release, so it must be the
+      # newest version, also when publications finish out of order.
+      - name: Mark the newest stable release as the latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs latest
+
+      - name: Remove superseded releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs prune --released-tag "$GITHUB_REF_NAME" --apply

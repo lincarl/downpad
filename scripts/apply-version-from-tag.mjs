@@ -1,15 +1,14 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const stableTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+import { parseTag } from "./release.mjs";
 
 // The manifest supplies Electron's version and the version shown in Settings.
 // pnpm's lockfile records dependencies and does not contain the app version.
+// A candidate tag such as v1.2.3-rc4 gives the version 1.2.3-rc4.
 export async function applyVersionFromTag(tag, root = process.cwd()) {
-  const match = stableTag.exec(tag);
-  if (!match) throw new Error(`invalid release tag ${JSON.stringify(tag)}; expected vMAJOR.MINOR.PATCH`);
-  const version = `${match[1]}.${match[2]}.${match[3]}`;
+  if (!parseTag(tag)) throw new Error(`invalid release tag ${JSON.stringify(tag)}; expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rcN`);
+  const version = tag.slice(1);
   const file = path.join(root, "package.json");
   const packageJson = JSON.parse(await readFile(file, "utf8"));
   packageJson.version = version;
