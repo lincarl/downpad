@@ -4133,6 +4133,7 @@ test("an undo right after Save marks the document unsaved again", async () => {
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
   await expect(page).toHaveTitle("undo.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
 });
 
 test("undoing every edit marks the document saved again", async () => {
@@ -4148,6 +4149,7 @@ test("undoing every edit marks the document saved again", async () => {
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
   await expect(page).toHaveTitle("undo-all.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
 });
 
 test("the first Ctrl+Z after opening a file that ends in a list leaves the caret in place", async () => {
@@ -6509,6 +6511,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
   await page.keyboard.press("ControlOrMeta+z");
   await expect(title).toHaveText("Draft notes # keep");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
   await page.keyboard.type("!");
   await expect(title).toHaveText("Draft notes # keep!");
   await page.keyboard.press("ControlOrMeta+z");
@@ -6526,6 +6529,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
   await expect(title).toHaveText("Draft notes # keep");
   await expect(body).toHaveText("The draft body.");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+y");
   await expect(title).toHaveText("final notes # keep");
   await page.keyboard.press("ControlOrMeta+s");
