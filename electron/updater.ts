@@ -32,6 +32,15 @@ interface StoredPending {
 interface StoredState {
   lastCheckMs?: number;
   pending?: StoredPending;
+  /** The version handed to the Windows installer, which the next start checks. */
+  installing?: string;
+}
+
+/** What the start found: the download to install now, and why the update that
+ *  the Windows installer ran before failed, if it did. */
+export interface StartState {
+  pending: PendingUpdate | null;
+  failure: string | null;
 }
 
 export interface UpdaterOptions {
@@ -58,6 +67,13 @@ const STALL_TIMEOUT_MS = 60_000;
 /** No release package comes near this size; a larger answer is not one. */
 const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024;
 const STATE_FILE = "state.json";
+/** The Windows installer's exit code, which the update helper writes. */
+const RESULT_FILE = "install-result.txt";
+/** Windows Installer's exit codes for a completed installation, also one that
+ *  waits for a restart of Windows. */
+const MSI_SUCCESS = new Set([0, 1641, 3010]);
+/** Windows Installer's exit code when the user cancelled. */
+const MSI_CANCELLED = 1602;
 
 /** Reads GitHub's latest release, downloads the package that matches how this
  *  copy was installed, verifies its SHA-256 digest from the release API and
@@ -68,6 +84,9 @@ export class Updater {
   private state: UpdateState = { status: "idle" };
   private lastCheckMs: number | null = null;
   private running: Promise<void> | null = null;
+  /** Whether Settings follows the running check, which then reports failures
+   *  and marks its download as asked for. */
+  private manual = false;
   private readonly apiUrl: string;
   private readonly allowLoopbackHttp: boolean;
   private readonly now: () => number;
@@ -88,19 +107,57 @@ export class Updater {
    *  needs, such as the package of the update that was just installed. Returns
    *  the verified download to install now, which needs automatic updates on or
    *  a download the user asked for. With automatic updates off, an automatic
-   *  download is deleted instead. */
-  async start(autoUpdate: boolean): Promise<PendingUpdate | null> {
+   *  download is deleted instead. Also reports an update that the Windows
+   *  installer did not complete. */
+  async start(autoUpdate: boolean): Promise<StartState> {
     const kind = this.options.kind;
-    if (!kind) return null;
+    if (!kind) return { pending: null, failure: null };
     const saved = await this.readState();
     this.lastCheckMs = typeof saved.lastCheckMs === "number" && Number.isFinite(saved.lastCheckMs) ? saved.lastCheckMs : null;
+    const failure = saved.installing ? await this.installerFailure(saved.installing, kind) : null;
     let pending = saved.pending ?? null;
     if (pending && !(await this.usable(pending, kind))) pending = null;
     if (pending && !autoUpdate && !pending.approved) pending = null;
-    if (pending !== (saved.pending ?? null)) await this.writeState({ ...saved, pending: pending ?? undefined });
+    if (pending !== (saved.pending ?? null) || saved.installing) {
+      await this.writeState({ lastCheckMs: saved.lastCheckMs, pending: pending ?? undefined });
+    }
     await this.tidy(pending?.file);
+    if (failure) this.state = { status: "failed", message: failure };
     this.notify();
-    return pending ? { version: pending.version, file: join(this.folder(kind), pending.file), sha256: pending.sha256 } : null;
+    return {
+      pending: pending ? { version: pending.version, file: join(this.folder(kind), pending.file), sha256: pending.sha256 } : null,
+      failure,
+    };
+  }
+
+  /** Why the Windows installer did not install `version`, from the exit code
+   *  that the update helper wrote, or null when this copy runs that version or
+   *  the user cancelled. */
+  private async installerFailure(version: string, kind: PackageKind): Promise<string | null> {
+    const code = await readFile(join(this.folder(kind), RESULT_FILE), "utf8").then((text) => Number.parseInt(text.trim(), 10), () => Number.NaN);
+    if (!isNewerStable(version, this.options.version) || code === MSI_CANCELLED) return null;
+    const detail = Number.isNaN(code) ? "The Windows installer did not finish."
+      : MSI_SUCCESS.has(code) ? "The Windows installer finished, but Downpad was not replaced."
+      : `The Windows installer stopped with error ${code}.`;
+    return `Couldn't install Downpad ${version}. ${detail}`;
+  }
+
+  /** Where the Windows update helper writes the installer's exit code. */
+  installerResultFile(): string {
+    return join(this.folder(this.options.kind ?? "msi"), RESULT_FILE);
+  }
+
+  /** The start handed the verified, already staged download of `version` to
+   *  the Windows installer: forget the download, record the version for the
+   *  next start, and wait for the next due check. The helper starts Downpad
+   *  again also after a failed or cancelled installation, so without this every
+   *  start would try again. */
+  async handedToInstaller(version: string): Promise<void> {
+    const kind = this.options.kind;
+    if (!kind) return;
+    this.lastCheckMs = this.now();
+    await this.writeState({ lastCheckMs: this.lastCheckMs, installing: version });
+    await this.tidy();
   }
 
   /** Check in the background when automatic updates are on and a check is due. */
@@ -109,9 +166,18 @@ export class Updater {
     return this.run(false);
   }
 
-  /** Check now on behalf of Settings, reporting progress and failures. While
-   *  another check runs, Settings follows that one instead. */
-  checkNow(): Promise<void> {
+  /** Check now on behalf of Settings, reporting progress and failures. While an
+   *  automatic check runs, Settings follows that one instead, which then reports
+   *  as a manual check does, and a download it made counts as asked for. */
+  async checkNow(): Promise<void> {
+    if (this.running) {
+      this.manual = true;
+      if (this.state.status !== "downloading") this.setState({ status: "checking" });
+      await this.running;
+      if (this.state.status === "ready") await this.approve().catch(() => false);
+      // An automatic check that failed before Settings joined it said nothing.
+      if (this.state.status !== "checking") return;
+    }
     return this.run(true);
   }
 
@@ -153,14 +219,21 @@ export class Updater {
     this.setState(message ? { status: "failed", message } : { status: "idle" });
   }
 
+  /** Run one check, which never rejects: an unexpected failure, such as a
+   *  state file that cannot be written, ends it as a failed check, so Settings
+   *  never waits on it. */
   private run(manual: boolean): Promise<void> {
     if (this.running) return this.running;
-    this.running = this.check(manual).finally(() => { this.running = null; });
+    this.manual = manual;
+    this.running = this.check().catch((error: unknown) => {
+      if (this.manual) this.setState({ status: "failed", message: `Couldn't check for updates. ${reason(error)}` });
+      else this.settle();
+    }).finally(() => { this.running = null; });
     return this.running;
   }
 
-  private async check(manual: boolean): Promise<void> {
-    if (manual) this.setState({ status: "checking" });
+  private async check(): Promise<void> {
+    if (this.manual) this.setState({ status: "checking" });
     let text: string;
     try {
       const response = await this.options.fetch(this.apiUrl, {
@@ -171,17 +244,19 @@ export class Updater {
       text = await response.text();
     } catch (error) {
       // A failed check stays due, so the next start tries again.
-      if (manual) this.setState({ status: "failed", message: `Couldn't check for updates. ${reason(error)}` });
+      if (this.manual) this.setState({ status: "failed", message: `Couldn't check for updates. ${reason(error)}` });
+      else this.settle();
       return;
     }
     const { understood, release } = parseRelease(text);
     if (!understood) {
-      if (manual) this.setState({ status: "failed", message: "Couldn't check for updates. The update server's answer couldn't be read." });
+      if (this.manual) this.setState({ status: "failed", message: "Couldn't check for updates. The update server's answer couldn't be read." });
+      else this.settle();
       return;
     }
     if (!release || !isNewerStable(release.version, this.options.version)) {
       await this.markChecked();
-      if (manual) this.setState({ status: "up-to-date" });
+      if (this.manual) this.setState({ status: "up-to-date" });
       else this.notify();
       return;
     }
@@ -194,17 +269,17 @@ export class Updater {
     }
     const saved = await this.readState();
     if (saved.pending?.version === release.version && saved.pending.sha256 === asset.sha256 && (await this.usable(saved.pending, kind))) {
-      if (manual && !saved.pending.approved) await this.writeState({ ...saved, pending: { ...saved.pending, approved: true } });
+      if (this.manual && !saved.pending.approved) await this.writeState({ ...saved, pending: { ...saved.pending, approved: true } });
       await this.markChecked();
       this.setState({ status: "ready", version: release.version });
       return;
     }
-    await this.download(kind, asset, release.version, manual);
+    await this.download(kind, asset, release.version);
   }
 
   /** Stream `asset` into this kind's folder while hashing it, and keep it as the
    *  pending update once its digest matches the release API's. */
-  private async download(kind: PackageKind, asset: ReleaseAsset, version: string, manual: boolean): Promise<void> {
+  private async download(kind: PackageKind, asset: ReleaseAsset, version: string): Promise<void> {
     const folder = this.folder(kind);
     const part = join(folder, `${asset.name}.part`);
     this.setState({ status: "downloading", version, percent: 0 });
@@ -245,12 +320,13 @@ export class Updater {
       }
       await rename(part, join(folder, asset.name));
       this.lastCheckMs = this.now();
-      await this.writeState({ lastCheckMs: this.lastCheckMs, pending: { version, file: asset.name, sha256: asset.sha256, approved: manual } });
+      await this.writeState({ lastCheckMs: this.lastCheckMs, pending: { version, file: asset.name, sha256: asset.sha256, approved: this.manual } });
       await this.tidy(asset.name);
       this.setState({ status: "ready", version });
     } catch (error) {
       await rm(part, { force: true }).catch(() => {});
-      this.setState(manual ? { status: "failed", message: `Couldn't download Downpad ${version}. ${reason(error)}` } : { status: "idle" });
+      if (this.manual) this.setState({ status: "failed", message: `Couldn't download Downpad ${version}. ${reason(error)}` });
+      else this.settle();
     } finally {
       clearTimeout(stall);
     }
@@ -298,6 +374,7 @@ export class Updater {
         pending: pending && typeof pending === "object" && !Array.isArray(pending)
           ? { ...(pending as StoredPending), approved: (pending as Record<string, unknown>).approved === true }
           : undefined,
+        installing: typeof source.installing === "string" ? source.installing : undefined,
       };
     } catch { return {}; }
   }
@@ -307,6 +384,12 @@ export class Updater {
     if (!kind) return;
     await mkdir(this.folder(kind), { recursive: true });
     await writeAtomic(join(this.folder(kind), STATE_FILE), JSON.stringify(state));
+  }
+
+  /** End an automatic check or download that failed without a word, since
+   *  nobody asked for it. A failed check stays due for the next start. */
+  private settle(): void {
+    if (this.state.status !== "idle") this.setState({ status: "idle" });
   }
 
   private setState(state: UpdateState): void {

@@ -15,7 +15,7 @@ import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
 import { adoptLegacyData, ConfigStore, RecentSearch, statFiles } from "./storage";
-import { debInstallCommand, installDeb, installedPackageKind, replaceAppImage, startMsiInstaller } from "./updateInstall";
+import { debInstallCommand, installDeb, installedPackageKind, replaceAppImage, stageMsi, startMsiInstaller } from "./updateInstall";
 import { Updater, type PendingUpdate } from "./updater";
 import type { PackageKind } from "./updatePlan";
 import { watchPath } from "./watchers";
@@ -181,7 +181,11 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "load_settings": return config.settings();
     case "save_settings": {
       await config.saveSettings(args.settings);
-      if (!(await config.settings()).autoUpdate) await updates().automaticUpdatesOff();
+      // Deleting an automatic download waits for a running download, which
+      // must not hold up the next settings save.
+      if (!(await config.settings()).autoUpdate) {
+        void updates().automaticUpdatesOff().catch((error: unknown) => console.error("Downpad could not delete the automatic update", error));
+      }
       return;
     }
     case "settings_path": return config.settingsPath;
@@ -474,9 +478,11 @@ async function installPendingUpdate(pending: PendingUpdate): Promise<{ restartin
   try {
     if (packageKind === "msi") {
       // The helper starts Downpad again also after a failed or cancelled
-      // installation, so forget the download first, or every start would try it.
-      await updates().dropPending();
-      await startMsiInstaller(pending.file, pending.sha256, process.execPath, firstFileArgument(process.argv) ?? undefined);
+      // installation, so the download is forgotten before it starts, or every
+      // start would try it. The verified copy it installs is staged first.
+      const staged = await stageMsi(pending.file, pending.sha256);
+      await updates().handedToInstaller(pending.version);
+      await startMsiInstaller(staged, process.execPath, updates().installerResultFile(), firstFileArgument(process.argv) ?? undefined);
       app.exit(0);
       return { restarting: true };
     }
@@ -517,9 +523,9 @@ async function start(): Promise<void> {
     onChange: (info) => emit("update-changed", info),
   });
   const { autoUpdate } = await config.settings();
-  const pending = await updater.start(autoUpdate).catch((error: unknown) => {
+  const { pending, failure: installerFailure } = await updater.start(autoUpdate).catch((error: unknown) => {
     console.error("Downpad could not read its update state", error);
-    return null;
+    return { pending: null, failure: null };
   });
   const installation = pending ? await installPendingUpdate(pending) : { restarting: false };
   if (installation.restarting) return;
@@ -547,8 +553,10 @@ async function start(): Promise<void> {
   await createWindow();
   startupCompleted = true;
   app.on("activate", () => { if (!mainWindow) void createWindow(); });
-  if (installation.failure && mainWindow) {
-    void dialog.showMessageBox(mainWindow, { type: "warning", title: "Downpad", message: "The update could not be installed.", detail: installation.failure });
+  // A failed installation by this start, or by the Windows installer before it.
+  const updateFailure = installation.failure ?? installerFailure;
+  if (updateFailure && mainWindow) {
+    void dialog.showMessageBox(mainWindow, { type: "warning", title: "Downpad", message: "The update could not be installed.", detail: updateFailure });
   }
   void updater.checkIfDue(autoUpdate).catch((error: unknown) => console.error("Downpad could not check for updates", error));
 }

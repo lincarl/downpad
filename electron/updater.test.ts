@@ -77,7 +77,7 @@ describe("Updater checks", () => {
     expect((await readdir(join(updates, "appimage"))).sort()).toEqual([github.name, "state.json"]);
 
     const next = await updater(github.fetch, { directory: updates });
-    expect(await next.instance.start(false)).toEqual({ version: "1.3.0", file: join(updates, "appimage", github.name), sha256: DIGEST });
+    expect((await next.instance.start(false)).pending).toEqual({ version: "1.3.0", file: join(updates, "appimage", github.name), sha256: DIGEST });
   });
 
   it("discards a download whose digest differs from the release's", async () => {
@@ -138,6 +138,45 @@ describe("Updater checks", () => {
     expect(instance.info().state).toEqual({ status: "available", version: "1.3.0", pageUrl: "https://github.com/lincarl/downpad/releases/tag/v1.3.0" });
   });
 
+  it("reports a check that could not save its state instead of leaving Check for updates disabled", async () => {
+    const root = await folder();
+    // A file where the updates folder should be makes every state write fail.
+    await writeFile(join(root, "updates"), "not a folder");
+    const github = server({ version: "1.2.0" });
+    const { instance } = await updater(github.fetch, { directory: join(root, "updates") });
+    await instance.checkNow();
+    expect(instance.info().state).toMatchObject({ status: "failed", message: expect.stringMatching(/^Couldn't check for updates\. /) });
+    await instance.checkNow();
+    expect(github.calls).toHaveLength(2);
+  });
+
+  it("makes an automatic check that Settings joins report and keep its download", async () => {
+    let release!: () => void;
+    const github = server();
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { instance, updates, shown } = await updater(async (url) => { await gate; return github.fetch(url); });
+    const automatic = instance.checkIfDue(true);
+    const manual = instance.checkNow();
+    expect(instance.info().state).toEqual({ status: "checking" });
+    release();
+    await Promise.all([automatic, manual]);
+    expect(shown.at(-1)?.state).toEqual({ status: "ready", version: "1.3.0" });
+    expect(await state(updates)).toMatchObject({ pending: { approved: true } });
+    await instance.automaticUpdatesOff();
+    expect((await (await updater(github.fetch, { directory: updates })).instance.start(false)).pending).not.toBeNull();
+  });
+
+  it("reports the failure of an automatic check that Settings joined", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { instance } = await updater(async () => { await gate; throw new TypeError("fetch failed"); });
+    const automatic = instance.checkIfDue(true);
+    const manual = instance.checkNow();
+    release();
+    await Promise.all([automatic, manual]);
+    expect(instance.info().state).toEqual({ status: "failed", message: "Couldn't check for updates. fetch failed." });
+  });
+
   it("joins a check that is already running instead of starting another", async () => {
     const github = server();
     const { instance } = await updater(github.fetch);
@@ -189,8 +228,8 @@ describe("Automatic updates", () => {
     const github = server();
     const { instance, updates } = await updater(github.fetch);
     await instance.checkIfDue(true);
-    expect(await (await updater(github.fetch, { directory: updates })).instance.start(true)).not.toBeNull();
-    expect(await (await updater(github.fetch, { directory: updates })).instance.start(false)).toBeNull();
+    expect((await (await updater(github.fetch, { directory: updates })).instance.start(true)).pending).not.toBeNull();
+    expect((await (await updater(github.fetch, { directory: updates })).instance.start(false)).pending).toBeNull();
     expect(await readdir(join(updates, "appimage"))).toEqual(["state.json"]);
   });
 
@@ -212,7 +251,7 @@ describe("Automatic updates", () => {
     const { instance, updates } = await updater(github.fetch);
     await instance.checkIfDue(true);
     expect(await instance.approve()).toBe(true);
-    expect(await (await updater(github.fetch, { directory: updates })).instance.start(false)).not.toBeNull();
+    expect((await (await updater(github.fetch, { directory: updates })).instance.start(false)).pending).not.toBeNull();
   });
 });
 
@@ -224,7 +263,7 @@ describe("Update state at start", () => {
     await writeFile(join(updates, "appimage", "Downpad-1.3.0-linux-x86_64.AppImage.part"), "partial");
     await writeFile(join(updates, "appimage", "Downpad-1.1.0-linux-x86_64.AppImage"), "old");
     const updated = await updater(github.fetch, { directory: updates, version: "1.3.0" });
-    expect(await updated.instance.start(true)).toBeNull();
+    expect((await updated.instance.start(true)).pending).toBeNull();
     expect(await readdir(join(updates, "appimage"))).toEqual(["state.json"]);
     expect(await state(updates)).toEqual({ lastCheckMs: NOW });
     expect(updated.instance.info().lastCheckMs).toBe(NOW);
@@ -242,7 +281,7 @@ describe("Update state at start", () => {
     ]) {
       await writeFile(join(updates, "appimage", "state.json"), JSON.stringify({ pending: { ...pending, approved: true } }));
       if (pending.file === "Downpad-1.3.0-linux-amd64.deb") await writeFile(join(updates, "appimage", pending.file), PACKAGE);
-      expect(await (await updater(server().fetch, { directory: updates })).instance.start(true)).toBeNull();
+      expect((await (await updater(server().fetch, { directory: updates })).instance.start(true)).pending).toBeNull();
     }
   });
 
@@ -255,12 +294,12 @@ describe("Update state at start", () => {
     await start.instance.dropPending("Couldn't install Downpad 1.3.0. The disk is full.");
     expect(start.instance.info()).toMatchObject({ lastCheckMs: NOW + 1000, state: { status: "failed", message: "Couldn't install Downpad 1.3.0. The disk is full." } });
     expect(await readdir(join(updates, "appimage"))).toEqual(["state.json"]);
-    expect(await (await updater(github.fetch, { directory: updates })).instance.start(true)).toBeNull();
+    expect((await (await updater(github.fetch, { directory: updates })).instance.start(true)).pending).toBeNull();
   });
 
   it("does nothing for a copy that cannot install updates itself", async () => {
     const { instance, updates } = await updater(server().fetch, { kind: null });
-    expect(await instance.start(true)).toBeNull();
+    expect(await instance.start(true)).toEqual({ pending: null, failure: null });
     await instance.checkIfDue(true);
     expect(await instance.approve()).toBe(false);
     expect(await readdir(updates)).toEqual([]);
@@ -270,5 +309,47 @@ describe("Update state at start", () => {
     const fetch = server().fetch;
     expect(() => new Updater({ version: "1.2.0", kind: null, directory: "unused", fetch, apiUrl: "http://example.com/latest" })).toThrow(/HTTPS/);
     expect(() => new Updater({ version: "1.2.0", kind: null, directory: "unused", fetch, apiUrl: "http://127.0.0.1:9/latest" })).not.toThrow();
+  });
+});
+
+describe("Windows installer handoff", () => {
+  /** An MSI copy of `version` whose start found `installing` handed to the
+   *  Windows installer and the exit code `result` written by the helper. */
+  async function afterInstaller(version: string, result?: string) {
+    const first = await updater(server().fetch, { kind: "msi" });
+    await first.instance.handedToInstaller("1.3.0");
+    if (result !== undefined) await writeFile(first.instance.installerResultFile(), result);
+    const next = await updater(server().fetch, { kind: "msi", version, directory: first.updates });
+    return { start: await next.instance.start(true), next, updates: first.updates };
+  }
+
+  it("forgets the download when it hands it over, so a failing installation cannot repeat", async () => {
+    const { instance, updates } = await updater(server().fetch, { kind: "msi" });
+    await mkdir(join(updates, "msi"), { recursive: true });
+    await writeFile(join(updates, "msi", "Downpad-1.3.0-win-x64.msi"), PACKAGE);
+    await writeFile(join(updates, "msi", "state.json"), JSON.stringify({ pending: { version: "1.3.0", file: "Downpad-1.3.0-win-x64.msi", sha256: DIGEST, approved: true } }));
+    await instance.handedToInstaller("1.3.0");
+    expect(await readdir(join(updates, "msi"))).toEqual(["state.json"]);
+    expect(JSON.parse(await readFile(join(updates, "msi", "state.json"), "utf8"))).toEqual({ lastCheckMs: NOW, installing: "1.3.0" });
+  });
+
+  it("reports the installer's error when the next start still runs the old version", async () => {
+    const { start, next, updates } = await afterInstaller("1.2.0", "1618 \r\n");
+    expect(start).toEqual({ pending: null, failure: "Couldn't install Downpad 1.3.0. The Windows installer stopped with error 1618." });
+    expect(next.instance.info().state).toEqual({ status: "failed", message: start.failure });
+    expect(await readdir(join(updates, "msi"))).toEqual(["state.json"]);
+    expect(JSON.parse(await readFile(join(updates, "msi", "state.json"), "utf8"))).toEqual({ lastCheckMs: NOW });
+    expect((await (await updater(server().fetch, { kind: "msi", directory: updates })).instance.start(true)).failure).toBeNull();
+  });
+
+  it("says nothing after a cancelled or a completed installation", async () => {
+    expect((await afterInstaller("1.2.0", "1602\r\n")).start.failure).toBeNull();
+    expect((await afterInstaller("1.3.0", "0\r\n")).start.failure).toBeNull();
+    expect((await afterInstaller("1.3.0")).start.failure).toBeNull();
+  });
+
+  it("reports an installer that never finished or left the old version", async () => {
+    expect((await afterInstaller("1.2.0")).start.failure).toBe("Couldn't install Downpad 1.3.0. The Windows installer did not finish.");
+    expect((await afterInstaller("1.2.0", "3010")).start.failure).toBe("Couldn't install Downpad 1.3.0. The Windows installer finished, but Downpad was not replaced.");
   });
 });

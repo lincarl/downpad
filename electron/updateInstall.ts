@@ -4,8 +4,8 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { access, chmod, constants, mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { access, chmod, constants, mkdtemp, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, win32 } from "node:path";
 import { Transform } from "node:stream";
@@ -17,17 +17,20 @@ export const INTEGRITY_FAILURE = "The downloaded update failed its integrity che
 
 /** Copy `source` to the new file `destination`, hashing exactly the bytes it
  *  writes. A copy whose SHA-256 digest is not `sha256` is removed, so only
- *  verified bytes reach an installer, even if the source changes meanwhile. */
+ *  verified bytes reach an installer, even if the source changes meanwhile. An
+ *  existing `destination` is refused and left as it is. */
 export async function copyVerified(source: string, destination: string, sha256: string, mode = 0o644): Promise<void> {
+  const output = await open(destination, "wx", mode);
   const hash = createHash("sha256");
   try {
     await pipeline(
       createReadStream(source),
       new Transform({ transform(chunk: Buffer, _encoding, done) { hash.update(chunk); done(null, chunk); } }),
-      createWriteStream(destination, { flags: "wx", mode }),
+      output.createWriteStream(),
     );
     if (hash.digest("hex") !== sha256) throw new Error(INTEGRITY_FAILURE);
   } catch (error) {
+    await output.close().catch(() => {});
     await rm(destination, { force: true });
     throw error;
   }
@@ -101,15 +104,20 @@ export interface MsiHelperPaths {
   staging: string;
   /** Downpad's executable, which starts again after the installation. */
   executable: string;
+  /** Receives the installer's exit code, which the next start reads. */
+  result: string;
   /** A file to open after the restart. */
   argument?: string;
 }
 
-/** The detached helper that waits for the MSI installation, removes the
- *  package and its folder, and starts Downpad again, also after a failed or
- *  cancelled installation. The paths reach cmd only as variables that it
- *  expands once, with delayed expansion off, so their characters are never
- *  parsed as commands. A path with a quote or a line break is refused. */
+/** The detached helper that waits for the MSI installation, writes its exit
+ *  code to `result`, removes the package and its folder, and starts Downpad
+ *  again, also after a failed or cancelled installation. The paths reach cmd
+ *  only as variables that it expands once, with delayed expansion off, so their
+ *  characters are never parsed as commands. A path with a quote or a line break
+ *  is refused. The exit code is read through `call`, which expands
+ *  `%ERRORLEVEL%` when it runs; the caret keeps the first expansion of the whole
+ *  line from reading it before the installer has run. */
 export function msiHelper(paths: MsiHelperPaths): { file: string; args: [string]; env: Record<string, string> } {
   for (const value of Object.values(paths)) {
     if (value !== undefined && /["\r\n\0]/.test(value)) throw new Error("An update path contains a character that Windows paths cannot contain.");
@@ -120,9 +128,11 @@ export function msiHelper(paths: MsiHelperPaths): { file: string; args: [string]
     DOWNPAD_UPDATE_STAGING: paths.staging,
     DOWNPAD_UPDATE_SYSTEM: paths.system,
     DOWNPAD_UPDATE_EXECUTABLE: paths.executable,
+    DOWNPAD_UPDATE_RESULT: paths.result,
   };
   if (paths.argument) env.DOWNPAD_UPDATE_ARGUMENT = paths.argument;
   const command = '/d /v:off /s /c "start "" /wait "%DOWNPAD_UPDATE_MSIEXEC%" /i "%DOWNPAD_UPDATE_PACKAGE%" /passive /norestart' +
+    ' & >"%DOWNPAD_UPDATE_RESULT%" call echo %^ERRORLEVEL%' +
     ' & del /q "%DOWNPAD_UPDATE_PACKAGE%" & cd /d "%DOWNPAD_UPDATE_SYSTEM%" & rd "%DOWNPAD_UPDATE_STAGING%"' +
     ` & start "" "%DOWNPAD_UPDATE_EXECUTABLE%"${paths.argument ? ' "%DOWNPAD_UPDATE_ARGUMENT%"' : ""}"`;
   return { file: win32.join(paths.system, "cmd.exe"), args: [command], env };
@@ -134,37 +144,71 @@ function systemFolder(): string {
   return win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32");
 }
 
-/** Start the MSI installation of the verified package `file` in a detached
- *  helper (msiHelper). The caller must quit at once, so the installer can
- *  replace Downpad's files. `msiexec` replaces Windows Installer in tests. */
-export async function startMsiInstaller(file: string, sha256: string, executable: string, argument?: string, msiexec?: string): Promise<void> {
+/** A verified copy of an MSI, alone in a new private folder. */
+export interface StagedMsi {
+  package: string;
+  staging: string;
+}
+
+/** Copy the downloaded MSI `file` into a new private folder and verify the
+ *  copy, so the download can be forgotten before the installation starts. */
+export async function stageMsi(file: string, sha256: string): Promise<StagedMsi> {
   const staging = await mkdtemp(join(tmpdir(), "downpad-update-"));
+  const staged = join(staging, basename(file));
   try {
-    const staged = join(staging, basename(file));
     await copyVerified(file, staged, sha256);
-    const helper = msiHelper({ system: systemFolder(), msiexec, package: staged, staging, executable, argument });
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+  return { package: staged, staging };
+}
+
+/** Start the installation of `staged` in a detached helper (msiHelper), which
+ *  writes the installer's exit code to `result`. The caller must quit at once,
+ *  so the installer can replace Downpad's files. If the helper cannot start,
+ *  the staged copy is removed. `msiexec` replaces Windows Installer in tests. */
+export async function startMsiInstaller(staged: StagedMsi, executable: string, result: string, argument?: string, msiexec?: string): Promise<void> {
+  try {
+    const helper = msiHelper({ system: systemFolder(), msiexec, package: staged.package, staging: staged.staging, executable, result, argument });
     await new Promise<void>((resolve, reject) => {
       const child = spawn(helper.file, helper.args, {
-        cwd: staging, env: { ...process.env, ...helper.env }, detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true,
+        cwd: staged.staging, env: { ...process.env, ...helper.env }, detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true,
       });
       child.once("error", reject);
       child.once("spawn", () => { child.unref(); resolve(); });
     });
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    await rm(staged.staging, { recursive: true, force: true });
     throw error;
   }
 }
 
 const executeFile = promisify(execFile);
 
-/** The installation folder that the MSI registered for this user, or empty. */
-async function registeredMsiFolder(): Promise<string> {
+/** A string value from a registry export, which reg.exe writes in UTF-16 with
+ *  backslashes and quotes escaped, or empty without one. */
+export function exportedRegistryString(exported: Buffer, name: string): string {
+  const text = exported.toString("utf16le").replace(/^\uFEFF/, "");
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"$/.exec(line);
+    if (match && match[1]!.replace(/\\(.)/g, "$1") === name) return match[2]!.replace(/\\(.)/g, "$1");
+  }
+  return "";
+}
+
+/** The installation folder that the MSI recorded in `key`, or empty. reg.exe's
+ *  query prints in the console's code page, which can garble a folder name
+ *  such as one under C:\\Users\\Jörg, so the value comes from an export instead. */
+export async function registeredMsiFolder(key = "HKCU\\Software\\Downpad"): Promise<string> {
+  const folder = await mkdtemp(join(tmpdir(), "downpad-registry-"));
   try {
-    const { stdout } = await executeFile(win32.join(systemFolder(), "reg.exe"), ["query", "HKCU\\Software\\Downpad", "/v", "InstallDir"],
-      { timeout: 5000, windowsHide: true });
-    return /\sInstallDir\s+REG_SZ\s+([^\r\n]+)/.exec(stdout)?.[1]?.trim() ?? "";
-  } catch { return ""; }
+    const file = join(folder, "key.reg");
+    await executeFile(win32.join(systemFolder(), "reg.exe"), ["export", key, file, "/y"], { timeout: 5000, windowsHide: true });
+    return exportedRegistryString(await readFile(file), "InstallDir");
+  } catch { return ""; } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 }
 
 /** The files of the installed `downpad` DEB package, from dpkg's database. */

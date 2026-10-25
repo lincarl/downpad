@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { copyVerified, debInstallCommand, INTEGRITY_FAILURE, installDeb, msiHelper, replaceAppImage, startMsiInstaller } from "./updateInstall";
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
+import {
+  copyVerified, debInstallCommand, exportedRegistryString, INTEGRITY_FAILURE, installDeb, msiHelper, registeredMsiFolder, replaceAppImage,
+  stageMsi, startMsiInstaller,
+} from "./updateInstall";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -40,6 +46,7 @@ describe("Verified copies", () => {
     expect(await readdir(directory)).toEqual(["Downpad-1.3.0-linux-x86_64.AppImage"]);
     await writeFile(join(directory, "taken"), "keep");
     await expect(copyVerified(source, join(directory, "taken"), DIGEST)).rejects.toThrow(/EEXIST/);
+    expect(await readFile(join(directory, "taken"), "utf8")).toBe("keep");
   });
 });
 
@@ -98,6 +105,7 @@ describe("MSI updates", () => {
     package: "C:\\Users\\a\\AppData\\Local\\Temp\\downpad-update-x\\Downpad-1.3.0-win-x64.msi",
     staging: "C:\\Users\\a\\AppData\\Local\\Temp\\downpad-update-x",
     executable: "C:\\Users\\a\\AppData\\Local\\Programs\\Downpad\\Downpad.exe",
+    result: "C:\\Users\\a\\AppData\\Roaming\\Downpad\\updates\\msi\\install-result.txt",
   };
 
   it("passes every path to cmd as a variable, never in the command itself", () => {
@@ -109,9 +117,11 @@ describe("MSI updates", () => {
       DOWNPAD_UPDATE_STAGING: paths.staging,
       DOWNPAD_UPDATE_SYSTEM: paths.system,
       DOWNPAD_UPDATE_EXECUTABLE: paths.executable,
+      DOWNPAD_UPDATE_RESULT: paths.result,
       DOWNPAD_UPDATE_ARGUMENT: "D:\\Notes & 100% ^done!\\plan (1).md",
     });
     expect(helper.args[0]).toBe('/d /v:off /s /c "start "" /wait "%DOWNPAD_UPDATE_MSIEXEC%" /i "%DOWNPAD_UPDATE_PACKAGE%" /passive /norestart' +
+      ' & >"%DOWNPAD_UPDATE_RESULT%" call echo %^ERRORLEVEL%' +
       ' & del /q "%DOWNPAD_UPDATE_PACKAGE%" & cd /d "%DOWNPAD_UPDATE_SYSTEM%" & rd "%DOWNPAD_UPDATE_STAGING%"' +
       ' & start "" "%DOWNPAD_UPDATE_EXECUTABLE%" "%DOWNPAD_UPDATE_ARGUMENT%""');
     expect(msiHelper(paths).args[0]).toMatch(/ & start "" "%DOWNPAD_UPDATE_EXECUTABLE%""$/);
@@ -123,28 +133,55 @@ describe("MSI updates", () => {
   });
 
   // Runs the real helper with stand-ins for Windows Installer and Downpad,
-  // in folders whose names cmd would otherwise misread.
-  it.runIf(process.platform === "win32")("installs, removes the package and its folder, and starts Downpad again with its file", async () => {
+  // in folders whose names cmd would otherwise misread. START runs a batch
+  // file in cmd /k, so each stand-in ends with exit.
+  it.runIf(process.platform === "win32")("installs, records the exit code, removes the copy and starts Downpad again with its file", async () => {
     const directory = await folder("Downpad & 100% ^test! (1) ");
     // The stand-ins are batch files, which read % in their own text, so their
     // record goes to a plainly named folder.
-    const record = join(await folder(), "record.txt");
+    const plain = await folder();
+    const record = join(plain, "record.txt");
+    const result = join(directory, "install-result.txt");
     const msiexec = join(directory, "fake msiexec.cmd");
     const executable = join(directory, "fake Downpad.cmd");
-    await writeFile(msiexec, `@echo installer %*>> "${record}"\r\n`);
-    await writeFile(executable, `@echo started %*>> "${record}"\r\n`);
+    await writeFile(msiexec, `@echo installer %*>> "${record}"\r\n@exit 1618\r\n`);
+    await writeFile(executable, `@echo started %*>> "${record}"\r\n@exit\r\n`);
     const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
-    await startMsiInstaller(file, DIGEST, executable, join(directory, "notes & 50%.md"), msiexec);
+    const staged = await stageMsi(file, DIGEST);
+    await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), msiexec);
     let text = "";
     for (let attempt = 0; attempt < 100 && !text.includes("started"); attempt += 1) {
       await new Promise((done) => setTimeout(done, 100));
       text = await readFile(record, "utf8").catch(() => "");
     }
     const [installer, started] = text.trim().split(/\r?\n/);
-    expect(installer).toMatch(/^installer \/i "(.+\\downpad-update-[^\\]+)\\Downpad-1\.3\.0-win-x64\.msi" \/passive \/norestart$/);
+    expect(installer).toBe(`installer /i "${staged.package}" /passive /norestart`);
     expect(started).toBe(`started "${join(directory, "notes & 50%.md")}"`);
-    const staging = /^installer \/i "(.+)\\Downpad-1\.3\.0-win-x64\.msi"/.exec(installer!)![1]!;
-    await expect(stat(staging)).rejects.toThrow();
+    expect((await readFile(result, "utf8")).trim()).toBe("1618");
+    await expect(stat(staged.staging)).rejects.toThrow();
     expect(await readFile(file)).toEqual(PACKAGE);
+  });
+});
+
+describe("MSI installation folder", () => {
+  it("reads a string value from reg.exe's UTF-16 export, with its escapes", () => {
+    const exported = Buffer.from("\uFEFFWindows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Software\\Downpad]\r\n" +
+      '"Other"="x"\r\n"InstallDir"="C:\\\\Users\\\\Jörg \\"J\\"\\\\Programs\\\\Downpad\\\\"\r\n', "utf16le");
+    expect(exportedRegistryString(exported, "InstallDir")).toBe('C:\\Users\\Jörg "J"\\Programs\\Downpad\\');
+    expect(exportedRegistryString(exported, "Missing")).toBe("");
+    expect(exportedRegistryString(Buffer.from("not an export"), "InstallDir")).toBe("");
+  });
+
+  it.runIf(process.platform === "win32")("reads a folder name outside the console's code page from the registry", async () => {
+    const key = `HKCU\\Software\\DownpadUpdateTest-${randomUUID()}`;
+    const folder = "C:\\Users\\Jörg Åström\\AppData\\Local\\Programs\\Downpad\\";
+    const reg = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe");
+    await promisify(execFile)(reg, ["add", key, "/v", "InstallDir", "/t", "REG_SZ", "/d", folder, "/f"]);
+    try {
+      expect(await registeredMsiFolder(key)).toBe(folder);
+    } finally {
+      await promisify(execFile)(reg, ["delete", key, "/f"]);
+    }
+    expect(await registeredMsiFolder(key)).toBe("");
   });
 });
