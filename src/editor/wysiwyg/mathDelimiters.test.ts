@@ -93,7 +93,7 @@ function startComposition(view: EditorView, text: string): void {
   if (!view.someProp("handleTextInput", (handle) => handle(view, from, to, text, insert))) view.dispatch(insert());
 }
 
-/** End the composition, and wait for the timeouts that Milkdown and md-easy
+/** End the composition, and wait for the timeouts that Milkdown and Downpad
  *  set when it ends. */
 async function endComposition(view: EditorView): Promise<void> {
   Reflect.deleteProperty(view, "composing");
@@ -474,7 +474,7 @@ describe("math and strikethrough delimiters", () => {
     ["Cross ~old~ab out.", ["old"], /^Cross ~~old~~ab out\.\n$/],
     // A tilde inside struck text pairs with nothing after it.
     ["It ~~takes ~5 min~~ now 10~ish.", ["takes ~5 min"], /^It ~~takes \\?~5 min~~ now 10\\~ish\.\n$/],
-    // md-easy's Markdown reader reads 😀 by its first UTF-16 unit, which is
+    // Downpad's Markdown reader reads 😀 by its first UTF-16 unit, which is
     // no punctuation, so the run between `)` and 😀 closes nothing.
     ["Cross ~(a)~😀 out.", [], /^Cross \\~\(a\)\\~😀 out\.\n$/],
     // The text typed after the closing run is outside the italic text too.

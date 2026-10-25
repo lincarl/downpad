@@ -5,7 +5,7 @@
 // a point beside the block's box, such as in the document's side padding,
 // left of a list item's or a quote's text, or in a table cell's padding.
 // Chromium's own drag selection takes the line at the point's height there
-// instead. A drag that md-easy follows itself (`dragSelect` in shiftClicks.ts)
+// instead. A drag that Downpad follows itself (`dragSelect` in shiftClicks.ts)
 // selected to the start or end of the whole block, or, as a selection between
 // blocks ends in the nearest text, to the end of the block before. After a
 // press beside the middle of a quote, a move of a pixel selected the rest of

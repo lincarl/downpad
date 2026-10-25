@@ -61,7 +61,7 @@ async function renderDocumentNode(req: PrintRequest): Promise<Element | null> {
     const node = host.querySelector(".ProseMirror");
     return node ? cloneCompleteDocument(node) : null;
   } catch (err) {
-    console.error("md-easy: offscreen print render failed", err);
+    console.error("Downpad: offscreen print render failed", err);
     return null;
   } finally {
     await editor.destroy().catch(() => {});

@@ -55,7 +55,7 @@ export function installAppShortcuts(actions: AppShortcutActions): () => void {
       actions.create();
     } else if (key === "p") {
       // Always suppress browser/WebView printing. Ctrl+Shift+P is reserved and
-      // intentionally does not open md-easy's print workspace.
+      // intentionally does not open Downpad's print workspace.
       event.preventDefault();
       if (!event.shiftKey) actions.print();
     } else if (key === "f" && !event.shiftKey && actions.store.get().view === "recent") {

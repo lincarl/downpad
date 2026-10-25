@@ -85,7 +85,7 @@ export interface PrinterInfo {
 }
 
 /**
- * Native print parameters (§5.21). md-easy lays the sheets out itself — page
+ * Native print parameters (§5.21). Downpad lays the sheets out itself — page
  * boxes already carry the margins, running header/footer and any scaling — so
  * the backend prints the page as-is: zero printer margins, no browser-added
  * header/footer, scale 1.

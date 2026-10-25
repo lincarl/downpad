@@ -58,7 +58,7 @@ const escapeText: TextHandler = (node: { value: string }, _parent, state, info) 
   return state.safe(body, info) + trailing.slice(0, 1);
 };
 
-/** Milkdown's remark-stringify options with the user's style and md-easy's
+/** Milkdown's remark-stringify options with the user's style and Downpad's
  *  text escaping. */
 export function stringifyOptions(prev: StringifyOptions, style: SerializerStyle): StringifyOptions {
   return {

@@ -10,7 +10,7 @@ async function fixture(context) {
   await mkdir(directory, { recursive: true });
   const root = await mkdtemp(path.join(directory, "run-"));
   context.after(() => rm(root, { recursive: true, force: true }));
-  await writeFile(path.join(root, "package.json"), '{"name":"md-easy","version":"0.2.2","main":"electron-dist/main.js"}\n');
+  await writeFile(path.join(root, "package.json"), '{"name":"downpad","version":"0.2.2","main":"electron-dist/main.js"}\n');
   return root;
 }
 
@@ -19,7 +19,7 @@ test("applies a stable tag without changing other Electron build metadata", asyn
 
   assert.equal(await applyVersionFromTag("v1.2.3", root), "1.2.3");
   assert.deepEqual(JSON.parse(await readFile(path.join(root, "package.json"))), {
-    name: "md-easy",
+    name: "downpad",
     version: "1.2.3",
     main: "electron-dist/main.js",
   });

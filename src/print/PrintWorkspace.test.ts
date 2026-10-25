@@ -60,7 +60,7 @@ const JOB: PrintJob = {
 };
 
 function enableElectron(): void {
-  Object.defineProperty(window, "mdEasy", { value: {}, configurable: true });
+  Object.defineProperty(window, "downpadDesktop", { value: {}, configurable: true });
 }
 
 async function flush(): Promise<void> {
@@ -123,7 +123,7 @@ describe("PrintWorkspace React view", () => {
     vi.clearAllMocks();
     document.body.innerHTML = "";
     document.documentElement.classList.remove("printing");
-    delete window.mdEasy;
+    delete window.downpadDesktop;
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     saveSettings = vi.fn<(settings: Settings) => void>();
@@ -136,7 +136,7 @@ describe("PrintWorkspace React view", () => {
   afterEach(() => {
     workspace?.close();
     workspace = null;
-    delete window.mdEasy;
+    delete window.downpadDesktop;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -205,14 +205,14 @@ describe("PrintWorkspace React view", () => {
     expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
   });
 
-  it("prints the Markdown version of a document md-easy could not render, keeping the saved choice", () => {
+  it("prints the Markdown version of a document Downpad could not render, keeping the saved choice", () => {
     act(() => workspace!.open({ ...JOB, documentNode: null }));
 
     expect(radio("Markdown").checked).toBe(true);
     expect(radio("Document").disabled).toBe(true);
     expect(printRenderMocks.renderPrintPages.mock.calls[0]?.[0]).toMatchObject({ version: "markdown" });
     expect(document.querySelector(".print-ws-hint")?.textContent).toBe(
-      "md-easy can't show this document in the Document view, so it prints the Markdown source.",
+      "Downpad can't show this document in the Document view, so it prints the Markdown source.",
     );
 
     editInput("Scale", "120");

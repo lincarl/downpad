@@ -9,9 +9,9 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 const heading = ".milkdown .ProseMirror h1";
 /** A synthetic one-pixel PNG, to exercise the local image protocol. */
 const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
-/** MD_EASY_CPU_THROTTLING_RATE, such as 4, runs every test with the
+/** DOWNPAD_CPU_THROTTLING_RATE, such as 4, runs every test with the
  *  renderer's CPU that many times slower, as on a slower machine. */
-const cpuThrottlingRate = Number(process.env.MD_EASY_CPU_THROTTLING_RATE) || undefined;
+const cpuThrottlingRate = Number(process.env.DOWNPAD_CPU_THROTTLING_RATE) || undefined;
 let directory: string;
 let app: ElectronApplication | undefined;
 let page: Page;
@@ -39,7 +39,7 @@ test.afterEach(async () => {
 
 /** Start the desktop app, with `file` as its launch argument, and resolve once
  *  startup has finished (`untilStarted`). `developmentOverride` sets
- *  MD_EASY_DEV_URL. A test of what startup shows before it can finish, such
+ *  DOWNPAD_DEV_URL. A test of what startup shows before it can finish, such
  *  as the recovery prompt that startup waits on, passes `duringStartup` to
  *  resolve once the app shell shows instead. */
 async function launch(
@@ -47,9 +47,9 @@ async function launch(
   { developmentOverride, duringStartup = false }: { developmentOverride?: string; duringStartup?: boolean } = {},
 ): Promise<void> {
   const environment = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE" && entry[0] !== "MD_EASY_DEV_URL"),
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE" && entry[0] !== "DOWNPAD_DEV_URL"),
   );
-  const executablePath = process.env.MD_EASY_EXECUTABLE;
+  const executablePath = process.env.DOWNPAD_EXECUTABLE;
   app = await electron.launch({
     chromiumSandbox: true,
     executablePath,
@@ -60,8 +60,8 @@ async function launch(
     ],
     env: {
       ...environment,
-      MD_EASY_USER_DATA_DIR: path.join(directory, "profile"),
-      ...(developmentOverride ? { MD_EASY_DEV_URL: developmentOverride } : {}),
+      DOWNPAD_USER_DATA_DIR: path.join(directory, "profile"),
+      ...(developmentOverride ? { DOWNPAD_DEV_URL: developmentOverride } : {}),
     },
   });
   page = await app.firstWindow();
@@ -131,7 +131,7 @@ test("launching a Markdown file renders formatting and relative images in an iso
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toContain("# Electron Markdown");
   const isolation = await page.evaluate(() => ({
-    bridge: typeof window.mdEasy?.invoke,
+    bridge: typeof window.downpadDesktop?.invoke,
     require: typeof Reflect.get(window, "require"),
     process: typeof Reflect.get(window, "process"),
   }));
@@ -159,7 +159,7 @@ test("a missing local image shows its placeholder without handler errors or fail
   app!.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   await chooseOpen(file);
   await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
-  // The printed copy must not look the path up next to md-easy's own page.
+  // The printed copy must not look the path up next to Downpad's own page.
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   await page.getByRole("button", { name: "Print", exact: true }).click();
   const printed = page.locator(".print-page img");
@@ -168,7 +168,7 @@ test("a missing local image shows its placeholder without handler errors or fail
   expect(errors).toEqual([]);
 });
 
-test("the renderer's Content Security Policy allows md-easy's content and blocks inline scripts and eval", async () => {
+test("the renderer's Content Security Policy allows Downpad's content and blocks inline scripts and eval", async () => {
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
   // Copy image converts a GIF to PNG through a blob: URL.
   const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -188,10 +188,10 @@ test("the renderer's Content Security Policy allows md-easy's content and blocks
       "$$", "\\frac{1}{2}", "$$", "",
       "```mermaid", "graph LR", "  A --> B", "```", "",
     ].join("\n"));
-    // The welcome document is read from md-easy's own files.
+    // The welcome document is read from Downpad's own files.
     await writeFile(path.join(directory, "profile", "settings.toml"), "hasCheckedDefaultHandler = true\n");
     await launch();
-    await expect(page.locator(heading)).toHaveText("Welcome to md-easy 👋");
+    await expect(page.locator(heading)).toHaveText("Welcome to Downpad 👋");
     const log = await page.evaluateHandle(() => {
       const violations: string[] = [];
       const copies: string[] = [];
@@ -266,7 +266,7 @@ test("opening a file with local images makes no failed loads", async () => {
   await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
   const loaded = () => page.locator(".ProseMirror img").evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0).length);
   await expect.poll(loaded).toBe(2);
-  // Each image starts at its own URL, never at its path next to md-easy's page.
+  // Each image starts at its own URL, never at its path next to Downpad's page.
   expect(errors).toEqual([]);
 });
 
@@ -287,7 +287,7 @@ test("a missing inline image shows its path in a chip, which a click locates", a
   await expect.poll(() => loaded("Pixel")).toBe(true);
   await expect(page.locator(".milkdown-image-inline.md-image-missing")).toHaveCount(1);
   await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
-  await expect(page).toHaveTitle("inline.md — md-easy");
+  await expect(page).toHaveTitle("inline.md — Downpad");
 
   const found = path.join(directory, "found.png");
   await app!.evaluate(({ dialog }, selectedFile) => {
@@ -723,7 +723,7 @@ test("Ctrl or Cmd+click and double-click on either half of an inline image follo
   // A double-click on an image inside a link to a Markdown file opens that file.
   const box = (await images.nth(3).boundingBox())!;
   await page.mouse.dblclick(box.x + box.width * 0.9, box.y + box.height / 2);
-  await expect(page).toHaveTitle("one.md — md-easy");
+  await expect(page).toHaveTitle("one.md — Downpad");
 });
 
 /** The point `fraction` of the way across the character at `index` of the
@@ -819,7 +819,7 @@ test("Ctrl or Cmd+click and double-click on either half of a character follow on
   // A double-click on the right half of a link to a Markdown file opens that file.
   const point = await pointOn("two", -1, 0.75);
   await page.mouse.dblclick(point.x, point.y);
-  await expect(page).toHaveTitle("two.md — md-easy");
+  await expect(page).toHaveTitle("two.md — Downpad");
 });
 
 test("Ctrl or Cmd+click that opens no link leaves the caret where it lands", async () => {
@@ -2860,7 +2860,7 @@ test("text typed, composed or pasted right after a link goes after it", async ()
   await app!.evaluate(({ clipboard }) => clipboard.writeText("f"));
   await page.keyboard.press("ControlOrMeta+v");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page).toHaveTitle("after-link.md — md-easy");
+  await expect(page).toHaveTitle("after-link.md — Downpad");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
   expect.soft(blocks.slice(0, 4)).toEqual([
     "End [one](https://example.com/1)a",
@@ -2937,9 +2937,9 @@ test("an input method's composition right after a link goes in once", async () =
   ];
   await expect.poll(() => readFile(file, "utf8")).toBe([...composed, "Text only [five](https://example.com/5)"].join("\n\n") + "\n");
   // The same steps with only the link text shown, which always worked.
-  const settings = await page.evaluate(() => window.mdEasy!.invoke("load_settings"));
+  const settings = await page.evaluate(() => window.downpadDesktop!.invoke("load_settings"));
   await app!.evaluate(({ BrowserWindow }, changed) => {
-    BrowserWindow.getAllWindows()[0]!.webContents.send("md-easy:event:settings-changed", changed);
+    BrowserWindow.getAllWindows()[0]!.webContents.send("downpad:event:settings-changed", changed);
   }, { ...settings, linkDisplay: "text-only" });
   await expect(page.locator(".milkdown .ProseMirror a")).toHaveCount(5);
   await expect(page.locator(".milkdown .ProseMirror .md-link-url")).toHaveCount(0);
@@ -3299,7 +3299,7 @@ test("End with the caret before images or formulas that start a line moves the c
   await typeAfter("Shift+ArrowRight", paragraph("keeps the formula."), "界", compose);
   await typeAfter("Shift+ArrowLeft", paragraph("joins by composing."), "合", compose);
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page).toHaveTitle("image-end.md — md-easy");
+  await expect(page).toHaveTitle("image-end.md — Downpad");
   const blocks = (await readFile(file, "utf8")).split("\n\n");
   expect(blocks.slice(0, 4)).toEqual([
     "Ends with ![End](end/missing.png)",
@@ -3377,7 +3377,7 @@ test("the block handle of a line with a wide missing image chip stays beside the
   await page.mouse.click(chipBox.x - 12, chipBox.y + chipBox.height / 2);
   await page.keyboard.type("X");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page).toHaveTitle("chip-handle.md — md-easy");
+  await expect(page).toHaveTitle("chip-handle.md — Downpad");
   const saved = await readFile(file, "utf8");
   // X went into "the", the word before the chip, and nothing else changed.
   const typed = saved.indexOf("X");
@@ -3404,7 +3404,7 @@ test("a missing image chip inside a text selection shows as selected", async () 
 });
 
 test("the packaged app ignores a remote development URL override", async () => {
-  test.skip(!process.env.MD_EASY_EXECUTABLE, "This boundary requires a packaged executable.");
+  test.skip(!process.env.DOWNPAD_EXECUTABLE, "This boundary requires a packaged executable.");
   const file = path.join(directory, "packaged.md");
   await writeFile(file, "# Bundled application\n");
   await launch(file, { developmentOverride: "https://example.invalid/" });
@@ -3850,7 +3850,7 @@ test("autosave in a pause writes a typed closing mark as Save would and leaves i
   await typeAtEnd(page.locator(".milkdown .ProseMirror p").nth(1), " Let $x$");
   await expect.poll(() => readFile(file, "utf8"), { timeout: 20_000 }).toBe("Start. Tickets cost \\$5-\\$10 each.\n\nNext. Let $x$\n");
   // Closing the tab makes the formula, which autosave has already saved.
-  await expect(page).toHaveTitle("autosaved.md — md-easy");
+  await expect(page).toHaveTitle("autosaved.md — Downpad");
   await page.getByRole("tab", { name: /autosaved\.md/ }).click({ button: "middle" });
   await expect(page.getByRole("tab", { name: /autosaved\.md/ })).toHaveCount(0);
   expect(await app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([]);
@@ -3868,7 +3868,7 @@ test("Save right after typing writes the last edit in the document and split vie
   await page.keyboard.type(" Saved at once.");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("# Typed\n\nFirst line. Saved at once.\n");
-  await expect(page).toHaveTitle("typed.md — md-easy");
+  await expect(page).toHaveTitle("typed.md — Downpad");
 
   // In the split, the Markdown pane still catches up after the save.
   await page.getByRole("radio", { name: "Split", exact: true }).click();
@@ -3878,7 +3878,7 @@ test("Save right after typing writes the last edit in the document and split vie
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("# Typed\n\nFirst line. Saved at once. Split too.\n");
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("First line. Saved at once. Split too.");
-  await expect(page).toHaveTitle("typed.md — md-easy");
+  await expect(page).toHaveTitle("typed.md — Downpad");
 });
 
 test("Save with no edit leaves a file the document view would rewrite byte-identical", async () => {
@@ -3898,7 +3898,7 @@ test("Save with no edit leaves a file the document view would rewrite byte-ident
   expect(await readFile(file, "utf8")).toBe(markdown);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("=====");
-  await expect(page).toHaveTitle("unedited.md — md-easy");
+  await expect(page).toHaveTitle("unedited.md — Downpad");
 });
 
 test("launching with a file builds its document editor once", async () => {
@@ -3909,8 +3909,8 @@ test("launching with a file builds its document editor once", async () => {
   await launch();
   // As in the reload test below, settle the first renderer's file listener.
   await page.evaluate(async () => {
-    window.mdEasy!.listen("open-file-requested", () => {});
-    await window.mdEasy!.invoke("settings_path");
+    window.downpadDesktop!.listen("open-file-requested", () => {});
+    await window.downpadDesktop!.invoke("settings_path");
   });
   // Count document editors from the start of a reloaded renderer, which reads
   // the first queued file as its launch argument.
@@ -3945,7 +3945,7 @@ test("a file the document view cannot show opens in the Markdown view with a not
   await launch(deep);
   const notice = page.getByRole("alert");
   await expect(notice).toHaveText(
-    "md-easy can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.Try again",
+    "Downpad can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.Try again",
   );
   const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
   await expect(markdown).toContainText("> deep");
@@ -3994,13 +3994,13 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await untilStarted();
   // Startup only fills the tab, so the editor must still be built for it.
   await expect(page.locator(heading)).toHaveText("Title");
-  await expect(page).toHaveTitle("● recovered.md — md-easy");
+  await expect(page).toHaveTitle("● recovered.md — Downpad");
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(markdown);
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(markdown);
-  await expect(page).toHaveTitle("recovered.md — md-easy");
+  await expect(page).toHaveTitle("recovered.md — Downpad");
 });
 
 test("a failed Open original preserves recovery and still allows Open recovered", async () => {
@@ -4023,7 +4023,7 @@ test("a failed Open original preserves recovery and still allows Open recovered"
   await untilStarted();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator(heading)).toHaveText("Recovered after failure");
-  await expect(page).toHaveTitle("● unavailable-original.md — md-easy");
+  await expect(page).toHaveTitle("● unavailable-original.md — Downpad");
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(markdown);
@@ -4043,7 +4043,7 @@ test("recovery preserves dirty background tabs and removes only saved documents"
   await launch(first);
   const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
   const snapshots = (savedSince = 0) => page.evaluate(async (since) =>
-    (await window.mdEasy!.invoke("list_recovery_snapshots"))
+    (await window.downpadDesktop!.invoke("list_recovery_snapshots"))
       .filter((snapshot) => Date.parse(snapshot.savedAt) >= since)
       .map(({ filePath, markdown }) => ({ filePath, markdown }))
       .sort((a, b) => (a.filePath ?? "").localeCompare(b.filePath ?? "")),
@@ -4074,7 +4074,7 @@ test("recovery preserves dirty background tabs and removes only saved documents"
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.insertText("Latest first edit.\n");
   await page.getByRole("tab", { name: "clean.md", exact: true }).click();
-  await expect(page).toHaveTitle("clean.md — md-easy");
+  await expect(page).toHaveTitle("clean.md — Downpad");
   const cleanSelectedAt = await page.evaluate(() => Date.now());
   // Fresh timestamps prove both background snapshots update while the clean
   // tab is active, rather than observing files before the next interval.
@@ -4103,11 +4103,11 @@ test("the first-run welcome document opens as saved with its exact text", async 
   // The renderer reads the copy that the build puts next to index.html.
   const welcome = (await readFile(path.join(projectRoot, "dist", "welcome.md"), "utf8")).replace(/\r\n/g, "\n");
   await launch();
-  await expect(page.locator(heading)).toContainText("Welcome to md-easy");
+  await expect(page.locator(heading)).toContainText("Welcome to Downpad");
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(welcome);
-  await expect(page).toHaveTitle("Untitled — md-easy");
+  await expect(page).toHaveTitle("Untitled — Downpad");
 });
 
 test("an undo right after Save marks the document unsaved again", async () => {
@@ -4123,10 +4123,10 @@ test("an undo right after Save marks the document unsaved again", async () => {
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
   // The file has the typed words but the document no longer does.
-  await expect(page).toHaveTitle("● undo.md — md-easy");
+  await expect(page).toHaveTitle("● undo.md — Downpad");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
-  await expect(page).toHaveTitle("undo.md — md-easy");
+  await expect(page).toHaveTitle("undo.md — Downpad");
 });
 
 test("undoing every edit marks the document saved again", async () => {
@@ -4137,10 +4137,10 @@ test("undoing every edit marks the document saved again", async () => {
   await paragraph.click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Typed.");
-  await expect(page).toHaveTitle("● undo-all.md — md-easy");
+  await expect(page).toHaveTitle("● undo-all.md — Downpad");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
-  await expect(page).toHaveTitle("undo-all.md — md-easy");
+  await expect(page).toHaveTitle("undo-all.md — Downpad");
 });
 
 test("the first Ctrl+Z after opening a file that ends in a list leaves the caret in place", async () => {
@@ -4312,7 +4312,7 @@ test("typing in the split's document pane right after the Markdown pane keeps bo
  *  waits its full second for each image before it shows. */
 async function holdImageAnswers(): Promise<void> {
   await app!.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", () => new Promise(() => {}));
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("downpad:image-url", () => new Promise(() => {}));
   });
 }
 
@@ -4335,7 +4335,7 @@ test("typing in the split's Markdown pane while a reload from disk builds keeps 
   expect(await page.locator(".editor-pane-wysiwyg:not([hidden])").count()).toBe(0);
   await expect(documentLine).toHaveText("New text from disk.");
   await expect(markdownLine).toHaveText("New text from disk.");
-  await expect(page).toHaveTitle("reload-while-typing.md — md-easy");
+  await expect(page).toHaveTitle("reload-while-typing.md — Downpad");
   // The panes built for the reload take typing.
   await typeAtEnd(markdownLine, " Typed after.");
   await page.keyboard.press("ControlOrMeta+s");
@@ -4351,7 +4351,7 @@ test("switching tabs while a reload from disk builds shows the other tab, then t
   await writeFile(other, "Other file.\n");
   await launch(file);
   await chooseOpen(other);
-  await expect(page).toHaveTitle("other.md — md-easy");
+  await expect(page).toHaveTitle("other.md — Downpad");
   await page.getByRole("tab", { name: "reloaded.md", exact: true }).click();
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   const documentLine = page.locator(".editor-pane-wysiwyg:not([hidden]) .ProseMirror p").first();
@@ -4368,7 +4368,7 @@ test("switching tabs while a reload from disk builds shows the other tab, then t
   await expect(documentLine).toHaveText("Other file.");
   await expect(markdownLine).toHaveText("Other file.");
   await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(2);
-  await expect(page).toHaveTitle("other.md — md-easy");
+  await expect(page).toHaveTitle("other.md — Downpad");
   await page.getByRole("tab", { name: "reloaded.md", exact: true }).click();
   await expect(documentLine).toHaveText("New text from disk.");
   await expect(markdownLine).toHaveText("New text from disk.");
@@ -4398,7 +4398,7 @@ test("a Reload clicked while a layout switch builds the document view shows the 
   // The build from the old text is done again from the new.
   await expect(documentLine).toHaveText("New text from disk.");
   await expect(markdownLine).toHaveText("New text from disk.");
-  await expect(page).toHaveTitle("reload-during-switch.md — md-easy");
+  await expect(page).toHaveTitle("reload-during-switch.md — Downpad");
   await typeAtEnd(markdownLine, " Typed after.");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
@@ -4440,7 +4440,7 @@ test("a reload from disk while settings rebuild the split's document view leaves
   const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
   // The image is missing, and the document view keeps that answer.
   await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .md-image-missing")).toHaveCount(1);
-  const settings = await page.evaluate(() => window.mdEasy!.invoke("load_settings"));
+  const settings = await page.evaluate(() => window.downpadDesktop!.invoke("load_settings"));
   await writeFile(path.join(directory, "pixel.png"), onePixelPng);
   await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
   const reload = page.getByRole("button", { name: "Reload", exact: true });
@@ -4451,15 +4451,15 @@ test("a reload from disk while settings rebuild the split's document view leaves
   await app!.evaluate(({ BrowserWindow, ipcMain }) => {
     type Handler = (event: unknown, ...args: unknown[]) => unknown;
     const handlers = Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>;
-    const imageUrl = handlers.get("md-easy:image-url")!;
-    const invoke = handlers.get("md-easy:invoke")!;
+    const imageUrl = handlers.get("downpad:image-url")!;
+    const invoke = handlers.get("downpad:invoke")!;
     const read = new Promise((resolve) => Reflect.set(globalThis, "releaseRead", resolve));
     const { ipc } = BrowserWindow.getAllWindows()[0]!.webContents;
-    ipc.handle("md-easy:image-url", async (event, ...args) => {
+    ipc.handle("downpad:image-url", async (event, ...args) => {
       await new Promise((resolve) => setTimeout(resolve, 900));
       return imageUrl(event, ...args);
     });
-    ipc.handle("md-easy:invoke", async (event, command, ...args) => {
+    ipc.handle("downpad:invoke", async (event, command, ...args) => {
       if (command === "read_file") await read;
       return invoke(event, command, ...args);
     });
@@ -4472,7 +4472,7 @@ test("a reload from disk while settings rebuild the split's document view leaves
   await page.keyboard.insertText(" ![x](slow.png)");
   // Change a document setting, which builds the document view again.
   await app!.evaluate(({ BrowserWindow }, changed) => {
-    BrowserWindow.getAllWindows()[0]!.webContents.send("md-easy:event:settings-changed", changed);
+    BrowserWindow.getAllWindows()[0]!.webContents.send("downpad:event:settings-changed", changed);
   }, { ...settings, mdBulletChar: settings.mdBulletChar === "*" ? "-" : "*" });
   await page.waitForFunction(() => document.querySelector(".editor-pane-wysiwyg[hidden]") && !document.querySelector(".editor-pane-wysiwyg:not([hidden])"));
   // While it builds, type once more, which schedules a mirror sync into it 120 ms
@@ -4483,10 +4483,10 @@ test("a reload from disk while settings rebuild the split's document view leaves
     (Reflect.get(globalThis, "releaseRead") as () => void)();
   });
   // The document view is built from the new text and shows the image now on disk.
-  await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .milkdown-image-block img")).toHaveAttribute("src", /^md-easy-file:/);
+  await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .milkdown-image-block img")).toHaveAttribute("src", /^downpad-file:/);
   await expect(documentLine).toHaveText("New text from disk.");
   await expect(markdownLine).toHaveText("New text from disk.");
-  await expect(page).toHaveTitle("reload-during-settings.md — md-easy");
+  await expect(page).toHaveTitle("reload-during-settings.md — Downpad");
   // Its undo history starts at the reload.
   await documentLine.click();
   await page.keyboard.press("End");
@@ -4528,10 +4528,10 @@ async function csvFile(name: string): Promise<string> {
 async function holdCommand(command: string, { first }: { first?: number } = {}): Promise<void> {
   await app!.evaluate(({ BrowserWindow, ipcMain }, [held, limit]) => {
     type Handler = (event: unknown, ...args: unknown[]) => unknown;
-    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:invoke")!;
+    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("downpad:invoke")!;
     const release = new Promise((resolve) => Reflect.set(globalThis, "releaseHeld", resolve));
     let asked = 0;
-    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:invoke", async (event, name, ...args) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("downpad:invoke", async (event, name, ...args) => {
       if (name !== held) return invoke(event, name, ...args);
       asked += 1;
       if (limit !== null && asked > limit) {
@@ -4704,7 +4704,7 @@ test("the files of a drop after one that cannot be read go in, and the drop's Ma
   await expect(page.locator(`.editor-pane:not([hidden]) ${heading}`)).toHaveText("Dropped");
   await page.getByRole("tab", { name: /drop-gone\.md/ }).click();
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", /good\.csv/, "Second line."]);
-  expect(errors).toContainEqual(expect.stringContaining("md-easy: could not insert gone.png"));
+  expect(errors).toContainEqual(expect.stringContaining("Downpad: could not insert gone.png"));
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[good.csv](attachments/good.csv)\n\nSecond line.\n");
   expect(await readFile(path.join(directory, "attachments", "good.csv"), "utf8")).toBe("a,b\n");
@@ -5314,8 +5314,8 @@ test("an image pasted or dropped as a file starts at its own URL, with no failed
   // `_invokeHandlers`, and a handler on the window's own `ipc` runs in their place.
   await app!.evaluate(({ BrowserWindow, ipcMain }) => {
     type Handler = (event: unknown, ...args: unknown[]) => unknown;
-    const imageUrl = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("md-easy:image-url")!;
-    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("md-easy:image-url", async (event, ...args) => {
+    const imageUrl = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("downpad:image-url")!;
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("downpad:image-url", async (event, ...args) => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       return imageUrl(event, ...args);
     });
@@ -5347,9 +5347,9 @@ test("an image pasted or dropped as a file starts at its own URL, with no failed
   await expect(images).toHaveCount(2);
   await expect.poll(() => allLoaded(images)).toBe(true);
   const history = await page.evaluate(() => Reflect.get(window, "imageHistory") as { sources: string[]; missing: boolean });
-  // A raw path would be looked up next to md-easy's own page and fail there.
+  // A raw path would be looked up next to Downpad's own page and fail there.
   expect(history.sources).toHaveLength(2);
-  expect(history.sources.every((src) => src.startsWith("md-easy-file:"))).toBe(true);
+  expect(history.sources.every((src) => src.startsWith("downpad-file:"))).toBe(true);
   expect(history.missing).toBe(false);
   expect(problems).toEqual([]);
   await page.keyboard.press("ControlOrMeta+s");
@@ -5720,7 +5720,7 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await expect(page.locator(".print-workspace")).toBeHidden();
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("* Star bullet");
-  await expect(page).toHaveTitle("bullets.md — md-easy");
+  await expect(page).toHaveTitle("bullets.md — Downpad");
 });
 
 test("the find count follows edits made while the card is open", async () => {
@@ -5825,7 +5825,7 @@ test("the frontmatter table's find highlights go with a layout change or a tab s
   await expect.poll(tableHighlights).toEqual({ match: [], current: ["Draft"] });
   // A new tab closes the card.
   await page.keyboard.press("ControlOrMeta+n");
-  await expect(page).toHaveTitle("Untitled — md-easy");
+  await expect(page).toHaveTitle("Untitled — Downpad");
   expect(await tableHighlights()).toEqual({ match: [], current: [] });
 });
 
@@ -5946,7 +5946,7 @@ test("find leaves a match at the top of the page in view and clear of the card",
     const file = path.join(directory, name);
     await writeFile(file, text);
     await chooseOpen(file);
-    await expect(page).toHaveTitle(`${name} — md-easy`);
+    await expect(page).toHaveTitle(`${name} — Downpad`);
     await page.keyboard.press("ControlOrMeta+f");
     await find.fill("needle");
     await expect(page.locator(".find-count")).toHaveText("1 of 1");
@@ -6303,11 +6303,11 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
     .locator(".frontmatter-value-edit");
   const body = page.locator(".milkdown .ProseMirror p").first();
   await typeAtEnd(title, " v2");
-  await expect(page).toHaveTitle("● frontmatter-undo.md — md-easy");
+  await expect(page).toHaveTitle("● frontmatter-undo.md — Downpad");
   // The caret stays in the cell, so typing goes on there.
   await page.keyboard.press("ControlOrMeta+z");
   await expect(title).toHaveText("Draft notes # keep");
-  await expect(page).toHaveTitle("frontmatter-undo.md — md-easy");
+  await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
   await page.keyboard.type("!");
   await expect(title).toHaveText("Draft notes # keep!");
   await page.keyboard.press("ControlOrMeta+z");
@@ -6324,7 +6324,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
   await page.keyboard.press("ControlOrMeta+z");
   await expect(title).toHaveText("Draft notes # keep");
   await expect(body).toHaveText("The draft body.");
-  await expect(page).toHaveTitle("frontmatter-undo.md — md-easy");
+  await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
   await page.keyboard.press("ControlOrMeta+y");
   await expect(title).toHaveText("final notes # keep");
   await page.keyboard.press("ControlOrMeta+s");
@@ -6364,7 +6364,7 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
   await expect(cell("status")).toHaveText("draft");
   await choose(cell("status"), "Undo");
   await expect(cell("title")).toHaveText("Draft notes # keep");
-  await expect(page).toHaveTitle("menu-undo.md — md-easy");
+  await expect(page).toHaveTitle("menu-undo.md — Downpad");
   await choose(cell("title"), "Redo");
   await expect(cell("title")).toHaveText("Draft notes # keep v2");
 
@@ -6388,7 +6388,7 @@ test("a file that ends in a list opens as saved", async () => {
   // Switching views reports any document change at once.
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("- Last item");
-  await expect(page).toHaveTitle("list-end.md — md-easy");
+  await expect(page).toHaveTitle("list-end.md — Downpad");
 });
 
 test("pasting a copy of the whole document adds no empty line", async () => {
@@ -6418,7 +6418,7 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await paragraph.click();
   await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
-  await expect(page).toHaveTitle("code-end.md — md-easy");
+  await expect(page).toHaveTitle("code-end.md — Downpad");
   await page.getByRole("radio", { name: "Document", exact: true }).click();
   await typeAtEnd(paragraph, " Edited.");
   await page.keyboard.press("ControlOrMeta+s");
@@ -6591,7 +6591,7 @@ test("a one-word edit in the document view saves only that line", async () => {
   await typeAtEnd(page.locator(".milkdown .ProseMirror > p", { hasText: "Thanks to everyone" }), " early");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe(markdown.replace("who tested\n", "who tested early\n"));
-  await expect(page).toHaveTitle("release.md — md-easy");
+  await expect(page).toHaveTitle("release.md — Downpad");
 });
 
 test("the document page runs to the end of a long document", async () => {
@@ -7640,8 +7640,8 @@ test("the Markdown version continues a source line taller than a page on the nex
 });
 
 test("Print submits the document to an installed test printer", async () => {
-  const printer = process.env.MD_EASY_TEST_PRINTER;
-  test.skip(!printer, "Set MD_EASY_TEST_PRINTER to a disposable virtual printer for native spool verification.");
+  const printer = process.env.DOWNPAD_TEST_PRINTER;
+  test.skip(!printer, "Set DOWNPAD_TEST_PRINTER to a disposable virtual printer for native spool verification.");
   const file = path.join(directory, "printer.md");
   await writeFile(file, "# Printed by Electron\n\nNative printer submission.\n");
   await launch(file);
@@ -7656,7 +7656,7 @@ test("the preload rejects unknown commands", async () => {
   await launch();
   const result = await page.evaluate(async () => {
     // The runtime must reject malformed input even when callers bypass TypeScript.
-    const invoke = window.mdEasy!.invoke as (command: string) => Promise<unknown>;
+    const invoke = window.downpadDesktop!.invoke as (command: string) => Promise<unknown>;
     try { await invoke("unknown-command"); return "accepted"; }
     catch (error) { return String(error); }
   });
@@ -7669,8 +7669,8 @@ test("a crashed renderer does not trap native window close", async () => {
   await launch(file);
   await expect(page.locator(heading)).toHaveText("Crash lifecycle");
   await page.evaluate(async () => {
-    window.mdEasy!.listen("close-requested", () => {});
-    await window.mdEasy!.invoke("settings_path");
+    window.downpadDesktop!.listen("close-requested", () => {});
+    await window.downpadDesktop!.invoke("settings_path");
   });
 
   const crashed = await app!.evaluate(async ({ app, BrowserWindow }) => {
@@ -7700,8 +7700,8 @@ test("file requests during reload reach the replacement renderer", async () => {
   await launch(original);
   await expect(page.locator(heading)).toHaveText("Before reload");
   await page.evaluate(async () => {
-    window.mdEasy!.listen("open-file-requested", () => {});
-    await window.mdEasy!.invoke("settings_path");
+    window.downpadDesktop!.listen("open-file-requested", () => {});
+    await window.downpadDesktop!.invoke("settings_path");
   });
 
   const reloaded = page.waitForEvent("domcontentloaded");

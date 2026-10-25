@@ -16,7 +16,7 @@
 // for blocks and text dragged within the document, text dragged in from
 // elsewhere (`dropAtEdge`), and dropped files (fileDrop.ts).
 //
-// md-easy draws the drop line itself (`dropLine`), from the same measurement
+// Downpad draws the drop line itself (`dropLine`), from the same measurement
 // of the page as the drop, in place of Crepe's indicator plugin. That plugin
 // found its edge again only for a dragover at a new point, and hid its line
 // 30 ms after a dragleave unless a dragover followed. So when the page

@@ -16,7 +16,7 @@ const markdownSeg = ".toolbar-view button:has-text('Markdown')";
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   // WYSIWYG mounts asynchronously; wait for the seeded heading to render.
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 test("the control starts on Document, with that segment active", async ({ page }) => {
@@ -31,12 +31,12 @@ test("'Split' shows the Markdown source beside the document", async ({ page }) =
   await page.locator(splitSeg).click();
 
   // The document stays visible; the raw source appears alongside it.
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   const raw = page.locator(rawContent);
   await expect(raw).toBeVisible();
   // The raw view shows literal markdown: heading syntax, a fenced code block,
   // and the GFM table all survived WYSIWYG serialization.
-  await expect(raw).toContainText("# Welcome to md-easy");
+  await expect(raw).toContainText("# Welcome to Downpad");
   await expect(raw).toContainText("```ts");
   await expect(raw).toContainText("| Feature | Status |");
   // "Split" is now the active segment.
@@ -88,7 +88,7 @@ test("'Markdown' shows only the raw source (the document is hidden)", async ({ p
 
   const raw = page.locator(rawContent);
   await expect(raw).toBeVisible();
-  await expect(raw).toContainText("# Welcome to md-easy");
+  await expect(raw).toContainText("# Welcome to Downpad");
   // The document (WYSIWYG) pane is hidden in the Markdown-only view.
   await expect(page.locator(`${wysiwyg} h1`)).toBeHidden();
   await expect(page.locator(markdownSeg)).toHaveAttribute("aria-checked", "true");
@@ -100,7 +100,7 @@ test("'Document' returns to the document-only view from the split", async ({ pag
 
   await page.locator(documentSeg).click(); // back to document only
   await expect(page.locator(rawContent)).toBeHidden();
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
   await expect(page.locator(documentSeg)).toHaveAttribute("aria-checked", "true");
 });
 
@@ -139,11 +139,11 @@ test("a narrow Split pane keeps a readable text column and room for the block ha
 
 test("switching Document → Markdown → Document keeps the document intact", async ({ page }) => {
   await page.locator(markdownSeg).click();
-  await expect(page.locator(rawContent)).toContainText("# Welcome to md-easy");
+  await expect(page.locator(rawContent)).toContainText("# Welcome to Downpad");
 
   await page.locator(documentSeg).click();
   await expect(page.locator(rawContent)).toBeHidden();
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
 test("the find card opens with Ctrl+F, follows the Markdown view and closes on Escape", async ({

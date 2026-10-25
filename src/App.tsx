@@ -904,7 +904,7 @@ function Banner() {
  *  with its uncut text for the tooltip. */
 function documentViewNotice(filePath: string | null, error: string): BannerState & { fullMessage: string } {
   const text = (name: string, detail: string): string =>
-    `md-easy can't show ${name} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Markdown view.`;
+    `Downpad can't show ${name} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Markdown view.`;
   // The error's first line and the file name, cut short so the notice stays
   // two lines in a window about 800 px wide or wider.
   const name = fileLabel(filePath);

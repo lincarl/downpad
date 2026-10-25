@@ -78,13 +78,13 @@ jobs:
         include:
           - name: Linux
             os: ubuntu-26.04
-            artifact: md-easy-linux
+            artifact: downpad-linux
             paths: |
               release/*.deb
               release/*.AppImage
           - name: Windows
             os: windows-2025
-            artifact: md-easy-windows
+            artifact: downpad-windows
             paths: |
               release/*.msi
 
@@ -181,7 +181,7 @@ jobs:
               printf 'Installer cache download failed for run %s.\n' "$run_id"
               continue
             fi
-            if [[ "$ARTIFACT_PREFIX" == md-easy-linux ]]; then
+            if [[ "$ARTIFACT_PREFIX" == downpad-linux ]]; then
               debs=("$cache_directory"/*.deb)
               appimages=("$cache_directory"/*.AppImage)
               [[ ${#debs[@]} -eq 1 && ${#appimages[@]} -eq 1 ]] || continue
@@ -344,8 +344,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_SHA: ${{ needs.prepare.outputs.head_sha }}
         run: |
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "md-easy-linux-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/md-easy-linux
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "md-easy-windows-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/md-easy-windows
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "downpad-linux-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/downpad-linux
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "downpad-windows-${GITHUB_REF_NAME#v}-$BUILD_SHA" --dir artifacts/downpad-windows
 
       - name: Publish release
         shell: bash
@@ -354,9 +354,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          appimages=(artifacts/md-easy-linux/*.AppImage)
-          debs=(artifacts/md-easy-linux/*.deb)
-          msis=(artifacts/md-easy-windows/*.msi)
+          appimages=(artifacts/downpad-linux/*.AppImage)
+          debs=(artifacts/downpad-linux/*.deb)
+          msis=(artifacts/downpad-windows/*.msi)
           [[ ${#appimages[@]} -eq 1 && ${#debs[@]} -eq 1 && ${#msis[@]} -eq 1 ]] || {
             printf 'Expected one AppImage, DEB and MSI installer, found %s, %s and %s\n' \
               "${#appimages[@]}" "${#debs[@]}" "${#msis[@]}" >&2
@@ -370,4 +370,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
-            --title "md-easy ${GITHUB_REF_NAME#v}"
+            --title "Downpad ${GITHUB_REF_NAME#v}"

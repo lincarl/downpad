@@ -961,7 +961,7 @@ describe("splitIntoPages, splitting a paragraph or heading", () => {
   it.each([
     ["paragraph", "P", "", "word"],
     ["heading", "H2", "", "word"],
-    // md-easy sets no text direction, so each line of a Hebrew paragraph is a
+    // Downpad sets no text direction, so each line of a Hebrew paragraph is a
     // right-to-left run that starts at the right, not back at the left. Judged
     // by direction, the paragraph had no line breaks and was shrunk to fit.
     ["Hebrew paragraph", "P", "rtl-run", "מילה"],

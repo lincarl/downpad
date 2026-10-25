@@ -1,10 +1,10 @@
 // Show local images at their real URL from the first render (spec §5.5).
 //
 // Crepe's image views render a node's raw Markdown src, then switch to what
-// proxyDomURL answers. md-easy's answer for a local image comes from the main
+// proxyDomURL answers. Downpad's answer for a local image comes from the main
 // process, so it arrives after that first render, and Chromium looks a relative
-// src up next to md-easy's own page in the meantime. That logs a failed load
-// and could show one of md-easy's own files. This plugin asks about every image
+// src up next to Downpad's own page in the meantime. That logs a failed load
+// and could show one of Downpad's own files. This plugin asks about every image
 // in the document before the editor view is created. proxyDomURL keeps the
 // answers (imageView.ts), so each view then starts with its URL.
 

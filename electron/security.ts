@@ -61,7 +61,7 @@ export class ImageAccess {
       this.tokensByPath.set(path, token);
       this.pathsByToken.set(token, path);
     }
-    return `md-easy-file://local/image?token=${encodeURIComponent(token)}`;
+    return `downpad-file://local/image?token=${encodeURIComponent(token)}`;
   }
 
   async resolveImage(token: string): Promise<string> {

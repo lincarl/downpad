@@ -118,7 +118,7 @@ interface FindPluginState {
 
 const EMPTY_OPTS: FindOptions = { caseSensitive: false, wholeWord: false, regex: false };
 
-export const findKey = new PluginKey<FindPluginState>("md-easy-find");
+export const findKey = new PluginKey<FindPluginState>("downpad-find");
 
 type FindMeta =
   /** With `from`, the first match at or after that position becomes current. */

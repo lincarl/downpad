@@ -54,7 +54,7 @@ try {
         stdio: "inherit",
         env: {
           ...process.env,
-          MD_EASY_DEV_URL: developmentUrl,
+          DOWNPAD_DEV_URL: developmentUrl,
         },
       });
       child.once("error", (error) => {

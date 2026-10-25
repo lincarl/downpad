@@ -145,7 +145,7 @@ function RecoveryDialogView({
           <DialogDescription asChild>
             <div className={cn("dialog-body", dialogBodyClassName)}>
               <p className="recovery-note m-0 pb-3 text-ink-soft">
-                md-easy found unsaved work from a session that didn&apos;t close cleanly.
+                Downpad found unsaved work from a session that didn&apos;t close cleanly.
               </p>
               <div className="recovery-list overflow-hidden rounded-[6px] border border-line bg-well">
                 {remaining.map((snapshot) => (

@@ -257,7 +257,7 @@ export class WysiwygEditor {
       },
     });
     // Apply serialization style (bullets/emphasis/heading style, etc.) and
-    // md-easy's text escaping.
+    // Downpad's text escaping.
     this.crepe.editor.config((ctx) => {
       ctx.update(remarkStringifyOptionsCtx, (prev) => stringifyOptions(prev, style));
     });
@@ -352,7 +352,7 @@ export class WysiwygEditor {
     this.crepe.editor.use(baselineState(this.opened));
     // Text put in at either end of a link starts plain text (§5.6).
     this.crepe.editor.use(linkEdges);
-    // Report document edits once typing pauses. md-easy keeps its own timer
+    // Report document edits once typing pauses. Downpad keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
     // to that document would never be reported. The same plugin keeps the drop
@@ -398,7 +398,7 @@ export class WysiwygEditor {
       // cleanup path. First drop Crepe's indent plugin, which types four spaces
       // on Tab that Markdown saves as `&#x20;`. Lists, tables and code blocks
       // have their own Tab keys. Also drop Crepe's drop indicator plugin, whose
-      // line md-easy draws itself (`dropLine`), and whose drops `dropAtEdge`
+      // line Downpad draws itself (`dropLine`), and whose drops `dropAtEdge`
       // puts in. Its state and the element that draws its line stay.
       createPromise = crepe.editor.remove([indentPlugin, dropIndicatorPlugin]).then(() => crepe.create()).then(() => undefined);
       this.createPromise = createPromise;

@@ -103,7 +103,7 @@ export async function pickImageFile(): Promise<string | null> {
 
 /** missingImages' state: the position of an image whose view looks its file up
  *  again in this transaction (see showAgain), or null. */
-const showAgainKey = new PluginKey<number | null>("md-easy-show-image-again");
+const showAgainKey = new PluginKey<number | null>("downpad-show-image-again");
 
 /** Look the file of the image at `pos` up again and show it, without a change
  *  to the document, its undo history or its unsaved mark. An image's view looks
@@ -194,7 +194,7 @@ const IN_SELECTION = "md-in-selection";
  *  calls for image blocks. Crepe reports no load errors of inline images, so the
  *  plugin passes those to it. An image that loads shows again, also in an <img>
  *  Crepe draws anew. After each change to the document a missing image shows its
- *  node's current path, since another path md-easy cannot load keeps the same
+ *  node's current path, since another path Downpad cannot load keeps the same
  *  empty URL and gives no new error. One whose path was cleared shows Crepe's
  *  input for a path instead. Load and error events do not bubble, so the plugin
  *  catches them on their way down to the image. Inline images inside a text
@@ -264,14 +264,14 @@ export function missingImages(onError: (event: Event) => void) {
   );
 }
 
-/** The src shown for a local image md-easy cannot load. It fails at once without a
+/** The src shown for a local image Downpad cannot load. It fails at once without a
  *  request or a console message, so the image shows as missing. The raw path would
- *  be looked up next to md-easy's own page, again by every copy of the document
+ *  be looked up next to Downpad's own page, again by every copy of the document
  *  such as the print preview. */
 const UNAVAILABLE_IMAGE = "data:,";
 
 /** The longest the first render of a document waits for the main process to
- *  answer about one image, counted from when md-easy first asked about it. */
+ *  answer about one image, counted from when Downpad first asked about it. */
 export const ANSWER_WAIT_MS = 1000;
 
 /** A question to the main process about a local image that has no answer yet. */
@@ -314,7 +314,7 @@ function lookUp(path: string): string | Lookup {
   return lookup;
 }
 
-/** The absolute path md-easy asks about for an image src in a document saved
+/** The absolute path Downpad asks about for an image src in a document saved
  *  at `filePath`, or null when the src is not a local image. Outside Electron
  *  every src is shown as it is. */
 function localImagePath(src: string, filePath: string | null): string | null {
@@ -326,7 +326,7 @@ function localImagePath(src: string, filePath: string | null): string | null {
  * saved at `filePath`, before their views exist, so each view shows its
  * image's URL from its first render. Crepe's views render a raw src until an
  * asynchronous answer arrives, and Chromium looks a relative one up next to
- * md-easy's own page, which fails and can show the image as missing for a
+ * Downpad's own page, which fails and can show the image as missing for a
  * moment. preloadImages calls this before a document's first render, and a
  * pasted or dropped image waits for it before it goes in.
  *
@@ -357,7 +357,7 @@ export async function lookUpImages(srcs: readonly string[], filePath: string | n
 
 /** Crepe ImageBlock feature config: render linked images + missing-image UX. */
 export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
-  /** The absolute path md-easy asks about for an image src, or null when the src
+  /** The absolute path Downpad asks about for an image src, or null when the src
    *  is not a local image. Outside Electron every src is shown as it is. */
   const localPath = (src: string): string | null => localImagePath(src, ctx.getFilePath());
   /** Forget the answer about an image src, so its next view asks again. */
@@ -393,7 +393,7 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
     // Storage hook for uploaded image *files* (§5.5). Crepe calls this for the
     // `src` of an image chosen in an image block's upload input. Its upload
     // plugin would also call it for an image pasted alone on the clipboard,
-    // but md-easy's smart paste takes those first (pasteHandler.ts). Its
+    // but Downpad's smart paste takes those first (pasteHandler.ts). Its
     // default returns a `blob:` object URL, which is session-scoped and would
     // land in the saved markdown (dead on reload). Route through our store so
     // the src is a base64 data URI (embed) or an attachments path instead, the
@@ -417,7 +417,7 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
      *  Once the main process has answered for a local image, later calls return
      *  that answer at once. Crepe's image views render the raw src until an
      *  asynchronous answer arrives, and Chromium requests a relative one next to
-     *  md-easy's own page. preloadImages asks about a document's images before
+     *  Downpad's own page. preloadImages asks about a document's images before
      *  its first render for this reason, and a pasted or dropped image is asked
      *  about before it goes in (`lookUpImages`). Answers last until a document
      *  is opened or reloaded, so a missing image that appears meanwhile shows

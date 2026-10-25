@@ -45,7 +45,7 @@ import {
 } from "./paper";
 
 /** What is being printed. `documentNode` is a detached, already-sanitized clone,
- *  or null when md-easy could not render the document, so only the Markdown
+ *  or null when Downpad could not render the document, so only the Markdown
  *  version can print. */
 export interface PrintJob {
   markdown: string;
@@ -448,7 +448,7 @@ export class PrintWorkspace {
       } catch (err) {
         // The backend print command failed to start. Printing through the browser
         // dialog still produces the right pages — it just shows one more dialog.
-        console.error("md-easy: native print unavailable, using the browser dialog", err);
+        console.error("Downpad: native print unavailable, using the browser dialog", err);
         if (this.host) await this.runBrowserPrint();
       }
     });
@@ -489,7 +489,7 @@ export class PrintWorkspace {
     try {
       await job();
     } catch (err) {
-      console.error("md-easy: print failed", err);
+      console.error("Downpad: print failed", err);
       this.flash("Printing failed.");
     } finally {
       document.documentElement.classList.remove("printing");
@@ -750,7 +750,7 @@ function PrintWorkspaceView({
             />
             <p className="print-ws-hint m-0 mt-1.5 text-ink-soft">
               {!view.documentRendered
-                ? "md-easy can't show this document in the Document view, so it prints the Markdown source."
+                ? "Downpad can't show this document in the Document view, so it prints the Markdown source."
                 : s.printVersion === "document"
                   ? "The formatted document, as the editor renders it."
                   : "The raw Markdown source, in a monospace face."}

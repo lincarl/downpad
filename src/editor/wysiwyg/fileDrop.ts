@@ -1,5 +1,5 @@
 // Where a file dropped on the document goes in (§5.4). While something is
-// dragged over the document, md-easy draws the drop line at the block edge
+// dragged over the document, Downpad draws the drop line at the block edge
 // where a drop at the pointer goes in, which is the edge nearest the pointer,
 // or above or below a table or a code, math or Mermaid block rather than
 // inside it (dropEdge.ts). A block dragged there goes in at that edge. The app

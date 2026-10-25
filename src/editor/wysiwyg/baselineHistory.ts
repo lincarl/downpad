@@ -49,12 +49,12 @@ class BaselineStep extends Step {
   /** The history keeps its steps in memory, so nothing reads this back and
    *  the step registers no JSON id. */
   toJSON(): { stepType: string } {
-    return { stepType: "mdEasyBaseline" };
+    return { stepType: "downpadBaseline" };
   }
 }
 
 const NO_BASELINE: BaselineSlot = { baseline: null };
-const baselineKey = new PluginKey<BaselineSlot>("md-easy-baseline");
+const baselineKey = new PluginKey<BaselineSlot>("downpad-baseline");
 
 /** The slot after `steps`, starting from `slot`. */
 function afterSteps(slot: BaselineSlot, steps: readonly Step[]): BaselineSlot {

@@ -126,7 +126,7 @@ async function renderInto(preview: LivePreview): Promise<void> {
       const parsed = await mermaid.parse(preview.code, { suppressErrors: true });
       if (!parsed) return errorElement("invalid diagram syntax");
       diagramCounter += 1;
-      const { svg } = await mermaid.render(`md-easy-mermaid-${diagramCounter}`, preview.code);
+      const { svg } = await mermaid.render(`downpad-mermaid-${diagramCounter}`, preview.code);
       const el = document.createElement("div");
       el.className = "mermaid-preview";
       el.innerHTML = svg;

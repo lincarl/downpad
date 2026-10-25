@@ -141,14 +141,14 @@ export interface ElectronBridge {
 
 declare global {
   interface Window {
-    mdEasy?: ElectronBridge;
+    downpadDesktop?: ElectronBridge;
   }
 }
 
 /** Resolve the installed app's preload API or explain why it is unavailable. */
 export function desktopBridge(): ElectronBridge {
-  const bridge = typeof window === "undefined" ? undefined : window.mdEasy;
-  if (!bridge) throw new Error("This action needs the installed md-easy app.");
+  const bridge = typeof window === "undefined" ? undefined : window.downpadDesktop;
+  if (!bridge) throw new Error("This action needs the installed Downpad app.");
   return bridge;
 }
 

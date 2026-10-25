@@ -1,6 +1,6 @@
-# md-easy
+# Downpad
 
-md-easy is a desktop Markdown editor built with Electron, React, TypeScript, Milkdown, and CodeMirror. Open Markdown files as formatted documents, edit their source, and print them or export them to PDF.
+Downpad is a desktop Markdown editor built with Electron, React, TypeScript, Milkdown, and CodeMirror. Open Markdown files as formatted documents, edit their source, and print them or export them to PDF.
 
 ## Features
 
@@ -63,12 +63,12 @@ The app icon and installer images in `build/`, and the glyph paths in `src/compo
 
 Build Windows installers on Windows and verify them there. Installer CI builds Linux and Windows packages, retains artifacts for 30 days, and publishes a GitHub release when a stable version tag is pushed. The release tag supplies the app version through `scripts/apply-version-from-tag.mjs`.
 
-Settings remain in `settings.toml` in the platform's `md-easy` configuration directory. Markdown files remain ordinary files on disk.
+Downpad keeps its settings in `settings.toml` in the platform's `Downpad` configuration directory. Downpad was called md-easy before, and on its first launch it moves md-easy's settings, recent files and recovery snapshots there. Markdown files remain ordinary files on disk.
 
 ## Maintainer workspace
 
-Maintainer-only agent instructions and personal project material are kept in the private [md-easy-internal](https://github.com/lincarl/md-easy-internal) companion repository. It is optional and is not required to build or use md-easy.
+Maintainer-only agent instructions and personal project material are kept in the private [md-easy-internal](https://github.com/lincarl/md-easy-internal) companion repository. It is optional and is not required to build or use Downpad.
 
 ## License
 
-md-easy is open-source software licensed under the [MIT License](LICENSE).
+Downpad is open-source software licensed under the [MIT License](LICENSE).

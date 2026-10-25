@@ -22,7 +22,7 @@ interface Matches {
 }
 
 /** Fired on a code block's editor once Crepe has put it into the document. */
-const CODE_BLOCK_READY = "md-easy-code-block-ready";
+const CODE_BLOCK_READY = "downpad-code-block-ready";
 
 const matchMark = Decoration.mark({ class: "md-find-match" });
 const currentMark = Decoration.mark({ class: "md-find-match md-find-current" });

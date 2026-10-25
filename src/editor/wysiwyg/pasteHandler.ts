@@ -29,7 +29,7 @@ import type { Ctx } from "@milkdown/kit/ctx";
 import { resolvePaste, snapshotFromDataTransfer } from "../../paste/pastePipeline";
 import type { WysiwygContext } from "./context";
 
-export const smartPasteKey = new PluginKey("md-easy-smart-paste");
+export const smartPasteKey = new PluginKey("downpad-smart-paste");
 
 /** A clipboard payload that is a single http(s) URL (no surrounding text). */
 function isSingleUrl(text: string): boolean {

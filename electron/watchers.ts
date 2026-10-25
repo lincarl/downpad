@@ -17,6 +17,6 @@ export function watchPath(path: string, changed: (modifiedMs: number) => void): 
   const watcher: FSWatcher = watch(dirname(path), (_event, fileName) => {
     if (fileName === null || fileName.toString() === basename(path)) schedule();
   });
-  watcher.on("error", (error) => { console.error("md-easy file watch failed", error); });
+  watcher.on("error", (error) => { console.error("Downpad file watch failed", error); });
   return () => { closed = true; if (timer) clearTimeout(timer); watcher.close(); };
 }

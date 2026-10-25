@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 // The custom right-click menu (spec §5.14 / §6.1, shell/documentContextMenu):
-// md-easy's own menu replaces the native WebView one everywhere, carries a single
+// Downpad's own menu replaces the native WebView one everywhere, carries a single
 // Print entry, and steps aside for Shift+right-click so Electron's spell-check
 // suggestions stay reachable.
 
@@ -12,7 +12,7 @@ test("right-clicking the document opens the custom menu with the editing command
   page,
 }) => {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 
   await page.locator(`${wysiwyg} h1`).click({ button: "right" });
   await expect(page.locator(menu)).toBeVisible();
@@ -44,7 +44,7 @@ test("Shift+right-click leaves the native menu to Electron (spell check, §5.14)
   page,
 }) => {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 
   const prevented = await page.evaluate(() => {
     const el = document.querySelector(".milkdown .ProseMirror")!;
@@ -58,7 +58,7 @@ test("Shift+right-click leaves the native menu to Electron (spell check, §5.14)
 
 test("Print in the menu opens the print workspace", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to md-easy");
+  await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 
   await page.locator(`${wysiwyg} h1`).click({ button: "right" });
   await page.locator(`${menu} .md-context-menu-item`, { hasText: "Print…" }).click();

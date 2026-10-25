@@ -2,7 +2,7 @@
 // final list, code block, quote, table, rule or image so there is a line to type
 // on. Milkdown leaves an empty last paragraph out of the Markdown, including the
 // plain text of a copy, but the HTML of a copy kept it as `<p></p>`. Pasting a
-// copy of the whole document into md-easy therefore added an empty paragraph,
+// copy of the whole document into Downpad therefore added an empty paragraph,
 // saved as a `<br />` line, and other apps that read the HTML can show it as an
 // extra empty line.
 //

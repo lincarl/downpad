@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Tests of md-easy's patch of ProseMirror's focus and selection handling, in
+// Tests of Downpad's patch of ProseMirror's focus and selection handling, in
 // patches/prosemirror-view@1.42.6.patch.
 //
 // ProseMirror puts its own selection back 20ms after the editor gains focus,

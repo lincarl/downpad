@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import synchronousFilesystem from "node:fs";
 import filesystem, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, join, resolve } from "node:path";
@@ -8,7 +9,7 @@ import { absolutePath, ensureAttachmentsDirectory, readMarkdown, writeAttachment
 import { pageRanges, pdfOptions, printerOptions, validatePrintOptions } from "./printing";
 import { clipboardPermission, externalUrl, ImageAccess, trustedPage } from "./security";
 import { loadSettingsFile, normalizeSettings, patchSettingsToml, saveSettingsFile } from "./settings";
-import { ConfigStore, firstMatch, parseRecent, pathKey, RecentSearch } from "./storage";
+import { adoptLegacyData, ConfigStore, firstMatch, parseRecent, pathKey, RecentSearch } from "./storage";
 import { watchPath } from "./watchers";
 
 const temporaryDirectories: string[] = [];
@@ -493,6 +494,76 @@ describe("Existing settings and history compatibility", () => {
     const snapshot = { sessionId: "closing-session", savedAt: new Date().toISOString(), filePath: null, markdown: "Unsaved text\n", isDirty: true };
     await Promise.all([store.writeSnapshot(snapshot), store.deleteSnapshot(snapshot.sessionId)]);
     expect(await store.snapshots()).toEqual([]);
+  });
+});
+
+describe("Data that the app kept as md-easy, its earlier name", () => {
+  afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); });
+
+  /** An md-easy folder with the app's files and one of Chromium's, beside the
+   *  Downpad folder that Electron has already created. */
+  async function folders(): Promise<{ legacy: string; directory: string }> {
+    const root = await fixtureDirectory();
+    const legacy = join(root, "md-easy");
+    const directory = join(root, "Downpad");
+    await mkdir(join(legacy, "recovery"), { recursive: true });
+    await mkdir(directory);
+    await writeFile(join(legacy, "settings.toml"), 'theme = "nord"\n');
+    await writeFile(join(legacy, "recent.json"), "[]");
+    await writeFile(join(legacy, "recovery", "session.json"), "{}");
+    await writeFile(join(legacy, "Custom Dictionary.txt"), "Downpad\n");
+    await writeFile(join(legacy, "Local State"), "{}");
+    return { legacy, directory };
+  }
+
+  it("moves the app's files into the folder that Electron created", async () => {
+    const { legacy, directory } = await folders();
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
+    expect(await readFile(join(directory, "recovery", "session.json"), "utf8")).toBe("{}");
+    expect(await readdir(legacy)).toEqual(["Local State"]);
+  });
+
+  it("keeps the files that the new folder already has and takes over the rest", async () => {
+    const { legacy, directory } = await folders();
+    await writeFile(join(directory, "recent.json"), '[{"p":"/notes.md","t":1}]');
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(await readFile(join(directory, "recent.json"), "utf8")).toBe('[{"p":"/notes.md","t":1}]');
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+    expect((await readdir(legacy)).sort()).toEqual(["Local State", "recent.json"]);
+    expect(adoptLegacyData(legacy, directory)).toBe(false);
+    expect(await readFile(join(directory, "recent.json"), "utf8")).toBe('[{"p":"/notes.md","t":1}]');
+  });
+
+  it("copies a file that cannot be moved and does not copy it again", async () => {
+    const { legacy, directory } = await folders();
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("The file is in use."), { code: "EPERM" });
+    });
+    syncBuiltinESMExports();
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
+    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
+    expect((await readdir(legacy)).sort()).toEqual(["Local State", "settings.toml"]);
+    await writeFile(join(directory, "settings.toml"), 'theme = "light"\n');
+    expect(adoptLegacyData(legacy, directory)).toBe(false);
+    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "light"\n');
+  });
+
+  it("tries a file again on the next launch when it can be neither moved nor copied", async () => {
+    const { legacy, directory } = await folders();
+    const failure = Object.assign(new Error("Access is denied."), { code: "EACCES" });
+    vi.spyOn(synchronousFilesystem, "renameSync").mockImplementationOnce(() => { throw failure; });
+    vi.spyOn(synchronousFilesystem, "cpSync").mockImplementationOnce(() => { throw failure; });
+    syncBuiltinESMExports();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(adoptLegacyData(legacy, directory)).toBe(false);
+    expect(logged).toHaveBeenCalledWith("Downpad could not take over md-easy's settings.toml", failure);
+    expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery"]);
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
+    expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
+    expect(await readdir(legacy)).toEqual(["Local State"]);
   });
 });
 

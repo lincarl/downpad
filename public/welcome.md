@@ -1,10 +1,10 @@
 ---
-title: Welcome to md-easy
+title: Welcome to Downpad
 ---
 
-# Welcome to md-easy 👋
+# Welcome to Downpad 👋
 
-**md-easy** is a lightweight, pure-WYSIWYG markdown editor. You're looking at the
+**Downpad** is a lightweight, pure-WYSIWYG markdown editor. You're looking at the
 welcome document — edit it, discard it, or **Save As** to keep it. It won't appear
 again.
 

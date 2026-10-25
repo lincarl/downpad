@@ -33,7 +33,7 @@ import { openTextPrompt } from "../../components/TextPromptDialog";
 import { MENU_ICONS } from "../../shell/menuIcons";
 import { mdImage } from "../../paste/mdLink";
 
-export const imageContextMenuKey = new PluginKey("md-easy-image-context-menu");
+export const imageContextMenuKey = new PluginKey("downpad-image-context-menu");
 
 // ── Copy image to the clipboard as image/png ──
 

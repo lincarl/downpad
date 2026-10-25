@@ -1,6 +1,6 @@
 import { crc32, deflateSync } from "node:zlib";
 
-// md-easy's app icon is a blue tile with a white block M above a yellow open chevron.
+// Downpad's app icon is a blue tile with a white block M above a yellow open chevron.
 // This module builds every icon and installer image as SVG and encodes the results.
 // scripts/generate-icons.mjs renders the SVGs and writes the files listed in `assets`.
 
@@ -132,7 +132,7 @@ export function msiBannerSvg() {
 /**
  * WiX welcome and finish image, 493 x 312 px. The text starts 180 px from the
  * left, so the brand panel stays narrower than that. The rest has the Windows
- * dialog color, because the finish page's "Run md-easy" check box is opaque.
+ * dialog color, because the finish page's "Run Downpad" check box is opaque.
  */
 export function msiDialogSvg() {
   const panel = 164, glyphSize = 124;
