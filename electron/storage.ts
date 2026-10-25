@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, unlink } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
 import type { FileStat, SearchHit, SearchSummary, Snapshot } from "../src/ipc/contracts";
@@ -51,26 +51,35 @@ export function validateSnapshot(value: unknown): Snapshot {
  *  added to the spell checker's dictionary, which Chromium keeps. */
 const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recovery", "Custom Dictionary.txt"];
 
-/** Move the app's own files from the user data folder that it kept as md-easy,
- *  its earlier name, to `directory` on the first launch after the rename.
- *  Electron creates `directory` before the app's code runs, so the move happens
- *  while `directory` holds none of the app's files. A file that cannot be
- *  moved, for example while a running md-easy holds it open on Windows, is
- *  copied instead. Chromium's own files stay in the old folder. Returns
- *  whether the app took over md-easy's settings. */
+/** Move the files in DATA_FILES from the user data folder that the app kept as
+ *  md-easy, its earlier name, to `directory`. Electron creates `directory`
+ *  before the app's code runs, so each file moves only while `directory` lacks
+ *  it. Nothing Downpad wrote is replaced, and a file that failed to move is
+ *  tried again on the next launch. A file that cannot be moved, for example
+ *  while a running md-easy holds it open on Windows, is copied instead and the
+ *  original stays. Chromium's own files stay in the old folder. Returns whether
+ *  the app took over md-easy's settings. */
 export function adoptLegacyData(legacy: string, directory: string): boolean {
-  if (!existsSync(legacy) || DATA_FILES.some((name) => existsSync(join(directory, name)))) return false;
-  mkdirSync(directory, { recursive: true });
+  if (!existsSync(legacy)) return false;
+  let adoptedSettings = false;
   for (const name of DATA_FILES) {
     const source = join(legacy, name);
-    if (!existsSync(source)) continue;
-    try { renameSync(source, join(directory, name)); }
+    const target = join(directory, name);
+    if (!existsSync(source) || existsSync(target)) continue;
+    mkdirSync(directory, { recursive: true });
+    try { renameSync(source, target); }
     catch {
-      try { cpSync(source, join(directory, name), { recursive: true }); }
-      catch (error) { console.error(`Downpad could not take over md-easy's ${name}`, error); }
+      try { cpSync(source, target, { recursive: true }); }
+      catch (error) {
+        // Remove a partial copy, so the next launch tries again.
+        rmSync(target, { recursive: true, force: true });
+        console.error(`Downpad could not take over md-easy's ${name}`, error);
+        continue;
+      }
     }
+    if (name === "settings.toml") adoptedSettings = true;
   }
-  return existsSync(join(directory, "settings.toml"));
+  return adoptedSettings;
 }
 
 /** Persist the existing user settings, recent history, and crash recovery formats. */
