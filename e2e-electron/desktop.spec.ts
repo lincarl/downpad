@@ -131,7 +131,7 @@ test("launching a Markdown file renders formatting and relative images in an iso
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(() => app!.evaluate(({ clipboard }) => clipboard.readText())).toContain("# Electron Markdown");
   const isolation = await page.evaluate(() => ({
-    bridge: typeof window.downpad?.invoke,
+    bridge: typeof window.downpadDesktop?.invoke,
     require: typeof Reflect.get(window, "require"),
     process: typeof Reflect.get(window, "process"),
   }));
@@ -2937,7 +2937,7 @@ test("an input method's composition right after a link goes in once", async () =
   ];
   await expect.poll(() => readFile(file, "utf8")).toBe([...composed, "Text only [five](https://example.com/5)"].join("\n\n") + "\n");
   // The same steps with only the link text shown, which always worked.
-  const settings = await page.evaluate(() => window.downpad!.invoke("load_settings"));
+  const settings = await page.evaluate(() => window.downpadDesktop!.invoke("load_settings"));
   await app!.evaluate(({ BrowserWindow }, changed) => {
     BrowserWindow.getAllWindows()[0]!.webContents.send("downpad:event:settings-changed", changed);
   }, { ...settings, linkDisplay: "text-only" });
@@ -3909,8 +3909,8 @@ test("launching with a file builds its document editor once", async () => {
   await launch();
   // As in the reload test below, settle the first renderer's file listener.
   await page.evaluate(async () => {
-    window.downpad!.listen("open-file-requested", () => {});
-    await window.downpad!.invoke("settings_path");
+    window.downpadDesktop!.listen("open-file-requested", () => {});
+    await window.downpadDesktop!.invoke("settings_path");
   });
   // Count document editors from the start of a reloaded renderer, which reads
   // the first queued file as its launch argument.
@@ -4043,7 +4043,7 @@ test("recovery preserves dirty background tabs and removes only saved documents"
   await launch(first);
   const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
   const snapshots = (savedSince = 0) => page.evaluate(async (since) =>
-    (await window.downpad!.invoke("list_recovery_snapshots"))
+    (await window.downpadDesktop!.invoke("list_recovery_snapshots"))
       .filter((snapshot) => Date.parse(snapshot.savedAt) >= since)
       .map(({ filePath, markdown }) => ({ filePath, markdown }))
       .sort((a, b) => (a.filePath ?? "").localeCompare(b.filePath ?? "")),
@@ -4440,7 +4440,7 @@ test("a reload from disk while settings rebuild the split's document view leaves
   const markdownLine = page.locator(".editor-pane-raw:not([hidden]) .cm-line").first();
   // The image is missing, and the document view keeps that answer.
   await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .md-image-missing")).toHaveCount(1);
-  const settings = await page.evaluate(() => window.downpad!.invoke("load_settings"));
+  const settings = await page.evaluate(() => window.downpadDesktop!.invoke("load_settings"));
   await writeFile(path.join(directory, "pixel.png"), onePixelPng);
   await writeFile(file, "New text from disk.\n\n![pixel](pixel.png)\n");
   const reload = page.getByRole("button", { name: "Reload", exact: true });
@@ -7656,7 +7656,7 @@ test("the preload rejects unknown commands", async () => {
   await launch();
   const result = await page.evaluate(async () => {
     // The runtime must reject malformed input even when callers bypass TypeScript.
-    const invoke = window.downpad!.invoke as (command: string) => Promise<unknown>;
+    const invoke = window.downpadDesktop!.invoke as (command: string) => Promise<unknown>;
     try { await invoke("unknown-command"); return "accepted"; }
     catch (error) { return String(error); }
   });
@@ -7669,8 +7669,8 @@ test("a crashed renderer does not trap native window close", async () => {
   await launch(file);
   await expect(page.locator(heading)).toHaveText("Crash lifecycle");
   await page.evaluate(async () => {
-    window.downpad!.listen("close-requested", () => {});
-    await window.downpad!.invoke("settings_path");
+    window.downpadDesktop!.listen("close-requested", () => {});
+    await window.downpadDesktop!.invoke("settings_path");
   });
 
   const crashed = await app!.evaluate(async ({ app, BrowserWindow }) => {
@@ -7700,8 +7700,8 @@ test("file requests during reload reach the replacement renderer", async () => {
   await launch(original);
   await expect(page.locator(heading)).toHaveText("Before reload");
   await page.evaluate(async () => {
-    window.downpad!.listen("open-file-requested", () => {});
-    await window.downpad!.invoke("settings_path");
+    window.downpadDesktop!.listen("open-file-requested", () => {});
+    await window.downpadDesktop!.invoke("settings_path");
   });
 
   const reloaded = page.waitForEvent("domcontentloaded");

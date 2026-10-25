@@ -19,13 +19,14 @@ import { watchPath } from "./watchers";
 
 app.setName("Downpad");
 const isolatedData = process.env.DOWNPAD_USER_DATA_DIR;
+let adoptedLegacySettings = false;
 if (isolatedData) {
   const directory = absolutePath(isolatedData);
   mkdirSync(directory, { recursive: true });
   app.setPath("userData", directory);
 } else {
   // The app was called md-easy before, and kept its data in a folder by that name.
-  adoptLegacyData(join(app.getPath("appData"), "md-easy"), app.getPath("userData"));
+  adoptedLegacySettings = adoptLegacyData(join(app.getPath("appData"), "md-easy"), app.getPath("userData"));
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -243,7 +244,8 @@ async function defaultMdHandler(): Promise<DefaultHandler> {
     await registryValue(`HKCR\\${progId}\\shell\\open\\command`);
   const executable = command.startsWith('"') ? command.slice(1).split('"')[0] ?? "" : /^(.*?\.exe)/i.exec(command)?.[1] ?? "";
   const normalized = executable.replace(/\\/g, "/").toLowerCase();
-  return { progId, isDefault: normalized === process.execPath.replace(/\\/g, "/").toLowerCase() || /(?:^|\/)downpad\.exe$/i.test(normalized) || /^downpad\./i.test(progId) };
+  // The MSI registers md-easy's ProgIds for Markdown files (scripts/brand-msi.mjs).
+  return { progId, isDefault: normalized === process.execPath.replace(/\\/g, "/").toLowerCase() || /(?:^|\/)downpad\.exe$/i.test(normalized) || /^mdeasy\./i.test(progId) };
 }
 
 function filters(source: Record<string, unknown>): Electron.FileFilter[] | undefined {
@@ -433,6 +435,12 @@ async function createWindow(): Promise<void> {
 async function start(): Promise<void> {
   await app.whenReady();
   await config.initialize();
+  if (adoptedLegacySettings) {
+    // A default .md app chosen as md-easy's executable no longer exists after the
+    // upgrade, so offer to make Downpad the default once more.
+    await config.saveSettings({ ...await config.settings(), hasCheckedDefaultHandler: false })
+      .catch((error: unknown) => console.error("Downpad could not reset its default-app check", error));
+  }
   Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate(macApplicationMenu(requestHistory)) : null);
   registerIpc();
   protocol.handle("downpad-file", async (request) => {

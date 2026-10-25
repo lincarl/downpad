@@ -358,7 +358,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                       />
                     </FormRow>
                   </SettingsBox>
-                  {isElectron() && window.downpad?.platform === "win32" && (
+                  {isElectron() && window.downpadDesktop?.platform === "win32" && (
                     <SettingsBox title="System integration">
                       <ButtonRow
                         label="Set as default…"

@@ -518,7 +518,7 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
 
   it("moves the app's files into the folder that Electron created", async () => {
     const { legacy, directory } = await folders();
-    adoptLegacyData(legacy, directory);
+    expect(adoptLegacyData(legacy, directory)).toBe(true);
     expect((await readdir(directory)).sort()).toEqual(["Custom Dictionary.txt", "recent.json", "recovery", "settings.toml"]);
     expect(await readFile(join(directory, "settings.toml"), "utf8")).toBe('theme = "nord"\n');
     expect(await readFile(join(directory, "recovery", "session.json"), "utf8")).toBe("{}");
@@ -528,7 +528,7 @@ describe("Data that the app kept as md-easy, its earlier name", () => {
   it("leaves both folders alone once the new folder holds the app's files", async () => {
     const { legacy, directory } = await folders();
     await writeFile(join(directory, "recent.json"), '[{"p":"/notes.md","t":1}]');
-    adoptLegacyData(legacy, directory);
+    expect(adoptLegacyData(legacy, directory)).toBe(false);
     expect(await readdir(directory)).toEqual(["recent.json"]);
     expect(await readdir(legacy)).toHaveLength(5);
   });

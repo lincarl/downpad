@@ -60,7 +60,7 @@ const JOB: PrintJob = {
 };
 
 function enableElectron(): void {
-  Object.defineProperty(window, "downpad", { value: {}, configurable: true });
+  Object.defineProperty(window, "downpadDesktop", { value: {}, configurable: true });
 }
 
 async function flush(): Promise<void> {
@@ -123,7 +123,7 @@ describe("PrintWorkspace React view", () => {
     vi.clearAllMocks();
     document.body.innerHTML = "";
     document.documentElement.classList.remove("printing");
-    delete window.downpad;
+    delete window.downpadDesktop;
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     saveSettings = vi.fn<(settings: Settings) => void>();
@@ -136,7 +136,7 @@ describe("PrintWorkspace React view", () => {
   afterEach(() => {
     workspace?.close();
     workspace = null;
-    delete window.downpad;
+    delete window.downpadDesktop;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

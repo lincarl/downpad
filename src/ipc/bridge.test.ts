@@ -30,11 +30,11 @@ describe("Electron preload integration", () => {
   beforeEach(() => {
     bridge = createTestBridge();
     // Vitest widens a generic command mock's return to the union of payloads.
-    window.downpad = bridge as ElectronBridge;
+    window.downpadDesktop = bridge as ElectronBridge;
   });
 
   afterEach(() => {
-    delete window.downpad;
+    delete window.downpadDesktop;
     vi.restoreAllMocks();
   });
 
@@ -54,7 +54,7 @@ describe("Electron preload integration", () => {
   });
 
   it("keeps browser dialogs usable and rejects filesystem commands without preload", async () => {
-    delete window.downpad;
+    delete window.downpadDesktop;
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
 
     expect(isElectron()).toBe(false);

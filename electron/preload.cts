@@ -49,4 +49,4 @@ const bridge: ElectronBridge = {
   cancelWindowClose: () => ipcRenderer.invoke("downpad:cancel-window-close"),
 };
 
-contextBridge.exposeInMainWorld("downpad", Object.freeze(bridge));
+contextBridge.exposeInMainWorld("downpadDesktop", Object.freeze(bridge));

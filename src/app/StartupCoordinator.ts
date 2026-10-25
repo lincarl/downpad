@@ -79,7 +79,7 @@ export class StartupCoordinator {
   /** Offer the Windows default-app settings once, without delaying startup. */
   async maybePromptDefaultHandler(): Promise<void> {
     const { store, settings, isDisposed } = this.dependencies;
-    if (isDisposed() || !isElectron() || window.downpad?.platform !== "win32") return;
+    if (isDisposed() || !isElectron() || window.downpadDesktop?.platform !== "win32") return;
     const current = store.get().settings;
     if (current.hasCheckedDefaultHandler) return;
 

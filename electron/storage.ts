@@ -56,9 +56,10 @@ const DATA_FILES = ["settings.toml", "recent.json", "window-state.json", "recove
  *  Electron creates `directory` before the app's code runs, so the move happens
  *  while `directory` holds none of the app's files. A file that cannot be
  *  moved, for example while a running md-easy holds it open on Windows, is
- *  copied instead. Chromium's own files stay in the old folder. */
-export function adoptLegacyData(legacy: string, directory: string): void {
-  if (!existsSync(legacy) || DATA_FILES.some((name) => existsSync(join(directory, name)))) return;
+ *  copied instead. Chromium's own files stay in the old folder. Returns
+ *  whether the app took over md-easy's settings. */
+export function adoptLegacyData(legacy: string, directory: string): boolean {
+  if (!existsSync(legacy) || DATA_FILES.some((name) => existsSync(join(directory, name)))) return false;
   mkdirSync(directory, { recursive: true });
   for (const name of DATA_FILES) {
     const source = join(legacy, name);
@@ -69,6 +70,7 @@ export function adoptLegacyData(legacy: string, directory: string): void {
       catch (error) { console.error(`Downpad could not take over md-easy's ${name}`, error); }
     }
   }
+  return existsSync(join(directory, "settings.toml"));
 }
 
 /** Persist the existing user settings, recent history, and crash recovery formats. */
