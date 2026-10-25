@@ -274,9 +274,14 @@ test("marks the stable release with the highest version as the latest", async ()
   await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
   assert.equal(server.latest, newer.id);
   assert.deepEqual(lines, ["Marked v0.3.6 as the latest release.", "v0.3.6 is the latest release."]);
-  await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
-  assert.equal(server.calls.filter((call) => call.startsWith("PATCH")).length, 1);
-  assert.equal(lines.at(-1), "v0.3.6 is the latest release.");
+});
+
+test("marks the newest release explicitly also when GitHub already shows it as the latest", async () => {
+  // GitHub picks a latest release on its own until one is marked.
+  const only = release("v0.3.5");
+  const server = releaseServer([release("v0.3.4"), only], { latest: only.id });
+  await markLatest({ request: server.request, repository, log: () => {} });
+  assert.deepEqual(server.calls.filter((call) => call.startsWith("PATCH")), [`PATCH /repos/${repository}/releases/${only.id}`]);
 });
 
 test("marks a release as the latest when none is, and does nothing without a stable release", async () => {
@@ -308,10 +313,17 @@ test("marks the newer release when another run published and marked it while thi
   assert.deepEqual(lines, ["Marked v0.3.5 as the latest release.", "Marked v0.3.6 as the latest release.", "v0.3.6 is the latest release."]);
 });
 
-test("gives up when the latest release keeps changing", async () => {
-  let version = 6;
-  const server = releaseServer([release("v0.3.5")], {
-    onPatch: (current) => { current.releases.push(release(`v0.3.${version++}`)); },
-  });
-  await assert.rejects(markLatest({ request: server.request, repository, log: () => {} }), /kept changing/);
+test("gives up after five changes, but not when the fifth one holds", async () => {
+  /** A server where each of the first `races` marks meets a newer release. */
+  const racing = (races) => {
+    let version = 6;
+    return releaseServer([release("v0.3.5")], {
+      onPatch: (current) => { if (version < 6 + races) current.releases.push(release(`v0.3.${version++}`)); },
+    });
+  };
+  await assert.rejects(markLatest({ request: racing(5).request, repository, log: () => {} }), /kept changing/);
+  const settled = racing(4);
+  await markLatest({ request: settled.request, repository, log: () => {} });
+  assert.equal(settled.releases.find((item) => item.id === settled.latest)?.tag_name, "v0.3.9");
+  assert.equal(settled.calls.filter((call) => call.startsWith("PATCH")).length, 5);
 });

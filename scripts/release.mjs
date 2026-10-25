@@ -187,12 +187,14 @@ async function listReleases(request, repository) {
 
 /** Mark the stable release with the highest version as GitHub's latest release,
  *  which installed copies read for updates. Stable releases are published
- *  without that mark, and only this step sets it. After each change it reads the
- *  releases again, so a run that read the list before a newer release appeared
- *  never leaves an older one as the latest: it marks the newer one next. */
+ *  without that mark, and only this step sets it. It always marks explicitly,
+ *  since GitHub picks a latest release on its own while none has been marked.
+ *  After each change it reads the releases again, so a run that read the list
+ *  before a newer release appeared never leaves an older one as the latest: it
+ *  marks the newer one next. It stops after five changes. */
 export async function markLatest({ request, repository, log = console.log }) {
   repositoryName(repository);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let changes = 0; ; changes += 1) {
     const stable = (await listReleases(request, repository)).map(parseRelease).filter(isStable)
       .sort((left, right) => compareBase(right.version, left.version));
     if (stable.length === 0) {
@@ -200,18 +202,20 @@ export async function markLatest({ request, repository, log = console.log }) {
       return;
     }
     const newest = stable[0];
-    const current = await request(`/repos/${repository}/releases/latest`).catch((error) => {
-      if (error.status === 404) return null;
-      throw error;
-    });
-    if (current?.id === newest.id) {
-      log(`${newest.tag} is the latest release.`);
-      return;
+    if (changes > 0) {
+      const current = await request(`/repos/${repository}/releases/latest`).catch((error) => {
+        if (error.status === 404) return null;
+        throw error;
+      });
+      if (current?.id === newest.id) {
+        log(`${newest.tag} is the latest release.`);
+        return;
+      }
+      if (changes === 5) throw new Error("The latest release kept changing. Run this step again.");
     }
     await request(`/repos/${repository}/releases/${newest.id}`, { method: "PATCH", body: { make_latest: "true" } });
     log(`Marked ${newest.tag} as the latest release.`);
   }
-  throw new Error("The latest release kept changing. Run this step again.");
 }
 
 /** Delete the release entries and downloads that `cleanupPlan` selects after

@@ -46,10 +46,11 @@ git push origin v0.3.5
 The tag must be unused. Do not move or rename an existing tag. The tag push
 builds and tests both platforms again and publishes the release without marking
 it as GitHub's latest release. A last job then marks the stable release with the
-highest version as the latest and runs the cleanup below. These jobs run one at
-a time across tags, and each checks the latest release again after it changes
-it, so releases that finish out of order still end with the newest one as the
-latest. Rerunning that job after a failure repeats only those steps. GitHub
+highest version as the latest and runs the cleanup below. It always marks that
+release explicitly, since GitHub picks a latest release on its own while none
+has been marked. These jobs run one at a time across tags, and each checks the
+latest release again after it changes it, so releases that finish out of order
+still end with the newest one as the latest. Rerunning that job after a failure repeats only those steps. GitHub
 keeps one waiting job per group, so if a third stable release finishes while
 one job runs and another waits, the waiting one is cancelled. Rerun it. After
 `v0.3.5` exists, the next automatic candidate is `v0.3.6-rc1`.
