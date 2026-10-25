@@ -198,7 +198,7 @@ test("rejects malformed release data before planning deletions", () => {
 });
 
 /** A fake release API with paging, deletion and GitHub's latest release. */
-function releaseServer(releases, { onDelete, latest } = {}) {
+function releaseServer(releases, { onDelete, onPatch, latest } = {}) {
   const server = { releases: [...releases], deleted: [], calls: [], latest };
   server.request = async (route, { method = "GET", body } = {}) => {
     server.calls.push(`${method} ${route}`);
@@ -214,6 +214,7 @@ function releaseServer(releases, { onDelete, latest } = {}) {
     if (one && index < 0) throw Object.assign(new Error("Not Found"), { status: 404 });
     if (method === "GET" && one) return server.releases[index];
     if (method === "PATCH" && one && body?.make_latest === "true") {
+      onPatch?.(server);
       server.latest = server.releases[index].id;
       return server.releases[index];
     }
@@ -272,7 +273,7 @@ test("marks the stable release with the highest version as the latest", async ()
   const lines = [];
   await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
   assert.equal(server.latest, newer.id);
-  assert.deepEqual(lines, ["Marked v0.3.6 as the latest release."]);
+  assert.deepEqual(lines, ["Marked v0.3.6 as the latest release.", "v0.3.6 is the latest release."]);
   await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
   assert.equal(server.calls.filter((call) => call.startsWith("PATCH")).length, 1);
   assert.equal(lines.at(-1), "v0.3.6 is the latest release.");
@@ -286,4 +287,31 @@ test("marks a release as the latest when none is, and does nothing without a sta
   const empty = releaseServer([release("v0.3.6-rc1")]);
   await markLatest({ request: empty.request, repository, log: () => {} });
   assert.equal(empty.calls.some((call) => call.startsWith("PATCH")), false);
+});
+
+test("marks the newer release when another run published and marked it while this one worked", async () => {
+  const older = release("v0.3.5");
+  const newer = release("v0.3.6");
+  let raced = false;
+  const server = releaseServer([older, release("v0.3.4")], {
+    onPatch: (current) => {
+      // The v0.3.6 run publishes and marks its release after this run read the list.
+      if (raced) return;
+      raced = true;
+      current.releases.push(newer);
+      current.latest = newer.id;
+    },
+  });
+  const lines = [];
+  await markLatest({ request: server.request, repository, log: (line) => lines.push(line) });
+  assert.equal(server.latest, newer.id);
+  assert.deepEqual(lines, ["Marked v0.3.5 as the latest release.", "Marked v0.3.6 as the latest release.", "v0.3.6 is the latest release."]);
+});
+
+test("gives up when the latest release keeps changing", async () => {
+  let version = 6;
+  const server = releaseServer([release("v0.3.5")], {
+    onPatch: (current) => { current.releases.push(release(`v0.3.${version++}`)); },
+  });
+  await assert.rejects(markLatest({ request: server.request, repository, log: () => {} }), /kept changing/);
 });

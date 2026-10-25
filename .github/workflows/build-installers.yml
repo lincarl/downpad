@@ -409,23 +409,26 @@ jobs:
           for file in "${files[@]}"; do
             printf '%s  %s\n' "$(sha256sum "$file" | cut -d ' ' -f 1)" "$(basename "$file")"
           done > SHA256SUMS
-          if [[ "$version" == *-rc* ]]; then
-            kind=(--prerelease --latest=false)
-          else
-            kind=(--latest)
-          fi
+          kind=()
+          [[ "$version" != *-rc* ]] || kind=(--prerelease)
+          # Only the finalize job marks the latest release, by version.
           gh release create "$RELEASE_TAG" "${files[@]}" SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
             --title "Downpad $version" \
+            --latest=false \
             "${kind[@]}"
 
   # A separate job, so a rerun of a failed cleanup does not publish again.
+  # Stable releases finish one at a time, across tags.
   finalize:
     name: Finish stable release
     needs: [prepare, release]
     if: ${{ !cancelled() && needs.release.result == 'success' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-rc') }}
+    concurrency:
+      group: finish-stable-release
+      cancel-in-progress: false
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -443,8 +446,8 @@ jobs:
           node-version-file: .node-version
           package-manager-cache: false
 
-      # Publications that finish out of order still leave the newest version
-      # as the latest release, which installed copies update to.
+      # Installed copies update to the latest release, so it must be the
+      # newest version, also when publications finish out of order.
       - name: Mark the newest stable release as the latest
         env:
           GH_TOKEN: ${{ github.token }}
