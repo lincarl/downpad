@@ -128,7 +128,8 @@
         "--conflicts",
         "md-easy",
         "--replaces",
-        "md-easy"
+        "md-easy",
+        "build/linux/md-easy.desktop=/usr/share/applications/md-easy.desktop"
       ]
     },
     "win": {

@@ -1,0 +1,10 @@
+# Downpad was called md-easy before. A default app chosen for md-easy names
+# this file, so the DEB keeps it, hidden from menus, and it opens Downpad.
+[Desktop Entry]
+Name=Downpad
+Exec=/opt/Downpad/downpad %U
+Terminal=false
+Type=Application
+Icon=downpad
+NoDisplay=true
+MimeType=text/markdown;

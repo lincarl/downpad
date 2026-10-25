@@ -144,7 +144,7 @@ Downpad was called md-easy before. The installers and the app take over what an 
 
 - The MSI keeps md-easy's upgrade code, `msi.upgradeCode` in `package.json`, so it replaces an installed md-easy. Without it, electron-builder derives a new code from the new app ID, and Windows would keep both apps.
 - The MSI also keeps md-easy's ProgIds for Markdown files, `mdeasy.md` and `mdeasy.markdown`, which `scripts/brand-msi.mjs` puts in place of the ProgIds that electron-builder derives from the product name. A default app chosen for .md files names its ProgId, so a user who made md-easy the default keeps Downpad as the default.
-- The DEB package conflicts with and replaces the `md-easy` package, so installing it removes md-easy.
+- The DEB package conflicts with and replaces the `md-easy` package, so installing it removes md-easy. It also installs `build/linux/md-easy.desktop`, which is hidden from menus and opens Downpad, because a default app chosen for md-easy names that file.
 - On its first launch, the app moves the settings, recent files, window size, recovery snapshots and the words added to the spell checker from md-easy's data folder to its own (`adoptLegacyData` in `electron/storage.ts`). Chromium's other files stay in the old folder. On Windows it then checks once more whether it is the default .md app, as on a first launch, because a default chosen as md-easy's executable no longer exists.
 
 Undo and Redo in the native menus (the spell-check menu that Shift+right-click opens, and the macOS Edit menu) go to the renderer, which runs the focused editor's undo history. Chromium's own undo knows nothing of those histories. A plain text field, such as the find card's, keeps Chromium's undo.
