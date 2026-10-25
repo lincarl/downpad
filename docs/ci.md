@@ -22,6 +22,16 @@ Build jobs have read-only permissions and do not retain checkout credentials.
 They run the application checks, tests, desktop build, desktop tests, and
 installer packaging for Linux and Windows.
 
+Windows also drives the MSI wizard through its final **Run Downpad** checkbox,
+checks the installed files and registration, waits for the application window,
+and uninstalls the test copy. A second scenario builds synthetic `0.0.1` and
+`0.0.2-rc1` packages through the normal release-version and packaging steps, then
+upgrades the stable installation to the candidate. This catches incorrect
+numeric Windows executable versions even when the PR artifact uses `0.0.0`.
+The test uses an isolated app profile. Its packages stay under `dev-temp/` and
+are never published. Failed runs retain MSI test diagnostics as a separate
+Actions artifact.
+
 Builds use Ubuntu 26.04 and Windows Server 2025, the Node version in
 `.node-version`, and the pnpm version in `package.json`. Jobs that use GitHub
 CLI install the pinned release with checksum verification through
