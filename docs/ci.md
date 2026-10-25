@@ -28,7 +28,14 @@ and uninstalls the test copy. A second scenario builds synthetic `0.0.1` and
 `0.0.2-rc1` packages through the normal release-version and packaging steps, then
 upgrades the stable installation to the candidate. This catches incorrect
 numeric Windows executable versions even when the PR artifact uses `0.0.0`.
-The test uses an isolated app profile. Its packages stay under `dev-temp/` and
+
+A recovery scenario removes only the executable from a registered `0.0.2-rc1`
+test installation, then upgrades to `0.0.2-rc2`. Both packages have the same
+numeric MSI version. The wizard must restore the intended files and launch the
+app. This simulates the missing-executable state without recreating every step
+of a historical failed upgrade.
+
+The tests use isolated app profiles. Their packages stay under `dev-temp/` and
 are never published. Failed runs retain MSI test diagnostics as a separate
 Actions artifact.
 

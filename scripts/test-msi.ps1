@@ -3,10 +3,13 @@
 .SYNOPSIS
 Tests a Downpad MSI's installed payload and the wizard's Run Downpad action.
 .DESCRIPTION
-Run in an interactive Windows test account with no existing Downpad installation.
+Run from the source checkout in an interactive Windows test account with no
+existing Downpad installation.
 Without PreviousMsi, first checks silent installation and removal, then a fresh
 wizard installation. With PreviousMsi, silently installs that package before
 driving the current package's upgrade wizard. Never launches Downpad manually.
+RecoverMissingExecutable requires equal product versions and removes only the
+previous test installation's executable before the upgrade, simulating damage.
 Diagnostics and isolated app data remain under dev-temp/msi-tests/diagnostics.
 .EXAMPLE
 powershell -NoProfile -File scripts/test-msi.ps1 -Msi release/Downpad-0.0.0-win-x64.msi -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion 0.0.0.0 -Scenario fresh
@@ -17,6 +20,7 @@ powershell -NoProfile -File scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests
 param(
     [Parameter(Mandatory = $true)][string]$Msi,
     [string]$PreviousMsi,
+    [switch]$RecoverMissingExecutable,
     [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
     [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+\.\d+$')][string]$ExpectedVersion,
     [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Scenario = 'fresh',
@@ -25,6 +29,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($RecoverMissingExecutable -and -not $PreviousMsi) { throw 'Recovery testing requires PreviousMsi.' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'MSI integration tests require Windows.' }
 if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
     throw 'MSI integration tests require an interactive desktop, not a Session 0 service.'
@@ -127,7 +132,9 @@ $startedProcesses = New-Object 'System.Collections.Generic.List[System.Diagnosti
 $appProcesses = @{}
 $attemptedProducts = New-Object 'System.Collections.Generic.List[string]'
 $testStarted = Get-Date
-$diagnostics = Join-Path (Split-Path -Parent $PSScriptRoot) ('dev-temp\msi-tests\diagnostics\{0}-{1}-{2}' -f $Scenario, (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+# CI can load this helper from its separate workflow checkout. Keep test output
+# under the application checkout, where the workflow collects diagnostics.
+$diagnostics = Join-Path (Get-Location).ProviderPath ('dev-temp\msi-tests\diagnostics\{0}-{1}-{2}' -f $Scenario, (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8)))
 [void](New-Item -ItemType Directory -Path $diagnostics)
 $oldDataDir = $env:DOWNPAD_USER_DATA_DIR
 $oldUpdateUrl = $env:DOWNPAD_UPDATE_API_URL
@@ -424,8 +431,13 @@ try {
             throw 'Upgrade fixtures must share an UpgradeCode and have different ProductCodes.'
         }
         $previousVersion = ConvertTo-NumericVersion $previous.ProductVersion
-        if ((ConvertTo-NumericVersion $previous.ExecutableVersion) -ne $previousVersion -or [version]$previousVersion -ge [version]$ExpectedVersion) {
-            throw 'The previous MSI must have matching numeric versions and precede the current MSI.'
+        if ((ConvertTo-NumericVersion $previous.ExecutableVersion) -ne $previousVersion) {
+            throw 'The previous MSI must have matching numeric product and executable versions.'
+        }
+        if ($RecoverMissingExecutable) {
+            if ($previousVersion -ne $ExpectedVersion) { throw 'Recovery testing requires equal MSI product versions.' }
+        } elseif ([version]$previousVersion -ge [version]$ExpectedVersion) {
+            throw 'The previous MSI must precede the current MSI outside recovery testing.'
         }
     }
     foreach ($key in @('HKCU:\Software\Downpad', 'HKCU:\Software\WOW6432Node\Downpad', 'HKLM:\Software\Downpad', 'HKLM:\Software\WOW6432Node\Downpad')) {
@@ -443,11 +455,25 @@ try {
         expectedVersion = $ExpectedVersion; expectedExecutable = $ExpectedExecutable
         executableSha256 = $expectedHash; asarSha256 = $expectedAsarHash
         productCode = $current.ProductCode; upgradeCode = $current.UpgradeCode
+        recoverMissingExecutable = [bool]$RecoverMissingExecutable
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $diagnostics 'inputs.json') -Encoding UTF8
     if ($previous) {
         [void]$attemptedProducts.Add($previous.ProductCode)
         Wait-TestProcess (Start-TestMsi "/i `"$PreviousMsi`" /qn" 'previous-silent-install')
         Assert-Installed $previous $previousVersion
+        if ($RecoverMissingExecutable) {
+            # Fault injection is limited to the installation this test created.
+            # Reject redirected paths before removing its single executable.
+            $item = Get-Item -LiteralPath $installedExe -Force
+            while ($item) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing to remove an executable through a reparse point at $($item.FullName)" }
+                if ($item -is [IO.FileInfo]) { $item = $item.Directory } else { $item = $item.Parent }
+            }
+            Remove-Item -LiteralPath $installedExe
+            if (Test-Path -LiteralPath $installedExe) { throw 'The recovery fixture still has its executable.' }
+            if ($installer.ProductState($previous.ProductCode) -ne 5) { throw 'The damaged recovery fixture lost its MSI registration.' }
+            Write-Host 'Removed the test executable. The next RC must restore it through a same-version upgrade.'
+        }
     } else {
         [void]$attemptedProducts.Add($current.ProductCode)
         Wait-TestProcess (Start-TestMsi "/i `"$Msi`" /qn" 'current-silent-install')

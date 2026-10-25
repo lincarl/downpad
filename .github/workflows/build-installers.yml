@@ -290,10 +290,10 @@ jobs:
           $msi = @(Get-ChildItem release -Filter *.msi)
           if ($msi.Count -ne 1) { throw "Expected one MSI, found $($msi.Count)" }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version -replace '-rc\d+$', ''
-          ./scripts/test-msi.ps1 -Msi $msi[0].FullName -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion "$version.0" -Scenario fresh
+          ./dev-temp/workflow-controls/scripts/test-msi.ps1 -Msi $msi[0].FullName -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion "$version.0" -Scenario fresh
 
       # PR artifacts use 0.0.0, which cannot expose RC file-version truncation.
-      # Package both fixtures normally so they pass through PE resource editing.
+      # Package the fixtures normally so they pass through PE resource editing.
       - name: Build stable and release candidate MSI test packages
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
         shell: powershell
@@ -309,6 +309,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Could not apply the candidate fixture version' }
             pnpm exec electron-builder --win msi --x64 --publish never -c.directories.output=dev-temp/msi-tests/candidate
             if ($LASTEXITCODE -ne 0) { throw 'Could not build the candidate fixture' }
+            node scripts/apply-version-from-tag.mjs v0.0.2-rc2
+            if ($LASTEXITCODE -ne 0) { throw 'Could not apply the recovery fixture version' }
+            pnpm exec electron-builder --win msi --x64 --publish never -c.directories.output=dev-temp/msi-tests/recovery
+            if ($LASTEXITCODE -ne 0) { throw 'Could not build the recovery fixture' }
           } finally {
             [IO.File]::WriteAllBytes('package.json', $manifest)
           }
@@ -317,7 +321,13 @@ jobs:
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
         shell: powershell
         run: |
-          ./scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
+          ./dev-temp/workflow-controls/scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade
+
+      - name: Test MSI recovery from a missing executable
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          ./dev-temp/workflow-controls/scripts/test-msi.ps1 -PreviousMsi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -Msi dev-temp/msi-tests/recovery/Downpad-0.0.2-rc2-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/recovery/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario recovery -RecoverMissingExecutable
 
       - name: Upload MSI test diagnostics
         if: failure() && runner.os == 'Windows'
