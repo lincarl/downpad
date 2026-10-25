@@ -16,7 +16,7 @@ import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
-import { hasUnsavedChanges, layoutFromDefaultView, shownLayout } from "../state/types";
+import { layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "../shell/pagePresses";
 import { preparePrintJob } from "../print/printDocument";
@@ -54,6 +54,7 @@ export class AppRuntime {
    *  runs, also while the switch waits for EditorHost to finish another change
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
+  private closingTabs = false;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -142,7 +143,7 @@ export class AppRuntime {
     // loads the document into it.
     this.recentView = new RecentView(
       createIpcRecentDataSource(),
-      () => this.store.get().settings.recentFilesVisibleCount,
+      () => this.store.get().settings,
       {
         // Opening from the Recent view lands the file in its own tab (§5.19);
         // openPath flushes the current editor and re-shows the active document.
@@ -231,11 +232,11 @@ export class AppRuntime {
   }
 
   closeDocumentTab(id: string): void {
-    void this.closeTab(id);
+    this.run(() => this.closeTab(id));
   }
 
   closeEveryTab(): void {
-    void this.closeAllTabs();
+    this.run(() => this.closeAllTabs());
   }
 
   handleBannerAction(id: string): void {
@@ -302,6 +303,16 @@ export class AppRuntime {
     }
     if (this.disposed) return;
     this.scheduler.start();
+
+    this.cleanups.push(this.store.subscribe((state, previous) => {
+      const next = state.settings;
+      const before = previous.settings;
+      const scopeChanged = next.recentFilesDefaultSearch !== before.recentFilesDefaultSearch;
+      if (scopeChanged || next.recentFilesKeepRemoved !== before.recentFilesKeepRemoved ||
+          next.recentFilesVisibleCount !== before.recentFilesVisibleCount) {
+        this.recentView.applyPreferences(scopeChanged);
+      }
+    }));
 
     // Re-apply spell check when the setting changes (no re-mount needed, §5.14).
     this.cleanups.push(this.store.select(
@@ -424,40 +435,54 @@ export class AppRuntime {
   /** Close a tab (§5.19), prompting if it has unsaved changes. When the last tab
    *  closes the editor is torn down and the Recent view is shown. */
   private async closeTab(id: string): Promise<void> {
-    // Collect typing the document view has not reported yet, so the unsaved
-    // check below sees it.
-    this.editorHost.flush();
-    const tab = this.store.get().tabs.find((t) => t.id === id);
-    if (!tab) return;
-    if (hasUnsavedChanges(tab) && !(await this.files.confirmCloseTab(tabLabel(tab)))) return;
-    const wasActive = this.store.get().activeTabId === id;
-    const nextActive = this.store.closeTab(id);
-    // Free the closed tab's editor pane(s) — including a background tab's, which
-    // would otherwise leak since it never becomes active again to be evicted.
-    await this.editorHost.discardTab(id);
-    if (nextActive === null) {
-      if (this.findBar.isOpen()) this.findBar.close();
-      await this.editorHost.unmount();
-      await this.showRecent();
-    } else if (wasActive) {
-      await this.showActiveDoc();
+    if (this.closingTabs) return;
+    this.closingTabs = true;
+    try {
+      // Collect typing the document view has not reported yet, so the unsaved
+      // check below sees it.
+      this.editorHost.flush();
+      const tab = this.store.get().tabs.find((t) => t.id === id);
+      if (!tab) return;
+      const decision = await this.files.confirmCloseTab(id, tabLabel(tab));
+      if (this.disposed || decision === "cancel" || (decision !== "discard" && !this.files.canCloseTabs([id]))) return;
+      const wasActive = this.store.get().activeTabId === id;
+      const nextActive = this.store.closeTab(id);
+      // Free the closed tab's editor pane(s) — including a background tab's, which
+      // would otherwise leak since it never becomes active again to be evicted.
+      await this.editorHost.discardTab(id);
+      if (nextActive === null) {
+        if (this.findBar.isOpen()) this.findBar.close();
+        await this.editorHost.unmount();
+        await this.showRecent();
+      } else if (wasActive) {
+        await this.showActiveDoc();
+      }
+    } finally {
+      this.closingTabs = false;
     }
   }
 
   /** Close every open tab (tab context menu, §5.19). Prompts once if any tab has
    *  unsaved changes, then tears the editor down and shows the Recent view. */
   private async closeAllTabs(): Promise<void> {
-    if (this.store.get().tabs.length === 0) return;
-    // Capture in-progress edits so the dirty check reflects the latest typing.
-    this.editorHost.flush();
-    if (this.files.anyDirty() && !(await this.files.confirmDiscardAll())) return;
-    for (const tab of [...this.store.get().tabs]) {
-      this.store.closeTab(tab.id);
-      await this.editorHost.discardTab(tab.id);
+    if (this.closingTabs || this.store.get().tabs.length === 0) return;
+    this.closingTabs = true;
+    try {
+      // Capture in-progress edits so the dirty check reflects the latest typing.
+      this.editorHost.flush();
+      const decision = await this.files.confirmCloseAll();
+      if (this.disposed || decision === "cancel" || (decision !== "discard" && !this.files.canCloseTabs())) return;
+      const tabs = [...this.store.get().tabs];
+      // Remove the approved documents together before asynchronous editor cleanup
+      // can let another document gain unsaved edits between individual closes.
+      for (const tab of tabs) this.store.closeTab(tab.id);
+      for (const tab of tabs) await this.editorHost.discardTab(tab.id);
+      if (this.findBar.isOpen()) this.findBar.close();
+      await this.editorHost.unmount();
+      await this.showRecent();
+    } finally {
+      this.closingTabs = false;
     }
-    if (this.findBar.isOpen()) this.findBar.close();
-    await this.editorHost.unmount();
-    await this.showRecent();
   }
 
   /** Show the Recent view (§5.8), refreshing its history list. */

@@ -250,6 +250,8 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
         recentFilesVisibleCount,
         initial.recentFilesVisibleCount,
       ),
+      recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
+      recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
     };
 
@@ -331,7 +333,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
               </div>
 
               <div className="dialog-body flex min-w-0 flex-1 flex-col">
-                <SettingsPage {...pageProps("general")}>
+                <SettingsPage {...pageProps("general")} className="settings-general">
                   <SettingsBox title="Autosave">
                     <CheckRow label="Autosave to file" placement="box">
                       <Checkbox
@@ -367,6 +369,16 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                         max={100_000}
                       />
                     </FormRow>
+                    <FormRow label="Default search">
+                      <Select name="recentFilesDefaultSearch" defaultValue={initial.recentFilesDefaultSearch}>
+                        <option value="names">Names</option>
+                        <option value="contents">Contents</option>
+                        <option value="all">All (names, then contents)</option>
+                      </Select>
+                    </FormRow>
+                    <CheckRow label="Keep removed files in list">
+                      <Checkbox name="recentFilesKeepRemoved" defaultChecked={initial.recentFilesKeepRemoved} />
+                    </CheckRow>
                   </SettingsBox>
                   {isElectron() && window.downpadDesktop?.platform === "win32" && (
                     <SettingsBox title="System integration">

@@ -5,7 +5,7 @@
 // already-open file; otherwise a new tab is added. The active tab's document is the canonical markdown string; after it
 // changes the EditorPresenter re-shows it in the editor.
 
-import { openDialog, saveDialog, ask } from "../ipc/dialogs";
+import { openDialog, saveDialog, ask, confirmSaveChanges } from "../ipc/dialogs";
 import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
@@ -44,6 +44,9 @@ interface SaveRequest {
   expectedPath: string | null;
   saveAs: boolean;
 }
+
+/** A clean close must still pass canCloseTabs immediately before removing tabs. */
+export type CloseDecision = "close" | "discard" | "cancel";
 
 export class FileService {
   private saveQueue: Promise<void> = Promise.resolve();
@@ -155,11 +158,11 @@ export class FileService {
    *  changes the document while the user types, and a digit typed next still
    *  keeps it text. */
   save(options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
-    return this.queueSave(false, options);
+    return this.queueSave(this.store.get().activeTabId, false, options);
   }
 
   saveAs(): Promise<boolean> {
-    return this.queueSave(true);
+    return this.queueSave(this.store.get().activeTabId, true);
   }
 
   /** Resolve once no save that can give a tab's document a new path is under
@@ -174,13 +177,13 @@ export class FileService {
   }
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
-  private queueSave(saveAs: boolean, options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
+  private queueSave(tabId: string | null, saveAs: boolean, options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
     this.present.flush(options);
-    const { doc, activeTabId } = this.store.get();
-    if (!activeTabId) return Promise.resolve(false);
-    const request = { tabId: activeTabId, snapshot: doc, expectedPath: doc.filePath, saveAs };
+    const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!tabId || !doc) return Promise.resolve(false);
+    const request = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs };
     this.pendingSaves.add(request);
     const operation = this.saveQueue.then(() => this.saveSnapshot(request))
       .finally(() => this.pendingSaves.delete(request));
@@ -257,16 +260,47 @@ export class FileService {
     return this.store.get().tabs.some(hasUnsavedChanges);
   }
 
-  /** Confirm discarding a single named tab before closing it (§5.19). */
-  async confirmCloseTab(label: string): Promise<boolean> {
-    return this.confirmDiscard(`"${label}" has unsaved changes. Discard them?`);
+  /** Save or discard one tab without activating it or redirecting its save. */
+  confirmCloseTab(tabId: string, label: string): Promise<CloseDecision> {
+    return this.prepareClose([tabId], `"${label}" has unsaved changes. Save before closing?`);
   }
 
-  /** Confirm discarding all unsaved tabs on window close (§5.19). */
-  async confirmDiscardAll(): Promise<boolean> {
+  /** Prompt once and save each unsaved tab before closing all tabs or the window. */
+  confirmCloseAll(): Promise<CloseDecision> {
+    this.present.flush();
     const n = this.store.get().tabs.filter(hasUnsavedChanges).length;
     const what = n === 1 ? "1 document has" : `${n} documents have`;
-    return this.confirmDiscard(`${what} unsaved changes. Discard them and close?`);
+    return this.prepareClose(this.store.get().tabs.map((tab) => tab.id), `${what} unsaved changes. Save before closing?`);
+  }
+
+  /** Recheck after asynchronous work, including unreported typing, dropped
+   *  files and queued writes that could change what is safely saved. */
+  canCloseTabs(tabIds = this.store.get().tabs.map((tab) => tab.id)): boolean {
+    this.present.flush();
+    const owners = new Set(tabIds);
+    return !this.store.get().tabs.some((tab) => owners.has(tab.id) && hasUnsavedChanges(tab))
+      && ![...this.pendingSaves].some((request) => owners.has(request.tabId));
+  }
+
+  /** Keep close saves in the ordinary queue, then verify every requested tab.
+   *  Cancellation or failure leaves all tabs open, including those saved first. */
+  private async prepareClose(tabIds: string[], message: string): Promise<CloseDecision> {
+    this.present.flush();
+    const owners = new Set(tabIds);
+    const unsaved = () => this.store.get().tabs.filter((tab) => owners.has(tab.id) && hasUnsavedChanges(tab));
+    if (unsaved().length > 0) {
+      const choice = await confirmSaveChanges(message);
+      if (choice === "cancel" || choice === "discard") return choice;
+      // The native prompt can remain open while editor updates are pending.
+      this.present.flush();
+      for (const tab of unsaved()) {
+        if (!(await this.queueSave(tab.id, false))) return "cancel";
+      }
+    }
+    // Another queued save may still overwrite the file after our write. Wait
+    // for it as well, and reject any newer edits or pending dropped assets.
+    while ([...this.pendingSaves].some((request) => owners.has(request.tabId))) await this.saveQueue;
+    return this.canCloseTabs(tabIds) ? "close" : "cancel";
   }
 
   private async confirmDiscard(message: string): Promise<boolean> {

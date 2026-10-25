@@ -30,7 +30,7 @@ test.afterEach(async () => {
     // Every test uses a disposable profile. Approve discarding its unsaved
     // edits so cleanup cannot wait on a native confirmation dialog.
     await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+      dialog.showMessageBox = async () => ({ response: 2, checkboxChecked: false });
     }).catch(() => {});
     await app.close();
   }
@@ -3839,7 +3839,7 @@ test("autosave in a pause writes a typed closing mark as Save would and leaves i
     Object.assign(globalThis, { prompts });
     dialog.showMessageBox = async (...args: unknown[]) => {
       prompts.push(String((args.at(-1) as { message?: unknown }).message));
-      return { response: 0, checkboxChecked: false };
+      return { response: 1, checkboxChecked: false };
     };
   });
   await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Tickets cost $5-$");
@@ -3997,7 +3997,8 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await untilStarted();
   // Startup only fills the tab, so the editor must still be built for it.
   await expect(page.locator(heading)).toHaveText("Title");
-  await expect(page).toHaveTitle("● recovered.md — Downpad");
+  await expect(page).toHaveTitle("recovered.md — Downpad");
+  await expect(page.getByRole("tab", { name: "recovered.md", exact: true }).locator(".tab-dot")).toBeVisible();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(markdown);
@@ -4026,7 +4027,8 @@ test("a failed Open original preserves recovery and still allows Open recovered"
   await untilStarted();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator(heading)).toHaveText("Recovered after failure");
-  await expect(page).toHaveTitle("● unavailable-original.md — Downpad");
+  await expect(page).toHaveTitle("unavailable-original.md — Downpad");
+  await expect(page.getByRole("tab", { name: "unavailable-original.md", exact: true }).locator(".tab-dot")).toBeVisible();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(markdown);
@@ -4094,7 +4096,7 @@ test("recovery preserves dirty background tabs and removes only saved documents"
   expect(await readFile(second, "utf8")).toBe("Saved.\n");
 
   await app!.evaluate(({ dialog }) => {
-    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+    dialog.showMessageBox = async () => ({ response: 2, checkboxChecked: false });
   });
   await app!.close();
   app = undefined;
@@ -4126,7 +4128,8 @@ test("an undo right after Save marks the document unsaved again", async () => {
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
   // The file has the typed words but the document no longer does.
-  await expect(page).toHaveTitle("● undo.md — Downpad");
+  await expect(page).toHaveTitle("undo.md — Downpad");
+  await expect(page.getByRole("tab", { name: "undo.md", exact: true }).locator(".tab-dot")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
   await expect(page).toHaveTitle("undo.md — Downpad");
@@ -4140,7 +4143,8 @@ test("undoing every edit marks the document saved again", async () => {
   await paragraph.click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Typed.");
-  await expect(page).toHaveTitle("● undo-all.md — Downpad");
+  await expect(page).toHaveTitle("undo-all.md — Downpad");
+  await expect(page.getByRole("tab", { name: "undo-all.md", exact: true }).locator(".tab-dot")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
   await expect(page).toHaveTitle("undo-all.md — Downpad");
@@ -4171,7 +4175,7 @@ test("closing a tab right after typing asks before discarding the edit", async (
     Object.assign(globalThis, { prompts });
     dialog.showMessageBox = async (...args: unknown[]) => {
       prompts.push(String((args.at(-1) as { message?: unknown }).message));
-      return { response: 0, checkboxChecked: false };
+      return { response: 1, checkboxChecked: false };
     };
   });
   const paragraph = page.locator(".milkdown .ProseMirror p").first();
@@ -4180,9 +4184,201 @@ test("closing a tab right after typing asks before discarding the edit", async (
   await page.keyboard.type(" Not lost.");
   await page.getByRole("tab", { name: /closing\.md/ }).click({ button: "middle" });
   await expect.poll(() => app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([
-    '"closing.md" has unsaved changes. Discard them?',
+    '"closing.md" has unsaved changes. Save before closing?',
   ]);
   await expect(paragraph).toHaveText("First line. Not lost.");
+});
+
+/** Answer close prompts by label and retain their options for assertions. */
+async function chooseCloseAction(choice: "Save" | "Cancel" | "Discard"): Promise<void> {
+  await app!.evaluate(({ dialog }, action) => {
+    const prompts: Array<{ buttons: string[]; defaultId?: number; cancelId?: number }> = [];
+    Reflect.set(globalThis, "closePrompts", prompts);
+    dialog.showMessageBox = async (...args: unknown[]) => {
+      const options = args.at(-1) as { buttons: string[]; defaultId?: number; cancelId?: number };
+      prompts.push({ buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId });
+      return { response: options.buttons.indexOf(action), checkboxChecked: false };
+    };
+  }, choice);
+}
+
+test("General Recent preferences persist and hide missing files without deleting history", async () => {
+  const available = path.join(directory, "available.md");
+  const missing = path.join(directory, "missing.md");
+  await writeFile(available, "# Available\n");
+  await writeFile(missing, "# Missing\n");
+  await launch(available);
+  await chooseOpen(missing);
+  await expect(page.getByRole("tab", { name: "missing.md", exact: true })).toBeVisible();
+  await unlink(missing);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await expect(page.locator(".recent-name")).toHaveText(["available.md"]);
+
+  await page.getByRole("button", { name: "Application menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByRole("combobox", { name: "Default search:" })).toHaveValue("names");
+  await dialog.getByRole("combobox", { name: "Default search:" }).selectOption("contents");
+  await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".recent-name")).toHaveText(["missing.md", "available.md"]);
+  await expect.poll(() => readFile(path.join(directory, "profile", "settings.toml"), "utf8")).toContain('recentFilesDefaultSearch = "contents"');
+  await app!.close();
+  app = undefined;
+
+  await launch();
+  await expect(page.getByRole("group", { name: "Search scope" }).getByRole("button", { name: "Contents", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".recent-name")).toHaveText(["missing.md", "available.md"]);
+  await page.getByRole("button", { name: "Application menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  const reopenedDialog = page.getByRole("dialog", { name: "Settings" });
+  await reopenedDialog.getByRole("checkbox", { name: "Keep removed files in list" }).uncheck();
+  await reopenedDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".recent-name")).toHaveText(["available.md"]);
+  const history = await page.evaluate(() => window.downpadDesktop!.invoke("get_recent_files"));
+  expect(history.map((entry) => entry.path)).toContain(missing);
+});
+
+test("Save on close writes an inactive tab before removing it", async () => {
+  const first = path.join(directory, "save-inactive.md");
+  const second = path.join(directory, "keep-active.md");
+  await writeFile(first, "First document.\n");
+  await writeFile(second, "Second document.\n");
+  await launch(first);
+  await typeAtEnd(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first(), " Saved.");
+  await chooseOpen(second);
+  await typeAtEnd(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first(), " Unsaved.");
+  await chooseCloseAction("Save");
+  await holdCommand("write_file");
+  const closing = page.getByRole("tab", { name: /save-inactive\.md/ });
+  await closing.locator(".tab-close").click();
+  await untilHeld();
+  await expect(closing).toBeVisible();
+  expect(await readFile(first, "utf8")).toBe("First document.\n");
+  await releaseHeld();
+  await expect(closing).toHaveCount(0);
+
+  expect(await readFile(first, "utf8")).toBe("First document. Saved.\n");
+  expect(await readFile(second, "utf8")).toBe("Second document.\n");
+  await expect(page.getByRole("tab", { name: /keep-active\.md/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first()).toHaveText("Second document. Unsaved.");
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "closePrompts"))).toEqual([
+    { buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
+  ]);
+});
+
+test("Save on closing all tabs writes both named and untitled documents", async () => {
+  const named = path.join(directory, "close-all.md");
+  const untitled = path.join(directory, "new-on-close.md");
+  await writeFile(named, "Named document.\n");
+  await launch(named);
+  await typeAtEnd(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first(), " Saved.");
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  await page.locator(".editor-pane:not([hidden]) .ProseMirror").click();
+  await page.keyboard.insertText("Untitled document.");
+  await chooseSave(untitled);
+  await chooseCloseAction("Save");
+  await page.getByRole("tab", { name: /Untitled/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Close all tabs", exact: true }).click();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+
+  expect(await readFile(named, "utf8")).toBe("Named document. Saved.\n");
+  expect(await readFile(untitled, "utf8")).toBe("Untitled document.\n");
+  expect(await app!.evaluate(() => (Reflect.get(globalThis, "closePrompts") as unknown[]).length)).toBe(1);
+});
+
+test("Save on close keeps an untitled tab after cancellation or write failure", async () => {
+  await launch();
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  const editor = page.locator(".editor-pane:not([hidden]) .ProseMirror");
+  await editor.click();
+  await page.keyboard.insertText("Keep this document.");
+  await chooseCloseAction("Save");
+  await app!.evaluate(({ dialog }) => {
+    dialog.showSaveDialog = async () => ({ canceled: true, filePath: "" });
+  });
+  const tab = page.getByRole("tab", { name: /Untitled/ });
+  await tab.locator(".tab-close").click();
+  await expect.poll(() => app!.evaluate(() => (Reflect.get(globalThis, "closePrompts") as unknown[]).length)).toBe(1);
+  await expect(editor).toHaveText("Keep this document.");
+  // A nonexistent parent exercises the real write failure path.
+  await chooseSave(path.join(directory, "missing-parent", "failed.md"));
+  const failure = page.waitForEvent("console", { predicate: (message) => message.type() === "error" && message.text().includes("file action failed") });
+  await tab.locator(".tab-close").click();
+  await failure;
+  await expect(tab).toBeVisible();
+  await expect(editor).toHaveText("Keep this document.");
+
+  const saved = path.join(directory, "retry.md");
+  await chooseSave(saved);
+  await tab.locator(".tab-close").click();
+  await expect(tab).toHaveCount(0);
+  expect(await readFile(saved, "utf8")).toBe("Keep this document.\n");
+});
+
+test("Save on close keeps edits typed while the write is pending", async () => {
+  const file = path.join(directory, "edit-during-close.md");
+  await writeFile(file, "First version.\n");
+  await launch(file);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await typeAtEnd(paragraph, " Saved.");
+  await chooseCloseAction("Save");
+  await holdCommand("write_file");
+  const tab = page.getByRole("tab", { name: /edit-during-close\.md/ });
+  await tab.locator(".tab-close").click();
+  await untilHeld();
+  await typeAtEnd(paragraph, " Later edit.");
+  await releaseHeld();
+  await untilHeldAnswered();
+  await expect(tab.locator(".tab-dot")).toBeVisible();
+  await expect(paragraph).toHaveText("First version. Saved. Later edit.");
+  expect(await readFile(file, "utf8")).toBe("First version. Saved.\n");
+});
+
+test("Save on close keeps a document while a dropped image is still being read", async () => {
+  const file = path.join(directory, "drop-during-close.md");
+  await writeFile(file, "Document with an incoming image.\n");
+  const before = (await stat(file)).mtimeMs;
+  await launch(file);
+  await holdCommand("read_image_bytes");
+  await dropBelow(page.locator(".ProseMirror p").first(), [await pngFile("pending.png")]);
+  await untilHeld();
+  await chooseCloseAction("Save");
+  const tab = page.getByRole("tab", { name: /drop-during-close\.md/ });
+  await tab.locator(".tab-close").click();
+  await expect.poll(async () => (await stat(file)).mtimeMs).toBeGreaterThan(before);
+  await expect(tab.locator(".tab-dot")).toBeVisible();
+  await releaseHeld();
+  await expect(page.locator(".ProseMirror .milkdown-image-block")).toHaveCount(1);
+
+  await tab.locator(".tab-close").click();
+  await expect(tab).toHaveCount(0);
+  expect(await readFile(file, "utf8")).toContain("![");
+});
+
+test("Save on window close awaits saved named and untitled tabs before exiting", async () => {
+  const named = path.join(directory, "window-close.md");
+  const untitled = path.join(directory, "window-untitled.md");
+  await writeFile(named, "Window document.\n");
+  await launch(named);
+  await typeAtEnd(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first(), " Saved.");
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  await page.locator(".editor-pane:not([hidden]) .ProseMirror").click();
+  await page.keyboard.insertText("Window untitled.");
+  await chooseSave(untitled);
+  await chooseCloseAction("Save");
+  await holdCommand("write_file");
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
+  await untilHeld();
+  expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  expect(await readFile(named, "utf8")).toBe("Window document.\n");
+  const closed = app!.waitForEvent("close");
+  await releaseHeld();
+  await closed;
+  app = undefined;
+
+  expect(await readFile(named, "utf8")).toBe("Window document. Saved.\n");
+  expect(await readFile(untitled, "utf8")).toBe("Window untitled.\n");
 });
 
 test("Tab leaves the document view without typing spaces, and still nests a list item", async () => {
@@ -4275,7 +4471,7 @@ test("cancelling a window close right after typing in the split keeps both panes
   await app!.evaluate(({ BrowserWindow, dialog }) => new Promise<void>((resolve) => {
     dialog.showMessageBox = async () => {
       resolve();
-      return { response: 0, checkboxChecked: false };
+      return { response: 1, checkboxChecked: false };
     };
     BrowserWindow.getAllWindows()[0]!.close();
   }));
@@ -4902,7 +5098,7 @@ test("an image pasted into a document that is closed while a Save As of it is wr
     Object.assign(globalThis, { prompts });
     dialog.showMessageBox = async (...args: unknown[]) => {
       prompts.push(String((args.at(-1) as { message?: unknown }).message));
-      return { response: 1, checkboxChecked: false };
+      return { response: 2, checkboxChecked: false };
     };
   });
   // The Save As is written slowly, as to a network share.
@@ -4917,7 +5113,7 @@ test("an image pasted into a document that is closed while a Save As of it is wr
   await tab(/notes\.md/).locator(".tab-close").click();
   await expect(tab(/notes\.md/)).toHaveCount(0);
   expect(await app!.evaluate(() => (globalThis as { prompts?: string[] }).prompts ?? [])).toEqual([
-    '"notes.md" has unsaved changes. Discard them?',
+    '"notes.md" has unsaved changes. Save before closing?',
   ]);
   // A save of an untitled document would ask where to save it.
   await app!.evaluate(({ dialog }) => {
@@ -6307,7 +6503,8 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
     .locator(".frontmatter-value-edit");
   const body = page.locator(".milkdown .ProseMirror p").first();
   await typeAtEnd(title, " v2");
-  await expect(page).toHaveTitle("● frontmatter-undo.md — Downpad");
+  await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
+  await expect(page.getByRole("tab", { name: "frontmatter-undo.md", exact: true }).locator(".tab-dot")).toBeVisible();
   // The caret stays in the cell, so typing goes on there.
   await page.keyboard.press("ControlOrMeta+z");
   await expect(title).toHaveText("Draft notes # keep");
@@ -7740,7 +7937,7 @@ test("same-document navigation preserves the unsaved close confirmation", async 
   await app!.evaluate(({ BrowserWindow, dialog }) => new Promise<void>((resolve) => {
     dialog.showMessageBox = async () => {
       resolve();
-      return { response: 0, checkboxChecked: false };
+      return { response: 1, checkboxChecked: false };
     };
     BrowserWindow.getAllWindows()[0]!.close();
   }));

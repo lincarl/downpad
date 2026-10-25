@@ -2,7 +2,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import type { KeyboardEvent } from "react";
 import { File, FolderOpen } from "lucide-react";
-import type { RecentEntry } from "@/state/types";
+import type { RecentEntry, Settings } from "@/state/types";
 import type { FileStat } from "@/ipc/contracts";
 import type { RecentDataSource } from "./recentData";
 import { fileName, dirName } from "./recentFormat";
@@ -35,6 +35,10 @@ export interface RecentViewCallbacks {
   copy(text: string): void | Promise<void>;
 }
 
+export type RecentPreferences = Pick<Settings,
+  "recentFilesVisibleCount" | "recentFilesDefaultSearch" | "recentFilesKeepRemoved"
+>;
+
 /** Name filtering waits for a short pause in typing; content search for a longer one. */
 const NAME_DEBOUNCE_MS = 200;
 const CONTENT_DEBOUNCE_MS = 400;
@@ -54,6 +58,10 @@ export class RecentView {
   private listElement: HTMLDivElement | null = null;
   private entries: RecentEntry[] = [];
   private readonly stats = new Map<string, FileStat>();
+  private readonly pendingStats = new Set<string>();
+  private refreshSeq = 0;
+  private statsSeq = 0;
+  private entering = true;
   private scope: SearchScope = "names";
   private query = "";
   private renderedNameQuery = "";
@@ -77,30 +85,46 @@ export class RecentView {
 
   constructor(
     private readonly data: RecentDataSource,
-    private readonly getVisibleCount: () => number,
+    private readonly getPreferences: () => RecentPreferences,
     private readonly cb: RecentViewCallbacks,
   ) {
     this.element.dataset.reactRecentView = "";
     this.element.className = "h-full";
     this.root = createRoot(this.element);
+    this.scope = this.getPreferences().recentFilesDefaultSearch;
     this.render();
   }
 
   /** Reload the history. Called each time Recent is shown. */
   async refresh(): Promise<void> {
-    const focusBefore = document.activeElement;
-    try {
-      this.entries = await this.data.list();
-    } catch {
-      this.entries = [];
+    const seq = ++this.refreshSeq;
+    if (this.entering) {
+      this.entering = false;
+      this.setScope(this.getPreferences().recentFilesDefaultSearch);
     }
-    if (this.destroyed) return;
+    const focusBefore = document.activeElement;
+    let entries: RecentEntry[];
+    try {
+      entries = await this.data.list();
+    } catch {
+      entries = [];
+    }
+    if (this.destroyed || seq !== this.refreshSeq) return;
+    this.entries = entries;
+    this.statsSeq++;
     this.stats.clear();
+    this.pendingStats.clear();
     this.keptSections.clear();
     this.resetContentSearch();
     this.scheduleContentSearch();
     this.render();
     this.focusSearchOnShow(focusBefore);
+  }
+
+  /** Apply saved preferences without fetching history or moving keyboard focus. */
+  applyPreferences(resetScope: boolean): void {
+    if (resetScope) this.setScope(this.getPreferences().recentFilesDefaultSearch);
+    this.render();
   }
 
   focusSearch(): void {
@@ -109,6 +133,7 @@ export class RecentView {
   }
 
   onLeave(): void {
+    this.entering = true;
     if (this.nameTimer) clearTimeout(this.nameTimer);
     this.nameTimer = null;
     this.renderedNameQuery = this.query;
@@ -357,13 +382,16 @@ export class RecentView {
   }
 
   private listing(): RecentListing {
+    const preferences = this.getPreferences();
     return buildListing({
-      entries: this.entries,
+      entries: preferences.recentFilesKeepRemoved
+        ? this.entries
+        : this.entries.filter((entry) => this.stats.get(entry.path)?.exists !== false),
       scope: this.scope,
       nameQuery: this.nameQuery(),
       contentQuery: this.contentQuery(),
       hits: this.contentHits,
-      visibleCount: this.getVisibleCount(),
+      visibleCount: preferences.recentFilesVisibleCount,
       inFavorites: (entry) => this.keptSections.get(entry.path) ?? entry.favorite,
     });
   }
@@ -475,13 +503,21 @@ export class RecentView {
   }
 
   private async ensureStats(paths: string[]): Promise<void> {
-    const unknown = paths.filter((path) => !this.stats.has(path));
+    const unknown = paths.filter((path) => !this.stats.has(path) && !this.pendingStats.has(path));
     if (!unknown.length) return;
+    const seq = this.statsSeq;
+    for (const path of unknown) this.pendingStats.add(path);
     try {
-      for (const stat of await this.data.stat(unknown)) this.stats.set(stat.path, stat);
-      this.render();
+      const stats = await this.data.stat(unknown);
+      if (this.destroyed || seq !== this.statsSeq) return;
+      for (const stat of stats) this.stats.set(stat.path, stat);
+      if (stats.length) this.render();
     } catch {
       // Rows remain usable without size/missing metadata.
+    } finally {
+      if (seq === this.statsSeq) {
+        for (const path of unknown) this.pendingStats.delete(path);
+      }
     }
   }
 

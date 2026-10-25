@@ -125,6 +125,9 @@ export interface AskDialogOptions {
   cancelLabel?: string;
 }
 
+/** The action chosen for a document with unsaved changes. */
+export type SaveChangesChoice = "save" | "discard" | "cancel";
+
 export interface ElectronBridge {
   readonly platform: string;
   invoke<K extends keyof DesktopCommandArgs>(
@@ -138,6 +141,7 @@ export interface ElectronBridge {
   openDialog(options: OpenDialogOptions): Promise<string | string[] | null>;
   saveDialog(options: SaveDialogOptions): Promise<string | null>;
   ask(message: string, options?: AskDialogOptions): Promise<boolean>;
+  confirmSaveChanges(message: string): Promise<SaveChangesChoice>;
   openExternal(url: string): Promise<void>;
   revealItemInFolder(path: string): Promise<void>;
   setTheme(theme: "light" | "dark" | "system"): Promise<void>;

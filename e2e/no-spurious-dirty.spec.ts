@@ -7,8 +7,8 @@ import { test, expect } from "@playwright/test";
 // …), but the document view reports the exact source until the user edits it, so
 // the flush is a no-op.
 //
-// Dirty state surfaces two ways: a leading "● " in the window title (TitleBar) and
-// a `.tab-dot` in the tab strip (TabStrip). We assert neither appears.
+// Dirty state appears as a `.tab-dot` in the tab strip (TabStrip).
+// The window title stays unchanged even when the document has unsaved edits.
 
 const wysiwyg = ".milkdown .ProseMirror";
 const rawContent = ".editor-pane-raw .cm-content";

@@ -110,6 +110,12 @@ describe("SettingsDialogView pages", () => {
 
   it("saves fields from every page, including hidden ones", async () => {
     const { user, onSave, onRequestClose } = renderDialog();
+    const search = screen.getByRole("combobox", { name: "Default search:" }) as HTMLSelectElement;
+    const keepRemoved = screen.getByRole("checkbox", { name: "Keep removed files in list" }) as HTMLInputElement;
+    expect(search.value).toBe("names");
+    expect(keepRemoved.checked).toBe(false);
+    await user.selectOptions(search, "all");
+    await user.click(keepRemoved);
     await user.click(screen.getByRole("tab", { name: "Appearance" }));
     await user.click(card("UI theme", "Light"));
     await user.click(card("Document theme", "Follow UI theme"));
@@ -126,6 +132,8 @@ describe("SettingsDialogView pages", () => {
       editorTheme: "follow-ui",
       editorWidthPx: 800,
       mdBulletChar: "*",
+      recentFilesDefaultSearch: "all",
+      recentFilesKeepRemoved: true,
       // Untouched fields on other pages keep their values.
       showFrontmatterPanel: DEFAULT_SETTINGS.showFrontmatterPanel,
       recentFilesVisibleCount: DEFAULT_SETTINGS.recentFilesVisibleCount,

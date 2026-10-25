@@ -41,6 +41,10 @@ const bridge: ElectronBridge = {
   openDialog: (options) => ipcRenderer.invoke("downpad:dialog-open", options),
   saveDialog: (options) => ipcRenderer.invoke("downpad:dialog-save", options),
   ask: (message, options) => ipcRenderer.invoke("downpad:dialog-ask", message, options),
+  async confirmSaveChanges(message) {
+    const choice: unknown = await ipcRenderer.invoke("downpad:dialog-confirm-save-changes", message);
+    return choice === "save" || choice === "discard" ? choice : "cancel";
+  },
   openExternal: (url) => ipcRenderer.invoke("downpad:open-external", url),
   revealItemInFolder: (path) => ipcRenderer.invoke("downpad:reveal-item", path),
   setTheme: (theme) => ipcRenderer.invoke("downpad:set-theme", theme),

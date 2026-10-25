@@ -176,11 +176,15 @@ export class DesktopEventBindings {
     try {
       const { editorHost, files, scheduler } = this.dependencies;
       editorHost.flush();
-      if (files.anyDirty()) {
-        const discard = await files.confirmDiscardAll();
-        if (!discard || this.disposed) return;
-      }
+      const decision = await files.confirmCloseAll();
+      if (decision === "cancel" || this.disposed) return;
       await scheduler.clear();
+      // Recovery cleanup awaits disk I/O. Typing, a queued save or a dropped
+      // file that arrived meanwhile must keep a Save close from losing work.
+      if (!this.disposed && decision !== "discard" && !files.canCloseTabs()) {
+        scheduler.start();
+        return;
+      }
       if (!this.disposed) {
         accepted = true;
         await desktopBridge().closeWindow();

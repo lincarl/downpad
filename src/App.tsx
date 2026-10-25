@@ -105,8 +105,7 @@ function AppContent({ store }: { store: Store }) {
     setEditorHost((current) => (current === host ? null : current));
   }, []);
   const runtime = useOwnedAppRuntime(store, editorHost, runtimeRefs, setRecentSummary);
-  const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
-  useDocumentTitle(state.activeTabId, state.doc.filePath, activeTab ? hasUnsavedChanges(activeTab) : false);
+  useDocumentTitle(state.activeTabId, state.doc.filePath);
 
   const editorVisible = state.view !== "recent";
   const editorLayout = editorVisible ? shownLayout(state) : "document";

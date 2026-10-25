@@ -78,6 +78,20 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("App shell", () => {
+  it("marks unsaved tabs without adding a dot to the window title", () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "C:\\notes\\draft.md" });
+    render(<App store={store} />);
+    expect(document.title).toBe("draft.md — Downpad");
+    act(() => store.patchDoc({ markdown: "changed", isDirty: true }));
+    expect(document.querySelectorAll(".tab-dot")).toHaveLength(1);
+    expect(document.title).toBe("draft.md — Downpad");
+    act(() => store.patchDoc({ filePath: null }));
+    expect(document.title).toBe("Untitled — Downpad");
+    act(() => store.closeTab("tab-1"));
+    expect(document.title).toBe("Downpad");
+  });
+
   it("mounts under Strict Mode with accessible layout and tab controls", async () => {
     render(<StrictMode><App store={makeStore()} /></StrictMode>);
     const user = userEvent.setup();

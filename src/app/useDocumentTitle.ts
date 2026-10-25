@@ -1,17 +1,17 @@
 import { useEffect } from "react";
 
+/** Name the active document in the window title; unsaved state belongs in its tab. */
 export function useDocumentTitle(
   activeTabId: string | null,
   filePath: string | null,
-  isDirty: boolean,
 ): void {
   useEffect(() => {
     if (activeTabId === null) {
       document.title = "Downpad";
       return;
     }
-    document.title = `${isDirty ? "● " : ""}${fileLabel(filePath)} — Downpad`;
-  }, [activeTabId, filePath, isDirty]);
+    document.title = `${fileLabel(filePath)} — Downpad`;
+  }, [activeTabId, filePath]);
 }
 
 function fileLabel(filePath: string | null): string {

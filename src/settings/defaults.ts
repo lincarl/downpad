@@ -21,6 +21,8 @@ export const DEFAULT_SETTINGS: Settings = {
 
   recentFilesMaxRetained: 500,
   recentFilesVisibleCount: 100,
+  recentFilesDefaultSearch: "names",
+  recentFilesKeepRemoved: false,
 
   defaultView: "document",
   collapseBase64InRawView: true,

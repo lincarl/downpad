@@ -298,6 +298,17 @@ describe("Existing settings and history compatibility", () => {
       .toMatchObject({ recentFilesMaxRetained: 500, recentFilesVisibleCount: 100 });
   });
 
+  it("defaults and persists Recent search and missing-file preferences", async () => {
+    expect(normalizeSettings({})).toMatchObject({ recentFilesDefaultSearch: "names", recentFilesKeepRemoved: false });
+    expect(normalizeSettings({ recentFilesDefaultSearch: "invalid", recentFilesKeepRemoved: "true" }))
+      .toMatchObject({ recentFilesDefaultSearch: "names", recentFilesKeepRemoved: false });
+    const path = join(await fixtureDirectory(), "recent-settings.toml");
+    for (const scope of ["names", "contents", "all"] as const) {
+      await saveSettingsFile(path, { recentFilesDefaultSearch: scope, recentFilesKeepRemoved: true });
+      expect(await loadSettingsFile(path)).toMatchObject({ recentFilesDefaultSearch: scope, recentFilesKeepRemoved: true });
+    }
+  });
+
   it("normalizes recovery retention and intervals while preserving valid configured durations", () => {
     expect(normalizeSettings({ recoveryRetentionDays: 0, recoverySnapshotIntervalSeconds: 0, autosaveIntervalSeconds: 0 }))
       .toMatchObject({ recoveryRetentionDays: 1, recoverySnapshotIntervalSeconds: 2, autosaveIntervalSeconds: 5 });

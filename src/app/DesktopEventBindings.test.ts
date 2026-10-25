@@ -7,7 +7,7 @@ import type { ElectronBridge } from "../ipc/bridge";
 import type { FileMeta, FilePayload } from "../ipc/contracts";
 import type { FileChangedPayload } from "../ipc/events";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
-import type { Eol } from "../state/types";
+import { blankDoc, type Eol } from "../state/types";
 import { createAppStore } from "./createAppStore";
 import { DesktopEventBindings } from "./DesktopEventBindings";
 
@@ -47,6 +47,7 @@ function createTestBridge() {
     openDialog: async () => null,
     saveDialog: async () => null,
     ask: async () => false,
+    confirmSaveChanges: vi.fn<ElectronBridge["confirmSaveChanges"]>(async () => "cancel"),
     openExternal: async () => {},
     revealItemInFolder: async () => {},
     setTheme: async () => {},
@@ -64,11 +65,12 @@ describe("native close decisions", () => {
   let files: FileService;
   let scheduler: SnapshotScheduler;
   let current: Promise<unknown>;
+  let store: ReturnType<typeof createAppStore>;
 
   beforeEach(() => {
     bridge = createTestBridge();
     window.downpadDesktop = bridge;
-    const store = createAppStore();
+    store = createAppStore();
     files = new FileService(store, {
       flush: () => {},
       showActiveDoc: async () => {},
@@ -77,9 +79,9 @@ describe("native close decisions", () => {
     host = new EditorHost(document.createElement("div"), store);
     scheduler = new SnapshotScheduler(store, files);
     vi.spyOn(host, "flush").mockImplementation(() => {});
-    vi.spyOn(files, "anyDirty").mockReturnValue(false);
-    vi.spyOn(files, "confirmDiscardAll").mockResolvedValue(true);
+    vi.spyOn(files, "confirmCloseAll").mockResolvedValue("close");
     vi.spyOn(scheduler, "clear").mockResolvedValue(undefined);
+    vi.spyOn(scheduler, "start").mockImplementation(() => {});
     current = Promise.resolve();
     bindings = new DesktopEventBindings({
       store,
@@ -115,8 +117,7 @@ describe("native close decisions", () => {
   });
 
   it("cancels quit intent after declining discard and accepts a later close", async () => {
-    vi.mocked(files.anyDirty).mockReturnValue(true);
-    vi.mocked(files.confirmDiscardAll).mockResolvedValueOnce(false);
+    vi.mocked(files.confirmCloseAll).mockResolvedValueOnce("cancel").mockResolvedValueOnce("discard");
     events.closeRequested!();
     await current;
 
@@ -127,7 +128,7 @@ describe("native close decisions", () => {
     events.closeRequested!();
     await current;
 
-    expect(files.confirmDiscardAll).toHaveBeenCalledTimes(2);
+    expect(files.confirmCloseAll).toHaveBeenCalledTimes(2);
     expect(bridge.closeWindow).toHaveBeenCalledOnce();
     expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
   });
@@ -139,6 +140,57 @@ describe("native close decisions", () => {
     await expect(current).rejects.toThrow("Recovery cleanup failed");
     expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
     expect(bridge.closeWindow).not.toHaveBeenCalled();
+  });
+
+  it("waits for Save before clearing recovery and closing the window", async () => {
+    vi.mocked(files.confirmCloseAll).mockRestore();
+    bridge.confirmSaveChanges.mockResolvedValueOnce("save");
+    store.addTab({ ...blankDoc(), filePath: "/docs/closing.md", markdown: "Unsaved text\n", isDirty: true });
+    let finishWrite!: (meta: FileMeta) => void;
+    disk.writeFile.mockImplementationOnce(() => new Promise((resolve) => { finishWrite = resolve; }));
+    events.closeRequested!();
+    const closing = current;
+    await vi.waitFor(() => expect(disk.writeFile).toHaveBeenCalledWith("/docs/closing.md", "Unsaved text\n", "lf"));
+    expect(bridge.closeWindow).not.toHaveBeenCalled();
+    expect(scheduler.clear).not.toHaveBeenCalled();
+    // Repeated native close events share the pending close instead of prompting again.
+    events.closeRequested!();
+    finishWrite({ modifiedMs: 200 });
+    await closing;
+
+    expect(bridge.confirmSaveChanges).toHaveBeenCalledOnce();
+    expect(scheduler.clear).toHaveBeenCalledOnce();
+    expect(bridge.closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it("cancels native close and retains recovery when Save fails", async () => {
+    vi.mocked(files.confirmCloseAll).mockRestore();
+    bridge.confirmSaveChanges.mockResolvedValueOnce("save");
+    store.addTab({ ...blankDoc(), filePath: "/docs/closing.md", markdown: "Unsaved text\n", isDirty: true });
+    disk.writeFile.mockRejectedValueOnce(new Error("Disk full"));
+    events.closeRequested!();
+
+    await expect(current).rejects.toThrow("Disk full");
+    expect(scheduler.clear).not.toHaveBeenCalled();
+    expect(bridge.closeWindow).not.toHaveBeenCalled();
+    expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
+    expect(store.get().doc.isDirty).toBe(true);
+  });
+
+  it.each(["typing", "dropped assets"])("restarts recovery when %s arrives during recovery cleanup", async (change) => {
+    const owner = store.addTab({ ...blankDoc(), filePath: "/docs/closing.md" });
+    let finishCleanup!: () => void;
+    vi.mocked(scheduler.clear).mockImplementationOnce(() => new Promise((resolve) => { finishCleanup = resolve; }));
+    events.closeRequested!();
+    await vi.waitFor(() => expect(scheduler.clear).toHaveBeenCalledOnce());
+    if (change === "typing") store.patchDoc({ markdown: "Later edits\n", isDirty: true });
+    else store.setFilesPending(owner, true);
+    finishCleanup();
+    await current;
+
+    expect(bridge.closeWindow).not.toHaveBeenCalled();
+    expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
+    expect(scheduler.start).toHaveBeenCalledOnce();
   });
 });
 

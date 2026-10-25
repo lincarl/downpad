@@ -93,7 +93,11 @@ async function mount(page: Page, entries = ENTRIES): Promise<void> {
     const app = document.querySelector<HTMLElement>("#app");
     if (!app) throw new Error("Application host is missing");
     app.style.height = "100vh";
-    const view = new RecentView(data, () => 100, {
+    const view = new RecentView(data, () => ({
+      recentFilesVisibleCount: 100,
+      recentFilesDefaultSearch: "names",
+      recentFilesKeepRemoved: true,
+    }), {
       onOpenFile(path) { window.__recentCalls.opened.push(path); },
       onSummaryChange() {},
       async pickFile() { return null; },

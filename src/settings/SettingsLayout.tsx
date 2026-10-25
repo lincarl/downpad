@@ -19,6 +19,7 @@ export interface SettingsPageProps {
   active: boolean;
   /** Pages without boxes (Keyboard shortcuts, About) lay out their own column. */
   plain?: boolean;
+  className?: string;
   children: ReactNode;
 }
 
@@ -27,14 +28,14 @@ export interface SettingsPageProps {
  * Inactive pages stay mounted behind the `hidden` attribute, because Save reads
  * every field of the form.
  */
-export function SettingsPage({ id, tabId, active, plain, children }: SettingsPageProps) {
+export function SettingsPage({ id, tabId, active, plain, className, children }: SettingsPageProps) {
   return (
     <div
       role="tabpanel"
       id={id}
       aria-labelledby={tabId}
       hidden={!active}
-      className="settings-page min-h-0 flex-1 overflow-y-auto px-5 py-3.5"
+      className={cn("settings-page min-h-0 flex-1 overflow-y-auto px-5 py-3.5", className)}
     >
       <div className={plain ? "flex flex-col" : pageGridClassName}>{children}</div>
     </div>

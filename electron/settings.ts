@@ -14,6 +14,7 @@ const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
   mdHeadingStyle: ["atx", "setext"], printVersion: ["document", "markdown"],
   printPaperSize: ["a4", "letter", "legal", "a5"], printOrientation: ["portrait", "landscape"],
   printMargins: ["normal", "narrow", "wide", "none"],
+  recentFilesDefaultSearch: ["names", "contents", "all"],
 };
 
 // Longer intervals overflow browser timers and run almost immediately.
