@@ -76,6 +76,7 @@ describe("the lines between frontmatter and the body", () => {
   it("keeps them after a frontmatter table edit", { timeout: 60_000 }, async () => {
     const { onChange, root } = await open("---\ntitle: x\n---\n\nFirst line.\n");
     await settle();
+    await vi.waitFor(() => expect(root.querySelector(".frontmatter-toggle")).not.toBeNull());
     root.querySelector<HTMLButtonElement>(".frontmatter-toggle")!.click();
     const value = root.querySelector<HTMLElement>(".frontmatter-value-edit")!;
     value.textContent = "y";

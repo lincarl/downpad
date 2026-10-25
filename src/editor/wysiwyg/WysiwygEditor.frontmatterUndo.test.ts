@@ -4,6 +4,7 @@
 // edits in the order they were made. These tests use the real editor.
 
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { splitFrontmatter } from "../../document/frontmatter";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import type { FindOptions } from "./findEngine";
@@ -52,7 +53,10 @@ async function open(markdown = FILE): Promise<{ editor: WysiwygEditor; onChange:
     requestSave: async () => false,
   });
   await redraw();
-  root.querySelector<HTMLButtonElement>(".frontmatter-toggle")?.click();
+  if (splitFrontmatter(markdown).frontmatter !== null) {
+    await vi.waitFor(() => expect(root.querySelector(".frontmatter-toggle")).not.toBeNull());
+    root.querySelector<HTMLButtonElement>(".frontmatter-toggle")!.click();
+  }
   return { editor, onChange };
 }
 
