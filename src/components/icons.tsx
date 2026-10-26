@@ -101,37 +101,3 @@ export function AppIcon({ size = 48, className }: { size?: number; className?: s
     </svg>
   );
 }
-
-/**
- * Downpad's document artwork: a page with a folded corner and the app icon's M
- * and chevron, in the icon's blue gradient. Used for Recent rows.
- */
-export function DocumentArtwork({ size = 34, className }: { size?: number; className?: string }) {
-  const gradient = useId();
-  const { size: tile, letter, arrow, colors } = appGlyph;
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width={size}
-      height={size}
-      viewBox="4.25 9 238 238"
-      aria-hidden="true"
-      focusable="false"
-      className={className}
-    >
-      <defs>
-        <linearGradient id={gradient} x2="1" y2="1">
-          <stop stopColor={colors.tileLight} />
-          <stop offset="1" stopColor={colors.tileDark} />
-        </linearGradient>
-      </defs>
-      <path d="M55 9H157L215 67V226Q215 247 194 247H55Q34 247 34 226V30Q34 9 55 9Z" fill={`url(#${gradient})`} />
-      <path d="M157 9V48Q157 67 176 67H215Z" fill="#91d9f5" />
-      {/* The glyph of a 170-unit tile, centered on the page below the fold. */}
-      <g transform={`translate(39.5 78) scale(${170 / tile})`}>
-        <path d={letter} fill={colors.letter} />
-        <path d={arrow} fill={colors.arrow} />
-      </g>
-    </svg>
-  );
-}
