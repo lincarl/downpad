@@ -11,7 +11,28 @@ import {
 } from "./updateInstall";
 
 const directories: string[] = [];
-afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => { await Promise.all(directories.splice(0).map(removeFolder)); });
+
+/** The errors with which Windows refuses to remove a file in use, or the
+ *  folder that holds it. */
+const IN_USE_ERRORS = new Set(["EPERM", "EBUSY", "ENOTEMPTY"]);
+
+/** Remove the folder `path`. The fake Downpad that the Windows update helper
+ *  starts on its own can still be exiting after its test has read its record,
+ *  and Windows refuses to remove a program file while a process uses it, so
+ *  removal is tried again for about 5 seconds before its error is thrown. */
+async function removeFolder(path: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error: unknown) {
+      if (attempt >= 50 || !(error instanceof Error && "code" in error
+        && typeof error.code === "string" && IN_USE_ERRORS.has(error.code))) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
 
 const PACKAGE = Buffer.from("new package bytes");
 const DIGEST = createHash("sha256").update(PACKAGE).digest("hex");
