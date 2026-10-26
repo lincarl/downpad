@@ -477,7 +477,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
-            --title "Downpad $version" \
+            --title "$RELEASE_TAG" \
             --latest=false \
             "${kind[@]}"
 
