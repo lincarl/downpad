@@ -6503,6 +6503,9 @@ test("find moves a match that wraps onto another line below the card", async () 
     await find.fill(query);
     await expect(page.locator(".find-count")).toHaveText("1 of 1");
     await expect.poll(currentMatchProblem).toBe("");
+    // The match can be clear of the card before the search's queued scroll
+    // has run, and that scroll would undo the user's.
+    await twoFrames();
     // The user scrolls down until the match's first line is under the card.
     // The next find step moves it below the card.
     await pane.evaluate((element) => {
