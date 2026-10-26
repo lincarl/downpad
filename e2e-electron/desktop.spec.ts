@@ -3323,16 +3323,13 @@ test("End with the caret before images or formulas that start a line moves the c
   await typeAfter("Shift+ArrowLeft", paragraph("joins by composing."), "合", compose);
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("image-end.md — Downpad");
-  const blocks = (await readFile(file, "utf8")).split("\n\n");
-  expect(blocks.slice(0, 4)).toEqual([
+  await expect.poll(async () => (await readFile(file, "utf8")).split("\n\n")).toEqual([
     "Ends with ![End](end/missing.png)",
     "![Start](start/missing.png) starts here.1",
     "![Pixel](image.png)![Gone](gone.png) start here.2",
     "Break\\\n![Pixel](image.png) after a line break.3",
-  ]);
-  expect(blocks[4]).toMatch(/^\| !\[Cell\]\(cell\/missing\.png\) in a cell4 *\|$/m);
-  expect(blocks[5]).toMatch(/^\| \$v\$ in a formula cell9 *\|$/m);
-  expect(blocks.slice(6)).toEqual([
+    expect.stringMatching(/^\| !\[Cell\]\(cell\/missing\.png\) in a cell4 *\|$/m),
+    expect.stringMatching(/^\| \$v\$ in a formula cell9 *\|$/m),
     "5",
     "$x^2$ starts with a formula.6",
     "![Pixel](image.png)$y$ start with an image.7",
@@ -4137,6 +4134,7 @@ test("the first-run welcome document opens as saved with its exact text", async 
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(welcome);
   await expect(page).toHaveTitle("Untitled — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
 });
 
 test("an undo right after Save marks the document unsaved again", async () => {
@@ -5950,6 +5948,7 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("* Star bullet");
   await expect(page).toHaveTitle("bullets.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
 });
 
 test("the find count follows edits made while the card is open", async () => {
@@ -6654,6 +6653,7 @@ test("a file that ends in a list opens as saved", async () => {
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("- Last item");
   await expect(page).toHaveTitle("list-end.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
 });
 
 test("pasting a copy of the whole document adds no empty line", async () => {
@@ -6684,6 +6684,7 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page).toHaveTitle("code-end.md — Downpad");
+  await expect(page.locator(".tab-dot")).toHaveCount(0);
   await page.getByRole("radio", { name: "Document", exact: true }).click();
   await typeAtEnd(paragraph, " Edited.");
   await page.keyboard.press("ControlOrMeta+s");
