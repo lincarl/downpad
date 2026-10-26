@@ -6,6 +6,10 @@
 function New-WizardState([datetime]$Now) {
     # Select-WizardAction updates this state as though each returned click was
     # posted. PendingDialog is the dialog that received Next, Install, or Finish.
+    # It stays set until that dialog's handle leaves the snapshot. In recorded CI
+    # runs, a reused handle slot got a new high word, so a successor should not
+    # repeat the old value. If one did, the driver would wait instead of
+    # clicking it and fail after 20 seconds.
     [pscustomobject]@{
         SawWelcome = $false; ClickedInstall = $false; ClickedFinish = $false
         LastAction = ''; LastActionAt = $Now; PendingDialog = $null
@@ -33,10 +37,11 @@ function Select-WizardAction($State, [object[]]$Windows, [scriptblock]$IsChecked
         }
         if ($State.ClickedFinish -or $choice) { continue }
         $waited = ($Now - $State.LastActionAt).TotalSeconds
-        if ($window.Handle -eq $State.PendingDialog) {
+        if ($null -ne $State.PendingDialog) {
             # Windows Installer replaces the dialog asynchronously and can destroy
-            # its controls between a read and a click. Wait for its successor.
-            if ($waited -gt 20) { throw "Installer did not respond to '$($State.LastAction)'.`n$dialogText" }
+            # its controls between a read and a click. The successor can appear
+            # before the old dialog closes, so use no window until it has closed.
+            if ($window.Handle -eq $State.PendingDialog -and $waited -gt 20) { throw "Installer did not respond to '$($State.LastAction)'.`n$dialogText" }
             continue
         }
         $next = @($buttons | Where-Object { $_.Text.Replace('&', '').Trim() -match '^Next\s*>?$' })

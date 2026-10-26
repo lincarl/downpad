@@ -78,18 +78,27 @@ const exit = (run, controls = [["Button", "Run Downpad", { checked: run }]]) => 
 ]);
 const at = (seconds, ...windows) => ({ at: seconds, windows });
 
-test("a dialog that received Next is not read again while Windows Installer replaces it", options, async () => {
+test("no window is used until the dialog that received Next or Install closes", options, async () => {
   // Recorded on 2026-10-26: the closing scope dialog read as unchecked, and the
-  // old driver posted a scope click to a destroyed radio button. A passing
-  // upgrade showed the Exit and Progress dialogs together.
-  const [fresh] = await replay([
+  // old driver posted a scope click to a destroyed radio button. The successor
+  // can appear before the old dialog closes, in either window order, so the
+  // overlaps below last several polls. A passing upgrade listed Exit before
+  // Progress. Progress gets no click, so Exit is used while Progress remains.
+  const recorded = (overlap, ending) => [
     at(0, prepare), at(1, welcome), at(1.2, welcome), at(2, scope(1)), at(2.6, scope(0)),
-    at(2.8, scope(0), ready), at(3, ready), at(4, progress), at(8, exit(1), progress), at(8.5, exit(1)),
-  ]);
-  assert.deepEqual(fresh, [
+    ...[2.8, 3, 3.2].map((seconds) => at(seconds, ...overlap)),
+    at(3.4, ready), at(3.6, ready, progress), at(4, progress), at(8, ...ending), at(8.5, exit(1)),
+  ];
+  const [oldFirst, newFirst] = await replay(
+    recorded([scope(0), ready], [progress, exit(1)]),
+    recorded([ready, scope(0)], [exit(1), progress]),
+  );
+  const expected = [
     "wait", "Next on dialog 20 -> 21", "wait", "Next on dialog 30 -> 34", "wait",
-    "Install -> 41", "wait", "wait", "Finish with Run Downpad checked -> 61", "wait",
-  ]);
+    "wait", "wait", "wait", "Install -> 41", "wait", "wait", "Finish with Run Downpad checked -> 61", "wait",
+  ];
+  assert.deepEqual(oldFirst, expected);
+  assert.deepEqual(newFirst, expected);
 });
 
 test("the per-user scope and Run Downpad are checked before Next and Finish", options, async () => {
@@ -103,23 +112,27 @@ test("the per-user scope and Run Downpad are checked before Next and Finish", op
 });
 
 test("a click without effect fails after 20 seconds", options, async () => {
-  const [closing, scopeClick] = await replay(
+  const [closing, overlap, scopeClick] = await replay(
     [at(0, welcome), at(19, welcome), at(20.5, welcome)],
+    [at(0, welcome), at(1, scope(1)), at(2, scope(0), ready), at(20.5, scope(0), ready), at(21.5, ready, scope(0))],
     [at(0, welcome), at(1, scope(0)), at(21.5, scope(0))],
   );
   assert.deepEqual(closing, ["Next on dialog 20 -> 21", "wait", "error: Installer did not respond to 'Next on dialog 20'."]);
+  assert.deepEqual(overlap, ["Next on dialog 20 -> 21", "Next on dialog 30 -> 34", "wait", "wait", "error: Installer did not respond to 'Next on dialog 30'."]);
   assert.deepEqual(scopeClick, ["Next on dialog 20 -> 21", "select per-user installation -> 31", "error: Installer did not respond to 'select per-user installation'."]);
 });
 
 test("installer errors and modals fail even while a dialog is closing", options, async () => {
   const failure = dialog(70, [["Button", "OK"], ["Static", "The installer has encountered an unexpected error installing this package."]]);
   const cancel = dialog(80, [["Button", "&Yes"], ["Button", "&No"], ["Static", "Are you sure you want to cancel Downpad installation?"]]);
-  const [error, modal] = await replay(
+  const [error, modal, overlap] = await replay(
     [at(0, welcome), at(0.5, welcome, failure)],
     [at(0, welcome), at(1, ready), at(1.5, cancel, ready)],
+    [at(0, welcome), at(1, scope(1)), at(1.5, ready, scope(0)), at(1.7, ready, scope(0), cancel)],
   );
   assert.deepEqual(error, ["Next on dialog 20 -> 21", "error: Installer error dialog after 'Next on dialog 20'."]);
   assert.deepEqual(modal, ["Next on dialog 20 -> 21", "Install -> 41", "error: Unexpected installer modal dialog."]);
+  assert.deepEqual(overlap, ["Next on dialog 20 -> 21", "Next on dialog 30 -> 34", "wait", "error: Unexpected installer modal dialog."]);
 });
 
 test("Finish requires the Welcome and Install steps and a Run Downpad checkbox", options, async () => {
