@@ -24,7 +24,11 @@ installer packaging for Linux and Windows.
 
 Windows also drives the MSI wizard through its final **Run Downpad** checkbox,
 checks the installed files and registration, waits for the application window,
-and uninstalls the test copy. A second scenario builds synthetic `0.0.1` and
+and uninstalls the test copy. After Next or Install, the driver stops using
+that dialog's controls until Windows Installer replaces it, because the
+controls can disappear between a read and a click. It still checks every
+window for installer errors. `pnpm test` replays dialog sequences through the
+driver's decisions on both platforms. A second scenario builds synthetic `0.0.1` and
 `0.0.2-rc1` packages through the normal release-version and packaging steps, then
 upgrades the stable installation to the candidate. This catches incorrect
 numeric Windows executable versions even when the PR artifact uses `0.0.0`.
