@@ -6242,6 +6242,9 @@ test("find keeps the last match in view and moves a covered match below the card
   await find.fill("middle");
   await expect(page.locator(".find-count")).toHaveText("1 of 1");
   await expect.poll(currentMatchProblem).toBe("");
+  // The match can be clear of the card before the search's queued scroll
+  // has run, and that scroll would undo the user's.
+  await twoFrames();
 
   // The user scrolls down until the middle match is under the card. The next
   // find step moves it below the card.
@@ -6328,6 +6331,9 @@ test("the find card fits a narrow window and find moves a match below it", async
   await page.keyboard.press("ControlOrMeta+h");
   await expect(replace).toBeVisible();
   await expect.poll(currentMatchProblem).toBe("");
+  // The match can be clear of the card before the search's queued scroll
+  // has run, and that scroll would undo the user's.
+  await twoFrames();
   await page.locator(".editor-area").evaluate((element) => {
     const match = document.querySelector(".md-find-current")!.getBoundingClientRect();
     element.scrollTop += match.top - document.querySelector(".find-bar")!.getBoundingClientRect().top - 8;
