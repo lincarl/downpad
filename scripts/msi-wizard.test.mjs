@@ -43,7 +43,10 @@ for ($index = 0; $index -lt $cases.Count; $index++) {
 async function replay(...cases) {
   assert.ok(shell, "CI must provide PowerShell to replay the MSI wizard.");
   const run = execute(shell, [
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(harness, "utf16le").toString("base64"),
+    "-NoLogo", "-NoProfile", "-NonInteractive",
+    // Allow the helper script without changing machine or user execution policy.
+    ...(process.platform === "win32" ? ["-ExecutionPolicy", "Bypass"] : []),
+    "-EncodedCommand", Buffer.from(harness, "utf16le").toString("base64"),
   ], {
     env: { ...process.env, DOWNPAD_WIZARD_SCRIPT: wizardScript, DOWNPAD_WIZARD_CASES: JSON.stringify({ cases: cases.map((steps) => ({ steps })) }) },
     timeout: 60_000,
