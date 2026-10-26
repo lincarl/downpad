@@ -3401,6 +3401,8 @@ test("the block handle of a line with a wide missing image chip stays beside the
   await page.keyboard.type("X");
   await page.keyboard.press("ControlOrMeta+s");
   await expect(page).toHaveTitle("chip-handle.md — Downpad");
+  // The title does not change while saving. Wait for the edit on disk.
+  await expect.poll(() => readFile(file, "utf8")).toContain("X");
   const saved = await readFile(file, "utf8");
   // X went into "the", the word before the chip, and nothing else changed.
   const typed = saved.indexOf("X");
