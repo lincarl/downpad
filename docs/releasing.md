@@ -7,6 +7,8 @@ Candidates keep the same target version, as `rc1`, `rc2` and so on, until that
 version is released as stable. For example, `v0.3.5-rc1` and `v0.3.5-rc2` both
 lead to the stable release `v0.3.5`.
 
+GitHub release titles match their tags, such as `v0.3.5` or `v0.3.5-rc1`.
+
 ## Release candidates
 
 Before the builds of a main push, the installer workflow creates the annotated
@@ -86,13 +88,13 @@ GH_TOKEN=$(gh auth token) node scripts/release.mjs prune --released-tag v0.3.5
 
 ## Package versions
 
-The app, the GitHub release and the file names show the public version, including
+The app and the file names show the public version, including
 the RC suffix. Each package format compares versions by its own rules, and a
 stable release replaces every candidate of its version.
 
 | Package | `0.3.5-rc1` | `0.3.5-rc2` | `0.3.5` |
 |---|---|---|---|
-| App, release and file names | `0.3.5-rc1` | `0.3.5-rc2` | `0.3.5` |
+| App and file names | `0.3.5-rc1` | `0.3.5-rc2` | `0.3.5` |
 | Debian package version | `0.3.5~rc1` | `0.3.5~rc2` | `0.3.5` |
 | MSI product version | `0.3.5.0` | `0.3.5.0` | `0.3.5.0` |
 | Windows executable numeric file version | `0.3.5.0` | `0.3.5.0` | `0.3.5.0` |

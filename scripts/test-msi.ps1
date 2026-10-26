@@ -47,6 +47,7 @@ function Write-TestProgress([string]$Message, [switch]$Quiet) {
     if (-not $Quiet) { Write-Host $line }
 }
 Write-TestProgress "Initialize native helpers for '$Scenario', worker PID $PID"
+. (Join-Path $PSScriptRoot 'msi-wizard.ps1')
 
 # Native button messages are asynchronous, so an error modal cannot block the
 # polling loop as a synchronous UIAutomation InvokePattern.Invoke can.
@@ -117,13 +118,13 @@ namespace DownpadMsiTest {
         public static int Checked(IntPtr handle) {
             UIntPtr result;
             if (SendMessageTimeout(handle, 0x00F0, IntPtr.Zero, IntPtr.Zero, 2, 1000, out result) == IntPtr.Zero)
-                throw new InvalidOperationException("The installer checkbox did not respond.");
+                throw new InvalidOperationException("The installer checkbox did not respond. Win32 error " + Marshal.GetLastWin32Error() + ".");
             return (int)result.ToUInt32();
         }
         public static void Click(IntPtr handle) {
             SetForegroundWindow(GetAncestor(handle, 2));
             if (!PostMessage(handle, 0x00F5, IntPtr.Zero, IntPtr.Zero))
-                throw new InvalidOperationException("Could not post the installer button click.");
+                throw new InvalidOperationException("Could not post the installer button click. Win32 error " + Marshal.GetLastWin32Error() + ".");
         }
     }
 }
@@ -317,62 +318,24 @@ function Save-Diagnostics([string]$Label) {
 
 function Invoke-InstallWizard([Diagnostics.Process]$Process) {
     # WiX's English assisted UI has Welcome, scope, ready, progress, and Exit.
+    # Select-WizardAction chooses at most one click from each window snapshot.
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $lastAction = ''
-    $lastActionAt = Get-Date
-    $sawWelcome = $false
-    $clickedInstall = $false
-    $clickedFinish = $false
+    $state = New-WizardState (Get-Date)
+    $isChecked = { param($control) [DownpadMsiTest.Native]::Checked($control.Handle) }
     $windowSince = $null
     $log = Join-Path $diagnostics 'wizard.log'
     Write-TestProgress "Drive installer wizard PID $($Process.Id)"
     while ((Get-Date) -lt $deadline) {
         Write-TestProgress 'Inspect wizard windows' -Quiet
-        $windows = @([DownpadMsiTest.Native]::Windows($Process.Id))
-        foreach ($window in $windows) {
+        $windows = @(foreach ($window in [DownpadMsiTest.Native]::Windows($Process.Id)) {
             Write-TestProgress "Inspect wizard controls for window $($window.Handle)" -Quiet
-            $children = @([DownpadMsiTest.Native]::Children($window.Handle))
-            $dialogText = (@($window.Text) + @($children | ForEach-Object { $_.Text })) -join "`n"
-            if ($dialogText -match '(?i)\berror\b|\bfailed\b|prematurely|not marked for installation') {
-                throw "Installer error dialog after '$lastAction'.`n$dialogText"
-            }
-            $buttons = @($children | Where-Object { $_.ClassName -eq 'Button' -and $_.Enabled })
-            if (@($buttons | Where-Object { $_.Text.Replace('&', '').Trim() -match '^(OK|Yes|No|Retry|Abort|Ignore)$' }).Count -gt 0) {
-                throw "Unexpected installer modal dialog.`n$dialogText"
-            }
-            if ($clickedFinish) { continue }
-            $next = @($buttons | Where-Object { $_.Text.Replace('&', '').Trim() -match '^Next\s*>?$' })
-            $install = @($buttons | Where-Object { $_.Text.Replace('&', '').Trim() -eq 'Install' })
-            $finish = @($buttons | Where-Object { $_.Text.Replace('&', '').Trim() -eq 'Finish' })
-            $target = $null
-            $action = ''
-            if ($finish.Count -eq 1) {
-                if (-not $sawWelcome -or -not $clickedInstall) { throw "Reached Finish without Welcome and Install.`n$dialogText" }
-                $run = @($buttons | Where-Object { $_.Text.Replace('&', '').Trim() -eq 'Run Downpad' })
-                if ($run.Count -ne 1) { throw "Exit dialog does not offer Run Downpad.`n$dialogText" }
-                if ([DownpadMsiTest.Native]::Checked($run[0].Handle) -ne 1) {
-                    $target = $run[0]; $action = 'check Run Downpad'
-                } else {
-                    Save-Diagnostics 'before-finish'
-                    $target = $finish[0]; $action = 'Finish with Run Downpad checked'; $clickedFinish = $true
-                }
-            } elseif ($install.Count -eq 1) {
-                $target = $install[0]; $action = 'Install'; $clickedInstall = $true
-            } elseif ($next.Count -eq 1) {
-                if ($dialogText -match '(?i)welcome') { $sawWelcome = $true }
-                $perUser = @($buttons | Where-Object { $_.Text.Replace('&', '') -match '(?i)just for you|only for me|just for me' })
-                if ($perUser.Count -eq 1 -and [DownpadMsiTest.Native]::Checked($perUser[0].Handle) -ne 1) {
-                    $target = $perUser[0]; $action = 'select per-user installation'
-                } else { $target = $next[0]; $action = "Next $($window.Handle) $dialogText" }
-            }
-            if ($target -and $action -ne $lastAction) {
-                Write-Host "Wizard action $($action.Split([char]10)[0])"
-                [DownpadMsiTest.Native]::Click($target.Handle)
-                $lastAction = $action
-                $lastActionAt = Get-Date
-            } elseif ($target -and ((Get-Date) - $lastActionAt).TotalSeconds -gt 20) {
-                throw "Installer did not respond to '$lastAction'.`n$dialogText"
-            }
+            [pscustomobject]@{ Handle = $window.Handle; Text = $window.Text; Children = @([DownpadMsiTest.Native]::Children($window.Handle)) }
+        })
+        $choice = Select-WizardAction $state $windows $isChecked (Get-Date)
+        if ($choice) {
+            if ($state.ClickedFinish) { Save-Diagnostics 'before-finish' }
+            Write-Host "Wizard action $($choice.Action)"
+            [DownpadMsiTest.Native]::Click($choice.Target.Handle)
         }
         Write-TestProgress 'Read wizard log' -Quiet
         if (Test-Path -LiteralPath $log) {
@@ -382,7 +345,7 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
         $hasWindow = $false
         Write-TestProgress 'Inspect installed app processes and windows' -Quiet
         foreach ($app in @(Get-TestAppProcesses)) {
-            if (-not $clickedFinish) { throw 'Downpad started before the Finish button was clicked.' }
+            if (-not $state.ClickedFinish) { throw 'Downpad started before the Finish button was clicked.' }
             if (@([DownpadMsiTest.Native]::Windows($app.Id) | Where-Object { $_.ClassName -eq 'Chrome_WidgetWin_1' }).Count -gt 0) {
                 $hasWindow = $true
             }
@@ -393,7 +356,7 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
         Write-TestProgress 'Check wizard client exit' -Quiet
         if ($Process.HasExited) {
             if ($Process.ExitCode -ne 0) { throw "Wizard exited with code $($Process.ExitCode)." }
-            if (-not $clickedFinish) { throw 'Wizard exited without clicking Finish with Run Downpad checked.' }
+            if (-not $state.ClickedFinish) { throw 'Wizard exited without clicking Finish with Run Downpad checked.' }
             if ($windowSince -and ((Get-Date) - $windowSince).TotalSeconds -ge 2) {
                 # The profile must be used by the custom action's child, not only
                 # created by this script. Electron writes Preferences at startup.
@@ -406,7 +369,7 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
         }
         Start-Sleep -Milliseconds 200
     }
-    throw "Timed out after $TimeoutSeconds seconds waiting for the wizard and installed application window. Last action '$lastAction'."
+    throw "Timed out after $TimeoutSeconds seconds waiting for the wizard and installed application window. Last action '$($state.LastAction)'."
 }
 
 function Get-RemainingMilliseconds([datetime]$Deadline) {

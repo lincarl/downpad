@@ -40,6 +40,8 @@ pnpm start
 
 `pnpm build` produces the frontend in `dist/` and the Electron main process and preload in `electron-dist/`. `pnpm start` opens that production build. Pass a Markdown path to the app to open it, for example `pnpm start ./notes.md`.
 
+`pnpm test` checks the MSI wizard driver's decisions with Windows PowerShell on Windows and PowerShell 7 (`pwsh`) elsewhere. On other systems outside CI, those tests are skipped if `pwsh` is not on `PATH`.
+
 Browser and desktop end-to-end tests run separately.
 
 ```sh
