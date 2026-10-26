@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
-import { Star } from "lucide-react";
+import { File, Star } from "lucide-react";
 import type { FileStat } from "@/ipc/contracts";
 import { cn } from "@/lib/utils";
-import { DocumentArtwork } from "@/components/icons";
 import { formatSize } from "@/document/docSize";
 import { fileName, formatDate, plainSnippet } from "./recentFormat";
 import type { RecentRowModel } from "./recentListing";
@@ -38,7 +37,7 @@ export interface RecentRowProps {
 
 /**
  * One file in the Recent list, after Mervin's row: 64px (88px with a content
- * snippet), edge to edge, with the document artwork, name over path, date over
+ * snippet), edge to edge, with a file icon, name over path, date over
  * size and the star at the far right. Clicking anywhere but the star opens it.
  */
 export function RecentRow({
@@ -83,7 +82,12 @@ export function RecentRow({
         tabIndex={tabStop ? 0 : -1}
         onFocus={onFocus}
       >
-        <DocumentArtwork size={34} className="recent-icon shrink-0" />
+        <File
+          aria-hidden="true"
+          focusable="false"
+          size={26}
+          className={cn("recent-icon shrink-0", strongInk, SELECTED_INK)}
+        />
         <span className="recent-mid mr-3 ml-[11px] flex min-w-0 flex-1 flex-col self-stretch pt-[9px]">
           <span className={cn("recent-name block truncate text-[12px] leading-[23px] font-semibold", strongInk, SELECTED_INK)}>
             <Highlighted text={name} query={nameQuery} />
