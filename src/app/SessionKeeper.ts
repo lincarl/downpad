@@ -38,10 +38,15 @@ export class SessionKeeper {
   }
 
   /** Resolve once the documents open now are recorded, as before the window
-   *  closes. A failed write is logged, since it must not keep the window open. */
-  flush(): Promise<void> {
+   *  closes, also a change made while the last write was under way. A failed
+   *  write is logged, since it must not keep the window open. */
+  async flush(): Promise<void> {
     this.record();
-    return this.writes;
+    let writes: Promise<void>;
+    do {
+      writes = this.writes;
+      await writes;
+    } while (writes !== this.writes);
   }
 
   private record(): void {

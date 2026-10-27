@@ -268,10 +268,14 @@ export function SettingsDialogView({ initial, onSave, onRequestClose, restartIfS
     if (form && opened.current === null) opened.current = JSON.stringify(readForm());
   }, []);
 
+  // The accent picker holds the colour it shows as a draft until OK.
+  const accentPickerOpen = useRef(false);
+
   // An update restart quits without saving the form, so it waits for Restart
-  // now while the form has changes.
+  // now while the form has changes, also a colour still open in the picker.
   const restartWhenReady = restartIfSaved &&
-    (async (): Promise<boolean> => JSON.stringify(readForm()) === opened.current && restartIfSaved());
+    (async (): Promise<boolean> =>
+      !accentPickerOpen.current && JSON.stringify(readForm()) === opened.current && restartIfSaved());
 
   const save = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -445,6 +449,9 @@ export function SettingsDialogView({ initial, onSave, onRequestClose, restartIfS
                         onCommit={(color) => {
                           setAccentColor(color);
                           setChosenAccentMode("custom");
+                        }}
+                        onOpenChange={(open) => {
+                          accentPickerOpen.current = open;
                         }}
                       />
                       <Button

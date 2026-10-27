@@ -76,6 +76,28 @@ describe("recording the open documents", () => {
     expect(native.saveSession.mock.calls.at(-1)).toEqual([{ files: ["/docs/a.md", "/docs/b.md"], active: "/docs/a.md" }]);
   });
 
+  it("waits in a flush also for a change made while the write before it was under way", async () => {
+    const { store, keeper, ids } = setup();
+    keeper.start();
+    await keeper.flush();
+    let first!: () => void;
+    let second!: () => void;
+    native.saveSession
+      .mockReturnValueOnce(new Promise<void>((resolve) => { first = resolve; }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => { second = resolve; }));
+    store.activateTab(ids.a);
+    let flushed = false;
+    const flushing = keeper.flush().then(() => { flushed = true; });
+    // A tab chosen while the window waits to close.
+    store.activateTab(ids.b);
+    first();
+    await vi.waitFor(() => expect(native.saveSession).toHaveBeenCalledTimes(3));
+    expect(flushed).toBe(false);
+    second();
+    await flushing;
+    expect(native.saveSession.mock.calls.at(-1)).toEqual([{ files: ["/docs/a.md", "/docs/b.md"], active: "/docs/b.md" }]);
+  });
+
   it("writes a session again after its write failed", async () => {
     const { keeper } = setup();
     vi.spyOn(console, "error").mockImplementation(() => {});

@@ -351,7 +351,31 @@ describe("SettingsDialogView updates", () => {
     expect(screen.getByRole("button", { name: "Restart now" })).toBeTruthy();
   });
 
-  it("does not restart for a download that was ready before the check, or a check that found nothing", async () => {
+  it("does not restart while the accent picker holds a colour that OK has not put in the form", async () => {
+    const bridge = desktop(installed);
+    const restartIfSaved = vi.fn(async () => true);
+    const { user } = await checkForUpdates(bridge, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+    await user.click(screen.getByRole("button", { name: "Choose custom accent color" }));
+    const hex = screen.getByRole("textbox", { name: "Accent color hex" });
+    await user.clear(hex);
+    await user.type(hex, "#123456");
+    bridge.send(ready);
+    expect(restartIfSaved).not.toHaveBeenCalled();
+  });
+
+  it("restarts when a check finds again the download that was ready when Settings opened", async () => {
+    const bridge = desktop(ready);
+    const restartIfSaved = vi.fn(async () => true);
+    const { user } = renderDialog(DEFAULT_SETTINGS, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await user.click(await screen.findByRole("button", { name: "Check for updates" }));
+    bridge.send({ ...installed, state: { status: "checking" } });
+    bridge.send(ready);
+    expect(restartIfSaved).toHaveBeenCalledOnce();
+  });
+
+  it("does not restart for a download that is ready when Settings opens, or a check that found nothing", async () => {
     const bridge = desktop(ready);
     const restartIfSaved = vi.fn(async () => true);
     const { user } = renderDialog(DEFAULT_SETTINGS, restartIfSaved);
