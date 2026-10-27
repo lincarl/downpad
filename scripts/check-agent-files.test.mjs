@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { trackedAgentFiles } from "./check-agent-files.mjs";
+
+const scratch = fileURLToPath(new URL("../dev-temp/agent-files-tests/", import.meta.url));
 
 /** Create a repository that commits `tracked` and also holds an ignored private AGENTS.md. */
 async function repository(t, tracked) {
-  const root = await mkdtemp(path.join(tmpdir(), "agent-files-"));
+  await mkdir(scratch, { recursive: true });
+  const root = await mkdtemp(path.join(scratch, "run-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const env = { ...process.env, HOME: root, XDG_CONFIG_HOME: root, GIT_CONFIG_NOSYSTEM: "1" };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[name];
