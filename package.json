@@ -11,7 +11,7 @@
     "build": "pnpm build:web && pnpm build:desktop",
     "build:web": "tsc --noEmit && vite build",
     "build:desktop": "tsc -p electron/tsconfig.json && node scripts/build-desktop.mjs",
-    "check": "tsc --noEmit && tsc -p electron/tsconfig.json && pnpm lint:css",
+    "check": "node scripts/check-agent-files.mjs && tsc --noEmit && tsc -p electron/tsconfig.json && pnpm lint:css",
     "lint:css": "stylelint \"src/**/*.css\"",
     "preview": "vite preview",
     "start": "electron .",
@@ -25,7 +25,7 @@
     "test:e2e": "playwright test",
     "test:electron": "playwright test --config playwright.electron.config.ts",
     "test:desktop": "vitest run --config electron/vitest.config.ts",
-    "test:ci": "node --test scripts/ci.test.mjs scripts/run-msi-test.test.mjs scripts/msi-wizard.test.mjs",
+    "test:ci": "node --test scripts/ci.test.mjs scripts/run-msi-test.test.mjs scripts/msi-wizard.test.mjs scripts/check-agent-files.test.mjs",
     "test:release": "node --test scripts/release.test.mjs"
   },
   "devDependencies": {
