@@ -1836,9 +1836,13 @@ test("the block handle hides when the document changes width, so a click on a bu
   /** Show the block handle beside the item that starts with `text` in the
    *  Document view and switch to the Split view. Returns the center of the
    *  item's bullet or task box, which lies under the handle's place from
-   *  before the switch. */
+   *  before the switch, once the split is on screen. */
   const switchBeside = async (text: string) => {
     await page.getByRole("radio", { name: "Document", exact: true }).click();
+    // A person points at the Document view only once it is on screen. When
+    // frames came late, as on a busy machine, the pointer move below showed
+    // the handle before that, and the frame that drew the view hid it again.
+    await twoFrames();
     const paragraph = (await item(text).locator("p").boundingBox())!;
     const middle = paragraph.y + paragraph.height / 2;
     await page.mouse.move(paragraph.x + 20, middle);
@@ -1847,6 +1851,11 @@ test("the block handle hides when the document changes width, so a click on a bu
       return (await handle.getAttribute("data-show")) === "true" && !!box && Math.abs(box.y + box.height / 2 - middle) < 8;
     }).toBe(true);
     await page.getByRole("radio", { name: "Split", exact: true }).click();
+    // The frame that first shows the split also hides the handle, so a press
+    // a person aims at the split never reaches the handle. Playwright measures
+    // and presses without waiting for a frame. When frames came late, its
+    // press reached the handle in its old place before any frame had hidden it.
+    await expect(handle).toHaveAttribute("data-show", "false");
     const label = await centerOf(item(text).locator(".label-wrapper"));
     const box = (await handle.boundingBox())!;
     expect(label.x > box.x && label.x < box.x + box.width && label.y > box.y && label.y < box.y + box.height).toBe(true);
@@ -6208,7 +6217,8 @@ function cardInsets(): Promise<{ top: number; right: number; height: number }> {
   });
 }
 
-/** Wait until the page has painted twice, so find's scrolls in frame callbacks are done. */
+/** Wait until the page has painted twice, so work in frame callbacks, such as
+ *  find's scrolls, is done, and a change of layout is on screen. */
 function twoFrames(): Promise<unknown> {
   return page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
