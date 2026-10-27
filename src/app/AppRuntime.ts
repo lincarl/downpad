@@ -14,6 +14,7 @@ import { RecentView } from "../home/RecentView";
 import { createIpcRecentDataSource } from "../home/recentData";
 import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
+import { restartToUpdate } from "../ipc/commands";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
 import { layoutFromDefaultView, shownLayout } from "../state/types";
@@ -25,6 +26,7 @@ import { installAppShortcuts } from "./installAppShortcuts";
 import { StartupCoordinator } from "./StartupCoordinator";
 import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
+import { SessionKeeper } from "./SessionKeeper";
 
 export interface AppRuntimeHosts {
   editorArea: HTMLElement;
@@ -46,6 +48,7 @@ export class AppRuntime {
   private readonly findBar: FindBar;
   private readonly recentView: RecentView;
   private readonly scheduler: SnapshotScheduler;
+  private readonly session: SessionKeeper;
   private readonly printWorkspace: PrintWorkspace;
   private readonly startup: StartupCoordinator;
   private readonly desktopEvents: DesktopEventBindings;
@@ -65,7 +68,11 @@ export class AppRuntime {
     private readonly callbacks: AppRuntimeCallbacks,
   ) {
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
-    this.settingsDialog = new SettingsDialog(store, (next) => void this.settingsModel.save(next));
+    this.settingsDialog = new SettingsDialog(
+      store,
+      (next) => void this.settingsModel.save(next),
+      () => this.restartToUpdateIfSaved(),
+    );
 
     // The editor presenter lets FileService flush + re-show the active document
     // after the active tab changes, without owning the editor or view state.
@@ -82,6 +89,7 @@ export class AppRuntime {
     // focuses it if already open, else opens a new tab (consistent with §5.19).
     this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
     this.scheduler = new SnapshotScheduler(store, this.files);
+    this.session = new SessionKeeper(store);
     // The find card floats over the document and searches the formatted
     // document or raw Markdown according to the active layout. Its open state
     // lives in the store so the toolbar's Find button can show as pressed.
@@ -135,6 +143,7 @@ export class AppRuntime {
       files: this.files,
       editorHost: this.editorHost,
       scheduler: this.scheduler,
+      session: this.session,
       run: (action) => this.run(action),
       handleDrop: (paths, drop) => this.fileDrops.handle(paths, drop),
     });
@@ -165,6 +174,7 @@ export class AppRuntime {
     this.desktopEvents.dispose();
     this.startup.dispose();
     this.scheduler.stop();
+    this.session.dispose();
     this.printWorkspace.close();
     this.settingsDialog.close();
     this.findBar.destroy();
@@ -209,6 +219,15 @@ export class AppRuntime {
 
   openSettings(): void {
     this.settingsDialog.open();
+  }
+
+  /** Restart to install the downloaded update, if no document has unsaved
+   *  changes, so that closing asks nothing. False, without a restart, when
+   *  one has. */
+  private async restartToUpdateIfSaved(): Promise<boolean> {
+    if (!this.files.canCloseTabs()) return false;
+    await restartToUpdate();
+    return true;
   }
 
   /** Toggle only the document surface. UI chrome remains controlled in Settings. */
@@ -285,15 +304,16 @@ export class AppRuntime {
     this.store.set({ editorLayout: startLayout });
     this.editorHost.initLayout(startLayout);
 
-    // Startup resolution (§5.15): recovery → launch arg → first-run welcome →
-    // Recent view (returning user). In a plain browser (dev/e2e) keep the seed doc.
+    // Startup resolution (§5.15): recovery → the documents open at the last
+    // close → launch arg → first-run welcome → Recent view (returning user). In
+    // a plain browser (dev/e2e) keep the seed doc.
     const landOnEditor = await this.startup.resolve();
     if (this.disposed) return;
     if (landOnEditor && this.store.get().activeTabId) {
       this.store.set({ view: "wysiwyg" });
       // A launch argument or a recovered file's original was already shown by
-      // openPath. A recovered snapshot, the welcome document and the browser
-      // seed only filled the tab, so this builds it.
+      // openPath. A recovered snapshot, a reopened document, the welcome
+      // document and the browser seed only filled the tab, so this builds it.
       await this.editorHost.showActiveDoc();
       this.files.watchActive();
     } else {
@@ -303,6 +323,7 @@ export class AppRuntime {
     }
     if (this.disposed) return;
     this.scheduler.start();
+    this.session.start();
 
     this.cleanups.push(this.store.subscribe((state, previous) => {
       const next = state.settings;

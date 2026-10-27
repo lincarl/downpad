@@ -13,6 +13,7 @@ import type {
   SearchHit,
   SearchOpts,
   SearchSummary,
+  Session,
   Snapshot,
   UpdateInfo,
 } from "./contracts";
@@ -149,6 +150,18 @@ export function deleteSnapshot(sessionId: string): Promise<void> {
 
 export function listRecoverySnapshots(): Promise<Snapshot[]> {
   return invoke("list_recovery_snapshots");
+}
+
+// ── Reopening the open documents ──
+
+/** The documents that were open when Downpad last closed. */
+export function loadSession(): Promise<Session> {
+  return invoke("load_session");
+}
+
+/** Record the open documents for the next start. */
+export function saveSession(session: Session): Promise<void> {
+  return invoke("save_session", { session });
 }
 
 // ── OS integration (§5.12) ──

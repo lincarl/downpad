@@ -207,6 +207,8 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "write_snapshot": return config.writeSnapshot(args.snapshot);
     case "delete_snapshot": return config.deleteSnapshot(string(args, "sessionId"));
     case "list_recovery_snapshots": return config.snapshots();
+    case "load_session": return config.session();
+    case "save_session": return config.saveSession(args.session);
     case "get_launch_args": return pendingOpenPaths.shift() ?? null;
     case "get_default_md_handler": return defaultMdHandler();
     case "open_default_apps_settings": {
@@ -473,7 +475,7 @@ function relaunchExecutable(): string {
 }
 
 /** Quit, through the usual prompt about unsaved documents, and start again,
- *  which installs the downloaded update. */
+ *  which installs the downloaded update and reopens the open documents. */
 async function restartToUpdate(): Promise<void> {
   if (!(await updates().approve())) throw new Error("No downloaded update is waiting.");
   restartForUpdate = true;
@@ -497,6 +499,7 @@ async function installPendingUpdate(pending: PendingUpdate): Promise<{ restartin
         await discardStagedMsi(staged);
         throw error;
       }
+      // The helper runs the installer once this process has ended.
       app.exit(0);
       return { restarting: true };
     }

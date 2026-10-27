@@ -78,6 +78,15 @@ export interface Snapshot {
   isDirty: boolean;
 }
 
+/** The documents that were open, which the next start reopens. Untitled
+ *  documents have no file and are left out. */
+export interface Session {
+  /** The files of the open documents, in tab order. */
+  files: string[];
+  /** The active document's file, or null when the active tab has none. */
+  active: string | null;
+}
+
 /** An installed printer offered in the print workspace (§5.21). */
 export interface PrinterInfo {
   name: string;

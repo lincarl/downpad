@@ -14,6 +14,7 @@ import type {
   SearchHit,
   SearchOpts,
   SearchSummary,
+  Session,
   Snapshot,
   UpdateInfo,
 } from "./contracts";
@@ -37,6 +38,8 @@ export interface DesktopCommandArgs {
   write_snapshot: { snapshot: Snapshot };
   delete_snapshot: { sessionId: string };
   list_recovery_snapshots: undefined;
+  load_session: undefined;
+  save_session: { session: Session };
   get_launch_args: undefined;
   get_default_md_handler: undefined;
   open_default_apps_settings: undefined;
@@ -71,6 +74,8 @@ export interface DesktopCommandResults {
   write_snapshot: void;
   delete_snapshot: void;
   list_recovery_snapshots: Snapshot[];
+  load_session: Session;
+  save_session: void;
   get_launch_args: string | null;
   get_default_md_handler: DefaultHandler;
   open_default_apps_settings: void;

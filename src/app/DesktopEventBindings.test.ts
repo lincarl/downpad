@@ -64,6 +64,7 @@ describe("native close decisions", () => {
   let host: EditorHost;
   let files: FileService;
   let scheduler: SnapshotScheduler;
+  let session: { flush: ReturnType<typeof vi.fn<() => Promise<void>>> };
   let current: Promise<unknown>;
   let store: ReturnType<typeof createAppStore>;
 
@@ -82,12 +83,14 @@ describe("native close decisions", () => {
     vi.spyOn(files, "confirmCloseAll").mockResolvedValue("close");
     vi.spyOn(scheduler, "clear").mockResolvedValue(undefined);
     vi.spyOn(scheduler, "start").mockImplementation(() => {});
+    session = { flush: vi.fn(async () => {}) };
     current = Promise.resolve();
     bindings = new DesktopEventBindings({
       store,
       files,
       editorHost: host,
       scheduler,
+      session,
       handleDrop: async () => {},
       run: (action) => {
         current = action();
@@ -104,16 +107,30 @@ describe("native close decisions", () => {
     vi.restoreAllMocks();
   });
 
-  it("flushes edits and clears recovery before approving native close", async () => {
+  it("flushes edits, clears recovery and records the open documents before approving native close", async () => {
     events.closeRequested!();
     await current;
 
     expect(host.flush).toHaveBeenCalledOnce();
     expect(scheduler.clear).toHaveBeenCalledOnce();
+    expect(session.flush).toHaveBeenCalledOnce();
     expect(bridge.closeWindow).toHaveBeenCalledOnce();
     expect(bridge.cancelWindowClose).not.toHaveBeenCalled();
     expect(vi.mocked(scheduler.clear).mock.invocationCallOrder[0])
       .toBeLessThan(bridge.closeWindow.mock.invocationCallOrder[0]!);
+    expect(session.flush.mock.invocationCallOrder[0]).toBeLessThan(bridge.closeWindow.mock.invocationCallOrder[0]!);
+  });
+
+  it("does not close while the open documents are still being recorded", async () => {
+    let recorded!: () => void;
+    session.flush.mockReturnValueOnce(new Promise<void>((resolve) => { recorded = resolve; }));
+    events.closeRequested!();
+    await vi.waitFor(() => expect(session.flush).toHaveBeenCalledOnce());
+    expect(bridge.closeWindow).not.toHaveBeenCalled();
+
+    recorded();
+    await current;
+    expect(bridge.closeWindow).toHaveBeenCalledOnce();
   });
 
   it("cancels quit intent after declining discard and accepts a later close", async () => {
@@ -216,6 +233,7 @@ describe("a file that changed on disk", () => {
       files,
       editorHost: host,
       scheduler: new SnapshotScheduler(store, files),
+      session: { flush: async () => {} },
       handleDrop: async () => {},
       run: () => {},
     });

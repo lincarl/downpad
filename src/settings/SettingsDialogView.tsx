@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import {
   Hash,
@@ -57,6 +57,9 @@ export interface SettingsDialogViewProps {
   initial: Settings;
   onSave: (next: Settings) => void;
   onRequestClose: () => void;
+  /** Restart Downpad to install the downloaded update if no document has
+   *  unsaved changes. Resolves false, without a restart, if one has. */
+  restartIfSaved?: () => Promise<boolean>;
 }
 
 type PageId =
@@ -108,7 +111,7 @@ function knownOr<T extends string>(value: string, choices: ReadonlyArray<{ value
 const FIRST_CONTROL =
   'input[type="radio"]:checked, input:not([type="radio"]):not([type="hidden"]):not(:disabled), select:not(:disabled), button:not(:disabled)';
 
-export function SettingsDialogView({ initial, onSave, onRequestClose }: SettingsDialogViewProps) {
+export function SettingsDialogView({ initial, onSave, onRequestClose, restartIfSaved }: SettingsDialogViewProps) {
   const formRef = useRef<HTMLFormElement>(null);
   const baseId = useId();
   const tabId = (page: PageId) => `${baseId}-tab-${page}`;
@@ -188,10 +191,10 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     document.getElementById(tabId(target))?.focus();
   };
 
-  const save = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
+  /** The settings that Save would write, read from the form. */
+  const readForm = (): Settings | null => {
     const form = formRef.current;
-    if (!form) return;
+    if (!form) return null;
 
     const input = (name: string): HTMLInputElement =>
       form.elements.namedItem(name) as HTMLInputElement;
@@ -212,7 +215,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     // Only copies that install updates themselves show this check box.
     const autoUpdate = form.elements.namedItem("autoUpdate") as HTMLInputElement | null;
 
-    const next: Settings = {
+    return {
       ...initial,
       theme: radio("theme").value as Settings["theme"],
       accentMode: input("accentMode").value as Settings["accentMode"],
@@ -254,7 +257,26 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
     };
+  };
 
+  // What the form held as it first rendered, to tell whether it has changes
+  // that Save has not written yet. The form mounts in the dialog's portal after
+  // this component's effects have run, so its ref records it.
+  const opened = useRef<string | null>(null);
+  const attachForm = useCallback((form: HTMLFormElement | null) => {
+    formRef.current = form;
+    if (form && opened.current === null) opened.current = JSON.stringify(readForm());
+  }, []);
+
+  // An update restart quits without saving the form, so it waits for Restart
+  // now while the form has changes.
+  const restartWhenReady = restartIfSaved &&
+    (async (): Promise<boolean> => JSON.stringify(readForm()) === opened.current && restartIfSaved());
+
+  const save = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    const next = readForm();
+    if (!next) return;
     onSave(next);
     onRequestClose();
   };
@@ -278,7 +300,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
           </DialogDescription>
           {/* No native validation: it cannot point at a field on a hidden page, so
               it would cancel Save silently. Save clamps every number instead. */}
-          <form ref={formRef} className="settings-form flex min-h-0 flex-1 flex-col" noValidate onSubmit={save}>
+          <form ref={attachForm} className="settings-form flex min-h-0 flex-1 flex-col" noValidate onSubmit={save}>
             <div className="flex min-h-0 flex-1">
               <div className="settings-nav flex w-[196px] shrink-0 flex-col overflow-y-auto border-r border-line-bar bg-status px-2 py-2.5">
                 <DialogTitle asChild>
@@ -650,7 +672,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
 
                 {isElectron() && (
                   <SettingsPage {...pageProps("updates")}>
-                    <UpdatesBox autoUpdate={initial.autoUpdate} />
+                    <UpdatesBox autoUpdate={initial.autoUpdate} restartWhenReady={restartWhenReady} />
                   </SettingsPage>
                 )}
 
@@ -714,9 +736,12 @@ function updateStatusText({ version, state }: UpdateInfo): string {
 /**
  * Settings > Updates: this copy's version, the automatic update switch for
  * copies that install updates themselves, and Check for updates, which
- * follows the main process's check and download as they progress.
+ * follows the main process's check and download as they progress. The update
+ * that a check ends with installs at once through `restartWhenReady`, which
+ * resolves false when the restart would lose work. Restart now is offered
+ * then, and for a download that was ready when Settings opened.
  */
-function UpdatesBox({ autoUpdate }: { autoUpdate: boolean }) {
+function UpdatesBox({ autoUpdate, restartWhenReady }: { autoUpdate: boolean; restartWhenReady?: () => Promise<boolean> }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState("");
 
@@ -742,10 +767,26 @@ function UpdatesBox({ autoUpdate }: { autoUpdate: boolean }) {
 
   const state = info?.state;
   const busy = state?.status === "checking" || state?.status === "downloading";
-  const report = (action: Promise<void>): void => {
+  const report = (action: Promise<unknown>): void => {
     setError("");
     void action.catch((failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)));
   };
+
+  // Set by Check for updates until the check ends. A download that is ready
+  // when Settings opens, or that an automatic check finishes, never restarts.
+  const checking = useRef(false);
+  const check = (): void => {
+    checking.current = true;
+    report(checkForUpdates().catch((failure: unknown) => {
+      checking.current = false;
+      throw failure;
+    }));
+  };
+  useEffect(() => {
+    if (!checking.current || !state || state.status === "checking" || state.status === "downloading") return;
+    checking.current = false;
+    if (state.status === "ready" && restartWhenReady) report(restartWhenReady());
+  }, [state]);
 
   return (
     <SettingsBox title="Updates">
@@ -763,7 +804,7 @@ function UpdatesBox({ autoUpdate }: { autoUpdate: boolean }) {
           </Hint>
         </>
       )}
-      <ButtonRow label="Check for updates" className="mt-1" disabled={busy || !info} onClick={() => report(checkForUpdates())}>
+      <ButtonRow label="Check for updates" className="mt-1" disabled={busy || !info} onClick={check}>
         <span role="status">{error || (info ? updateStatusText(info) : "")}</span>
       </ButtonRow>
       {state?.status === "ready" && (
