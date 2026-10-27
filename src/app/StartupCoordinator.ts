@@ -11,6 +11,7 @@ import {
   getDefaultMdHandler,
   getLaunchArgs,
   listRecoverySnapshots,
+  loadSession,
   openDefaultAppsSettings,
 } from "../ipc/commands";
 import type { Snapshot } from "../ipc/contracts";
@@ -39,29 +40,40 @@ export class StartupCoordinator {
     this.recoveryDialog.destroy();
   }
 
-  /** Resolve recovery → launch argument → welcome → Recent. Returns
-   *  true when startup should land in the editor. Browser/dev keeps its seed
-   *  document and therefore always lands in the editor. */
+  /** Resolve recovery → the documents open when Downpad last closed → launch
+   *  argument → welcome → Recent. Returns true when startup should land in the
+   *  editor. Browser/dev keeps its seed document and therefore always lands in
+   *  the editor. */
   async resolve(): Promise<boolean> {
     if (this.dependencies.isDisposed()) return false;
     if (!isElectron()) return true;
 
-    const { store } = this.dependencies;
+    const { store, files } = this.dependencies;
+    const session = await loadSession().catch(() => null);
+    if (this.dependencies.isDisposed()) return false;
     // The seed document is a browser/e2e convenience. The desktop app starts
     // from the real startup sources below.
     store.set({ tabs: [], activeTabId: null, doc: blankDoc() });
 
-    if (await this.tryRecovery()) return true;
+    const recovered = await this.tryRecovery();
     if (this.dependencies.isDisposed()) return false;
+    // Recovery comes first, so a file whose unsaved work it reopened is not
+    // opened a second time from disk.
+    const reopened = session ? await files.restoreTabs(session.files, session.active) : false;
+    if (this.dependencies.isDisposed()) return false;
+    // After recovery the launch argument opens once the open-file listener
+    // attaches, when startup has finished.
+    if (recovered) return true;
 
     const arg = await getLaunchArgs().catch(() => null);
     if (this.dependencies.isDisposed()) return false;
     if (arg) {
-      await this.dependencies.files
+      await files
         .openPath(arg)
         .catch((error) => console.error("Downpad: open arg failed", error));
       return true;
     }
+    if (reopened) return true;
 
     if (!store.get().settings.hasSeenWelcome) {
       await this.loadWelcome();

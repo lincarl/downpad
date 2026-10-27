@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { EditorHost } from "../editor/EditorHost";
 import { FileService } from "../files/FileService";
-import type { Snapshot } from "../ipc/contracts";
+import type { FilePayload, Session, Snapshot } from "../ipc/contracts";
 import type { RecoveryHandlers } from "../recovery/RecoveryDialog";
 import { SettingsModel } from "../settings/SettingsModel";
 import { createAppStore } from "./createAppStore";
@@ -23,7 +23,8 @@ const native = vi.hoisted(() => ({
   deleteSnapshot: vi.fn<(sessionId: string) => Promise<void>>(),
   readFile: vi.fn<typeof import("../ipc/commands").readFile>(),
   recordFileOpened: vi.fn(async () => {}),
-  getLaunchArgs: vi.fn(async () => null),
+  getLaunchArgs: vi.fn<() => Promise<string | null>>(async () => null),
+  loadSession: vi.fn<() => Promise<Session>>(),
 }));
 const recovery = vi.hoisted(() => ({
   open: vi.fn<(snapshots: Snapshot[], handlers: RecoveryHandlers) => Promise<void>>(),
@@ -37,6 +38,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   readFile: native.readFile,
   recordFileOpened: native.recordFileOpened,
   getLaunchArgs: native.getLaunchArgs,
+  loadSession: native.loadSession,
 }));
 vi.mock("../recovery/RecoveryDialog", () => ({
   RecoveryDialog: class {
@@ -51,6 +53,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   native.listRecoverySnapshots.mockResolvedValue([snapshot]);
   native.deleteSnapshot.mockResolvedValue();
+  native.loadSession.mockResolvedValue({ files: [], active: null });
   recovery.open.mockImplementation(async (snapshots, handlers) => { await handlers.openRecovered(snapshots[0]!); });
 });
 afterEach(async () => {
@@ -196,5 +199,74 @@ describe("opening a recovered snapshot", () => {
     applyEditorMarkdownForTab(store, tabId, snapshot.markdown);
     expect(store.get().doc.isDirty).toBe(true);
     expect(native.deleteSnapshot).toHaveBeenCalledWith(snapshot.sessionId);
+  });
+});
+
+describe("reopening the documents open at the last close", () => {
+  const onDisk: Record<string, string> = {
+    "/docs/a.md": "# A\n",
+    "/docs/b.md": "# B\n",
+    "/docs/c.md": "# C\n",
+    "/docs/notes.md": "# Notes\n\nSaved text.\n",
+  };
+  const payload = (content: string): FilePayload => ({ content, eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: content.length });
+  const tabFiles = (store: ReturnType<typeof setup>["store"]) => store.get().tabs.map((tab) => tab.doc.filePath);
+  const activeFile = (store: ReturnType<typeof setup>["store"]) =>
+    store.get().tabs.find((tab) => tab.id === store.get().activeTabId)?.doc.filePath;
+
+  beforeEach(() => {
+    native.listRecoverySnapshots.mockResolvedValue([]);
+    native.readFile.mockImplementation(async (path) => {
+      const content = onDisk[path];
+      if (content === undefined) throw new Error("The file is missing.");
+      return payload(content);
+    });
+  });
+
+  it("reopens the files in their order with the same active one, and leaves out files that are gone", async () => {
+    const { store, startup, presenter } = setup();
+    native.loadSession.mockResolvedValue({ files: ["/docs/a.md", "/docs/gone.md", "/docs/b.md", "/docs/c.md"], active: "/docs/b.md" });
+
+    expect(await startup.resolve()).toBe(true);
+    expect(tabFiles(store)).toEqual(["/docs/a.md", "/docs/b.md", "/docs/c.md"]);
+    expect(activeFile(store)).toBe("/docs/b.md");
+    expect(store.get().doc).toMatchObject({ filePath: "/docs/b.md", markdown: "# B\n", isDirty: false, savedMarkdown: "# B\n" });
+    // Reopening is not opening the files again, and AppRuntime shows the active tab.
+    expect(native.recordFileOpened).not.toHaveBeenCalled();
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+    expect(native.getLaunchArgs).toHaveBeenCalledOnce();
+  });
+
+  it("opens the launch file beside them as the active tab, or switches to it when it is one of them", async () => {
+    const first = setup();
+    native.loadSession.mockResolvedValue({ files: ["/docs/a.md", "/docs/b.md"], active: "/docs/a.md" });
+    native.getLaunchArgs.mockResolvedValueOnce("/docs/c.md");
+    expect(await first.startup.resolve()).toBe(true);
+    expect(tabFiles(first.store)).toEqual(["/docs/a.md", "/docs/b.md", "/docs/c.md"]);
+    expect(activeFile(first.store)).toBe("/docs/c.md");
+
+    const second = setup();
+    native.getLaunchArgs.mockResolvedValueOnce("/docs/b.md");
+    expect(await second.startup.resolve()).toBe(true);
+    expect(tabFiles(second.store)).toEqual(["/docs/a.md", "/docs/b.md"]);
+    expect(activeFile(second.store)).toBe("/docs/b.md");
+  });
+
+  it("keeps recovered work instead of reopening its file from disk", async () => {
+    const { store, startup } = setup();
+    native.listRecoverySnapshots.mockResolvedValue([snapshot]);
+    native.loadSession.mockResolvedValue({ files: ["/docs/a.md", snapshot.filePath!], active: snapshot.filePath });
+
+    expect(await startup.resolve()).toBe(true);
+    expect(tabFiles(store)).toEqual([snapshot.filePath, "/docs/a.md"]);
+    expect(store.get().doc).toMatchObject({ filePath: snapshot.filePath, markdown: snapshot.markdown, isDirty: true });
+    expect(native.readFile).not.toHaveBeenCalledWith(snapshot.filePath);
+  });
+
+  it("starts on the Recent view when none of the files can be read", async () => {
+    const { store, startup } = setup();
+    native.loadSession.mockResolvedValue({ files: ["/docs/gone.md"], active: "/docs/gone.md" });
+    expect(await startup.resolve()).toBe(false);
+    expect(store.get().tabs).toEqual([]);
   });
 });

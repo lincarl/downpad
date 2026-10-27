@@ -7,6 +7,7 @@
 
 import { openDialog, saveDialog, ask, confirmSaveChanges } from "../ipc/dialogs";
 import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
+import type { FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
 import { blankDoc, hasUnsavedChanges, type DocumentState } from "../state/types";
@@ -92,16 +93,7 @@ export class FileService {
     // A closed reload owner must not redirect the read into the active tab,
     // even if that tab has since opened the same path.
     if (existing && !this.store.get().tabs.some((tab) => tab.id === existing.id)) return;
-    const doc: DocumentState = {
-      markdown: payload.content,
-      filePath: path,
-      eol: payload.eol,
-      hadBom: payload.hadBom,
-      modifiedMs: payload.modifiedMs,
-      isDirty: false,
-      savedMarkdown: payload.content,
-      frontmatterCollapsed: existing?.doc.frontmatterCollapsed ?? false,
-    };
+    const doc = fileDocument(path, payload, existing?.doc.frontmatterCollapsed ?? false);
     if (existing) {
       this.store.activateTab(existing.id);
       this.store.replaceActiveDoc(doc);
@@ -110,6 +102,28 @@ export class FileService {
 
     await this.present.reloadActiveDoc(); // fresh content → fresh editor
     this.recordOpened(path);
+  }
+
+  /** Reopen the files of an earlier session in new tabs, in their order,
+   *  without showing them, and make `active` the active tab. A file that is
+   *  open already, or that cannot be read, such as one deleted since, is left
+   *  out. Unlike openPath, this does not count as opening the files for the
+   *  Recent view. Resolves whether it reopened any file. */
+  async restoreTabs(paths: readonly string[], active: string | null): Promise<boolean> {
+    const isOpen = (path: string) => this.store.get().tabs.some((tab) => samePath(tab.doc.filePath, path));
+    const closed = paths.filter((path) => !isOpen(path));
+    const payloads = await Promise.all(closed.map((path) => readFile(path).catch(() => null)));
+    this.present.flush();
+    let reopened = false;
+    closed.forEach((path, index) => {
+      const payload = payloads[index];
+      if (!payload || isOpen(path)) return;
+      this.store.addTab(fileDocument(path, payload));
+      reopened = true;
+    });
+    const shown = this.store.get().tabs.find((tab) => samePath(tab.doc.filePath, active));
+    if (shown) this.store.activateTab(shown.id);
+    return reopened;
   }
 
   /** True if the active tab is a pristine untitled buffer that open can reuse.
@@ -311,6 +325,20 @@ export class FileService {
       cancelLabel: "Cancel",
     });
   }
+}
+
+/** The unchanged document of `path`, as read from disk. */
+function fileDocument(path: string, payload: FilePayload, frontmatterCollapsed = false): DocumentState {
+  return {
+    markdown: payload.content,
+    filePath: path,
+    eol: payload.eol,
+    hadBom: payload.hadBom,
+    modifiedMs: payload.modifiedMs,
+    isDirty: false,
+    savedMarkdown: payload.content,
+    frontmatterCollapsed,
+  };
 }
 
 /** Compare saved paths without merging distinct files on POSIX filesystems. */

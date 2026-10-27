@@ -19,12 +19,15 @@ import { isElectron } from "../ipc/env";
 import { undoOrRedo } from "../shell/editorActions";
 import type { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Store } from "../state/store";
+import type { SessionKeeper } from "./SessionKeeper";
 
 export interface DesktopEventDependencies {
   store: Store;
   files: FileService;
   editorHost: EditorHost;
   scheduler: SnapshotScheduler;
+  /** Records the open documents, which a close must wait for. */
+  session: Pick<SessionKeeper, "flush">;
   run(action: () => Promise<unknown>): void;
   /** Open or embed dropped files. It reads where they go from `drop`, the
    *  drop event, before it first awaits. */
@@ -174,13 +177,17 @@ export class DesktopEventBindings {
     this.closing = true;
     let accepted = false;
     try {
-      const { editorHost, files, scheduler } = this.dependencies;
+      const { editorHost, files, scheduler, session } = this.dependencies;
       editorHost.flush();
       const decision = await files.confirmCloseAll();
       if (decision === "cancel" || this.disposed) return;
       await scheduler.clear();
-      // Recovery cleanup awaits disk I/O. Typing, a queued save or a dropped
-      // file that arrived meanwhile must keep a Save close from losing work.
+      // The next start reopens the documents open now, also one that Save
+      // just gave a file.
+      await session.flush();
+      // Recovery cleanup and the session record await disk I/O. Typing, a
+      // queued save or a dropped file that arrived meanwhile must keep a Save
+      // close from losing work.
       if (!this.disposed && decision !== "discard" && !files.canCloseTabs()) {
         scheduler.start();
         return;

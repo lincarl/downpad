@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { dialogButtonClassName } from "@/components/ui/dialog-layout";
@@ -22,6 +22,9 @@ export interface AccentColorFieldViewProps {
   /** Disabled while the system accent is in use. */
   disabled?: boolean;
   onCommit: (color: string) => void;
+  /** Told when the picker opens and closes. While it is open, the colour it
+   *  shows is a draft that only OK puts in the form. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -29,12 +32,16 @@ export interface AccentColorFieldViewProps {
  * staged picker. Its OK button commits only to the surrounding Settings form;
  * the form's Save button is still what applies the setting.
  */
-export function AccentColorFieldView({ value, defaultColor, disabled, onCommit }: AccentColorFieldViewProps) {
+export function AccentColorFieldView({ value, defaultColor, disabled, onCommit, onOpenChange }: AccentColorFieldViewProps) {
   const [draft, setDraft] = useState(value);
   const [hexText, setHexText] = useState(value);
   const [open, setOpen] = useState(false);
   const hexRef = useRef<HTMLInputElement>(null);
   const restoreFocus = useRef(false);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open]);
 
   const setCanonicalDraft = (next: string, syncHex = true): void => {
     const normalized = normalizeHex(next);

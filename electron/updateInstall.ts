@@ -8,7 +8,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { access, chmod, constants, mkdtemp, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
-import { Transform } from "node:stream";
+import { Transform, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { isMsiInstallation, linuxPackageKind, type PackageKind } from "./updatePlan";
@@ -110,9 +110,12 @@ export interface MsiHelperPaths {
   argument?: string;
 }
 
-/** The detached helper that waits for the MSI installation, writes its exit
- *  code to `result`, removes the package and its folder, and starts Downpad
- *  again, also after a failed or cancelled installation. The paths reach cmd
+/** The detached helper that waits for Downpad to exit, runs the MSI
+ *  installation, writes its exit code to `result`, removes the package and its
+ *  folder, and starts Downpad again, also after a failed or cancelled
+ *  installation. It waits with `set /p`, which reads its standard input, a pipe
+ *  from Downpad, until the pipe closes as Downpad's process ends, so the running
+ *  copy never holds the files that the installer replaces. The paths reach cmd
  *  only as variables that it expands once, with delayed expansion off, so their
  *  characters are never parsed as commands. A path with a quote or a line break
  *  is refused. The exit code is read through `call`, which expands
@@ -131,7 +134,8 @@ export function msiHelper(paths: MsiHelperPaths): { file: string; args: [string]
     DOWNPAD_UPDATE_RESULT: paths.result,
   };
   if (paths.argument) env.DOWNPAD_UPDATE_ARGUMENT = paths.argument;
-  const command = '/d /v:off /s /c "start "" /wait "%DOWNPAD_UPDATE_MSIEXEC%" /i "%DOWNPAD_UPDATE_PACKAGE%" /passive /norestart' +
+  const command = '/d /v:off /s /c "set /p DOWNPAD_UPDATE_WAIT=' +
+    ' & start "" /wait "%DOWNPAD_UPDATE_MSIEXEC%" /i "%DOWNPAD_UPDATE_PACKAGE%" /passive /norestart' +
     ' & >"%DOWNPAD_UPDATE_RESULT%" call echo %^ERRORLEVEL%' +
     ' & del /q "%DOWNPAD_UPDATE_PACKAGE%" & cd /d "%DOWNPAD_UPDATE_SYSTEM%" & rd "%DOWNPAD_UPDATE_STAGING%"' +
     ` & start "" "%DOWNPAD_UPDATE_EXECUTABLE%"${paths.argument ? ' "%DOWNPAD_UPDATE_ARGUMENT%"' : ""}"`;
@@ -170,18 +174,24 @@ export async function discardStagedMsi(staged: StagedMsi): Promise<void> {
 }
 
 /** Start the installation of `staged` in a detached helper (msiHelper), which
- *  writes the installer's exit code to `result`. The caller must quit at once,
- *  so the installer can replace Downpad's files. If the helper cannot start,
- *  the staged copy is removed. `msiexec` replaces Windows Installer in tests. */
-export async function startMsiInstaller(staged: StagedMsi, executable: string, result: string, argument?: string, msiexec?: string): Promise<void> {
+ *  writes the installer's exit code to `result`. The helper starts the
+ *  installer once the returned pipe closes, which happens when this process
+ *  ends, so the caller must quit at once. Tests close the pipe instead. If the
+ *  helper cannot start, the staged copy is removed. `msiexec` replaces Windows
+ *  Installer in tests. */
+export async function startMsiInstaller(staged: StagedMsi, executable: string, result: string, argument?: string, msiexec?: string): Promise<Writable> {
   try {
     const helper = msiHelper({ system: systemFolder(), msiexec, package: staged.package, staging: staged.staging, executable, result, argument });
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise<Writable>((resolve, reject) => {
       const child = spawn(helper.file, helper.args, {
-        cwd: staged.staging, env: { ...process.env, ...helper.env }, detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true,
+        cwd: staged.staging, env: { ...process.env, ...helper.env }, detached: true, stdio: ["pipe", "ignore", "ignore"],
+        windowsHide: true, windowsVerbatimArguments: true,
       });
       child.once("error", reject);
-      child.once("spawn", () => { child.unref(); resolve(); });
+      // Nothing is written to the pipe, so a helper that ends first cannot
+      // make it fail, but an error event without a listener would throw.
+      child.stdin!.on("error", () => {});
+      child.once("spawn", () => { child.unref(); resolve(child.stdin!); });
     });
   } catch (error) {
     await rm(staged.staging, { recursive: true, force: true });

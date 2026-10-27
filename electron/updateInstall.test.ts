@@ -155,7 +155,8 @@ describe("MSI updates", () => {
       DOWNPAD_UPDATE_RESULT: paths.result,
       DOWNPAD_UPDATE_ARGUMENT: "D:\\Notes & 100% ^done!\\plan (1).md",
     });
-    expect(helper.args[0]).toBe('/d /v:off /s /c "start "" /wait "%DOWNPAD_UPDATE_MSIEXEC%" /i "%DOWNPAD_UPDATE_PACKAGE%" /passive /norestart' +
+    expect(helper.args[0]).toBe('/d /v:off /s /c "set /p DOWNPAD_UPDATE_WAIT=' +
+      ' & start "" /wait "%DOWNPAD_UPDATE_MSIEXEC%" /i "%DOWNPAD_UPDATE_PACKAGE%" /passive /norestart' +
       ' & >"%DOWNPAD_UPDATE_RESULT%" call echo %^ERRORLEVEL%' +
       ' & del /q "%DOWNPAD_UPDATE_PACKAGE%" & cd /d "%DOWNPAD_UPDATE_SYSTEM%" & rd "%DOWNPAD_UPDATE_STAGING%"' +
       ' & start "" "%DOWNPAD_UPDATE_EXECUTABLE%" "%DOWNPAD_UPDATE_ARGUMENT%""');
@@ -171,7 +172,7 @@ describe("MSI updates", () => {
   // in a folder whose name cmd would otherwise misread. Like the real ones,
   // the stand-ins are programs. START would run a batch file in cmd /k, whose
   // quote handling splits a quoted path that quoted arguments follow.
-  it.runIf(process.platform === "win32")("installs, records the exit code, removes the copy and starts Downpad again with its file", { timeout: 60_000 }, async () => {
+  it.runIf(process.platform === "win32")("waits for Downpad to exit, installs, records the exit code, removes the copy and starts Downpad again with its file", { timeout: 60_000 }, async () => {
     const directory = await folder("Downpad & 100% ^test! (1) ");
     const plain = await folder();
     await writeFile(join(plain, "standin.cs"), STAND_IN);
@@ -185,7 +186,13 @@ describe("MSI updates", () => {
     const result = join(directory, "install-result.txt");
     const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
     const staged = await stageMsi(file, DIGEST);
-    await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), msiexec);
+    const pipe = await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), msiexec);
+    // While the pipe is open, Downpad still runs, so nothing may start. A
+    // helper that did not wait would start the installer well within this.
+    await new Promise((done) => setTimeout(done, 4000));
+    expect(await readFile(record, "utf8").catch(() => "")).toBe("");
+    // Closing the pipe stands in for Downpad's exit.
+    pipe.destroy();
     // Each stand-in opens a console window, which can take seconds on CI.
     let text = "";
     let code = "";

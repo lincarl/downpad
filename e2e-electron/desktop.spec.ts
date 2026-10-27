@@ -4251,6 +4251,9 @@ test("General Recent preferences persist and hide missing files without deleting
   app = undefined;
 
   await launch();
+  // The file that was open reopens, and the one deleted since does not.
+  await expect(page.locator(".tab-label")).toHaveText(["available.md"]);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
   await expect(page.getByRole("group", { name: "Search scope" }).getByRole("button", { name: "Contents", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".recent-name")).toHaveText(["missing.md", "available.md"]);
   await page.getByRole("button", { name: "Application menu" }).click();
@@ -4289,6 +4292,50 @@ test("Save on close writes an inactive tab before removing it", async () => {
   expect(await app!.evaluate(() => Reflect.get(globalThis, "closePrompts"))).toEqual([
     { buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
   ]);
+});
+
+test("the documents open when Downpad closed reopen with the same active one", async () => {
+  const first = path.join(directory, "reopen-first.md");
+  const second = path.join(directory, "reopen-second.md");
+  const gone = path.join(directory, "reopen-gone.md");
+  const named = path.join(directory, "reopen-named-on-close.md");
+  await writeFile(first, "# First\n");
+  await writeFile(second, "# Second\n");
+  await writeFile(gone, "# Gone\n");
+  const shownHeading = () => page.locator(".editor-pane:not([hidden]) .ProseMirror h1");
+  await launch(first);
+  await chooseOpen(second);
+  await chooseOpen(gone);
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  await page.locator(".editor-pane:not([hidden]) .ProseMirror").click();
+  await page.keyboard.insertText("Named as Downpad closes.");
+  // Another untitled document stays empty, so nothing reopens it.
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  await page.getByRole("tab", { name: "reopen-second.md", exact: true }).click();
+  await expect(shownHeading()).toHaveText("Second");
+  await unlink(gone);
+  await chooseSave(named);
+  await chooseCloseAction("Save");
+  await app!.close();
+  app = undefined;
+  expect(await readFile(named, "utf8")).toBe("Named as Downpad closes.\n");
+
+  await launch();
+  await expect(page.locator(".tab-label")).toHaveText(["reopen-first.md", "reopen-second.md", "reopen-named-on-close.md"]);
+  await expect(page.getByRole("tab", { name: "reopen-second.md", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(shownHeading()).toHaveText("Second");
+  await page.getByRole("tab", { name: "reopen-first.md", exact: true }).click();
+  await expect(shownHeading()).toHaveText("First");
+
+  // Closing every tab leaves nothing to reopen.
+  await page.getByRole("tab", { name: "reopen-first.md", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Close all tabs", exact: true }).click();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await app!.close();
+  app = undefined;
+  await launch();
+  await expect(page.locator(".recent-name").first()).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
 });
 
 test("Save on closing all tabs writes both named and untitled documents", async () => {

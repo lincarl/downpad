@@ -1,7 +1,7 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, unlink } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
-import type { FileStat, SearchHit, SearchSummary, Snapshot } from "../src/ipc/contracts";
+import type { FileStat, SearchHit, SearchSummary, Session, Snapshot } from "../src/ipc/contracts";
 import type { RecentEntry, Settings } from "../src/state/types";
 import { absolutePath, readMarkdown, writeAtomic } from "./io";
 import { loadSettingsFile, saveSettingsFile } from "./settings";
@@ -44,6 +44,27 @@ export function validateSnapshot(value: unknown): Snapshot {
     sessionId: source.sessionId, savedAt: source.savedAt, filePath: source.filePath,
     markdown: source.markdown, isDirty: source.isDirty,
   };
+}
+
+/** More files than anyone keeps open. A larger list is not one Downpad wrote. */
+const MAX_SESSION_FILES = 500;
+
+/** Check the open documents that the renderer records (`save_session`): files
+ *  as absolute paths, at most MAX_SESSION_FILES of them. */
+export function validateSession(value: unknown): Session {
+  if (!value || typeof value !== "object") throw new Error("The open documents are required.");
+  const source = value as Record<string, unknown>;
+  if (!Array.isArray(source.files) || source.files.length > MAX_SESSION_FILES) throw new Error("The open documents must be a list of files.");
+  return {
+    files: source.files.map((file: unknown) => absolutePath(file)),
+    active: source.active === null ? null : absolutePath(source.active),
+  };
+}
+
+/** Read `session.json`. Anything Downpad did not write reopens nothing. */
+export function parseSession(text: string): Session {
+  try { return validateSession(JSON.parse(text) as unknown); }
+  catch { return { files: [], active: null }; }
 }
 
 /** The files in the user data folder that hold the user's data: settings,
@@ -110,7 +131,8 @@ export function adoptLegacyData(legacy: string, directory: string): boolean {
   return adoptedSettings;
 }
 
-/** Persist the existing user settings, recent history, and crash recovery formats. */
+/** Persist the existing user settings, recent history, and crash recovery
+ *  formats, and the documents open when Downpad last closed. */
 export class ConfigStore {
   readonly settingsPath: string;
   private pendingWrite: Promise<unknown> = Promise.resolve();
@@ -181,6 +203,17 @@ export class ConfigStore {
       await this.storeRecent(entries);
       return entry;
     });
+  }
+
+  /** The documents that were open when Downpad last closed. */
+  async session(): Promise<Session> {
+    await this.pendingWrite;
+    return parseSession(await readFile(join(this.directory, "session.json"), "utf8").catch(() => ""));
+  }
+
+  async saveSession(value: unknown): Promise<void> {
+    const session = validateSession(value);
+    return this.mutate(() => writeAtomic(join(this.directory, "session.json"), JSON.stringify(session)));
   }
 
   private async recoveryDirectory(): Promise<string> {

@@ -8,10 +8,12 @@ import type { Settings } from "@/state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsDialogView } from "./SettingsDialogView";
 
-function renderDialog(initial: Settings = DEFAULT_SETTINGS) {
+function renderDialog(initial: Settings = DEFAULT_SETTINGS, restartIfSaved?: () => Promise<boolean>) {
   const onSave = vi.fn<(next: Settings) => void>();
   const onRequestClose = vi.fn();
-  render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />);
+  render(
+    <SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} restartIfSaved={restartIfSaved} />,
+  );
   return { onSave, onRequestClose, user: userEvent.setup() };
 }
 
@@ -298,6 +300,96 @@ describe("SettingsDialogView updates", () => {
     expect(bridge.invoke).toHaveBeenCalledWith("restart_to_update", undefined);
     // The main process refused, and the page says why.
     expect(await screen.findByText("No downloaded update is waiting.")).toBeTruthy();
+  });
+
+  /** Open Settings > Updates and click Check for updates. */
+  async function checkForUpdates(bridge: ReturnType<typeof desktop>, restartIfSaved: () => Promise<boolean>) {
+    const { user } = renderDialog(DEFAULT_SETTINGS, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    const check = await screen.findByRole("button", { name: "Check for updates" });
+    await waitFor(() => expect((check as HTMLButtonElement).disabled).toBe(false));
+    await user.click(check);
+    expect(bridge.invoke).toHaveBeenCalledWith("check_for_updates", undefined);
+    return { user, check };
+  }
+
+  const ready: UpdateInfo = { ...installed, state: { status: "ready", version: "1.3.0" } };
+
+  it("restarts to install the download that the check ends with", async () => {
+    const bridge = desktop(installed);
+    const restartIfSaved = vi.fn(async () => true);
+    await checkForUpdates(bridge, restartIfSaved);
+    bridge.send({ ...installed, state: { status: "checking" } });
+    bridge.send({ ...installed, state: { status: "downloading", version: "1.3.0", percent: 100 } });
+    expect(restartIfSaved).not.toHaveBeenCalled();
+    bridge.send(ready);
+    expect(restartIfSaved).toHaveBeenCalledOnce();
+    // Later news of the same download restarts nothing more.
+    bridge.send(ready);
+    expect(restartIfSaved).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Restart now when the restart would lose unsaved documents", async () => {
+    const bridge = desktop(installed);
+    const restartIfSaved = vi.fn(async () => false);
+    const { user } = await checkForUpdates(bridge, restartIfSaved);
+    bridge.send(ready);
+    expect(restartIfSaved).toHaveBeenCalledOnce();
+    await user.click(await screen.findByRole("button", { name: "Restart now" }));
+    expect(bridge.invoke).toHaveBeenCalledWith("restart_to_update", undefined);
+  });
+
+  it("does not restart while the form has changes that Save has not written", async () => {
+    const bridge = desktop(installed);
+    const restartIfSaved = vi.fn(async () => true);
+    const { user } = renderDialog(DEFAULT_SETTINGS, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Update automatically" }));
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    bridge.send(ready);
+    expect(restartIfSaved).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Restart now" })).toBeTruthy();
+  });
+
+  it("does not restart while the accent picker holds a colour that OK has not put in the form", async () => {
+    const bridge = desktop(installed);
+    const restartIfSaved = vi.fn(async () => true);
+    const { user } = await checkForUpdates(bridge, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+    await user.click(screen.getByRole("button", { name: "Choose custom accent color" }));
+    const hex = screen.getByRole("textbox", { name: "Accent color hex" });
+    await user.clear(hex);
+    await user.type(hex, "#123456");
+    bridge.send(ready);
+    expect(restartIfSaved).not.toHaveBeenCalled();
+  });
+
+  it("restarts when a check finds again the download that was ready when Settings opened", async () => {
+    const bridge = desktop(ready);
+    const restartIfSaved = vi.fn(async () => true);
+    const { user } = renderDialog(DEFAULT_SETTINGS, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await user.click(await screen.findByRole("button", { name: "Check for updates" }));
+    bridge.send({ ...installed, state: { status: "checking" } });
+    bridge.send(ready);
+    expect(restartIfSaved).toHaveBeenCalledOnce();
+  });
+
+  it("does not restart for a download that is ready when Settings opens, or a check that found nothing", async () => {
+    const bridge = desktop(ready);
+    const restartIfSaved = vi.fn(async () => true);
+    const { user } = renderDialog(DEFAULT_SETTINGS, restartIfSaved);
+    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    expect(await screen.findByRole("button", { name: "Restart now" })).toBeTruthy();
+    // An automatic download that ends while Settings is open is not the user's check either.
+    bridge.send({ ...installed, state: { status: "downloading", version: "1.3.0", percent: 50 } });
+    bridge.send(ready);
+    expect(restartIfSaved).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    bridge.send({ ...installed, state: { status: "up-to-date" } });
+    bridge.send(ready);
+    expect(restartIfSaved).not.toHaveBeenCalled();
   });
 
   it("offers the download page to a copy that cannot install updates, and keeps its saved switch", async () => {

@@ -506,6 +506,30 @@ describe("Existing settings and history compatibility", () => {
     await Promise.all([store.writeSnapshot(snapshot), store.deleteSnapshot(snapshot.sessionId)]);
     expect(await store.snapshots()).toEqual([]);
   });
+
+  it("keeps the open documents for the next start and reads anything else as none", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    expect(await store.session()).toEqual({ files: [], active: null });
+
+    const notes = resolve(directory, "notes.md");
+    const plan = resolve(directory, "plan.md");
+    await store.saveSession({ files: [notes, plan], active: plan });
+    expect(await store.session()).toEqual({ files: [notes, plan], active: plan });
+    await store.saveSession({ files: [notes], active: null });
+    expect(await store.session()).toEqual({ files: [notes], active: null });
+
+    await expect(store.saveSession({ files: ["notes.md"], active: null })).rejects.toThrow("An absolute file path is required.");
+    await expect(store.saveSession({ files: [notes], active: "plan.md" })).rejects.toThrow("An absolute file path is required.");
+    await expect(store.saveSession({ files: Array.from({ length: 501 }, () => notes), active: null })).rejects.toThrow("must be a list of files");
+    expect(await store.session()).toEqual({ files: [notes], active: null });
+
+    await writeFile(join(directory, "session.json"), '{"files": ["relative.md"], "active": null}');
+    expect(await store.session()).toEqual({ files: [], active: null });
+    await writeFile(join(directory, "session.json"), "not JSON");
+    expect(await store.session()).toEqual({ files: [], active: null });
+  });
 });
 
 describe("Data that the app kept as md-easy, its earlier name", () => {
