@@ -2,8 +2,7 @@
 
 Code reviews finish locally before a branch is pushed and its pull request opens.
 GitHub runs builds and tests automatically when a pull request opens, reopens,
-receives a commit, or becomes ready for review. Automatic GitHub CodeRabbit
-reviews are disabled.
+receives a commit, or becomes ready for review.
 
 The required `reviewed-ci` Actions check passes only when source preparation and
 both platform builds succeed. A failed, cancelled, or skipped build cannot pass
