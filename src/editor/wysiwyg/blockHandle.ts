@@ -32,7 +32,9 @@
 // place over 0.2 s and still took clicks on its way. This plugin hides the
 // handle whenever the view's width changes, so it takes no press until the
 // pointer shows it again beside the block under it, and Downpad's styles have
-// it appear there at once rather than slide.
+// it appear there at once rather than slide. The observer runs before the
+// browser draws the new width, so no frame shows the handle in its old place
+// while it still takes presses.
 
 import type { BlockEditFeatureConfig } from "@milkdown/crepe/feature/block-edit";
 import { editorViewCtx } from "@milkdown/kit/core";
