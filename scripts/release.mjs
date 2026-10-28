@@ -1,7 +1,13 @@
-import { appendFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { appendFile, lstat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { createGitHubClient } from "./ci.mjs";
+
+const runGitHub = promisify(execFile);
 
 // Release tags are vMAJOR.MINOR.PATCH for stable releases and
 // vMAJOR.MINOR.PATCH-rcN for release candidates. docs/releasing.md has the policy.
@@ -185,6 +191,65 @@ async function listReleases(request, repository) {
   return releases;
 }
 
+/** Create or complete a release using the verified tag's CI artifacts. Existing
+ *  downloads must match exactly and are never overwritten. Notes stay intact.
+ *  A failed upload can be retried, including one that left a draft release. */
+export async function publishRelease({ request, repository, tag, files, run = runGitHub, log = console.log }) {
+  repositoryName(repository);
+  const version = parseTag(tag);
+  if (!version) throw new Error("Publication requires a stable or candidate version tag.");
+  const expected = releaseAssets(tag);
+  if (files.length !== expected.length || new Set(files.map((file) => path.basename(file))).size !== expected.length ||
+    files.some((file) => !expected.includes(path.basename(file)))) {
+    throw new Error(`Publication requires exactly these files: ${expected.join(", ")}.`);
+  }
+  const local = [];
+  for (const file of files) {
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.size === 0) throw new Error(`Missing or invalid release file ${file}.`);
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(file)) hash.update(chunk);
+    local.push({ file, name: path.basename(file), size: stat.size, digest: `sha256:${hash.digest("hex")}` });
+  }
+  const prerelease = version.rc !== null;
+  /** Read drafts as well as published releases, so interrupted uploads resume. */
+  async function existingRelease() {
+    return (await listReleases(request, repository)).find((release) => release.tag_name === tag);
+  }
+  /** Reject incompatible metadata or downloads before making any changes. */
+  function missingAssets(raw) {
+    const release = parseRelease(raw);
+    if (release.tag !== tag || release.prerelease !== prerelease) throw new Error(`${tag} has incompatible release metadata.`);
+    return local.filter((asset) => {
+      const matches = raw.assets.filter((uploaded) => uploaded.name === asset.name);
+      if (matches.length === 0) return true;
+      const [uploaded] = matches;
+      if (matches.length !== 1 || uploaded.state !== "uploaded" || uploaded.size !== asset.size || uploaded.digest !== asset.digest) {
+        throw new Error(`${tag} asset ${asset.name} does not match the CI artifact. Refusing to overwrite it.`);
+      }
+      return false;
+    });
+  }
+  const existing = await existingRelease();
+  if (!existing) {
+    await run("gh", ["release", "create", tag, ...files, "--repo", repository, "--verify-tag", "--generate-notes",
+      "--title", tag, "--latest=false", ...(prerelease ? ["--prerelease"] : [])]);
+  } else {
+    const missing = missingAssets(existing);
+    if (missing.length > 0) {
+      await run("gh", ["release", "upload", tag, ...missing.map((asset) => asset.file), "--repo", repository]);
+    }
+  }
+  const uploaded = await existingRelease();
+  if (!uploaded || missingAssets(uploaded).length > 0) throw new Error(`${tag} publication is incomplete.`);
+  if (uploaded.draft) {
+    await run("gh", ["release", "edit", tag, "--repo", repository, "--draft=false", "--latest=false"]);
+  }
+  const published = parseRelease(await existingRelease());
+  if (published.draft || !published.publishedAt) throw new Error(`${tag} is not published.`);
+  log(`Published ${tag} with all required files. Existing downloads and release notes were preserved.`);
+}
+
 /** Mark the stable release with the highest version as GitHub's latest release,
  *  which installed copies read for updates. Stable releases are published
  *  without that mark, and only this step sets it. It always marks explicitly,
@@ -265,8 +330,7 @@ export async function pruneReleases({ request, repository, releasedTag, apply = 
   }
 }
 
-/** Run `candidate` in CI after a main push, `latest` after a stable release, or
- *  `prune --released-tag vX.Y.Z [--apply]`. */
+/** Run candidate allocation, publication, latest selection or release cleanup. */
 async function main(argv = process.argv.slice(2), env = process.env) {
   const [command, ...options] = argv;
   const request = createGitHubClient(env);
@@ -281,6 +345,10 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     await markLatest({ request, repository: env.GITHUB_REPOSITORY ?? "lincarl/downpad" });
     return;
   }
+  if (command === "publish") {
+    await publishRelease({ request, repository: env.GITHUB_REPOSITORY, tag: env.RELEASE_TAG, files: options });
+    return;
+  }
   if (command === "prune") {
     const tagIndex = options.indexOf("--released-tag");
     const releasedTag = tagIndex >= 0 ? options[tagIndex + 1] : undefined;
@@ -289,7 +357,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     await pruneReleases({ request, repository: env.GITHUB_REPOSITORY ?? "lincarl/downpad", releasedTag, apply: options.includes("--apply") });
     return;
   }
-  throw new Error("Expected candidate, latest or prune.");
+  throw new Error("Expected candidate, publish, latest or prune.");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

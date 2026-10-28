@@ -470,16 +470,8 @@ jobs:
           for file in "${files[@]}"; do
             printf '%s  %s\n' "$(sha256sum "$file" | cut -d ' ' -f 1)" "$(basename "$file")"
           done > SHA256SUMS
-          kind=()
-          [[ "$version" != *-rc* ]] || kind=(--prerelease)
-          # Only the finalize job marks the latest release, by version.
-          gh release create "$RELEASE_TAG" "${files[@]}" SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --generate-notes \
-            --title "$RELEASE_TAG" \
-            --latest=false \
-            "${kind[@]}"
+          # Resume an existing release before finalization and cleanup.
+          node scripts/release.mjs publish "${files[@]}" SHA256SUMS
 
   # A separate job, so a rerun of a failed cleanup does not publish again.
   # Stable releases finish one at a time, across tags.

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
-import { allocateCandidate, cleanupPlan, markLatest, nextCandidateTag, parseTag, pruneReleases, releaseAssets } from "./release.mjs";
+import { allocateCandidate, cleanupPlan, markLatest, nextCandidateTag, parseTag, pruneReleases, publishRelease, releaseAssets } from "./release.mjs";
 
 const repository = "example/app";
 const sha = "a".repeat(40);
@@ -228,6 +231,138 @@ function releaseServer(releases, { onDelete, onPatch, latest } = {}) {
   };
   return server;
 }
+
+/** Stage real files and model the CLI's release uploads against the same API. */
+async function publication(t, { tag = "v0.3.5", existing = true, draft = false, uploaded = 0 } = {}) {
+  const root = new URL("../dev-temp/", import.meta.url);
+  await mkdir(root, { recursive: true });
+  const directory = await mkdtemp(new URL("release-test-", root));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const files = [];
+  const assets = [];
+  for (const name of releaseAssets(tag)) {
+    const content = Buffer.from(`CI artifact ${name}\n`);
+    const file = path.join(directory, name);
+    await writeFile(file, content);
+    files.push(file);
+    assets.push({ name, state: "uploaded", size: content.length, digest: `sha256:${createHash("sha256").update(content).digest("hex")}` });
+  }
+  const entry = { ...release(tag, { draft, assets: [] }), body: "Maintainer's release notes" };
+  entry.assets = assets.slice(0, uploaded).map((asset) => ({ ...asset }));
+  const server = releaseServer(existing ? [entry] : []);
+  const commands = [];
+  /** Apply successful gh commands without replacing any existing release asset. */
+  async function run(command, args) {
+    commands.push([command, ...args]);
+    assert.equal(command, "gh");
+    assert.equal(args[0], "release");
+    assert.equal(args[2], tag);
+    assert.equal(args[args.indexOf("--repo") + 1], repository);
+    assert.ok(!args.includes("--clobber"));
+    if (args[1] === "create") {
+      assert.ok(args.includes("--verify-tag"));
+      assert.ok(args.includes("--latest=false"));
+      assert.equal(args.includes("--prerelease"), parseTag(tag).rc !== null);
+      assert.equal(server.releases.length, 0);
+      server.releases.push(entry);
+    } else if (args[1] === "edit") {
+      assert.ok(args.includes("--draft=false"));
+      assert.ok(args.includes("--latest=false"));
+      assert.equal(entry.assets.length, assets.length);
+      entry.draft = false;
+      entry.published_at = "2026-10-25T10:00:00Z";
+      return;
+    } else {
+      assert.equal(args[1], "upload");
+    }
+    for (const file of args.slice(3, args.indexOf("--repo"))) {
+      assert.ok(files.includes(file));
+      const asset = assets.find((item) => item.name === path.basename(file));
+      assert.ok(!entry.assets.some((item) => item.name === asset.name));
+      entry.assets.push({ ...asset });
+    }
+  }
+  return { entry, server, commands, files, options: { request: server.request, repository, tag, files, run, log: () => {} } };
+}
+
+test("completes an empty existing stable release before cleanup removes its candidates", async (t) => {
+  const data = await publication(t);
+  data.server.releases.push(release("v0.3.4"), release("v0.3.5-rc1"), release("v0.3.6-rc1"));
+  assert.throws(() => cleanupPlan(data.server.releases, "v0.3.5"), /incomplete/);
+  await publishRelease(data.options);
+  assert.deepEqual(data.commands.map((command) => command[2]), ["upload"]);
+  assert.equal(data.entry.body, "Maintainer's release notes");
+  await pruneReleases({ request: data.server.request, repository, releasedTag: "v0.3.5", apply: true, log: () => {} });
+  assert.deepEqual(data.server.deleted, ["v0.3.5-rc1"]);
+  assert.deepEqual(data.server.releases.map((item) => item.tag_name).sort(), ["v0.3.4", "v0.3.5", "v0.3.6-rc1"]);
+});
+
+test("creates new stable and candidate releases with all required files", async (t) => {
+  for (const tag of ["v0.3.5", "v0.3.5-rc1"]) {
+    const data = await publication(t, { tag, existing: false });
+    await publishRelease(data.options);
+    assert.deepEqual(data.commands.map((command) => command[2]), ["create"]);
+    assert.deepEqual(data.entry.assets.map((asset) => asset.name), releaseAssets(tag));
+  }
+});
+
+test("resumes partial uploads and makes a complete rerun without changing downloads", async (t) => {
+  const data = await publication(t, { uploaded: 2 });
+  const preserved = structuredClone(data.entry.assets);
+  await publishRelease(data.options);
+  assert.deepEqual(data.commands, [["gh", "release", "upload", "v0.3.5", ...data.files.slice(2), "--repo", repository]]);
+  assert.deepEqual(data.entry.assets.slice(0, 2), preserved);
+  await publishRelease(data.options);
+  assert.equal(data.commands.length, 1);
+});
+
+test("publishes an interrupted draft only after completing its uploads", async (t) => {
+  const data = await publication(t, { draft: true, uploaded: 1 });
+  await publishRelease(data.options);
+  assert.deepEqual(data.commands.map((command) => command[2]), ["upload", "edit"]);
+  assert.equal(data.entry.draft, false);
+  assert.equal(data.entry.body, "Maintainer's release notes");
+});
+
+test("rejects mismatched or unverifiable existing files before uploading anything", async (t) => {
+  for (const invalid of [{ digest: `sha256:${"0".repeat(64)}` }, { digest: null }, { size: 1 }, { state: "starter" }]) {
+    const data = await publication(t, { uploaded: 1 });
+    Object.assign(data.entry.assets[0], invalid);
+    await assert.rejects(publishRelease(data.options), /Refusing to overwrite/);
+    assert.deepEqual(data.commands, []);
+  }
+});
+
+test("rejects the wrong prerelease status and missing input files without changing a release", async (t) => {
+  const data = await publication(t);
+  data.entry.prerelease = true;
+  await assert.rejects(publishRelease(data.options), /incompatible release metadata/);
+  data.entry.prerelease = false;
+  await assert.rejects(publishRelease({ ...data.options, files: data.files.slice(1) }), /requires exactly/);
+  await writeFile(data.files[0], "");
+  await assert.rejects(publishRelease(data.options), /invalid release file/);
+  assert.deepEqual(data.commands, []);
+});
+
+test("an upload failure leaves the draft unpublished and cleanup refuses the incomplete release", async (t) => {
+  const data = await publication(t, { draft: true });
+  await assert.rejects(publishRelease({ ...data.options, run: async () => { throw new Error("Upload failed"); } }), /Upload failed/);
+  assert.equal(data.entry.draft, true);
+  assert.throws(() => cleanupPlan(data.server.releases, "v0.3.5"), /not a published stable release/);
+});
+
+test("verifies the uploaded files instead of trusting a successful CLI exit", async (t) => {
+  const data = await publication(t, { draft: true });
+  await assert.rejects(publishRelease({ ...data.options, run: async () => {} }), /publication is incomplete/);
+  assert.equal(data.entry.draft, true);
+  assert.deepEqual(data.commands, []);
+});
+
+test("does not try publication when the release listing fails", async (t) => {
+  const data = await publication(t);
+  await assert.rejects(publishRelease({ ...data.options, request: async () => { throw new Error("API unavailable"); } }), /API unavailable/);
+  assert.deepEqual(data.commands, []);
+});
 
 test("a dry run lists the plan and deletes nothing", async () => {
   const server = releaseServer([release("v0.3.4"), release("v0.3.5-rc1"), release("v0.3.5")]);
