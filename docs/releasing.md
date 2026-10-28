@@ -57,6 +57,13 @@ keeps one waiting job per group, so if a third stable release finishes while
 one job runs and another waits, the waiting one is cancelled. Rerun it. After
 `v0.3.5` exists, the next automatic candidate is `v0.3.6-rc1`.
 
+If a release entry already exists when the tag build finishes, publication
+uploads its missing files and preserves its notes. This also lets a rerun
+complete an interrupted upload or draft. Existing files must have the same
+size and SHA-256 digest as the CI artifacts. A mismatch, missing digest or wrong
+prerelease status stops publication without replacing any downloads. Cleanup
+runs only after publication succeeds with all required files.
+
 ## Installed copies
 
 Installed copies of Downpad update only to stable releases. A copy running
