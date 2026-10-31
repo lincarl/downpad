@@ -40,6 +40,14 @@ numeric MSI version. The wizard must restore the intended files and launch the
 app. This simulates the missing-executable state without recreating every step
 of a historical failed upgrade.
 
+A rollback scenario installs the stable fixture, then injects a failure into a
+disposable copy of the candidate MSI after it removes the previous product.
+The upgrade removes the old product after `InstallInitialize`, inside Windows
+Installer's transaction. The test requires error 1603, the previous product's
+registration and exact executable and app payload bytes, and a working app
+window after rollback. It then upgrades with the unmodified candidate and checks
+the wizard's launch again. The injected failure never enters a published MSI.
+
 The tests use isolated app profiles. Their packages stay under `dev-temp/` and
 are never published. Each scenario runs in a separate PowerShell process with
 an independent ten-minute deadline. Cleanup shares a two-minute wait budget

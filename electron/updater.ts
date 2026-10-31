@@ -6,6 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { UpdateInfo, UpdateState } from "../src/ipc/contracts";
 import { writeAtomic } from "./io";
+import { processStartTime } from "./processStartTime";
 import {
   allowedUrl, assetFor, assetName, checkDue, isNewerStable, isSha256, parseRelease, RELEASE_API_URL,
   type PackageKind, type ReleaseAsset,
@@ -34,6 +35,10 @@ interface StoredState {
   pending?: StoredPending;
   /** The version handed to the Windows installer, which the next start checks. */
   installing?: string;
+  /** The detached helper that owns the in-progress installation. */
+  installerPid?: number;
+  /** Creation identity distinguishes the helper from a reused process ID. */
+  installerStartTime?: string;
 }
 
 /** What the start found: the download to install now, and why the update that
@@ -41,6 +46,8 @@ interface StoredState {
 export interface StartState {
   pending: PendingUpdate | null;
   failure: string | null;
+  /** Quit this extra launch so it cannot lock files the installer replaces. */
+  installing?: boolean;
 }
 
 export interface UpdaterOptions {
@@ -56,6 +63,8 @@ export interface UpdaterOptions {
    *  from this computer. */
   apiUrl?: string;
   now?: () => number;
+  /** Tests can model the detached Windows helper without starting a process. */
+  processStartTime?: (pid: number) => Promise<string | null>;
   onChange?: (info: UpdateInfo) => void;
 }
 
@@ -74,6 +83,8 @@ const RESULT_FILE = "install-result.txt";
 const MSI_SUCCESS = new Set([0, 1641, 3010]);
 /** Windows Installer's exit code when the user cancelled. */
 const MSI_CANCELLED = 1602;
+/** Older handoffs have no process identity. Give them a bounded completion window. */
+const LEGACY_INSTALL_WAIT_MS = 10 * 60 * 1000;
 
 /** Reads GitHub's latest release, downloads the package that matches how this
  *  copy was installed, verifies its SHA-256 digest from the release API and
@@ -84,6 +95,7 @@ export class Updater {
   private state: UpdateState = { status: "idle" };
   private lastCheckMs: number | null = null;
   private running: Promise<void> | null = null;
+  private awaitingInstaller = false;
   /** Whether Settings follows the running check, which then reports failures
    *  and marks its download as asked for. */
   private manual = false;
@@ -114,7 +126,13 @@ export class Updater {
     if (!kind) return { pending: null, failure: null };
     const saved = await this.readState();
     this.lastCheckMs = typeof saved.lastCheckMs === "number" && Number.isFinite(saved.lastCheckMs) ? saved.lastCheckMs : null;
-    const failure = saved.installing ? await this.installerFailure(saved.installing, kind) : null;
+    const installation = saved.installing ? await this.installerStatus(saved, kind) : { failure: null };
+    if (installation.installing) {
+      this.awaitingInstaller = true;
+      return { pending: null, failure: null, installing: true };
+    }
+    this.awaitingInstaller = false;
+    const failure = installation.failure;
     let pending = saved.pending ?? null;
     if (pending && !(await this.usable(pending, kind))) pending = null;
     if (pending && !autoUpdate && !pending.approved) pending = null;
@@ -130,16 +148,43 @@ export class Updater {
     };
   }
 
-  /** Why the Windows installer did not install `version`, from the exit code
-   *  that the update helper wrote, or null when this copy runs that version or
-   *  the user cancelled. */
-  private async installerFailure(version: string, kind: PackageKind): Promise<string | null> {
-    const code = await readFile(join(this.folder(kind), RESULT_FILE), "utf8").then((text) => Number.parseInt(text.trim(), 10), () => Number.NaN);
-    if (!isNewerStable(version, this.options.version) || code === MSI_CANCELLED) return null;
+  /** Distinguish a running helper from a completed or interrupted installation. */
+  private async installerStatus(saved: StoredState, kind: PackageKind): Promise<{ failure: string | null; installing?: boolean }> {
+    const version = saved.installing!;
+    const readCode = async (): Promise<number> => {
+      const result = await readFile(join(this.folder(kind), RESULT_FILE), "utf8").catch(() => "");
+      return /^\d+\s*$/.test(result.trim()) ? Number(result.trim()) : Number.NaN;
+    };
+    let code = await readCode();
+    if (Number.isNaN(code)) {
+      if (await this.installerRunning(saved)) return { failure: null, installing: true };
+      // The helper can write its result and exit while its identity is read.
+      code = await readCode();
+    }
+    // New files can be visible before MSI commits. Keep them unlocked until
+    // installation finishes, even when this launch already has the new version.
+    if (!isNewerStable(version, this.options.version)) return { failure: null };
+    if (code === MSI_CANCELLED) return { failure: null };
     const detail = Number.isNaN(code) ? "The Windows installer did not finish."
       : MSI_SUCCESS.has(code) ? "The Windows installer finished, but Downpad was not replaced."
       : `The Windows installer stopped with error ${code}.`;
-    return `Couldn't install Downpad ${version}. ${detail}`;
+    return { failure: `Couldn't install Downpad ${version}. ${detail}` };
+  }
+
+  /** A missing result is inconclusive while the detached helper still runs. */
+  private async installerRunning(saved: StoredState): Promise<boolean> {
+    if (saved.installerPid !== undefined && saved.installerStartTime) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await (this.options.processStartTime ?? processStartTime)(saved.installerPid) === saved.installerStartTime;
+        } catch { /* A timeout or denied lookup does not establish an exit. */ }
+      }
+      // Bound the work in this launch, retaining the handoff for another
+      // launch or the result written when the helper completes.
+      return true;
+    }
+    const elapsed = this.now() - (saved.lastCheckMs ?? 0);
+    return elapsed >= 0 && elapsed < LEGACY_INSTALL_WAIT_MS;
   }
 
   /** Where the Windows update helper writes the installer's exit code. */
@@ -158,6 +203,16 @@ export class Updater {
     this.lastCheckMs = this.now();
     await this.writeState({ lastCheckMs: this.lastCheckMs, installing: version });
     await this.tidy();
+  }
+
+  /** Record the helper before Downpad exits and releases its installation pipe. */
+  async installerStarted(pid: number): Promise<void> {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("The Windows update helper has no valid process ID.");
+    const saved = await this.readState();
+    if (!saved.installing) throw new Error("No Windows update is waiting for its helper.");
+    const startTime = await (this.options.processStartTime ?? processStartTime)(pid);
+    if (!startTime) throw new Error("Cannot identify the Windows update helper.");
+    await this.writeState({ ...saved, installerPid: pid, installerStartTime: startTime });
   }
 
   /** Check in the background when automatic updates are on and a check is due. */
@@ -223,6 +278,7 @@ export class Updater {
    *  state file that cannot be written, ends it as a failed check, so Settings
    *  never waits on it. */
   private run(manual: boolean): Promise<void> {
+    if (this.awaitingInstaller) return Promise.resolve();
     if (this.running) return this.running;
     this.manual = manual;
     this.running = this.check().catch((error: unknown) => {
@@ -375,6 +431,8 @@ export class Updater {
           ? { ...(pending as StoredPending), approved: (pending as Record<string, unknown>).approved === true }
           : undefined,
         installing: typeof source.installing === "string" ? source.installing : undefined,
+        installerPid: typeof source.installerPid === "number" && Number.isSafeInteger(source.installerPid) && source.installerPid > 0 ? source.installerPid : undefined,
+        installerStartTime: typeof source.installerStartTime === "string" ? source.installerStartTime : undefined,
       };
     } catch { return {}; }
   }

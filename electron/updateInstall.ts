@@ -177,11 +177,13 @@ export async function discardStagedMsi(staged: StagedMsi): Promise<void> {
  *  writes the installer's exit code to `result`. The helper starts the
  *  installer once the returned pipe closes, which happens when this process
  *  ends, so the caller must quit at once. Tests close the pipe instead. If the
- *  helper cannot start, the staged copy is removed. `msiexec` replaces Windows
- *  Installer in tests. */
-export async function startMsiInstaller(staged: StagedMsi, executable: string, result: string, argument?: string, msiexec?: string): Promise<Writable> {
+ *  helper cannot start or its identity cannot be saved, the staged copy is removed.
+ *  `msiexec` replaces Windows Installer in tests. `onStarted` saves the helper's
+ *  PID and creation identity before the caller can exit and release its pipe. */
+export async function startMsiInstaller(staged: StagedMsi, executable: string, result: string, argument?: string,
+  options: { msiexec?: string; onStarted?: (pid: number) => Promise<void> } = {}): Promise<Writable> {
   try {
-    const helper = msiHelper({ system: systemFolder(), msiexec, package: staged.package, staging: staged.staging, executable, result, argument });
+    const helper = msiHelper({ system: systemFolder(), msiexec: options.msiexec, package: staged.package, staging: staged.staging, executable, result, argument });
     return await new Promise<Writable>((resolve, reject) => {
       const child = spawn(helper.file, helper.args, {
         cwd: staged.staging, env: { ...process.env, ...helper.env }, detached: true, stdio: ["pipe", "ignore", "ignore"],
@@ -191,7 +193,17 @@ export async function startMsiInstaller(staged: StagedMsi, executable: string, r
       // Nothing is written to the pipe, so a helper that ends first cannot
       // make it fail, but an error event without a listener would throw.
       child.stdin!.on("error", () => {});
-      child.once("spawn", () => { child.unref(); resolve(child.stdin!); });
+      child.once("spawn", () => {
+        void Promise.resolve().then(() => options.onStarted?.(child.pid!)).then(() => {
+          child.unref();
+          resolve(child.stdin!);
+        }, (error: unknown) => {
+          // Keep the pipe open until the helper exits, so it cannot run the MSI
+          // after the caller fails to persist its ownership of the update.
+          child.once("exit", () => { child.stdin!.destroy(); reject(error); });
+          if (!child.kill()) { child.stdin!.destroy(); reject(error); }
+        });
+      });
     });
   } catch (error) {
     await rm(staged.staging, { recursive: true, force: true });

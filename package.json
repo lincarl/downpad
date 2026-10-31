@@ -25,7 +25,7 @@
     "test:e2e": "playwright test",
     "test:electron": "playwright test --config playwright.electron.config.ts",
     "test:desktop": "vitest run --config electron/vitest.config.ts",
-    "test:ci": "node --test scripts/ci.test.mjs scripts/run-msi-test.test.mjs scripts/msi-wizard.test.mjs scripts/check-agent-files.test.mjs",
+    "test:ci": "node --test scripts/ci.test.mjs scripts/run-msi-test.test.mjs scripts/msi-wizard.test.mjs scripts/brand-msi.test.mjs scripts/check-agent-files.test.mjs",
     "test:release": "node --test scripts/release.test.mjs"
   },
   "devDependencies": {
@@ -71,7 +71,7 @@
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",
     "lucide-react": "^1.61.0",
-    "mermaid": "^12.2.0",
+    "pele": "^1.13.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "smol-toml": "^1.9.1",

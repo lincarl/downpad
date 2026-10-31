@@ -1,6 +1,6 @@
 // Smart-paste format resolution (spec §5.4). The clipboard is reduced to a
 // `ClipboardSnapshot`, then `resolvePaste` picks an action by the spec's
-// priority order: image > HTML > markdown-looking plain text > plain text.
+// priority order: image > markdown-looking plain text > HTML > plain text.
 //
 // The DOM extraction (`snapshotFromDataTransfer`) and the pure decision
 // (`resolvePaste`) are split so the priority logic is unit-testable without a
@@ -40,14 +40,14 @@ export function resolvePaste(
   // 1. Image wins outright.
   if (s.imageFile) return { kind: "image", file: s.imageFile };
 
-  // 2. Rich HTML → markdown (the Excel / Sheets / Notion table path).
+  // 2. Markdown source wins over a code editor's syntax-highlighted HTML.
+  if (s.text && looksLikeMarkdown(s.text)) return { kind: "markdown", md: s.text };
+
+  // 3. Rich HTML → markdown (the Excel / Sheets / Notion table path).
   if (s.html && isRealHtml(s.html)) {
     const md = htmlToMarkdown(s.html);
     if (md) return { kind: "markdown", md };
   }
-
-  // 3. Plain text that looks like markdown → parse as markdown.
-  if (s.text && looksLikeMarkdown(s.text)) return { kind: "markdown", md: s.text };
 
   // 4. Plain text → literal paragraph.
   if (s.text) return { kind: "text", text: s.text };

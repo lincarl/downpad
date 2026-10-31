@@ -15,12 +15,13 @@
 //     in Milkdown's form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, editorViewOptionsCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { Plugin, Selection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { closeHistory } from "@milkdown/kit/prose/history";
 import { dropIndicatorPlugin } from "@milkdown/kit/plugin/cursor";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { createElement } from "react";
@@ -33,13 +34,14 @@ import "@milkdown/crepe/theme/frame.css";
 import type { SerializerStyle } from "../../state/types";
 import { stringifyOptions } from "./serializer";
 import { smartPastePlugin } from "./pasteHandler";
+import { pasteMarkdownSource } from "./markdownPaste";
 import { copyWithoutTrailingLine } from "./copyTrailingLine";
 import { linkViewPlugin } from "./linkView";
 import { shiftClicks } from "./shiftClicks";
 import { listLabelClicks } from "./listLabelClicks";
 import { paddingPresses } from "./paddingPresses";
 import { blockHandle, blockEditConfig } from "./blockHandle";
-import { pruneMermaidPreviews, renderMermaidPreview } from "./mermaid";
+import { renderMermaidPreview } from "./mermaid";
 import { imageBlockFeatureConfig, missingImages, type ViewRef } from "./imageView";
 import { imageBlockAltSchema, imageBlockAltView } from "./imageBlockAlt";
 import { endPastAtoms } from "./lineEnd";
@@ -288,7 +290,7 @@ export class WysiwygEditor {
     // Keep a blank line where a tight item's blocks would read back as something else.
     this.crepe.editor.config(tightListItemJoin);
     // Smart paste (§5.4): images, HTML→markdown, markdown-looking text.
-    this.crepe.editor.use(smartPastePlugin(context));
+    this.crepe.editor.use(smartPastePlugin(context, (markdown) => this.pasteMarkdown(markdown)));
     // Copy and drag without the empty line Crepe keeps after a final block.
     this.crepe.editor.use(copyWithoutTrailingLine);
     // Link rendering (§5.6): text-and-url suffix + Ctrl/Cmd-click to open.
@@ -460,6 +462,41 @@ export class WysiwygEditor {
     return body == null
       ? null
       : joinFrontmatter({ frontmatter: this.frontmatterBlock, separator: this.frontmatterSeparator, body });
+  }
+
+  /** Paste through the source, recording its body and frontmatter in one undo. */
+  private pasteMarkdown(markdown: string): boolean {
+    if (!this.crepe) return false;
+    const editor = this.crepe.editor;
+    return editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const baseline = baselineOf(view.state) ?? this.baseline;
+      const serialize = ctx.get(serializerCtx);
+      const splitBody = (body: string) => splitFrontmatter(joinFrontmatter({
+        frontmatter: this.frontmatterBlock, separator: this.frontmatterSeparator, body,
+      }));
+      const pasted = pasteMarkdownSource(view.state, markdown, {
+        write: (doc) => baseline ? baseline.write(doc) : serialize(doc),
+        serialize,
+        parse: ctx.get(parserCtx),
+        bodyOf: (body) => splitBody(body).body,
+      });
+      if (pasted == null) return false;
+      const { body, caret } = pasted;
+      const split = splitBody(body);
+      const slot: BaselineSlot = { baseline: null };
+      editor.action(mirrorMarkdown(split.body, false, (state, tr) => {
+        setFrontmatter(state, tr, { block: split.frontmatter, separator: split.separator });
+        setBaseline(state, tr, slot);
+        // Populate the slot before frontmatter's view callback reports the edit.
+        this.rememberSource(split.body, slot, tr.doc);
+        tr.setSelection(Selection.near(tr.doc.resolve(Math.min(caret, tr.doc.content.size)), -1));
+        return closeHistory(tr).setMeta("paste", true).setMeta("uiEvent", "paste").scrollIntoView();
+      }));
+      // Typing after the paste starts a separate undo step.
+      view.dispatch(closeHistory(view.state.tr));
+      return true;
+    });
   }
 
   /** Report an edit now instead of waiting for typing to pause. A caller that
@@ -860,15 +897,13 @@ export class WysiwygEditor {
       // A failed create leaves Milkdown in its creating state, where destroy()
       // tries again every 50 ms forever. Such an editor has nothing to destroy.
       if (crepe && crepe.editor.status !== EditorStatus.OnCreate) await crepe.destroy();
-      // Release the closed document's diagrams from the theme watcher.
-      pruneMermaidPreviews();
     })();
     return this.destroyPromise;
   }
 
   /** Record the body Crepe just parsed in `slot`, so `getMarkdown` can keep
    *  its exact text for the blocks the user does not change. */
-  private rememberSource(source: string, slot: BaselineSlot): void {
+  private rememberSource(source: string, slot: BaselineSlot, doc?: EditorState["doc"]): void {
     const parsed = this.parsed;
     this.parsed = null;
     this.baseline =
@@ -882,7 +917,7 @@ export class WysiwygEditor {
           // state takes the transformed tree as a plain object.
           toDoc: (tree, markdown) => new ParserState(schema).next({ ...remark.runSync(tree, markdown) }).toDoc(),
         };
-        return new SourceBaseline(source, ctx.get(editorViewCtx).state.doc, tools, parsed?.text === source ? parsed.outline : undefined);
+        return new SourceBaseline(source, doc ?? ctx.get(editorViewCtx).state.doc, tools, parsed?.text === source ? parsed.outline : undefined);
       }) ?? null;
     slot.baseline = this.baseline;
   }

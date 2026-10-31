@@ -734,6 +734,7 @@ function DocumentTab({
   focusable: boolean;
   runtime: AppRuntime | null;
 }) {
+  const unsaved = hasUnsavedChanges(tab);
   const showMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
     const path = tab.doc.filePath;
@@ -753,6 +754,7 @@ function DocumentTab({
       aria-selected={active}
       aria-controls="document-editor-panel"
       aria-keyshortcuts="Delete"
+      aria-description={unsaved ? "Unsaved changes" : undefined}
       tabIndex={focusable ? 0 : -1}
       data-tab-id={tab.id}
       className={cn(
@@ -799,13 +801,10 @@ function DocumentTab({
     >
       <File
         aria-hidden="true"
-        className={cn("shrink-0", active ? "text-accent" : "text-ink-body")}
+        className={cn("tab-file-icon shrink-0", unsaved ? "is-dirty text-ink-danger" : active ? "text-accent" : "text-ink-body")}
         {...SMALL_ICON}
       />
       <span className="tab-select flex min-w-0 flex-auto items-center gap-1.5">
-        {hasUnsavedChanges(tab) && (
-          <span aria-hidden="true" className="tab-dot size-[7px] shrink-0 rounded-full bg-accent" />
-        )}
         <span className="tab-label overflow-hidden text-ellipsis">
           {fileLabel(tab.doc.filePath)}
         </span>

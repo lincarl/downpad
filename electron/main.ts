@@ -494,7 +494,8 @@ async function installPendingUpdate(pending: PendingUpdate): Promise<{ restartin
       const staged = await stageMsi(pending.file, pending.sha256);
       try {
         await updates().handedToInstaller(pending.version);
-        await startMsiInstaller(staged, process.execPath, updates().installerResultFile(), firstFileArgument(process.argv) ?? undefined);
+        await startMsiInstaller(staged, process.execPath, updates().installerResultFile(), firstFileArgument(process.argv) ?? undefined,
+          { onStarted: (pid) => updates().installerStarted(pid) });
       } catch (error) {
         await discardStagedMsi(staged);
         throw error;
@@ -547,10 +548,11 @@ async function start(): Promise<void> {
     onChange: (info) => emit("update-changed", info),
   });
   const { autoUpdate } = await config.settings();
-  const { pending, failure: installerFailure } = await updater.start(autoUpdate).catch((error: unknown) => {
+  const { pending, failure: installerFailure, installing } = await updater.start(autoUpdate).catch((error: unknown) => {
     console.error("Downpad could not read its update state", error);
-    return { pending: null, failure: null };
+    return { pending: null, failure: null, installing: false };
   });
+  if (installing) { app.exit(0); return; }
   const installation = pending ? await installPendingUpdate(pending) : { restarting: false };
   if (installation.restarting) return;
   Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate(macApplicationMenu(requestHistory)) : null);

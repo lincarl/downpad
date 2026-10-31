@@ -7,7 +7,7 @@ import { test, expect } from "@playwright/test";
 // …), but the document view reports the exact source until the user edits it, so
 // the flush is a no-op.
 //
-// Dirty state appears as a `.tab-dot` in the tab strip (TabStrip).
+// Dirty state appears as a red document icon in the tab strip (TabStrip).
 // The window title stays unchanged even when the document has unsaved edits.
 
 const wysiwyg = ".milkdown .ProseMirror";
@@ -23,9 +23,9 @@ test.beforeEach(async ({ page }) => {
 test("a freshly opened document is not dirty, even after opening/closing the split", async ({
   page,
 }) => {
-  // Clean on load: no dirty dot anywhere.
+  // Clean on load, with no unsaved document icons.
   await expect(page).not.toHaveTitle(/^●/);
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 
   // Open the Markdown split ("Split"), then return to the document ("Document").
   // Each layout switch flushes the document through the round-trip that used to
@@ -37,5 +37,5 @@ test("a freshly opened document is not dirty, even after opening/closing the spl
 
   // Still clean — opening the split with no edits must never raise the unsaved flag.
   await expect(page).not.toHaveTitle(/^●/);
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
