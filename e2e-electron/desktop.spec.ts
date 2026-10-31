@@ -2,6 +2,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 import { mkdir, mkdtemp, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { WebPreferences } from "electron";
 import type {} from "../src/ipc/bridge";
 
@@ -120,27 +121,29 @@ async function clipboardText(): Promise<string> {
 
 test("the toolbar copies the whole document as Markdown or formatted text to the desktop clipboard", async () => {
   const file = path.join(directory, "copy-formats.md");
+  const markdown = "# Copy formats\n\nA **bold** paragraph.\n\nLatest edit with [related](../related%20note.md#section)[^1].\n\n[^1]: A footnote.\n";
   await writeFile(file, "# Copy formats\n\nA **bold** paragraph.\n");
   await launch(file);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const source = page.locator(".editor-pane-raw .cm-content");
   await source.click();
   await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.insertText("# Copy formats\n\nA **bold** paragraph.\n\nLatest edit.\n");
+  await page.keyboard.insertText(markdown);
   const copy = page.locator(".toolbar").getByRole("button", { name: "Copy", exact: true });
   await copy.click();
   await page.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
-  await expect.poll(clipboardText).toBe("# Copy formats\n\nA **bold** paragraph.\n\nLatest edit.\n");
+  await expect.poll(clipboardText).toBe(markdown);
   await copy.click();
   await page.getByRole("menuitem", { name: "Copy formatted text", exact: true }).click();
-  await expect.poll(clipboardText).toBe("Copy formats\n\nA bold paragraph.\n\nLatest edit.");
+  await expect.poll(clipboardText).toBe("Copy formats\n\nA bold paragraph.\n\nLatest edit with related[1].\n\n[1] A footnote.");
   const html = await app!.evaluate(async ({ clipboard }) => {
     const items = await clipboard.read();
     const item = items.find((entry) => entry.types.includes("text/html"));
     return item ? (await item.getType("text/html")).text() : "";
   });
   expect(html).toContain("<strong>bold</strong>");
-  expect(html).toContain("Latest edit.");
+  expect(html).toContain("Latest edit with");
+  expect(html).toContain(new URL("../related%20note.md#section", pathToFileURL(file)).href);
   expect(html).not.toContain("contenteditable");
   await expect(source).toContainText("A **bold** paragraph.");
 });

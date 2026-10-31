@@ -22,7 +22,7 @@ describe("formatted document", () => {
     expect(root.querySelector("strong")?.textContent).toBe("Bold");
     expect(root.querySelector("em")?.textContent).toBe("italic");
     expect(root.querySelector("del")?.textContent).toBe("removed");
-    expect(root.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(root.querySelector("a")?.getAttribute("href")).toBe("https://example.com/");
     expect(root.querySelector("ul ul li")?.textContent).toBe("Nested");
     expect(root.querySelector("ol")?.getAttribute("start")).toBe("3");
     expect(root.querySelector("pre code")?.textContent).toBe(code);
@@ -36,6 +36,41 @@ describe("formatted document", () => {
     expect(text).toContain("Name\tValue\nKey\tAnswer");
     expect(text).toContain(code);
     expect(document.querySelector(".milkdown, .ProseMirror")).toBeNull();
+  });
+
+  it("keeps local links and images anchored to the source document", async () => {
+    const markdown = [
+      "[Relative](../other%20file.md#intro)",
+      "[Windows](C:/notes/other.md)",
+      "[File](file:///notes/other.md)",
+      "![Local image](images/diagram.png)",
+      "![Web image](//example.com/image.png)",
+      "[Unsafe](javascript:alert%281%29)",
+    ].join("\n\n");
+    for (const [filePath, relative, image] of [
+      ["/notes/a #1%/index.md", "file:///notes/other%20file.md#intro", "file:///notes/a%20%231%25/images/diagram.png"],
+      ["C:\\notes\\drafts\\index.md", "file:///C:/notes/other%20file.md#intro", "file:///C:/notes/drafts/images/diagram.png"],
+      ["\\\\server\\share\\drafts\\index.md", "file://server/share/other%20file.md#intro", "file://server/share/drafts/images/diagram.png"],
+    ]) {
+      const { html } = await formatDocument(markdown, filePath);
+      const root = document.createElement("div");
+      root.innerHTML = html;
+      expect([...root.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+        relative, "file:///C:/notes/other.md", "file:///notes/other.md", null,
+      ]);
+      expect([...root.querySelectorAll("img")].map((node) => node.getAttribute("src"))).toEqual([
+        image, "https://example.com/image.png",
+      ]);
+    }
+    const { html } = await formatDocument("[Unresolved](relative.md)");
+    expect(html).toBe("<p><a>Unresolved</a></p>");
+  });
+
+  it("separates footnote labels from body text in plain-text copies", async () => {
+    const { html, text } = await formatDocument("Text[^1] and another[^note].\n\n[^1]: A footnote.\n\n[^note]: A **named** footnote.");
+    expect(text).toBe("Text[1] and another[note].\n\n[1] A footnote.\n\n[note] A named footnote.");
+    expect(html).toContain('<sup data-label="1" data-type="footnote_reference">1</sup>');
+    expect(html).toContain("<strong>named</strong>");
   });
 
   it("keeps metadata and special content readable without executing embedded HTML", async () => {

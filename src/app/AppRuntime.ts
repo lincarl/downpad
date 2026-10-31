@@ -576,7 +576,8 @@ export class AppRuntime {
   private async copyFormatted(): Promise<void> {
     try {
       this.editorHost.flush();
-      await copyFormattedDocument(this.store.get().doc.markdown);
+      const { markdown, filePath } = this.store.get().doc;
+      await copyFormattedDocument(markdown, filePath);
     } catch (error) {
       console.error("Downpad: formatted copy failed", error);
       if (!this.disposed) {

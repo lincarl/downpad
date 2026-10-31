@@ -11,7 +11,7 @@ export interface FormattedDocument {
 
 /** Parse the complete source into portable HTML, without editor controls or
  *  viewport limits. Metadata, formulas and diagram source stay readable text. */
-export async function formatDocument(markdown: string): Promise<FormattedDocument> {
+export async function formatDocument(markdown: string, filePath: string | null = null): Promise<FormattedDocument> {
   // Crepe supplies the document's CommonMark, GFM and math schemas. Keep the
   // empty view detached and disable its UI features. LaTeX requires CodeMirror,
   // but no code editor is mounted because only the parser receives the source.
@@ -41,7 +41,15 @@ export async function formatDocument(markdown: string): Promise<FormattedDocumen
       // KaTeX's rendered HTML needs fonts and CSS the receiving app does not
       // have. Keep the formula intact instead of copying broken visual math.
       math_inline: (node) => ["code", {}, `$${String(node.attrs.value)}$`],
-    }, DOMSerializer.marksFromSchema(schema));
+    }, {
+      ...DOMSerializer.marksFromSchema(schema),
+      // The editor's link serializer drops file URLs and Windows drive paths.
+      // Clipboard links need their own safe, absolute destinations.
+      link: (mark) => ["a", {
+        href: portableUrl(String(mark.attrs.href), false, filePath),
+        title: mark.attrs.title,
+      }, 0],
+    });
     root.append(serializer.serializeFragment(parsed.content));
 
     // Task state lives in Milkdown attributes and otherwise disappears when
@@ -53,7 +61,10 @@ export async function formatDocument(markdown: string): Promise<FormattedDocumen
     for (const element of root.querySelectorAll("[href], [src]")) {
       for (const name of ["href", "src"]) {
         const value = element.getAttribute(name);
-        if (value !== null && (!value || !portableUrl(value, name === "src"))) element.removeAttribute(name);
+        if (value === null) continue;
+        const url = portableUrl(value, name === "src", filePath);
+        if (url) element.setAttribute(name, url);
+        else element.removeAttribute(name);
       }
     }
     return { html: root.innerHTML, text: plainText(root).trimEnd() };
@@ -63,27 +74,41 @@ export async function formatDocument(markdown: string): Promise<FormattedDocumen
 }
 
 /** Write both clipboard formats, rejecting if rich copying is unavailable. */
-export async function copyFormattedDocument(markdown: string): Promise<void> {
+export async function copyFormattedDocument(markdown: string, filePath: string | null = null): Promise<void> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
     throw new Error("Formatted clipboard access is unavailable.");
   }
-  const { html, text } = await formatDocument(markdown);
+  const { html, text } = await formatDocument(markdown, filePath);
   await navigator.clipboard.write([new ClipboardItem({
     "text/html": new Blob([html], { type: "text/html" }),
     "text/plain": new Blob([text], { type: "text/plain" }),
   })]);
 }
 
-/** Keep ordinary links and image sources, excluding executable URL schemes. */
-function portableUrl(value: string, image: boolean): boolean {
+/** Resolve local targets against the document, excluding executable URL schemes. */
+function portableUrl(value: string, image: boolean, filePath: string | null): string | null {
   try {
-    const url = new URL(value, "https://downpad.invalid/");
-    if (["https:", "http:", "file:"].includes(url.protocol)) return true;
-    if (!image) return ["mailto:", "tel:", "ftp:"].includes(url.protocol);
-    return /^data:image\/(?:png|jpeg|gif|webp|avif);/i.test(value);
+    let target = value.trim();
+    if (!target) return null;
+    if (/^[A-Za-z]:[\\/]/.test(target)) target = `file:///${target.replace(/\\/g, "/")}`;
+    else if (target.startsWith("\\\\")) target = `file:${target.replace(/\\/g, "/")}`;
+    else if (target.startsWith("//")) target = `https:${target}`;
+    else if (target.startsWith("/")) target = `file://${target}`;
+    const url = new URL(target, filePath ? fileUrl(filePath) : undefined);
+    if (["https:", "http:", "file:"].includes(url.protocol)) return url.href;
+    if (!image && ["mailto:", "tel:", "ftp:"].includes(url.protocol)) return url.href;
+    if (image && /^data:image\/(?:png|jpeg|gif|webp|avif);/i.test(target)) return target;
+    return null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Encode a filesystem path as a URL without treating its # or ? as URL syntax. */
+function fileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const prefix = normalized.startsWith("//") ? "file:" : normalized.startsWith("/") ? "file://" : "file:///";
+  return prefix + encodeURI(normalized).replace(/[?#]/g, encodeURIComponent);
 }
 
 /** Retain paragraph breaks, list markers and table columns in plain pastes. */
@@ -91,6 +116,11 @@ function plainText(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
   if (!(node instanceof Element)) return "";
   const children = () => [...node.childNodes].map(plainText).join("");
+  if (node.matches('sup[data-type="footnote_reference"]')) return `[${node.textContent ?? ""}]`;
+  if (node.matches('dl[data-type="footnote_definition"]')) {
+    const body = node.querySelector("dd");
+    return `[${node.getAttribute("data-label") ?? ""}] ${body ? plainText(body).trimEnd() : ""}\n\n`;
+  }
   switch (node.tagName) {
     case "BR": return "\n";
     case "HR": return "---\n\n";
