@@ -5,7 +5,6 @@ import { CellSelection, selectedRect } from "@milkdown/kit/prose/tables";
 import { closeHistory } from "@milkdown/kit/prose/history";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { normalizeToLf, stripBom } from "../../document/lineEndings";
-import { splitFrontmatter } from "../../document/frontmatter";
 
 interface PasteSource {
   body: string;
@@ -17,12 +16,14 @@ interface PasteTools {
   write: (doc: Node) => string;
   serialize: (doc: Node) => string;
   parse: (source: string) => Node | null | undefined;
+  /** Apply the same frontmatter handling as the editor that will render it. */
+  bodyOf: (source: string) => string;
 }
 
 /** Splice Markdown into the selected body text, keeping compatible source exact.
  *  A temporary word locates partial selections in the editor's Markdown. Like
  *  other document edits, this can normalize the surrounding changed block. */
-export function pasteMarkdownSource(state: EditorState, markdown: string, { write, serialize, parse }: PasteTools): PasteSource | null {
+export function pasteMarkdownSource(state: EditorState, markdown: string, { write, serialize, parse, bodyOf }: PasteTools): PasteSource | null {
   const { doc, selection } = state;
   const inserted = normalizeToLf(stripBom(markdown)[0]);
   if (
@@ -30,7 +31,7 @@ export function pasteMarkdownSource(state: EditorState, markdown: string, { writ
     selection instanceof AllSelection ||
     (selection.from <= Selection.atStart(doc).from && selection.to >= Selection.atEnd(doc).to)
   ) {
-    const parsed = parse(splitFrontmatter(inserted).body);
+    const parsed = parse(bodyOf(inserted));
     return parsed ? { body: inserted, caret: Selection.atEnd(parsed).to } : null;
   }
 
@@ -40,28 +41,46 @@ export function pasteMarkdownSource(state: EditorState, markdown: string, { writ
   const marked = write(state.tr.insertText(marker).doc);
   const at = marked.indexOf(marker);
   if (at < 0 || marked.indexOf(marker, at + marker.length) >= 0) return null;
-  const body = marked.slice(0, at) + inserted + marked.slice(at + marker.length);
-  const split = splitFrontmatter(body);
-  const parsed = parse(split.body);
+  let body = marked.slice(0, at) + inserted + marked.slice(at + marker.length);
+  let end = at + inserted.length;
+  const rendered = bodyOf(body);
+  const parsed = parse(rendered);
   const clipboard = parse(inserted);
   if (!parsed || !clipboard) return null;
 
   const marks = state.storedMarks ?? (selection.empty ? selection.$from.marks() : selection.$from.marksAcross(selection.$to)) ?? [];
   let content = clipboard.content;
-  if (marks.length && clipboard.childCount === 1 && clipboard.firstChild?.type.name === "paragraph") {
+  // An image on its own parses as a block, but inside this paragraph it is
+  // inline. Compare the splice with an insertion in that same context.
+  if (clipboard.childCount === 1 && clipboard.firstChild?.type.name !== "paragraph" && selection.$from.sameParent(selection.$to)) {
+    const wrapped = parse(`${marker} ${inserted} ${marker}`);
+    const paragraph = wrapped?.childCount === 1 ? wrapped.firstChild : null;
+    if (paragraph?.type.name === "paragraph" && paragraph.firstChild?.text?.startsWith(`${marker} `) && paragraph.lastChild?.text?.endsWith(` ${marker}`)) {
+      content = Fragment.from(paragraph.copy(paragraph.content.cut(marker.length + 1, paragraph.content.size - marker.length - 1)));
+    }
+  }
+  if (marks.length && content.childCount === 1 && content.firstChild?.type.name === "paragraph") {
     const inline: Node[] = [];
-    clipboard.firstChild.forEach((node) => inline.push(node.mark(node.marks.reduce((set, mark) => mark.addToSet(set), marks))));
-    content = Fragment.from(clipboard.firstChild.copy(Fragment.from(inline)));
+    content.firstChild.forEach((node) => inline.push(node.mark(node.marks.reduce((set, mark) => mark.addToSet(set), marks))));
+    content = Fragment.from(content.firstChild.copy(Fragment.from(inline)));
   }
   const placed = state.tr.replaceSelection(Slice.maxOpen(content));
   const same = serialize(parsed) === serialize(placed.doc);
   // Splicing **new** into **left target right** would let its delimiters
   // close the surrounding bold mark. Serialize that edited block instead.
-  if (marks.length && !same) return { body: write(placed.doc), caret: placed.selection.to };
-  if (same) return { body, caret: placed.selection.to };
-
-  const end = Math.max(0, at + inserted.length - (body.length - split.body.length));
-  return { body, caret: sourceCaret(split.body, end, parsed, parse, marker) };
+  if (marks.length && !same) {
+    // Record the endpoint in the repaired source too. Serialization can
+    // normalize nodes, so a position in `placed.doc` is not a source position.
+    const repaired = write(placed.insertText(marker, placed.selection.to).doc);
+    end = repaired.indexOf(marker);
+    if (end < 0 || repaired.indexOf(marker, end + marker.length) >= 0) return null;
+    body = repaired.slice(0, end) + repaired.slice(end + marker.length);
+  }
+  const finalBody = bodyOf(body);
+  const finalDoc = parse(finalBody);
+  if (!finalDoc) return null;
+  end = Math.max(0, end - (body.length - finalBody.length));
+  return { body, caret: sourceCaret(finalBody, end, finalDoc, parse, marker) };
 }
 
 /** Locate a source endpoint without letting shared text shorten the paste.

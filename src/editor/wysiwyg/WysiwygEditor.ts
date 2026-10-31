@@ -472,15 +472,18 @@ export class WysiwygEditor {
       const view = ctx.get(editorViewCtx);
       const baseline = baselineOf(view.state) ?? this.baseline;
       const serialize = ctx.get(serializerCtx);
+      const splitBody = (body: string) => splitFrontmatter(joinFrontmatter({
+        frontmatter: this.frontmatterBlock, separator: this.frontmatterSeparator, body,
+      }));
       const pasted = pasteMarkdownSource(view.state, markdown, {
         write: (doc) => baseline ? baseline.write(doc) : serialize(doc),
         serialize,
         parse: ctx.get(parserCtx),
+        bodyOf: (body) => splitBody(body).body,
       });
       if (pasted == null) return false;
       const { body, caret } = pasted;
-      const source = joinFrontmatter({ frontmatter: this.frontmatterBlock, separator: this.frontmatterSeparator, body });
-      const split = splitFrontmatter(source);
+      const split = splitBody(body);
       const slot: BaselineSlot = { baseline: null };
       editor.action(mirrorMarkdown(split.body, false, (state, tr) => {
         setFrontmatter(state, tr, { block: split.frontmatter, separator: split.separator });

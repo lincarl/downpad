@@ -109,3 +109,29 @@ test("pasting repeated or nested formatting preserves surrounding marks and the 
   await page.keyboard.insertText("!");
   await expect(page.locator(documentBody)).toHaveText("Before target after.! after.");
 });
+
+test("an image pasted into bold text stays inline and typing follows it", async ({ page }) => {
+  await pasteMarkdown(page, "Before **left target right** after.");
+  await page.locator(`${documentBody} strong`).evaluate((element) => {
+    const text = element.firstChild!;
+    document.getSelection()?.setBaseAndExtent(text, 5, text, 11);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await expect.poll(() => page.evaluate(() => document.getSelection()?.toString())).toBe("target");
+  await pasteMarkdown(page, "![Image](image.png)");
+  await expect(page.locator(`${documentBody} > p`)).toHaveCount(1);
+  await expect(page.locator(`${documentBody} > p img`)).toHaveAttribute("alt", "Image");
+  await page.keyboard.insertText("!");
+  await expect(page.locator(documentBody)).toHaveText("Before left ! right after.");
+});
+
+test("pasted metadata below existing frontmatter keeps the caret after the complete body", async ({ page }) => {
+  await pasteMarkdown(page, "---\ntitle: keep\n---\n\nOld body.");
+  await page.locator(documentBody).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await pasteMarkdown(page, "---\ntitle: pasted\n---\n\n# New body");
+  await page.keyboard.insertText("!");
+  await expect(page.locator(`${documentBody} h1`)).toHaveText("New body!");
+  await expect(page.locator(documentBody)).toContainText("title: pasted");
+  expect(await source(page)).toContain("---\ntitle: keep\n---\n");
+});

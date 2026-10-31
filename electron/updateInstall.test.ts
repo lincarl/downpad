@@ -195,6 +195,7 @@ describe("MSI updates", () => {
     expect(helperPid).toBeGreaterThan(0);
     expect(helperStartTime).toMatch(/^\d+$/);
     expect(await processStartTime(helperPid!)).toBe(helperStartTime);
+    expect(await processStartTime(2_147_483_647)).toBeNull();
     // While the pipe is open, Downpad still runs, so nothing may start. A
     // helper that did not wait would start the installer well within this.
     await new Promise((done) => setTimeout(done, 4000));

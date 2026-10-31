@@ -174,7 +174,14 @@ export class Updater {
   /** A missing result is inconclusive while the detached helper still runs. */
   private async installerRunning(saved: StoredState): Promise<boolean> {
     if (saved.installerPid !== undefined && saved.installerStartTime) {
-      return await (this.options.processStartTime ?? processStartTime)(saved.installerPid) === saved.installerStartTime;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await (this.options.processStartTime ?? processStartTime)(saved.installerPid) === saved.installerStartTime;
+        } catch { /* A timeout or denied lookup does not establish an exit. */ }
+      }
+      // Bound the work in this launch, retaining the handoff for another
+      // launch or the result written when the helper completes.
+      return true;
     }
     const elapsed = this.now() - (saved.lastCheckMs ?? 0);
     return elapsed >= 0 && elapsed < LEGACY_INSTALL_WAIT_MS;

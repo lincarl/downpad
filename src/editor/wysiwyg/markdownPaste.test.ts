@@ -109,6 +109,17 @@ describe("Markdown source pasted into the document", () => {
     expect(editor.getMarkdown()).toBe(initial);
   });
 
+  it("places the caret after pasted frontmatter that remains body content below existing metadata", async () => {
+    const initial = "---\ntitle: keep\n---\n\nOld body.\n";
+    const { editor, view } = await open(initial);
+    view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)));
+    paste(view, "---\ntitle: pasted\n---\n\n# New body");
+    expect(editor.getMarkdown()).toBe("---\ntitle: keep\n---\n\n---\ntitle: pasted\n---\n\n# New body");
+    view.dispatch(view.state.tr.insertText("!"));
+    expect(view.dom.querySelector("h1")?.textContent).toBe("New body!");
+    expect(view.state.doc.textContent).toContain("title: pasted");
+  });
+
   it("replaces the selected text, leaves the caret after it, and separates following typing in undo", async () => {
     const { editor, view } = await open("Before target after.\n\nUntouched\n=========\n");
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 8, 14)));
@@ -160,6 +171,26 @@ describe("Markdown source pasted into the document", () => {
     view.dispatch(view.state.tr.insertText("!"));
     expect(view.dom.querySelector("li")?.textContent?.trim()).toBe("item! after.");
     expect(view.dom.querySelector("p")?.textContent).toBe("Before # Heading");
+  });
+
+  it("keeps a pasted image inline inside marked text and types immediately after it", async () => {
+    const { editor, view } = await open("Before **left target right** after.\n");
+    selectText(view, "target");
+    paste(view, "![Image](image.png)");
+    expect(view.state.doc.childCount).toBe(1);
+    expect(editor.getMarkdown()).toBe("Before **left ![Image](image.png) right** after.\n");
+    view.dispatch(view.state.tr.insertText("!"));
+    expect(view.state.doc.textContent).toBe("Before left ! right after.");
+    expect(view.dom.querySelector("p img")?.getAttribute("alt")).toBe("Image");
+  });
+
+  it("preserves unselected marks around a paste that adds paragraphs", async () => {
+    const { view } = await open("Before **left target right** after.\n");
+    selectText(view, "target");
+    paste(view, "**one**\n\n**two**");
+    view.dispatch(view.state.tr.insertText("!"));
+    expect([...view.dom.querySelectorAll("p")].map((node) => node.textContent)).toEqual(["Before left one", "two! right after."]);
+    expect([...view.dom.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["left one", "two! right"]);
   });
 
   it.each([

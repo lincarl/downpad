@@ -415,6 +415,39 @@ describe("Windows installer handoff", () => {
     expect(await next.instance.start(true)).toEqual({ pending: null, failure: null });
   });
 
+  it("retains the handoff after lookup timeouts and retries on a later launch", async () => {
+    const first = await updater(server().fetch, { kind: "msi", processStartTime: async () => "helper-created" });
+    await first.instance.handedToInstaller("1.3.0");
+    await first.instance.installerStarted(12345);
+    const saved = await readFile(join(first.updates, "msi", "state.json"), "utf8");
+    let attempts = 0;
+    const next = await updater(server().fetch, {
+      kind: "msi", directory: first.updates,
+      processStartTime: async () => { attempts++; throw new Error("Process lookup timed out."); },
+    });
+    expect(await next.instance.start(true)).toEqual({ pending: null, failure: null, installing: true });
+    expect(attempts).toBe(2);
+    expect(await readFile(join(first.updates, "msi", "state.json"), "utf8")).toBe(saved);
+    const later = await updater(server().fetch, { kind: "msi", directory: first.updates, processStartTime: async () => "unrelated-process" });
+    expect((await later.instance.start(true)).failure).toContain("did not finish");
+  });
+
+  it("recovers from a transient lookup timeout during the same launch", async () => {
+    const first = await updater(server().fetch, { kind: "msi", processStartTime: async () => "helper-created" });
+    await first.instance.handedToInstaller("1.3.0");
+    await first.instance.installerStarted(12345);
+    let attempts = 0;
+    const next = await updater(server().fetch, {
+      kind: "msi", directory: first.updates,
+      processStartTime: async () => {
+        if (attempts++ === 0) throw new Error("Process lookup timed out.");
+        return null;
+      },
+    });
+    expect((await next.instance.start(true)).failure).toContain("did not finish");
+    expect(attempts).toBe(2);
+  });
+
   it("refuses to release an installer whose process identity cannot be recorded", async () => {
     const { instance, updates } = await updater(server().fetch, { kind: "msi", processStartTime: async () => null });
     await instance.handedToInstaller("1.3.0");
