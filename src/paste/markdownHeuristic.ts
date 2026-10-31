@@ -1,11 +1,14 @@
 // Decides whether a chunk of plain text is "probably markdown" so the smart-paste
 // pipeline (spec §5.4, step 3) can parse it as markdown rather than dropping it in
 // as a literal paragraph. The signals are exactly those the spec enumerates:
-// ATX headings, fenced code, table separators, links, bold, and list markers.
+// frontmatter, ATX headings, fenced code, table separators, links, bold, and list markers.
 //
 // Deliberately conservative on the bold/link side (requires non-empty content
 // between the markers) so ordinary prose with a stray `*` or `-` is treated as
 // plain text, not markdown.
+
+import { splitFrontmatter } from "../document/frontmatter";
+import { normalizeToLf, stripBom } from "../document/lineEndings";
 
 const SIGNALS: RegExp[] = [
   /^#{1,6}\s+\S/m, // ATX heading:            # Title
@@ -22,5 +25,6 @@ const SIGNALS: RegExp[] = [
 /** True if `text` shows at least one markdown structural signal (spec §5.4). */
 export function looksLikeMarkdown(text: string): boolean {
   if (!text) return false;
-  return SIGNALS.some((re) => re.test(text));
+  const normalized = normalizeToLf(stripBom(text)[0]);
+  return splitFrontmatter(normalized).frontmatter !== null || SIGNALS.some((re) => re.test(normalized));
 }

@@ -1197,14 +1197,23 @@ body {
 }
 
 /* Mermaid diagrams (§5.2): rendered preview below the editable code source. */
-.editor-host .mermaid-preview {
+:is(.editor-host, .print-doc) .mermaid-preview {
+  --pele-bg: var(--editor-surface-bg);
+  --pele-fg: var(--editor-surface-fg);
+  --pele-muted: var(--doc-muted);
+  --pele-line: var(--editor-surface-fg);
+  --pele-surface: var(--doc-fill);
+  --pele-surface-alt: var(--doc-hover);
+  --pele-border: var(--doc-line-strong);
+  --pele-accent: var(--doc-accent);
+
   display: flex;
   justify-content: center;
   padding: 8px 4px;
   overflow: auto;
 }
 
-.editor-host .mermaid-preview svg {
+:is(.editor-host, .print-doc) .mermaid-preview svg {
   max-width: 100%;
   height: auto;
 }
@@ -1465,6 +1474,14 @@ body {
 /* Printed document surface. Always light (black on white) regardless of the
    document theme, so a dark-mode document doesn't print as a black slab. */
 .print-doc {
+  --editor-surface-bg: #fff;
+  --editor-surface-fg: #000;
+  --doc-muted: #666;
+  --doc-fill: #f3f3f3;
+  --doc-hover: #e6e6e6;
+  --doc-line-strong: #8a8a8a;
+  --doc-accent: #205ea6;
+
   font-family: var(--editor-font, "Segoe UI", system-ui, sans-serif);
   color: #000;
   background: #fff;

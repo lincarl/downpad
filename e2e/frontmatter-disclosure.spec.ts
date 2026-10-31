@@ -34,7 +34,7 @@ async function expectUnchangedSample(page: Page): Promise<void> {
   await expect
     .poll(() => source.locator(".cm-line").evaluateAll((lines) => lines.slice(0, 6).map((line) => line.textContent)))
     .toEqual(sampleFrontmatter);
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -52,7 +52,7 @@ test("frontmatter starts collapsed and keyboard toggles retain their state acros
   await expect(content).toHaveAttribute("id", (await toggle.getAttribute("aria-controls"))!);
   await expect(content).toHaveAttribute("hidden", "");
   await expect(content).toBeHidden();
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await page.locator(livePane).screenshot({ path: "e2e/__screens__/frontmatter-collapsed.png" });
 
   // Enter opens the button and Space closes it. Both states must survive the
@@ -86,7 +86,7 @@ test("frontmatter starts collapsed and keyboard toggles retain their state acros
     await page.locator(".tab").first().click();
     await expect(page.locator(`${livePane} h1`)).toHaveText("Welcome to Downpad");
     await expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
-    await expect(page.locator(".tab-dot")).toHaveCount(0);
+    await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   }
   await expectUnchangedSample(page);
 });
@@ -138,7 +138,7 @@ test("undo and redo reveal a collapsed edited cell without undoing the disclosur
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(valueFor(page, "title")).toHaveText("Welcome");
   await expect(valueFor(page, "title")).toBeFocused();
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -147,7 +147,7 @@ test("undo and redo reveal a collapsed edited cell without undoing the disclosur
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(valueFor(page, "title")).toHaveText("Changed title");
   await expect(valueFor(page, "title")).toBeFocused();
-  await expect(page.locator(".tab-dot")).toHaveCount(1);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(1);
 });
 
 for (const block of [

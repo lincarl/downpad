@@ -332,6 +332,13 @@ jobs:
         run: |
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -Msi dev-temp/msi-tests/recovery/Downpad-0.0.2-rc2-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/recovery/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario recovery -RecoverMissingExecutable
 
+      - name: Test MSI rollback after a failed upgrade
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 12
+        shell: powershell
+        run: |
+          node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario rollback -TestRollback
+
       - name: Upload MSI test diagnostics
         if: always() && runner.os == 'Windows' && steps.existing.outputs.reused != 'true'
         timeout-minutes: 3

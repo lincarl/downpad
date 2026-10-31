@@ -17,3 +17,4 @@ minimumReleaseAgeExclude:
   - "@asamuzakjp/dom-selector@10.0.5"
   - katex@0.19.1
   - prosemirror-view@1.42.8
+  - pele@1.13.0

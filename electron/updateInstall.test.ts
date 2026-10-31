@@ -186,7 +186,11 @@ describe("MSI updates", () => {
     const result = join(directory, "install-result.txt");
     const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
     const staged = await stageMsi(file, DIGEST);
-    const pipe = await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), msiexec);
+    let helperPid: number | undefined;
+    const pipe = await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), {
+      msiexec, onStarted: async (pid) => { helperPid = pid; },
+    });
+    expect(helperPid).toBeGreaterThan(0);
     // While the pipe is open, Downpad still runs, so nothing may start. A
     // helper that did not wait would start the installer well within this.
     await new Promise((done) => setTimeout(done, 4000));
@@ -212,6 +216,21 @@ describe("MSI updates", () => {
     expect(code.trim()).toBe("1618");
     await expect(stat(staged.staging)).rejects.toThrow();
     expect(await readFile(file)).toEqual(PACKAGE);
+  });
+
+  it.runIf(process.platform === "win32")("stops the waiting helper if its PID cannot be saved", async () => {
+    const directory = await folder();
+    const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
+    const staged = await stageMsi(file, DIGEST);
+    const result = join(directory, "install-result.txt");
+    let helperPid: number | undefined;
+    await expect(startMsiInstaller(staged, process.execPath, result, undefined, {
+      onStarted: async (pid) => { helperPid = pid; throw new Error("Cannot save the helper PID."); },
+    })).rejects.toThrow("Cannot save the helper PID.");
+    expect(helperPid).toBeGreaterThan(0);
+    expect(() => process.kill(helperPid!, 0)).toThrow();
+    await expect(stat(result)).rejects.toThrow();
+    await expect(stat(staged.staging)).rejects.toThrow();
   });
 });
 

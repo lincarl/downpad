@@ -1689,7 +1689,7 @@ test("a click or Shift+click beside the frontmatter table keeps editor focus, wh
   await expect(toggle).toBeFocused();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(table).toBeVisible();
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   /** A blank point beside the table in the current layout. */
   const besideTable = async () => {
     const wrap = (await page.locator(".frontmatter-table-wrap").boundingBox())!;
@@ -4059,7 +4059,7 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   // Startup only fills the tab, so the editor must still be built for it.
   await expect(page.locator(heading)).toHaveText("Title");
   await expect(page).toHaveTitle("recovered.md — Downpad");
-  await expect(page.getByRole("tab", { name: "recovered.md", exact: true }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "recovered.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(markdown);
@@ -4089,7 +4089,7 @@ test("a failed Open original preserves recovery and still allows Open recovered"
   await expect(dialog).toHaveCount(0);
   await expect(page.locator(heading)).toHaveText("Recovered after failure");
   await expect(page).toHaveTitle("unavailable-original.md — Downpad");
-  await expect(page.getByRole("tab", { name: "unavailable-original.md", exact: true }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "unavailable-original.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(markdown);
@@ -4174,7 +4174,7 @@ test("the first-run welcome document opens as saved with its exact text", async 
   await page.getByRole("menuitem", { name: "Copy as Markdown", exact: true }).click();
   await expect.poll(clipboardText).toBe(welcome);
   await expect(page).toHaveTitle("Untitled — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("an undo right after Save marks the document unsaved again", async () => {
@@ -4191,11 +4191,11 @@ test("an undo right after Save marks the document unsaved again", async () => {
   await expect(paragraph).toHaveText("First line.");
   // The file has the typed words but the document no longer does.
   await expect(page).toHaveTitle("undo.md — Downpad");
-  await expect(page.getByRole("tab", { name: "undo.md", exact: true }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "undo.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
   await expect(page).toHaveTitle("undo.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("undoing every edit marks the document saved again", async () => {
@@ -4207,11 +4207,11 @@ test("undoing every edit marks the document saved again", async () => {
   await page.keyboard.press("End");
   await page.keyboard.type(" Typed.");
   await expect(page).toHaveTitle("undo-all.md — Downpad");
-  await expect(page.getByRole("tab", { name: "undo-all.md", exact: true }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "undo-all.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
   await expect(page).toHaveTitle("undo-all.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("the first Ctrl+Z after opening a file that ends in a list leaves the caret in place", async () => {
@@ -4376,6 +4376,38 @@ test("the documents open when Downpad closed reopen with the same active one", a
   await expect(page.getByRole("tab")).toHaveCount(0);
 });
 
+test("temporarily unavailable documents reopen after later restarts in their saved order", async () => {
+  const first = path.join(directory, "available-first.md");
+  const unavailable = path.join(directory, "temporarily-unavailable.md");
+  const last = path.join(directory, "available-last.md");
+  await writeFile(first, "# First\n");
+  await writeFile(unavailable, "# Temporarily unavailable\n");
+  await writeFile(last, "# Last\n");
+  await launch(first);
+  await chooseOpen(unavailable);
+  await chooseOpen(last);
+  await page.getByRole("tab", { name: "temporarily-unavailable.md", exact: true }).click();
+  await app!.close();
+  app = undefined;
+  await unlink(unavailable);
+
+  for (let restart = 0; restart < 2; restart++) {
+    await launch();
+    await expect(page.locator(".tab-label")).toHaveText(["available-first.md", "available-last.md"]);
+    await app!.close();
+    app = undefined;
+    expect(JSON.parse(await readFile(path.join(directory, "profile", "session.json"), "utf8"))).toEqual({
+      files: [first, unavailable, last], active: unavailable,
+    });
+  }
+
+  await writeFile(unavailable, "# Available again\n");
+  await launch();
+  await expect(page.locator(".tab-label")).toHaveText(["available-first.md", "temporarily-unavailable.md", "available-last.md"]);
+  await expect(page.getByRole("tab", { name: "temporarily-unavailable.md", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Available again");
+});
+
 test("Save on closing all tabs writes both named and untitled documents", async () => {
   const named = path.join(directory, "close-all.md");
   const untitled = path.join(directory, "new-on-close.md");
@@ -4439,7 +4471,7 @@ test("Save on close keeps edits typed while the write is pending", async () => {
   await typeAtEnd(paragraph, " Later edit.");
   await releaseHeld();
   await untilHeldAnswered();
-  await expect(tab.locator(".tab-dot")).toBeVisible();
+  await expect(tab.locator(".tab-file-icon.is-dirty")).toBeVisible();
   await expect(paragraph).toHaveText("First version. Saved. Later edit.");
   expect(await readFile(file, "utf8")).toBe("First version. Saved.\n");
 });
@@ -4456,7 +4488,7 @@ test("Save on close keeps a document while a dropped image is still being read",
   const tab = page.getByRole("tab", { name: /drop-during-close\.md/ });
   await tab.locator(".tab-close").click();
   await expect.poll(async () => (await stat(file)).mtimeMs).toBeGreaterThan(before);
-  await expect(tab.locator(".tab-dot")).toBeVisible();
+  await expect(tab.locator(".tab-file-icon.is-dirty")).toBeVisible();
   await releaseHeld();
   await expect(page.locator(".ProseMirror .milkdown-image-block")).toHaveCount(1);
 
@@ -4991,7 +5023,7 @@ test("two Markdown files dropped together each open in a tab of their own", asyn
   // The document they were dropped on is as it was.
   await page.getByRole("tab", { name: /drop-two\.md/ }).click();
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p")).toHaveText(["First line.", "Second line."]);
-  await expect(page.getByRole("tab", { name: /drop-two\.md/ }).locator(".tab-dot")).toBeHidden();
+  await expect(page.getByRole("tab", { name: /drop-two\.md/ }).locator(".tab-file-icon.is-dirty")).toBeHidden();
 });
 
 test("the files of a drop after one that cannot be read go in, and the drop's Markdown file opens", async () => {
@@ -5016,7 +5048,7 @@ test("the files of a drop after one that cannot be read go in, and the drop's Ma
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n\n[good.csv](attachments/good.csv)\n\nSecond line.\n");
   expect(await readFile(path.join(directory, "attachments", "good.csv"), "utf8")).toBe("a,b\n");
-  await expect(page.getByRole("tab", { name: /drop-gone\.md/ }).locator(".tab-dot")).toBeHidden();
+  await expect(page.getByRole("tab", { name: /drop-gone\.md/ }).locator(".tab-file-icon.is-dirty")).toBeHidden();
 });
 
 test("a file dropped on a document that is saved in another folder while the file is read goes in beside it there", async () => {
@@ -5217,7 +5249,7 @@ test("an image pasted into a document that is closed while a Save As of it is wr
   await untilHeld();
   await pasteImageAtEnd(first);
   // The image waits for the Save As, and its document counts as unsaved.
-  await expect(tab(/notes\.md/).locator(".tab-dot")).toBeVisible();
+  await expect(tab(/notes\.md/).locator(".tab-file-icon.is-dirty")).toBeVisible();
   // On Linux a middle click also pastes the selection into the document.
   await tab(/notes\.md/).locator(".tab-close").click();
   await expect(tab(/notes\.md/)).toHaveCount(0);
@@ -5236,7 +5268,7 @@ test("an image pasted into a document that is closed while a Save As of it is wr
   // Give the image the time it would take to be written and saved for.
   await page.waitForTimeout(1000);
   expect(await readFile(other, "utf8")).toBe("Other line.\n");
-  await expect(tab(/other\.md/).locator(".tab-dot")).toBeVisible();
+  await expect(tab(/other\.md/).locator(".tab-file-icon.is-dirty")).toBeVisible();
   expect(await app!.evaluate(() => Reflect.get(globalThis, "saveAskedAfterClose") === true)).toBe(false);
   expect(await exists(path.join(path.dirname(original), "attachments"))).toBe(false);
   expect(await exists(path.join(path.dirname(saved), "attachments"))).toBe(false);
@@ -5264,7 +5296,7 @@ for (const [when, held] of [
     }
     await pasteImageAtEnd(first);
     if (held === "write_attachment") await untilHeld();
-    await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-dot")).toBeVisible();
+    await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-file-icon.is-dirty")).toBeVisible();
     await page.getByRole("radio", { name: "Markdown", exact: true }).click();
     const source = page.locator(".cm-content");
     await source.click();
@@ -5569,7 +5601,7 @@ test("an image pasted into a document whose editor is dropped from memory while 
   await releaseHeld();
   await untilHeldAnswered();
   // The image waits for its document, which shows as unsaved meanwhile.
-  await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   await page.getByRole("tab", { name: /notes\.md/ }).click();
   await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block img")).toHaveCount(1);
   await page.keyboard.press("ControlOrMeta+s");
@@ -5966,7 +5998,7 @@ test("a file dropped on a document goes into it once it is in front again after 
   await expect.poll(() => stat(path.join(directory, "sub", "attachments", "notes.csv")).then(() => true, () => false)).toBe(true);
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror")).toHaveText("Other line.");
   // The file waits for its document, which shows as unsaved meanwhile.
-  await expect(page.getByRole("tab", { name: /saved\.md/ }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: /saved\.md/ }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   await page.getByRole("tab", { name: /saved\.md/ }).click();
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").nth(1)).toHaveText(/notes\.csv/);
   await page.keyboard.press("ControlOrMeta+s");
@@ -6033,7 +6065,7 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("* Star bullet");
   await expect(page).toHaveTitle("bullets.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("the find count follows edits made while the card is open", async () => {
@@ -6650,12 +6682,12 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
   const body = page.locator(".milkdown .ProseMirror p").first();
   await typeAtEnd(title, " v2");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
-  await expect(page.getByRole("tab", { name: "frontmatter-undo.md", exact: true }).locator(".tab-dot")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "frontmatter-undo.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   // The caret stays in the cell, so typing goes on there.
   await page.keyboard.press("ControlOrMeta+z");
   await expect(title).toHaveText("Draft notes # keep");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await page.keyboard.type("!");
   await expect(title).toHaveText("Draft notes # keep!");
   await page.keyboard.press("ControlOrMeta+z");
@@ -6673,7 +6705,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
   await expect(title).toHaveText("Draft notes # keep");
   await expect(body).toHaveText("The draft body.");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+y");
   await expect(title).toHaveText("final notes # keep");
   await page.keyboard.press("ControlOrMeta+s");
@@ -6739,7 +6771,7 @@ test("a file that ends in a list opens as saved", async () => {
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("- Last item");
   await expect(page).toHaveTitle("list-end.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("pasting a copy of the whole document adds no empty line", async () => {
@@ -6770,7 +6802,7 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   await expect(page).toHaveTitle("code-end.md — Downpad");
-  await expect(page.locator(".tab-dot")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await page.getByRole("radio", { name: "Document", exact: true }).click();
   await typeAtEnd(paragraph, " Edited.");
   await page.keyboard.press("ControlOrMeta+s");

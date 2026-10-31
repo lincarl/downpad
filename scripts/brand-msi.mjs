@@ -5,10 +5,23 @@ import { fileURLToPath } from "node:url";
 // electron-builder calls this hook after it writes the WiX project and before it
 // compiles the MSI. It swaps WiX's stock dialog images for Downpad's bitmaps,
 // gives the file types the ProgIds of md-easy, the app's earlier name, and
-// records the installation folder for the updater.
+// records the installation folder for the updater. Major upgrades remove the
+// old product inside the transaction so a failed installation restores it.
 
 const bitmaps = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "build", "msi");
 const xml = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+/** Includes removal of the old product in Windows Installer's rollback.
+ *  Removing it before installing new files also permits component changes. */
+function transactionalMajorUpgrade(project, projectFile) {
+  let upgrades = 0;
+  const scheduled = project.replace(/<MajorUpgrade\b[^>]*\/>/g, (element) => {
+    upgrades += 1;
+    return element.replace(/\sSchedule=(["'])[^"']*\1/, "").replace(/\s*\/>$/, ' Schedule="afterInstallInitialize"/>');
+  });
+  if (upgrades !== 1) throw new Error(`Cannot schedule rollback in ${projectFile}: found ${upgrades} MajorUpgrade elements.`);
+  return scheduled;
+}
 
 /** Renames the ProgIds that electron-builder derives from the product name,
  *  Downpad.md and Downpad.markdown, to md-easy's mdeasy.md and mdeasy.markdown.
@@ -39,11 +52,11 @@ function recordInstallFolder(project, projectFile) {
 }
 
 /** Adds the banner and welcome bitmaps to the WiX project at `projectFile`,
- *  keeps md-easy's ProgIds and records the installation folder. */
+ *  keeps md-easy's ProgIds, records the installation folder and enables upgrade rollback. */
 export default async function brandMsi(projectFile) {
   const original = await readFile(projectFile, "utf8");
   if (!original.includes("</Product>")) throw new Error(`Cannot brand ${projectFile}: no WiX Product element.`);
-  const project = recordInstallFolder(keepLegacyProgIds(original, projectFile), projectFile);
+  const project = recordInstallFolder(keepLegacyProgIds(transactionalMajorUpgrade(original, projectFile), projectFile), projectFile);
   // light.exe runs in the project's folder. A relative path also resolves under Wine.
   const source = (name) => xml(path.relative(path.dirname(projectFile), path.join(bitmaps, name)).split(path.sep).join("\\"));
   const variables = `<WixVariable Id="WixUIBannerBmp" Value="${source("banner.bmp")}"/>\n`

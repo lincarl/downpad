@@ -227,9 +227,11 @@ test("a mouse click on a find option keeps typing in the field it was in", async
   // A click on the label's text, then on the check box itself.
   await page.getByText("Match case", { exact: true }).click();
   await expect(page.getByRole("checkbox", { name: "Match case" })).toBeChecked();
+  await expect(findInput).toBeFocused();
   await page.keyboard.type("co");
   await page.getByRole("checkbox", { name: "Whole word" }).click();
   await expect(page.getByRole("checkbox", { name: "Whole word" })).toBeChecked();
+  await expect(findInput).toBeFocused();
   await page.keyboard.type("me");
   await expect(findInput).toHaveValue("Welcome");
   await expect(findInput).toBeFocused();
@@ -238,6 +240,7 @@ test("a mouse click on a find option keeps typing in the field it was in", async
   await replaceInput.click();
   await page.keyboard.type("Hel");
   await page.getByText("Match case", { exact: true }).click();
+  await expect(replaceInput).toBeFocused();
   await page.keyboard.type("lo");
   await expect(replaceInput).toHaveValue("Hello");
   await expect(page.getByRole("checkbox", { name: "Match case" })).not.toBeChecked();

@@ -7,9 +7,11 @@ Run from the source checkout in an interactive Windows test account with no
 existing Downpad installation.
 Without PreviousMsi, first checks silent installation and removal, then a fresh
 wizard installation. With PreviousMsi, silently installs that package before
-driving the current package's upgrade wizard. Never launches Downpad manually.
+driving the current package's upgrade wizard.
 RecoverMissingExecutable requires equal product versions and removes only the
 previous test installation's executable before the upgrade, simulating damage.
+TestRollback fails a copied MSI after removing the previous product, verifies
+that rollback restores it, and launches the restored app before a normal upgrade.
 Diagnostics and isolated app data remain under dev-temp/msi-tests/diagnostics.
 Use run-msi-test.mjs to enforce a separate process deadline around native calls.
 .EXAMPLE
@@ -22,6 +24,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Msi,
     [string]$PreviousMsi,
     [switch]$RecoverMissingExecutable,
+    [switch]$TestRollback,
     [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
     [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+\.\d+$')][string]$ExpectedVersion,
     [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Scenario = 'fresh',
@@ -31,6 +34,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($RecoverMissingExecutable -and -not $PreviousMsi) { throw 'Recovery testing requires PreviousMsi.' }
+if ($TestRollback -and (-not $PreviousMsi -or $RecoverMissingExecutable)) { throw 'Rollback testing requires PreviousMsi and cannot remove its executable.' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'MSI integration tests require Windows.' }
 if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
     throw 'MSI integration tests require an interactive desktop, not a Session 0 service.'
@@ -425,6 +429,85 @@ function Assert-Removed {
     if (@(Get-RelatedProducts).Count -ne 0) { throw 'Uninstall left a related MSI product registered.' }
 }
 
+function New-FailingUpgrade([string]$Source) {
+    # Modify only a disposable test copy. A type 19 custom action fails after
+    # file scheduling, when RemoveExistingProducts has already removed the old app.
+    $target = Join-Path $diagnostics 'rollback-failure.msi'
+    Copy-Item -LiteralPath $Source -Destination $target
+    $database = $installer.OpenDatabase($target, 1)
+    try {
+        $sequences = @{}
+        $view = $database.OpenView('SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`')
+        try {
+            [void]$view.Execute()
+            while ($record = $view.Fetch()) {
+                $sequences[$record.StringData(1)] = $record.IntegerData(2)
+                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record)
+            }
+        } finally { [void]$view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
+        foreach ($action in @('InstallInitialize', 'RemoveExistingProducts', 'InstallFiles', 'InstallFinalize')) {
+            if (-not $sequences.ContainsKey($action)) { throw "Missing $action in the upgrade execution sequence." }
+        }
+        if ($sequences.RemoveExistingProducts -le $sequences.InstallInitialize -or $sequences.RemoveExistingProducts -ge $sequences.InstallFiles) {
+            throw 'The upgrade must remove the old product after InstallInitialize and before InstallFiles.'
+        }
+        $sequence = $sequences.InstallFiles + 1
+        if ($sequence -ge $sequences.InstallFinalize -or @($sequences.Values | Where-Object { $_ -eq $sequence }).Count -gt 0) {
+            throw 'No unused execution slot after InstallFiles for the rollback failure.'
+        }
+        foreach ($sql in @(
+            'INSERT INTO `CustomAction` (`Action`, `Type`, `Target`) VALUES (''DownpadRollbackFailure'', 19, ''Downpad rollback test failure.'')',
+            ('INSERT INTO `InstallExecuteSequence` (`Action`, `Condition`, `Sequence`) VALUES (''DownpadRollbackFailure'', ''WIX_UPGRADE_DETECTED AND NOT Installed'', {0})' -f $sequence)
+        )) {
+            $view = $database.OpenView($sql)
+            try { [void]$view.Execute() } finally { [void]$view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
+        }
+        [void]$database.Commit()
+    } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) }
+    return $target
+}
+
+function Test-UpgradeRollback {
+    # Confirm both registration and file bytes return, then run the restored app.
+    $oldExeHash = (Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash
+    $installedAsar = Join-Path $installFolder 'resources\app.asar'
+    $oldAsarHash = (Get-FileHash -LiteralPath $installedAsar -Algorithm SHA256).Hash
+    $broken = New-FailingUpgrade $Msi
+    $process = Start-TestMsi "/i `"$broken`" /qn" 'rollback'
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw 'The rollback installation timed out.' }
+    if ($process.ExitCode -ne 1603) { throw "Expected forced MSI error 1603, found $($process.ExitCode)." }
+    $log = Get-Content -LiteralPath (Join-Path $diagnostics 'rollback.log') -Raw
+    if ($log -notmatch 'Action ended [^\r\n]*RemoveExistingProducts\. Return value 1\.' -or
+        $log -notmatch 'Action ended [^\r\n]*DownpadRollbackFailure\. Return value 3\.') {
+        throw 'The test did not reach its forced failure after removing the previous product.'
+    }
+    Assert-Installed $previous $previousVersion
+    if ($installer.ProductState($current.ProductCode) -ne -1) { throw 'The failed upgrade left the new product registered.' }
+    if ((Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash -ne $oldExeHash -or
+        (Get-FileHash -LiteralPath $installedAsar -Algorithm SHA256).Hash -ne $oldAsarHash) {
+        throw 'Rollback did not restore the previous executable and app payload exactly.'
+    }
+    Write-TestProgress 'Launch the restored application after rollback'
+    $app = Start-Process -FilePath $installedExe -PassThru
+    [void]$app.Handle
+    $appProcesses[$app.Id] = $app
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $visible = $false
+    while ((Get-Date) -lt $deadline) {
+        if ($app.HasExited) { throw 'The restored application exited before showing a window.' }
+        if (@([DownpadMsiTest.Native]::Windows($app.Id) | Where-Object { $_.ClassName -eq 'Chrome_WidgetWin_1' }).Count -gt 0) {
+            $visible = $true
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $visible) { throw 'The restored application did not show a window.' }
+    Save-Diagnostics 'rollback-restored'
+    Stop-TestApps (Get-Date).AddSeconds(30)
+    if (@(Get-TestAppProcesses).Count -gt 0) { throw 'The restored test app did not stop before the next upgrade.' }
+    Write-TestProgress 'Rollback restored the old product and its working application'
+}
+
 try {
     Write-TestProgress 'Activate Windows Installer COM'
     $installer = New-Object -ComObject WindowsInstaller.Installer
@@ -468,6 +551,7 @@ try {
         executableSha256 = $expectedHash; asarSha256 = $expectedAsarHash
         productCode = $current.ProductCode; upgradeCode = $current.UpgradeCode
         recoverMissingExecutable = [bool]$RecoverMissingExecutable
+        testRollback = [bool]$TestRollback
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $diagnostics 'inputs.json') -Encoding UTF8
     if ($previous) {
         [void]$attemptedProducts.Add($previous.ProductCode)
@@ -496,6 +580,7 @@ try {
         Assert-Removed
     }
     if (-not $attemptedProducts.Contains($current.ProductCode)) { [void]$attemptedProducts.Add($current.ProductCode) }
+    if ($TestRollback) { Test-UpgradeRollback }
     Invoke-InstallWizard (Start-TestMsi "/i `"$Msi`" /qf" 'wizard')
     Assert-Installed $current $ExpectedVersion -CurrentPayload
     if ($previous -and $installer.ProductState($previous.ProductCode) -ne -1) { throw 'The previous MSI product is still registered after upgrade.' }

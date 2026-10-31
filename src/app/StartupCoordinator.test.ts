@@ -8,6 +8,7 @@ import type { FilePayload, Session, Snapshot } from "../ipc/contracts";
 import type { RecoveryHandlers } from "../recovery/RecoveryDialog";
 import { SettingsModel } from "../settings/SettingsModel";
 import { createAppStore } from "./createAppStore";
+import { SessionKeeper } from "./SessionKeeper";
 import { StartupCoordinator } from "./StartupCoordinator";
 
 const snapshot: Snapshot = {
@@ -25,6 +26,7 @@ const native = vi.hoisted(() => ({
   recordFileOpened: vi.fn(async () => {}),
   getLaunchArgs: vi.fn<() => Promise<string | null>>(async () => null),
   loadSession: vi.fn<() => Promise<Session>>(),
+  saveSession: vi.fn<(session: Session) => Promise<void>>(),
 }));
 const recovery = vi.hoisted(() => ({
   open: vi.fn<(snapshots: Snapshot[], handlers: RecoveryHandlers) => Promise<void>>(),
@@ -39,6 +41,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   recordFileOpened: native.recordFileOpened,
   getLaunchArgs: native.getLaunchArgs,
   loadSession: native.loadSession,
+  saveSession: native.saveSession,
 }));
 vi.mock("../recovery/RecoveryDialog", () => ({
   RecoveryDialog: class {
@@ -223,7 +226,7 @@ describe("reopening the documents open at the last close", () => {
     });
   });
 
-  it("reopens the files in their order with the same active one, and leaves out files that are gone", async () => {
+  it("reopens readable files in order with the same active one and remembers unavailable paths", async () => {
     const { store, startup, presenter } = setup();
     native.loadSession.mockResolvedValue({ files: ["/docs/a.md", "/docs/gone.md", "/docs/b.md", "/docs/c.md"], active: "/docs/b.md" });
 
@@ -235,6 +238,13 @@ describe("reopening the documents open at the last close", () => {
     expect(native.recordFileOpened).not.toHaveBeenCalled();
     expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
     expect(native.getLaunchArgs).toHaveBeenCalledOnce();
+    const keeper = new SessionKeeper(store);
+    keeper.start(startup.sessionToRestore);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({
+      files: ["/docs/a.md", "/docs/gone.md", "/docs/b.md", "/docs/c.md"], active: "/docs/b.md",
+    });
+    keeper.dispose();
   });
 
   it("opens the launch file beside them as the active tab, or switches to it when it is one of them", async () => {
@@ -268,5 +278,57 @@ describe("reopening the documents open at the last close", () => {
     native.loadSession.mockResolvedValue({ files: ["/docs/gone.md"], active: "/docs/gone.md" });
     expect(await startup.resolve()).toBe(false);
     expect(store.get().tabs).toEqual([]);
+  });
+
+  it("keeps recovered work active instead of an unavailable previous active file", async () => {
+    const { store, startup } = setup();
+    native.listRecoverySnapshots.mockResolvedValue([snapshot]);
+    native.loadSession.mockResolvedValue({ files: ["/offline/notes.md"], active: "/offline/notes.md" });
+    expect(await startup.resolve()).toBe(true);
+    const keeper = new SessionKeeper(store);
+    keeper.start(startup.sessionToRestore);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: ["/offline/notes.md", snapshot.filePath], active: snapshot.filePath });
+    keeper.dispose();
+  });
+
+  it.each([{ available: [] }, { available: ["/docs/a.md", "/docs/b.md"] }])("retries unavailable files across restarts with readable files $available", async ({ available }) => {
+    const unavailable = "/offline/notes.md";
+    const previous: Session = { files: [...available.slice(0, 1), unavailable, ...available.slice(1)], active: unavailable };
+    let recorded = previous;
+    native.loadSession.mockImplementation(async () => recorded);
+    native.saveSession.mockImplementation(async (session) => { recorded = session; });
+
+    for (let restart = 0; restart < 2; restart++) {
+      const { store, startup } = setup();
+      expect(await startup.resolve()).toBe(available.length > 0);
+      expect(tabFiles(store)).toEqual(available);
+      const keeper = new SessionKeeper(store);
+      keeper.start(startup.sessionToRestore);
+      await keeper.flush();
+      expect(recorded).toEqual(previous);
+      keeper.dispose();
+      await host?.dispose();
+      host = null;
+    }
+
+    native.readFile.mockImplementation(async (path) => payload(path === unavailable ? "# Available again\n" : onDisk[path]!));
+    const { store, startup } = setup();
+    expect(await startup.resolve()).toBe(true);
+    expect(tabFiles(store)).toEqual(previous.files);
+    expect(activeFile(store)).toBe(unavailable);
+    expect(store.get().doc.markdown).toBe("# Available again\n");
+  });
+
+  it("remembers an explicit launch file as active while retaining an unavailable previous file", async () => {
+    const { store, startup } = setup();
+    native.loadSession.mockResolvedValue({ files: ["/offline/notes.md"], active: "/offline/notes.md" });
+    native.getLaunchArgs.mockResolvedValue("/docs/a.md");
+    expect(await startup.resolve()).toBe(true);
+    const keeper = new SessionKeeper(store);
+    keeper.start(startup.sessionToRestore);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: ["/offline/notes.md", "/docs/a.md"], active: "/docs/a.md" });
+    keeper.dispose();
   });
 });

@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UpdateInfo } from "../src/ipc/contracts";
 import { CHECK_INTERVAL_MS, type PackageKind } from "./updatePlan";
-import { Updater } from "./updater";
+import { Updater, type UpdaterOptions } from "./updater";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -54,10 +54,13 @@ async function folder(): Promise<string> {
 }
 
 /** An updater for an AppImage copy of version 1.2.0, recording what Settings would show. */
-async function updater(fetch: (url: string) => Promise<Response>, { version = "1.2.0", kind = "appimage" as PackageKind | null, now = NOW, directory = "" } = {}) {
+async function updater(fetch: (url: string) => Promise<Response>, {
+  version = "1.2.0", kind = "appimage" as PackageKind | null, now = NOW, directory = "",
+  isProcessRunning = undefined as UpdaterOptions["isProcessRunning"],
+} = {}) {
   const updates = directory || (await folder());
   const shown: UpdateInfo[] = [];
-  const instance = new Updater({ version, kind, directory: updates, fetch, now: () => now, onChange: (info) => shown.push(info) });
+  const instance = new Updater({ version, kind, directory: updates, fetch, now: () => now, isProcessRunning, onChange: (info) => shown.push(info) });
   return { instance, updates, shown };
 }
 
@@ -318,8 +321,9 @@ describe("Windows installer handoff", () => {
   async function afterInstaller(version: string, result?: string) {
     const first = await updater(server().fetch, { kind: "msi" });
     await first.instance.handedToInstaller("1.3.0");
+    await first.instance.installerStarted(12345);
     if (result !== undefined) await writeFile(first.instance.installerResultFile(), result);
-    const next = await updater(server().fetch, { kind: "msi", version, directory: first.updates });
+    const next = await updater(server().fetch, { kind: "msi", version, directory: first.updates, isProcessRunning: () => false });
     return { start: await next.instance.start(true), next, updates: first.updates };
   }
 
@@ -351,5 +355,49 @@ describe("Windows installer handoff", () => {
   it("reports an installer that never finished or left the old version", async () => {
     expect((await afterInstaller("1.2.0")).start.failure).toBe("Couldn't install Downpad 1.3.0. The Windows installer did not finish.");
     expect((await afterInstaller("1.2.0", "3010")).start.failure).toBe("Couldn't install Downpad 1.3.0. The Windows installer finished, but Downpad was not replaced.");
+  });
+
+  it("preserves a running installation through extra starts, then consumes its result once", async () => {
+    for (const completion of [{ version: "1.2.0", code: "1618", failure: true }, { version: "1.2.0", code: "1602", failure: false }, { version: "1.3.0", code: "0", failure: false }]) {
+      const github = server();
+      const first = await updater(github.fetch, { kind: "msi" });
+      await first.instance.handedToInstaller("1.3.0");
+      await first.instance.installerStarted(12345);
+      for (const partial of [undefined, "", "16x"]) {
+        if (partial !== undefined) await writeFile(first.instance.installerResultFile(), partial);
+        const next = await updater(github.fetch, { kind: "msi", directory: first.updates, isProcessRunning: (pid) => pid === 12345 });
+        expect(await next.instance.start(true)).toEqual({ pending: null, failure: null, installing: true });
+        expect(JSON.parse(await readFile(join(first.updates, "msi", "state.json"), "utf8"))).toEqual({ lastCheckMs: NOW, installing: "1.3.0", installerPid: 12345 });
+        if (partial !== undefined) expect(await readFile(first.instance.installerResultFile(), "utf8")).toBe(partial);
+        await next.instance.checkNow();
+        expect(github.calls).toEqual([]);
+      }
+      await writeFile(first.instance.installerResultFile(), completion.code);
+      const finished = await updater(github.fetch, { kind: "msi", version: completion.version, directory: first.updates, isProcessRunning: () => false });
+      expect(Boolean((await finished.instance.start(true)).failure)).toBe(completion.failure);
+      expect(JSON.parse(await readFile(join(first.updates, "msi", "state.json"), "utf8"))).toEqual({ lastCheckMs: NOW });
+      expect(await readdir(join(first.updates, "msi"))).toEqual(["state.json"]);
+      const later = await updater(github.fetch, { kind: "msi", directory: first.updates });
+      expect(await later.instance.start(true)).toEqual({ pending: null, failure: null });
+    }
+  });
+
+  it("checks actual process liveness when the helper has not published its result", async () => {
+    const first = await updater(server().fetch, { kind: "msi" });
+    await first.instance.handedToInstaller("1.3.0");
+    await first.instance.installerStarted(process.pid);
+    const next = await updater(server().fetch, { kind: "msi", directory: first.updates });
+    expect(await next.instance.start(true)).toEqual({ pending: null, failure: null, installing: true });
+    const replaced = await updater(server().fetch, { kind: "msi", directory: first.updates, version: "1.3.0" });
+    expect(await replaced.instance.start(true)).toEqual({ pending: null, failure: null, installing: true });
+  });
+
+  it("bounds the wait for legacy handoffs that did not save a helper PID", async () => {
+    const first = await updater(server().fetch, { kind: "msi" });
+    await first.instance.handedToInstaller("1.3.0");
+    const early = await updater(server().fetch, { kind: "msi", directory: first.updates, now: NOW + 60_000 });
+    expect(await early.instance.start(true)).toEqual({ pending: null, failure: null, installing: true });
+    const expired = await updater(server().fetch, { kind: "msi", directory: first.updates, now: NOW + 10 * 60_000 });
+    expect((await expired.instance.start(true)).failure).toBe("Couldn't install Downpad 1.3.0. The Windows installer did not finish.");
   });
 });

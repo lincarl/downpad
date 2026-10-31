@@ -330,7 +330,7 @@ export class AppRuntime {
     }
     if (this.disposed) return;
     this.scheduler.start();
-    this.session.start();
+    this.session.start(this.startup.sessionToRestore);
 
     this.cleanups.push(this.store.subscribe((state, previous) => {
       const next = state.settings;

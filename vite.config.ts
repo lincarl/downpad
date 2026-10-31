@@ -16,7 +16,7 @@ const appVersion = JSON.parse(
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "script-src 'self'",
-  // CodeMirror, KaTeX and Mermaid's diagrams add inline styles.
+  // CodeMirror, KaTeX and Pele's diagrams add inline styles.
   "style-src 'self' 'unsafe-inline'",
   // Web and embedded images, local images through downpad-file: or file: URLs,
   // and the blob: URL Copy image converts through.

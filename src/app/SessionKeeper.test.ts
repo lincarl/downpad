@@ -110,3 +110,71 @@ describe("recording the open documents", () => {
     expect(native.saveSession.mock.calls[1]).toEqual(native.saveSession.mock.calls[0]);
   });
 });
+
+describe("remembering temporarily unavailable documents", () => {
+  const unavailable = "/offline/notes.md";
+
+  it("keeps unavailable files in order and updates the active file after a tab switch", async () => {
+    const { store, keeper, ids } = setup();
+    const previous = { files: ["/docs/a.md", unavailable, "/docs/b.md"], active: unavailable };
+    keeper.start(previous);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith(previous);
+
+    store.activateTab(ids.b);
+    store.closeTab(ids.a);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: [unavailable, "/docs/b.md"], active: "/docs/b.md" });
+    keeper.dispose();
+  });
+
+  it("forgets a formerly unavailable file after it opens and the user closes it", async () => {
+    const { store, keeper, ids } = setup();
+    keeper.start({ files: [unavailable, "/docs/a.md", "/docs/b.md"], active: unavailable });
+    const opened = store.addTab(file(unavailable));
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: ["/docs/a.md", "/docs/b.md", unavailable], active: unavailable });
+
+    store.closeTab(opened);
+    store.activateTab(ids.b);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: ["/docs/a.md", "/docs/b.md"], active: "/docs/b.md" });
+    keeper.dispose();
+  });
+
+  it("clears unavailable files when the user closes every tab", async () => {
+    const { store, keeper } = setup();
+    keeper.start({ files: [unavailable, "/docs/a.md", "/docs/b.md"], active: unavailable });
+    for (const tab of store.get().tabs) store.closeTab(tab.id);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: [], active: null });
+    keeper.dispose();
+  });
+
+  it("clears a wholly unavailable session after the user opens and closes an untitled tab", async () => {
+    const { store, keeper } = setup();
+    for (const tab of store.get().tabs) store.closeTab(tab.id);
+    keeper.start({ files: [unavailable], active: unavailable });
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: [unavailable], active: unavailable });
+
+    const untitled = store.addTab(blankDoc());
+    store.closeTab(untitled);
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: [], active: null });
+    keeper.dispose();
+  });
+
+  it("recognizes Windows path variants when an unavailable file is opened and saved elsewhere", async () => {
+    const { store, keeper } = setup();
+    keeper.start({ files: ["Z:\\Notes.md", "z:/NOTES.md"], active: "Z:\\Notes.md" });
+    const opened = store.addTab(file("z:/notes.md"));
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: ["/docs/a.md", "/docs/b.md", "z:/notes.md"], active: "z:/notes.md" });
+
+    store.patchDocById(opened, { filePath: "C:\\Saved.md" });
+    await keeper.flush();
+    expect(native.saveSession).toHaveBeenLastCalledWith({ files: ["/docs/a.md", "/docs/b.md", "C:\\Saved.md"], active: "C:\\Saved.md" });
+    keeper.dispose();
+  });
+});

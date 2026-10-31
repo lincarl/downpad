@@ -2,6 +2,13 @@ import { describe, it, expect } from "vitest";
 import { looksLikeMarkdown } from "./markdownHeuristic";
 
 describe("looksLikeMarkdown", () => {
+  it("recognizes complete leading frontmatter without other Markdown", () => {
+    expect(looksLikeMarkdown("---\ntitle: sample\n---")).toBe(true);
+    expect(looksLikeMarkdown("---\r\ntitle: sample\r\n...\r\n")).toBe(true);
+    expect(looksLikeMarkdown("\uFEFF---\rtitle: sample\r---\r")).toBe(true);
+    expect(looksLikeMarkdown("---\ntitle: unfinished")).toBe(false);
+  });
+
   it("detects ATX headings", () => {
     expect(looksLikeMarkdown("# Title\n\nbody")).toBe(true);
     expect(looksLikeMarkdown("### Sub heading here")).toBe(true);

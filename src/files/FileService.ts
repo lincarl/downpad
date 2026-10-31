@@ -106,9 +106,10 @@ export class FileService {
 
   /** Reopen the files of an earlier session in new tabs, in their order,
    *  without showing them, and make `active` the active tab. A file that is
-   *  open already, or that cannot be read, such as one deleted since, is left
-   *  out. Unlike openPath, this does not count as opening the files for the
-   *  Recent view. Resolves whether it reopened any file. */
+   *  open already is left alone. Unreadable files get no editor tab, and
+   *  SessionKeeper remembers them for later starts. Unlike openPath, this
+   *  does not count as opening the files for Recent. Returns whether any file
+   *  reopened. */
   async restoreTabs(paths: readonly string[], active: string | null): Promise<boolean> {
     const isOpen = (path: string) => this.store.get().tabs.some((tab) => samePath(tab.doc.filePath, path));
     const closed = paths.filter((path) => !isOpen(path));

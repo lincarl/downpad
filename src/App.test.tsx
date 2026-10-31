@@ -79,14 +79,20 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("App shell", () => {
-  it("marks unsaved tabs without adding a dot to the window title", () => {
+  it("marks the document icon red for unsaved tabs and restores it after saving", () => {
     const store = makeStore();
     store.patchDoc({ filePath: "C:\\notes\\draft.md" });
     render(<App store={store} />);
     expect(document.title).toBe("draft.md — Downpad");
     act(() => store.patchDoc({ markdown: "changed", isDirty: true }));
-    expect(document.querySelectorAll(".tab-dot")).toHaveLength(1);
+    expect(document.querySelectorAll(".tab-file-icon.is-dirty")).toHaveLength(1);
+    expect(document.querySelector(".tab-file-icon")?.classList.contains("text-ink-danger")).toBe(true);
+    expect(document.querySelector(".tab-dot")).toBeNull();
+    expect(document.querySelector("[role='tab']")?.getAttribute("aria-description")).toBe("Unsaved changes");
     expect(document.title).toBe("draft.md — Downpad");
+    act(() => store.patchDoc({ isDirty: false }));
+    expect(document.querySelector(".tab-file-icon.is-dirty")).toBeNull();
+    expect(document.querySelector("[role='tab']")?.hasAttribute("aria-description")).toBe(false);
     act(() => store.patchDoc({ filePath: null }));
     expect(document.title).toBe("Untitled — Downpad");
     act(() => store.closeTab("tab-1"));

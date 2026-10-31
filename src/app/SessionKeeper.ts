@@ -5,6 +5,7 @@
 import { saveSession } from "../ipc/commands";
 import type { Session } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
+import { sameFilePath } from "../files/pathIdentity";
 import type { Store } from "../state/store";
 import type { AppState } from "../state/types";
 
@@ -21,14 +22,29 @@ export class SessionKeeper {
   private recorded = "";
   private writes: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | null = null;
+  private unavailable: string[] = [];
+  private fileOrder: string[] = [];
+  private unavailableActive: string | null = null;
 
   constructor(private readonly store: Store) {}
 
-  /** Record the documents open now, and from then on every change. Startup
-   *  clears the tabs before it reopens the documents, so start once it ends. */
-  start(): void {
+  /** Record open documents and remember files startup could not read. Start
+   *  after startup has resolved recovery, restored tabs and launch arguments. */
+  start(previous: Session | null = null): void {
     if (!isElectron() || this.unsubscribe) return;
-    this.unsubscribe = this.store.subscribe(() => this.record());
+    const open = sessionOf(this.store.get()).files;
+    this.fileOrder = previous?.files.filter((path, index, paths) =>
+      paths.findIndex((file) => sameFilePath(file, path)) === index) ?? [];
+    this.unavailable = this.fileOrder.filter((path) => !open.some((file) => sameFilePath(file, path)));
+    const active = previous?.active;
+    this.unavailableActive = active && this.unavailable.some((path) => sameFilePath(path, active)) ? active : null;
+    this.unsubscribe = this.store.subscribe((state, before) => {
+      // Closing the last visible tab deliberately clears the whole session.
+      // Starting with no readable files must keep the saved reopening intent.
+      if (before.tabs.length > 0 && state.tabs.length === 0) this.unavailable = [];
+      if (state.activeTabId !== before.activeTabId || state.doc.filePath !== before.doc.filePath) this.unavailableActive = null;
+      this.record();
+    });
     this.record();
   }
 
@@ -51,7 +67,7 @@ export class SessionKeeper {
 
   private record(): void {
     if (!this.unsubscribe) return;
-    const session = sessionOf(this.store.get());
+    const session = this.nextSession();
     const text = JSON.stringify(session);
     if (text === this.recorded) return;
     this.recorded = text;
@@ -60,5 +76,31 @@ export class SessionKeeper {
       if (this.recorded === text) this.recorded = "";
       console.error("Downpad could not record the open documents", error);
     });
+  }
+
+  /** Keep unavailable files in their saved positions until opened or cleared. */
+  private nextSession(): Session {
+    const current = sessionOf(this.store.get());
+    const isOpen = (path: string) => current.files.some((file) => sameFilePath(file, path));
+    // Once a file opens normally, its tab owns its place in the session. A
+    // later close or Save As must not bring the old unavailable path back.
+    this.unavailable = this.unavailable.filter((path) => !isOpen(path));
+    if (this.unavailable.length === 0) {
+      this.fileOrder = current.files;
+      return current;
+    }
+    const isUnavailable = (path: string) => this.unavailable.some((file) => sameFilePath(file, path));
+    const retained = this.fileOrder.filter((path) => isOpen(path) || isUnavailable(path));
+    let openIndex = 0;
+    const files = retained.flatMap((path) => {
+      if (isUnavailable(path)) return [path];
+      const open = current.files[openIndex++];
+      return open ? [open] : [];
+    });
+    files.push(...current.files.slice(openIndex));
+    this.fileOrder = files;
+    const active = this.unavailableActive && isUnavailable(this.unavailableActive)
+      ? this.unavailableActive : current.active;
+    return { files, active };
   }
 }

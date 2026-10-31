@@ -6,6 +6,7 @@ import { ask } from "../ipc/dialogs";
 import { loadDocument } from "../document/DocumentModel";
 import type { EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
+import { sameFilePath } from "../files/pathIdentity";
 import {
   deleteSnapshot,
   getDefaultMdHandler,
@@ -14,7 +15,7 @@ import {
   loadSession,
   openDefaultAppsSettings,
 } from "../ipc/commands";
-import type { Snapshot } from "../ipc/contracts";
+import type { Session, Snapshot } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { RecoveryDialog } from "../recovery/RecoveryDialog";
 import type { SettingsModel } from "../settings/SettingsModel";
@@ -33,6 +34,8 @@ export interface StartupCoordinatorDependencies {
  *  default-handler prompt from §5.12. */
 export class StartupCoordinator {
   private readonly recoveryDialog = new RecoveryDialog();
+  /** Saved reopening intent, including files that startup could not read. */
+  sessionToRestore: Session | null = null;
 
   constructor(private readonly dependencies: StartupCoordinatorDependencies) {}
 
@@ -50,6 +53,7 @@ export class StartupCoordinator {
 
     const { store, files } = this.dependencies;
     const session = await loadSession().catch(() => null);
+    this.sessionToRestore = session;
     if (this.dependencies.isDisposed()) return false;
     // The seed document is a browser/e2e convenience. The desktop app starts
     // from the real startup sources below.
@@ -63,7 +67,10 @@ export class StartupCoordinator {
     if (this.dependencies.isDisposed()) return false;
     // After recovery the launch argument opens once the open-file listener
     // attaches, when startup has finished.
-    if (recovered) return true;
+    if (recovered) {
+      if (session) this.sessionToRestore = { ...session, active: store.get().doc.filePath };
+      return true;
+    }
 
     const arg = await getLaunchArgs().catch(() => null);
     if (this.dependencies.isDisposed()) return false;
@@ -71,6 +78,12 @@ export class StartupCoordinator {
       await files
         .openPath(arg)
         .catch((error) => console.error("Downpad: open arg failed", error));
+      // An explicit launch file takes precedence over an unavailable active
+      // file from the previous session.
+      const opened = store.get().doc.filePath;
+      if (session && opened && sameFilePath(opened, arg)) {
+        this.sessionToRestore = { ...session, active: arg };
+      }
       return true;
     }
     if (reopened) return true;

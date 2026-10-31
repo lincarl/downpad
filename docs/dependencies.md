@@ -11,6 +11,11 @@ Transitive npm dependencies follow their parent packages' compatible ranges.
 The lockfile records the resolved versions. `pnpm audit` checks npm advisories;
 it does not audit the operating system or binaries downloaded by packaging tools.
 
+Pele 1.13.0 renders Mermaid fences in place of Mermaid.js. It loads on demand
+and uses CSS variables for document and print colors. Pele targets
+Mermaid 12.1 syntax with its own layout and styling, so diagrams can look different
+and newer Mermaid syntax may not render. Its version has a release-age exception.
+
 ## Overrides and patches
 
 - KaTeX is overridden to 0.19.1 throughout the dependency tree. The math parser

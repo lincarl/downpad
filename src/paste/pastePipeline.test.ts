@@ -12,6 +12,12 @@ const snap = (over: Partial<ClipboardSnapshot>): ClipboardSnapshot => ({
 const fakeConvert = (html: string) => `MD(${html})`;
 
 describe("resolvePaste priority order (spec §5.4)", () => {
+  it("keeps Markdown source instead of its syntax-highlighted HTML", () => {
+    const md = "---\ntitle: sample\n---\n\n# Heading\n";
+    expect(resolvePaste(snap({ text: md, html: `<pre><code>${md}</code></pre>` }), fakeConvert))
+      .toEqual({ kind: "markdown", md });
+  });
+
   it("1. image beats everything", () => {
     const file = { type: "image/png" } as File;
     const action = resolvePaste(
