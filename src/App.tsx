@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Code,
   Columns2,
+  Copy,
   File,
   FileCode2,
   FilePlus2,
@@ -18,7 +19,6 @@ import {
   FolderOpen,
   History,
   ListClock,
-  Menu,
   Minus,
   Moon,
   Plus,
@@ -195,8 +195,6 @@ function Toolbar() {
 
   return (
     <header className="toolbar row-start-1 flex min-w-0 items-center gap-1 border-b border-line-toolbar bg-window px-[3px]">
-      <AppMenu inEditor={inEditor} documentIsDark={documentIsDark} />
-      <ToolSeparator />
       <TooltipLabel text="Recent files">
         <Button
           type="button"
@@ -208,7 +206,7 @@ function Toolbar() {
           onClick={() => runtime?.showRecentView()}
         >
           <ListClock aria-hidden="true" {...TOOL_ICON} />
-          <span className="max-[935px]:hidden">Recent</span>
+          <span className="max-[975px]:hidden">Recent</span>
         </Button>
       </TooltipLabel>
       <SplitButton
@@ -235,15 +233,14 @@ function Toolbar() {
         items={[
           { label: "Save", icon: Save, run: () => runtime?.saveDocument() },
           { label: "Save as…", icon: SaveAll, run: () => runtime?.saveDocumentAs() },
-          { label: "Copy as Markdown", icon: FileCode2, run: () => runtime?.copyDocumentMarkdown(), separatorBefore: true },
         ]}
       />
-      <ToolSeparator className="max-[620px]:hidden" />
+      <ToolSeparator className="max-[660px]:hidden" />
       <ToggleGroup
         type="single"
         value={inEditor ? editorLayout : ""}
         disabled={!inEditor}
-        className="toolbar-view inline-flex max-[620px]:hidden"
+        className="toolbar-view inline-flex max-[660px]:hidden"
         aria-label="Editor view"
         onValueChange={(value) => {
           if (value) runtime?.selectLayout(value as EditorLayout);
@@ -269,18 +266,30 @@ function Toolbar() {
           );
         })}
       </ToggleGroup>
-      <ToolSeparator className="max-[729px]:hidden" />
+      <ToolbarMenu
+        className="min-[660px]:hidden"
+        label="Editor view"
+        icon={editorLayout === "markdown" ? Code : editorLayout === "split" ? Columns2 : FileText}
+        disabled={!inEditor}
+        items={layouts.map(({ value, label }) => ({
+          label,
+          checked: inEditor && editorLayout === value,
+          radio: true,
+          run: () => runtime?.selectLayout(value),
+        }))}
+      />
+      <ToolSeparator className="max-[769px]:hidden" />
       <ToolButton
-        className="max-[819px]:hidden"
+        className="max-[859px]:hidden"
         label="Decrease text size"
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(-0.1)}
       >
         <Minus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
-      <TextSizeControl className="max-[729px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
+      <TextSizeControl className="max-[769px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
       <ToolButton
-        className="max-[819px]:hidden"
+        className="max-[859px]:hidden"
         label="Increase text size"
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(0.1)}
@@ -288,6 +297,15 @@ function Toolbar() {
         <Plus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
       <ToolSeparator />
+      <ToolbarMenu
+        label="Copy"
+        icon={Copy}
+        disabled={!inEditor}
+        items={[
+          { label: "Copy as markdown", icon: FileCode2, run: () => runtime?.copyDocumentMarkdown() },
+          { label: "Copy formatted text", icon: FileText, run: () => runtime?.copyDocumentFormatted() },
+        ]}
+      />
       <ToolButton label="Print" tooltip="Print (Ctrl+P)" disabled={!inEditor} onClick={() => runtime?.printDocument()}>
         <Printer aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
@@ -311,6 +329,9 @@ function Toolbar() {
         ) : (
           <Moon aria-hidden="true" className="document-theme-glyph" {...TOOL_ICON} />
         )}
+      </ToolButton>
+      <ToolButton className="ml-auto" label="Settings" onClick={() => runtime?.openSettings()}>
+        <Settings aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
     </header>
   );
@@ -376,62 +397,39 @@ function useToolbarMenu() {
   return { open, setOpen, triggerRef, activate, menuProps: { onKeyDown, onCloseAutoFocus } };
 }
 
-/** The hamburger menu: file actions, document actions, view choices and Settings. */
-function AppMenu({ inEditor, documentIsDark }: { inEditor: boolean; documentIsDark: boolean }) {
-  const runtime = useAppRuntime();
-  const editorLayout = useAppState(shownLayout);
+/** A toolbar button that opens related commands using the shared menu keyboard behavior. */
+function ToolbarMenu({ className, label, icon: Icon, disabled, items }: {
+  className?: string;
+  label: string;
+  icon: LucideIcon;
+  disabled?: boolean;
+  items: MenuItem[];
+}) {
   const { open, setOpen, triggerRef, activate, menuProps } = useToolbarMenu();
-  const layout = (value: EditorLayout, label: string, icon: LucideIcon): MenuItem => ({
-    label,
-    icon,
-    disabled: !inEditor,
-    checked: inEditor && editorLayout === value,
-    radio: true,
-    run: () => runtime?.selectLayout(value),
-  });
-  const items: MenuItem[] = [
-    { label: "New document", icon: FilePlus2, run: () => runtime?.newDocument() },
-    { label: "Open…", icon: FolderOpen, run: () => runtime?.openDocument() },
-    { label: "Recent files", icon: History, run: () => runtime?.showRecentView() },
-    { label: "Save", icon: Save, disabled: !inEditor, separatorBefore: true, run: () => runtime?.saveDocument() },
-    { label: "Save as…", icon: SaveAll, disabled: !inEditor, run: () => runtime?.saveDocumentAs() },
-    { label: "Copy as Markdown", icon: FileCode2, disabled: !inEditor, run: () => runtime?.copyDocumentMarkdown() },
-    { label: "Print", icon: Printer, disabled: !inEditor, run: () => runtime?.printDocument() },
-    { ...layout("document", "Document", FileText), separatorBefore: true, section: "View" },
-    layout("split", "Split", Columns2),
-    layout("markdown", "Markdown", Code),
-    {
-      label: "Dark document",
-      icon: Moon,
-      disabled: !inEditor,
-      checked: inEditor && documentIsDark,
-      run: () => runtime?.toggleDocumentTheme(),
-    },
-    { label: "Settings", icon: Settings, separatorBefore: true, run: () => runtime?.openSettings() },
-  ];
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <TooltipLabel text="Menu">
+      <TooltipLabel text={label}>
         <PopoverTrigger asChild>
           <Button
             ref={triggerRef}
             type="button"
             variant="tool"
             size="tool-icon"
-            className="toolbar-menu"
-            aria-label="Application menu"
+            className={className}
+            aria-label={label}
             aria-haspopup="menu"
+            disabled={disabled}
           >
-            <Menu aria-hidden="true" {...TOOL_ICON} />
+            <Icon aria-hidden="true" {...TOOL_ICON} />
           </Button>
         </PopoverTrigger>
       </TooltipLabel>
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn("app-menu z-[100] min-w-[210px]", menuSurfaceClassName)}
+        className={cn("z-[100]", menuSurfaceClassName)}
         role="menu"
-        aria-label="Application menu"
+        aria-label={label}
         {...menuProps}
         onOpenAutoFocus={focusFirstMenuRow}
       >
@@ -533,7 +531,7 @@ function SplitButton({
               type="button"
               className={cn(
                 part,
-                "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[935px]:pr-1",
+                "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[975px]:pr-1",
               )}
               aria-label={label}
               disabled={disabled}
@@ -541,7 +539,7 @@ function SplitButton({
             >
               <Icon aria-hidden="true" {...TOOL_ICON} />
               {/* Narrow windows keep the icon and drop the label before anything clips. */}
-              <span className="toolbar-file-label max-[935px]:hidden">{label}</span>
+              <span className="toolbar-file-label max-[975px]:hidden">{label}</span>
             </button>
           </TooltipLabel>
           <PopoverTrigger asChild>
