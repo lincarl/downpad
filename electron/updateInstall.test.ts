@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { processStartTime } from "./processStartTime";
 import {
   copyVerified, debInstallCommand, exportedRegistryString, INTEGRITY_FAILURE, installDeb, msiHelper, registeredMsiFolder, replaceAppImage,
   stageMsi, startMsiInstaller,
@@ -187,10 +188,13 @@ describe("MSI updates", () => {
     const file = await download(directory, "Downpad-1.3.0-win-x64.msi");
     const staged = await stageMsi(file, DIGEST);
     let helperPid: number | undefined;
+    let helperStartTime: string | null = null;
     const pipe = await startMsiInstaller(staged, executable, result, join(directory, "notes & 50%.md"), {
-      msiexec, onStarted: async (pid) => { helperPid = pid; },
+      msiexec, onStarted: async (pid) => { helperPid = pid; helperStartTime = await processStartTime(pid); },
     });
     expect(helperPid).toBeGreaterThan(0);
+    expect(helperStartTime).toMatch(/^\d+$/);
+    expect(await processStartTime(helperPid!)).toBe(helperStartTime);
     // While the pipe is open, Downpad still runs, so nothing may start. A
     // helper that did not wait would start the installer well within this.
     await new Promise((done) => setTimeout(done, 4000));

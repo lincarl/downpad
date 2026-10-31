@@ -177,9 +177,9 @@ export async function discardStagedMsi(staged: StagedMsi): Promise<void> {
  *  writes the installer's exit code to `result`. The helper starts the
  *  installer once the returned pipe closes, which happens when this process
  *  ends, so the caller must quit at once. Tests close the pipe instead. If the
- *  helper cannot start or its PID cannot be saved, the staged copy is removed.
+ *  helper cannot start or its identity cannot be saved, the staged copy is removed.
  *  `msiexec` replaces Windows Installer in tests. `onStarted` saves the helper's
- *  PID before the caller can exit and release its pipe. */
+ *  PID and creation identity before the caller can exit and release its pipe. */
 export async function startMsiInstaller(staged: StagedMsi, executable: string, result: string, argument?: string,
   options: { msiexec?: string; onStarted?: (pid: number) => Promise<void> } = {}): Promise<Writable> {
   try {

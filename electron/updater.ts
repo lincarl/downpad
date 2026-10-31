@@ -6,6 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { UpdateInfo, UpdateState } from "../src/ipc/contracts";
 import { writeAtomic } from "./io";
+import { processStartTime } from "./processStartTime";
 import {
   allowedUrl, assetFor, assetName, checkDue, isNewerStable, isSha256, parseRelease, RELEASE_API_URL,
   type PackageKind, type ReleaseAsset,
@@ -36,6 +37,8 @@ interface StoredState {
   installing?: string;
   /** The detached helper that owns the in-progress installation. */
   installerPid?: number;
+  /** Creation identity distinguishes the helper from a reused process ID. */
+  installerStartTime?: string;
 }
 
 /** What the start found: the download to install now, and why the update that
@@ -61,7 +64,7 @@ export interface UpdaterOptions {
   apiUrl?: string;
   now?: () => number;
   /** Tests can model the detached Windows helper without starting a process. */
-  isProcessRunning?: (pid: number) => boolean;
+  processStartTime?: (pid: number) => Promise<string | null>;
   onChange?: (info: UpdateInfo) => void;
 }
 
@@ -80,7 +83,7 @@ const RESULT_FILE = "install-result.txt";
 const MSI_SUCCESS = new Set([0, 1641, 3010]);
 /** Windows Installer's exit code when the user cancelled. */
 const MSI_CANCELLED = 1602;
-/** Older handoffs have no helper PID. Give them a bounded completion window. */
+/** Older handoffs have no process identity. Give them a bounded completion window. */
 const LEGACY_INSTALL_WAIT_MS = 10 * 60 * 1000;
 
 /** Reads GitHub's latest release, downloads the package that matches how this
@@ -148,9 +151,16 @@ export class Updater {
   /** Distinguish a running helper from a completed or interrupted installation. */
   private async installerStatus(saved: StoredState, kind: PackageKind): Promise<{ failure: string | null; installing?: boolean }> {
     const version = saved.installing!;
-    const result = await readFile(join(this.folder(kind), RESULT_FILE), "utf8").catch(() => "");
-    const code = /^\d+\s*$/.test(result.trim()) ? Number(result.trim()) : Number.NaN;
-    if (Number.isNaN(code) && this.installerRunning(saved)) return { failure: null, installing: true };
+    const readCode = async (): Promise<number> => {
+      const result = await readFile(join(this.folder(kind), RESULT_FILE), "utf8").catch(() => "");
+      return /^\d+\s*$/.test(result.trim()) ? Number(result.trim()) : Number.NaN;
+    };
+    let code = await readCode();
+    if (Number.isNaN(code)) {
+      if (await this.installerRunning(saved)) return { failure: null, installing: true };
+      // The helper can write its result and exit while its identity is read.
+      code = await readCode();
+    }
     // New files can be visible before MSI commits. Keep them unlocked until
     // installation finishes, even when this launch already has the new version.
     if (!isNewerStable(version, this.options.version)) return { failure: null };
@@ -162,11 +172,9 @@ export class Updater {
   }
 
   /** A missing result is inconclusive while the detached helper still runs. */
-  private installerRunning(saved: StoredState): boolean {
-    if (saved.installerPid !== undefined) {
-      if (this.options.isProcessRunning) return this.options.isProcessRunning(saved.installerPid);
-      try { process.kill(saved.installerPid, 0); return true; }
-      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+  private async installerRunning(saved: StoredState): Promise<boolean> {
+    if (saved.installerPid !== undefined && saved.installerStartTime) {
+      return await (this.options.processStartTime ?? processStartTime)(saved.installerPid) === saved.installerStartTime;
     }
     const elapsed = this.now() - (saved.lastCheckMs ?? 0);
     return elapsed >= 0 && elapsed < LEGACY_INSTALL_WAIT_MS;
@@ -195,7 +203,9 @@ export class Updater {
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("The Windows update helper has no valid process ID.");
     const saved = await this.readState();
     if (!saved.installing) throw new Error("No Windows update is waiting for its helper.");
-    await this.writeState({ ...saved, installerPid: pid });
+    const startTime = await (this.options.processStartTime ?? processStartTime)(pid);
+    if (!startTime) throw new Error("Cannot identify the Windows update helper.");
+    await this.writeState({ ...saved, installerPid: pid, installerStartTime: startTime });
   }
 
   /** Check in the background when automatic updates are on and a check is due. */
@@ -415,6 +425,7 @@ export class Updater {
           : undefined,
         installing: typeof source.installing === "string" ? source.installing : undefined,
         installerPid: typeof source.installerPid === "number" && Number.isSafeInteger(source.installerPid) && source.installerPid > 0 ? source.installerPid : undefined,
+        installerStartTime: typeof source.installerStartTime === "string" ? source.installerStartTime : undefined,
       };
     } catch { return {}; }
   }

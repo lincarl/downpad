@@ -133,6 +133,36 @@ describe("Markdown source pasted into the document", () => {
   });
 
   it.each([
+    ["**", "strong"], ["*", "em"], ["~~", "del"],
+  ])("keeps %s text on both sides when pasted Markdown uses the same mark", async (delimiter, tag) => {
+    const initial = `Before ${delimiter}left target right${delimiter} after.\n`;
+    const { editor, view } = await open(initial);
+    selectText(view, "target");
+    paste(view, `${delimiter}new${delimiter}`);
+    expect(view.dom.querySelector(tag)?.textContent).toBe("left new right");
+    expect(view.state.doc.textContent).toBe("Before left new right after.");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor.getMarkdown()).toBe(initial);
+  });
+
+  it("puts the caret after the entire paste when it repeats selected and surrounding text", async () => {
+    const { view } = await open("Before target after.\n");
+    selectText(view, "target");
+    paste(view, "target **after**.");
+    view.dispatch(view.state.tr.insertText("!"));
+    expect(view.state.doc.textContent).toBe("Before target after.! after.");
+  });
+
+  it("tracks the source endpoint when pasted blocks join the surrounding text", async () => {
+    const { view } = await open("Before target after.\n");
+    selectText(view, "target");
+    paste(view, "# Heading\n\n* item");
+    view.dispatch(view.state.tr.insertText("!"));
+    expect(view.dom.querySelector("li")?.textContent?.trim()).toBe("item! after.");
+    expect(view.dom.querySelector("p")?.textContent).toBe("Before # Heading");
+  });
+
+  it.each([
     [2, 3, ["AB", "XY", "keepthese"]],
     [0, 3, ["XY", "onetwo", "keepthese"]],
   ])("pastes a table into selected cells %s to %s without changing unselected cells", async (from, to, expected) => {

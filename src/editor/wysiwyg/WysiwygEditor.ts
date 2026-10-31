@@ -15,7 +15,7 @@
 //     in Milkdown's form, as before (sourceBaseline.ts).
 
 import { Crepe } from "@milkdown/crepe";
-import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, editorViewOptionsCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
+import { EditorStatus, remarkStringifyOptionsCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, remarkCtx, schemaCtx, serializerCtx } from "@milkdown/kit/core";
 import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
@@ -472,8 +472,13 @@ export class WysiwygEditor {
       const view = ctx.get(editorViewCtx);
       const baseline = baselineOf(view.state) ?? this.baseline;
       const serialize = ctx.get(serializerCtx);
-      const body = pasteMarkdownSource(view.state, markdown, (doc) => baseline ? baseline.write(doc) : serialize(doc));
-      if (body == null) return false;
+      const pasted = pasteMarkdownSource(view.state, markdown, {
+        write: (doc) => baseline ? baseline.write(doc) : serialize(doc),
+        serialize,
+        parse: ctx.get(parserCtx),
+      });
+      if (pasted == null) return false;
+      const { body, caret } = pasted;
       const source = joinFrontmatter({ frontmatter: this.frontmatterBlock, separator: this.frontmatterSeparator, body });
       const split = splitFrontmatter(source);
       const slot: BaselineSlot = { baseline: null };
@@ -482,8 +487,7 @@ export class WysiwygEditor {
         setBaseline(state, tr, slot);
         // Populate the slot before frontmatter's view callback reports the edit.
         this.rememberSource(split.body, slot, tr.doc);
-        const end = tr.mapping.map(state.selection.to, 1);
-        tr.setSelection(Selection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size)), -1));
+        tr.setSelection(Selection.near(tr.doc.resolve(Math.min(caret, tr.doc.content.size)), -1));
         return closeHistory(tr).setMeta("paste", true).setMeta("uiEvent", "paste").scrollIntoView();
       }));
       // Typing after the paste starts a separate undo step.

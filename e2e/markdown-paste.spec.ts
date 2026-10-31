@@ -85,3 +85,27 @@ test("pastes stay literal inside inline code and fenced code", async ({ page }) 
   await expect(page.locator(".editor-pane-wysiwyg:not([hidden]) .frontmatter-toggle")).toHaveCount(0);
   expect(await source(page)).toContain("Before ``left **bold** `code` right`` after.");
 });
+
+test("pasting repeated or nested formatting preserves surrounding marks and the insertion endpoint", async ({ page }) => {
+  await pasteMarkdown(page, "Before **left target right** after.");
+  const strong = page.locator(`${documentBody} strong`);
+  await strong.evaluate((element) => {
+    const text = element.firstChild!;
+    document.getSelection()?.setBaseAndExtent(text, 5, text, 11);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await expect.poll(() => page.evaluate(() => document.getSelection()?.toString())).toBe("target");
+  await pasteMarkdown(page, "**new**");
+  await expect(strong).toHaveText("left new right");
+  await page.keyboard.insertText("!");
+  await expect(strong).toHaveText("left new! right");
+
+  await page.keyboard.press("ControlOrMeta+A");
+  await pasteMarkdown(page, "Before target after.");
+  await page.keyboard.press("Home");
+  for (let index = 0; index < 7; index++) await page.keyboard.press("ArrowRight");
+  for (let index = 0; index < 6; index++) await page.keyboard.press("Shift+ArrowRight");
+  await pasteMarkdown(page, "target **after**.");
+  await page.keyboard.insertText("!");
+  await expect(page.locator(documentBody)).toHaveText("Before target after.! after.");
+});
