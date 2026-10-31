@@ -26,7 +26,7 @@ function closeActiveMenu(restoreFocus: boolean, activated = false): void {
   if (listenerTimer) clearTimeout(listenerTimer);
   listenerTimer = null;
   document.removeEventListener("pointerdown", onPointerDown, true);
-  document.removeEventListener("keydown", onKeyDown, true);
+  window.removeEventListener("keydown", onKeyDown, true);
   document.removeEventListener("focusin", onFocusIn);
   window.removeEventListener("blur", closeContextMenu);
   const current = active;
@@ -72,7 +72,10 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
   closeActiveMenu(false);
   const host = document.createElement("div");
   host.dataset.reactContextMenu = "";
-  document.body.append(host);
+  // Radix keeps focus within the active dialog. Its context menu belongs in
+  // that same scope, including a nested dialog such as the custom dictionary.
+  const container = restoreFocus?.closest('[role="dialog"]') ?? document.body;
+  container.append(host);
   const root = createRoot(host);
   flushSync(() => {
     root.render(<ContextMenu x={x} y={y} items={items} label={label} />);
@@ -88,10 +91,10 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
     menu.style.left = `${Math.max(0, window.innerWidth - rect.width - 4)}px`;
   if (rect.bottom > window.innerHeight)
     menu.style.top = `${Math.max(0, window.innerHeight - rect.height - 4)}px`;
-  // Escape/keyboard navigation should work as soon as the menu is visible. Only
+  // Handle Escape before a dialog's document-level handler can close it. Only
   // the outside-pointer listener is delayed so the opening right-click cannot
   // immediately close its own menu.
-  document.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("focusin", onFocusIn);
   window.addEventListener("blur", closeContextMenu);
   menu.querySelector<HTMLButtonElement>(".md-context-menu-item:not(.disabled)")?.focus();

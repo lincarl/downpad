@@ -239,3 +239,41 @@ test("changing documents dismisses spelling choices and rejects their stale nati
   expect(error).toContain("This spelling menu has closed.");
   expect(await readFile(path.join(directory, "spelling.md"), "utf8")).toBe("A speling example.\n");
 });
+
+test("native editing menus work inside Settings and its nested dictionary dialog", async () => {
+  await launch("A spelling example.\n");
+  const settings = await spellingSettings();
+  await settings.getByRole("tab", { name: "Appearance", exact: true }).click();
+  const font = settings.getByRole("textbox", { name: "Body font:" });
+  await font.fill("Georgia");
+
+  /** Exercise pointer targeting and Escape within the field's own modal. */
+  const checkMenu = async (field: Locator, dialog: Locator, text: string): Promise<void> => {
+    await field.click({ button: "right" });
+    const menu = dialog.getByRole("menu", { name: "Edit", exact: true });
+    await expect(menu).toBeVisible();
+    await menu.getByRole("menuitem", { name: "Select all", exact: true }).click();
+    await expect(field).toBeFocused();
+    expect(await field.evaluate((element) => [
+      (element as HTMLInputElement).selectionStart,
+      (element as HTMLInputElement).selectionEnd,
+    ])).toEqual([0, text.length]);
+    await field.click({ button: "right" });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+    await expect(field).toBeFocused();
+  };
+
+  await checkMenu(font, settings, "Georgia");
+  await settings.getByRole("tab", { name: "Spelling", exact: true }).click();
+  await settings.getByRole("button", { name: "Manage dictionary…" }).click();
+  const dictionary = page.getByRole("dialog", { name: "Custom dictionary", exact: true });
+  const word = dictionary.getByRole("textbox", { name: "New word", exact: true });
+  await word.fill("zorblaxquendrel");
+  await checkMenu(word, dictionary, "zorblaxquendrel");
+  await dictionary.getByRole("button", { name: "Done", exact: true }).click();
+  await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await page.evaluate(() => window.downpadDesktop!.invoke("list_dictionary_words"))).toEqual([]);
+});

@@ -40,6 +40,30 @@ test("Escape closes the menu", async ({ page }) => {
   await expect(page.locator(menu)).toHaveCount(0);
 });
 
+test("a Settings field keeps its editing menu inside the dialog", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+  await settings.getByRole("tab", { name: "Appearance", exact: true }).click();
+  const font = settings.getByRole("textbox", { name: "Body font:" });
+  await font.fill("Georgia");
+  await font.click({ button: "right" });
+  const editMenu = settings.getByRole("menu", { name: "Edit", exact: true });
+  await expect(editMenu).toBeVisible();
+  await editMenu.getByRole("menuitem", { name: "Select all", exact: true }).click();
+  await expect(font).toBeFocused();
+  expect(await font.evaluate((element) => [
+    (element as HTMLInputElement).selectionStart,
+    (element as HTMLInputElement).selectionEnd,
+  ])).toEqual([0, "Georgia".length]);
+  await font.click({ button: "right" });
+  await expect(editMenu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(editMenu).toHaveCount(0);
+  await expect(settings).toBeVisible();
+  await expect(font).toBeFocused();
+});
+
 test("Shift+right-click leaves the native menu to Electron (spell check, §5.14)", async ({
   page,
 }) => {
