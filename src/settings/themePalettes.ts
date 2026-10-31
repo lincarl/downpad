@@ -63,7 +63,7 @@ export interface DocumentPalette {
 
 export const DOCUMENT_PALETTES: Record<Scheme, DocumentPalette> = {
   light: { paper: "#ffffff", ink: "#1a1a1a", edge: "#202020" },
-  dark: { paper: "#1e1e1e", ink: "#d4d4d4", edge: "#39414c" },
+  dark: { paper: "#040404", ink: "#d4d4d4", edge: "#39414c" },
 };
 
 /** The scheme a UI theme setting shows now; "system" follows the OS as

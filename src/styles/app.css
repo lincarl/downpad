@@ -291,10 +291,10 @@
   --accent-hover: color-mix(in srgb, var(--accent) 82%, #fff);
 }
 
-/* Dark document surface, independent of the chrome theme (spec §6.2). Matches
-   VS Code's "Dark+" editor: #1e1e1e page, #d4d4d4 text. */
+/* Dark document surface, independent of the chrome theme (spec §6.2). Uses a
+   #040404 page with VS Code's "Dark+" #d4d4d4 text and syntax colours. */
 :root[data-editor-theme="dark"] {
-  --editor-surface-bg: #1e1e1e;
+  --editor-surface-bg: #040404;
   --editor-surface-fg: #d4d4d4;
 
   /* VS Code's Dark+ Markdown and YAML colours and dark selection colours. */
