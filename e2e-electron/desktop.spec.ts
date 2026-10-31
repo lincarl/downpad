@@ -2,6 +2,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 import { mkdir, mkdtemp, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { WebPreferences } from "electron";
 import type {} from "../src/ipc/bridge";
 
@@ -117,6 +118,35 @@ async function clipboardText(): Promise<string> {
   const text = await app!.evaluate(({ clipboard }) => clipboard.readText());
   return text.replace(/\r\n/g, "\n");
 }
+
+test("the toolbar copies the whole document as Markdown or formatted text to the desktop clipboard", async () => {
+  const file = path.join(directory, "copy-formats.md");
+  const markdown = "# Copy formats\n\nA **bold** paragraph.\n\nLatest edit with [related](../related%20note.md#section)[^1].\n\n[^1]: A footnote.\n";
+  await writeFile(file, "# Copy formats\n\nA **bold** paragraph.\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const source = page.locator(".editor-pane-raw .cm-content");
+  await source.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText(markdown);
+  const copy = page.locator(".toolbar").getByRole("button", { name: "Copy", exact: true });
+  await copy.click();
+  await page.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
+  await expect.poll(clipboardText).toBe(markdown);
+  await copy.click();
+  await page.getByRole("menuitem", { name: "Copy formatted text", exact: true }).click();
+  await expect.poll(clipboardText).toBe("Copy formats\n\nA bold paragraph.\n\nLatest edit with related[1].\n\n[1] A footnote.");
+  const html = await app!.evaluate(async ({ clipboard }) => {
+    const items = await clipboard.read();
+    const item = items.find((entry) => entry.types.includes("text/html"));
+    return item ? (await item.getType("text/html")).text() : "";
+  });
+  expect(html).toContain("<strong>bold</strong>");
+  expect(html).toContain("Latest edit with");
+  expect(html).toContain(new URL("../related%20note.md#section", pathToFileURL(file)).href);
+  expect(html).not.toContain("contenteditable");
+  await expect(source).toContainText("A **bold** paragraph.");
+});
 
 test("launching a Markdown file renders formatting and relative images in an isolated renderer", async () => {
   const file = path.join(directory, "launch.md");
@@ -2603,7 +2633,7 @@ test("a click in the room find adds above the Markdown view keeps focus in the f
   await launch(file);
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
-  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("button", { name: "Editor view", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   await expect(pane.locator(".cm-line").first()).toBeVisible();
@@ -3606,9 +3636,10 @@ test("a toolbar tooltip lets a click through to a document tab", async () => {
   await launch(file);
   await expect(page.locator(heading)).toHaveText("Tooltip");
   await page.getByRole("button", { name: "Recent", exact: true }).click();
-  // Keyboard focus opens the menu tooltip over the first tab and keeps it open.
-  await page.getByRole("button", { name: "Application menu", exact: true }).focus();
-  await expect(page.getByRole("tooltip", { name: "Menu", exact: true })).toBeVisible();
+  // Keyboard focus opens the Recent tooltip over the first tab and keeps it open.
+  await page.getByRole("tab").focus();
+  await page.getByRole("button", { name: "Recent", exact: true }).focus();
+  await expect(page.getByRole("tooltip", { name: "Recent files", exact: true })).toBeVisible();
   await page.getByRole("tab").click({ position: { x: 24, y: 8 }, timeout: 2_000 });
   await expect(page.locator(heading)).toBeVisible();
   await expect(page.locator(".recent-host")).toBeHidden();
@@ -4247,8 +4278,7 @@ test("General Recent preferences persist and hide missing files without deleting
   await page.getByRole("button", { name: "Recent", exact: true }).click();
   await expect(page.locator(".recent-name")).toHaveText(["available.md"]);
 
-  await page.getByRole("button", { name: "Application menu" }).click();
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("combobox", { name: "Default search:" })).toHaveValue("names");
   await dialog.getByRole("combobox", { name: "Default search:" }).selectOption("contents");
@@ -4265,8 +4295,7 @@ test("General Recent preferences persist and hide missing files without deleting
   await page.getByRole("button", { name: "Recent", exact: true }).click();
   await expect(page.getByRole("group", { name: "Search scope" }).getByRole("button", { name: "Contents", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".recent-name")).toHaveText(["missing.md", "available.md"]);
-  await page.getByRole("button", { name: "Application menu" }).click();
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const reopenedDialog = page.getByRole("dialog", { name: "Settings" });
   await reopenedDialog.getByRole("checkbox", { name: "Keep removed files in list" }).uncheck();
   await reopenedDialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -4468,7 +4497,7 @@ test("Tab leaves the document view without typing spaces, and still nests a list
   const document = page.locator(".milkdown .ProseMirror");
   // Nothing follows the document, so Tab wraps to the first control, as it
   // does from the Markdown view.
-  const next = page.getByRole("button", { name: "Application menu", exact: true });
+  const next = page.getByRole("button", { name: "Recent", exact: true });
   await document.locator("p").first().click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Edited.");
@@ -6407,7 +6436,7 @@ test("find in the Markdown view gives the first line room below the card and cle
   await launch(file);
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
-  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("button", { name: "Editor view", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   const firstLine = pane.locator(".cm-line").filter({ hasText: "needle on the first line." });
