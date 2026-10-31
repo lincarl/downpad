@@ -153,6 +153,15 @@ export function imageContextMenuPlugin(viewRef: ViewRef, ctx: WysiwygContext) {
         },
         props: {
           handleDOMEvents: {
+            mousedown: (view: EditorView, event: MouseEvent): boolean => {
+              if (event.button !== 2) return false;
+              const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+              if (!at || !imageNodeAtPos(view, at.inside >= 0 ? at.inside : at.pos)) return false;
+              // ProseMirror otherwise selects the image on mouseup and takes
+              // focus back from the menu that Linux opens on right-button down.
+              event.preventDefault();
+              return true;
+            },
             contextmenu: (view: EditorView, event: MouseEvent): boolean => {
               const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
               if (!at) return false;

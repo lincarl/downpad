@@ -251,7 +251,10 @@ test("the renderer's Content Security Policy allows Downpad's content and blocks
     await expect.poll(() => pane.locator(".ProseMirror img").evaluateAll((images) => images.map((image) => image instanceof HTMLImageElement && image.naturalWidth > 0))).toEqual([true, true, true]);
     // Copy image fetches the embedded image's data: URL and converts it to PNG.
     await pane.getByRole("img", { name: "Embedded", exact: true }).click({ button: "right" });
-    await page.getByRole("menuitem", { name: "Copy image", exact: true }).click();
+    const copyImage = page.getByRole("menuitem", { name: "Copy image", exact: true });
+    // Releasing the right button must leave focus in the image menu.
+    await expect(copyImage).toBeFocused();
+    await copyImage.click();
     await expect.poll(() => log.evaluate(({ copies }) => copies)).toEqual(["image/png"]);
     // Vite inlines KaTeX_Size3 as a data: URL. A blocked inlined font falls back to
     // its font file without a violation event, so load each inlined source directly.

@@ -83,14 +83,30 @@ async function wordMenu(container: Locator, word: string): Promise<Locator> {
 
 /** Wait for the downloaded dictionary to flag actual document text. */
 async function misspellingMenu(container: Locator, word: string): Promise<Locator> {
+  const editor = container.locator("xpath=ancestor-or-self::*[@contenteditable='true'][1]");
+  const source = await editor.evaluate((element) => element.classList.contains("cm-content"));
   await expect.poll(async () => {
-    // Startup's scripted autofocus does not start the native scan. Repeat a
-    // real focus transition while a first-use dictionary may still download.
-    await page.getByRole("button", { name: "Settings", exact: true }).focus();
-    const point = await wordPoint(container, word);
-    await page.mouse.click(point.x, point.y);
+    if (!source) {
+      // A real pointer focus starts the rendered document's initial scan.
+      await page.getByRole("button", { name: "Settings", exact: true }).focus();
+      const point = await wordPoint(container, word);
+      await page.mouse.click(point.x, point.y);
+    }
     const menu = await wordMenu(container, word);
-    return menu.getByRole("menuitem", { name: "Add to dictionary", exact: true }).count();
+    const found = await menu.getByRole("menuitem", { name: "Add to dictionary", exact: true }).count();
+    if (!found && source) {
+      await page.keyboard.press("Escape");
+      // Native keyboard focus starts Chromium's scan even when CodeMirror's
+      // scripted mouse focus does not. Leave the editor focused between polls
+      // so an asynchronous scan can finish before another menu takes focus.
+      await editor.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await expect(editor).toBeFocused();
+      const point = await wordPoint(container, word);
+      await page.mouse.click(point.x, point.y);
+    }
+    return found;
   }, { timeout: 30_000, message: "The native spelling dictionary must load and flag the misspelling." }).toBe(1);
   return page.getByRole("menu", { name: "Edit", exact: true });
 }
@@ -126,7 +142,8 @@ test("spelling languages save together, survive restart, and respond to external
   await dialog.getByRole("checkbox", { name: "Use system languages", exact: true }).check();
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   const info = await page.evaluate(() => window.downpadDesktop!.invoke("get_spellcheck_info"));
-  expect(info.activeLanguages).toEqual(info.systemLanguages);
+  await expect.poll(async () => (await page.evaluate(() => window.downpadDesktop!.invoke("get_spellcheck_info"))).activeLanguages)
+    .toEqual(info.systemLanguages);
 });
 
 test("normal spelling corrections preserve formatting, source, undo and zoomed menu targeting", async () => {

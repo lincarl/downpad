@@ -34,7 +34,7 @@ function preference(view: EditorView, text: string): string | null {
 }
 
 describe("Markdown spelling eligibility", () => {
-  it("excludes parsed code while keeping surrounding prose and escaped backticks eligible", () => {
+  it("excludes parsed code while keeping surrounding prose and escaped backticks eligible", async () => {
     const { view } = open([
       "Prose `inlinecode` and ``nested`code`` after.",
       "",
@@ -58,11 +58,14 @@ describe("Markdown spelling eligibility", () => {
       "Afterwards.",
     ].join("\n"));
 
-    for (const word of ["Prose", "after", "plainword", "unfinished", "Afterwards"]) expect(preference(view, word)).toBe("true");
-    for (const word of ["inlinecode", "nested", "fencedword", "tildeword", "indentedword", "quotedword"]) {
-      expect(preference(view, word)).toBe("false");
-    }
-    expect([...view.contentDOM.querySelectorAll('.cm-line[spellcheck="false"]')].some((line) => !line.textContent)).toBe(true);
+    // The time-sliced Markdown parser can finish its initial tree in the background.
+    await vi.waitFor(() => {
+      for (const word of ["Prose", "after", "plainword", "unfinished", "Afterwards"]) expect(preference(view, word), word).toBe("true");
+      for (const word of ["inlinecode", "nested", "fencedword", "tildeword", "indentedword", "quotedword"]) {
+        expect(preference(view, word), word).toBe("false");
+      }
+      expect([...view.contentDOM.querySelectorAll('.cm-line[spellcheck="false"]')].some((line) => !line.textContent)).toBe(true);
+    });
   });
 
   it("updates exclusions when inline delimiters are typed, deleted and undone", () => {
