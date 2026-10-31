@@ -6774,7 +6774,7 @@ test("a file that ends in a list opens as saved", async () => {
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
-test("pasting a copy of the whole document adds no empty line", async () => {
+test("pasting a copy of the whole document preserves source spacing without adding an empty paragraph", async () => {
   const file = path.join(directory, "copy-all.md");
   await writeFile(file, "Intro.\n\n> Quote\n");
   await launch(file);
@@ -6783,12 +6783,21 @@ test("pasting a copy of the whole document adds no empty line", async () => {
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ControlOrMeta+c");
   await expect.poll(clipboardText).toBe("Intro.\n\n> Quote\n");
-  // The document view keeps an empty line after the final quote. The copy's
-  // HTML, which a paste reads, must leave it out too.
+  // Both clipboard formats omit Crepe's empty paragraph after the final quote.
+  const html = await app!.evaluate(async ({ clipboard }) => {
+    const items = await clipboard.read();
+    const item = items.find((entry) => entry.types.includes("text/html"));
+    return item ? (await item.getType("text/html")).text() : "";
+  });
+  expect(await page.evaluate((markup) => Array.from(new DOMParser().parseFromString(markup, "text/html")
+    .querySelectorAll("p"), (paragraph) => paragraph.textContent), html)).toEqual(["Intro.", "Quote"]);
   await typeAtEnd(intro, "\n");
   await page.keyboard.press("ControlOrMeta+v");
+  // Only the editor's final typing paragraph is empty. Source paste retains
+  // the clipboard's last newline beside the existing two-newline separator.
+  await expect(page.locator(".milkdown .ProseMirror p")).toHaveText(["Intro.", "Intro.", "Quote", "Quote", ""]);
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("Intro.\n\nIntro.\n\n> Quote\n\n> Quote\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("Intro.\n\nIntro.\n\n> Quote\n\n\n> Quote\n");
 });
 
 test("an edit to a file that ends in a code block saves no extra blank line", async () => {
