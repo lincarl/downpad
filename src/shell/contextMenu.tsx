@@ -12,6 +12,7 @@ interface ActiveMenu {
   root: Root;
   menu: HTMLElement;
   restoreFocus: HTMLElement | null;
+  onDismiss?: () => void;
 }
 
 let active: ActiveMenu | null = null;
@@ -21,17 +22,19 @@ export function closeContextMenu(): void {
   closeActiveMenu(true);
 }
 
-function closeActiveMenu(restoreFocus: boolean): void {
+function closeActiveMenu(restoreFocus: boolean, activated = false): void {
   if (listenerTimer) clearTimeout(listenerTimer);
   listenerTimer = null;
   document.removeEventListener("pointerdown", onPointerDown, true);
   document.removeEventListener("keydown", onKeyDown, true);
+  document.removeEventListener("focusin", onFocusIn);
   window.removeEventListener("blur", closeContextMenu);
   const current = active;
   active = null;
   if (!current) return;
   disposeReactRoot(current.root, current.host);
   if (restoreFocus && current.restoreFocus?.isConnected) current.restoreFocus.focus();
+  if (!activated) current.onDismiss?.();
 }
 
 export function isContextMenuOpen(): boolean {
@@ -40,6 +43,11 @@ export function isContextMenuOpen(): boolean {
 
 function onPointerDown(event: Event): void {
   if (active && !active.menu.contains(event.target as Node)) closeContextMenu();
+}
+
+/** A shortcut can move to another editor without an outside pointer click. */
+function onFocusIn(event: FocusEvent): void {
+  if (active && !active.menu.contains(event.target as Node)) closeActiveMenu(false);
 }
 
 function onKeyDown(event: KeyboardEvent): void {
@@ -59,7 +67,7 @@ function onKeyDown(event: KeyboardEvent): void {
 
 /** Open a menu of `items` at the pointer position, named `label` for screen
  *  readers, such as "Tab". It replaces any menu that is already open. */
-export function showContextMenu(x: number, y: number, items: MenuItem[], label: string): void {
+export function showContextMenu(x: number, y: number, items: MenuItem[], label: string, onDismiss?: () => void): void {
   const restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   closeActiveMenu(false);
   const host = document.createElement("div");
@@ -74,7 +82,7 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
     disposeReactRoot(root, host);
     return;
   }
-  active = { host, root, menu, restoreFocus };
+  active = { host, root, menu, restoreFocus, onDismiss };
   const rect = menu.getBoundingClientRect();
   if (rect.right > window.innerWidth)
     menu.style.left = `${Math.max(0, window.innerWidth - rect.width - 4)}px`;
@@ -84,6 +92,7 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
   // the outside-pointer listener is delayed so the opening right-click cannot
   // immediately close its own menu.
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("focusin", onFocusIn);
   window.addEventListener("blur", closeContextMenu);
   menu.querySelector<HTMLButtonElement>(".md-context-menu-item:not(.disabled)")?.focus();
   listenerTimer = setTimeout(() => {
@@ -107,7 +116,7 @@ function ContextMenu({ x, y, items, label }: { x: number; y: number; items: Menu
       <MenuRows
         items={items}
         onActivate={(item) => {
-          closeContextMenu();
+          closeActiveMenu(true, true);
           void item.run();
         }}
       />
