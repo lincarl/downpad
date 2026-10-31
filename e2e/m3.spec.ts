@@ -35,8 +35,7 @@ async function expandFrontmatter(page: Page): Promise<void> {
 // Opens Settings on the given page. The dialog keeps one page visible at a time
 // (General first), so a field must be reached through its nav row.
 async function openSettings(page: Page, section = "General"): Promise<void> {
-  await page.getByRole("button", { name: "Application menu" }).click();
-  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".dialog").getByRole("tab", { name: section, exact: true }).click();
 }
 

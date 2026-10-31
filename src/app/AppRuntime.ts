@@ -27,6 +27,7 @@ import { StartupCoordinator } from "./StartupCoordinator";
 import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
+import { copyFormattedDocument } from "../clipboard/formattedDocument";
 
 export interface AppRuntimeHosts {
   editorArea: HTMLElement;
@@ -215,6 +216,12 @@ export class AppRuntime {
 
   copyDocumentMarkdown(): void {
     void this.copyMarkdown();
+  }
+
+  /** Copy the complete document as HTML and readable plain text. */
+  copyDocumentFormatted(): void {
+    if (this.disposed || !this.store.get().activeTabId) return;
+    void this.copyFormatted();
   }
 
   openSettings(): void {
@@ -562,6 +569,19 @@ export class AppRuntime {
       await navigator.clipboard.writeText(this.store.get().doc.markdown);
     } catch {
       // Clipboard may be unavailable outside the app shell; ignore.
+    }
+  }
+
+  /** Flush the source pane too, so every layout copies the latest document. */
+  private async copyFormatted(): Promise<void> {
+    try {
+      this.editorHost.flush();
+      await copyFormattedDocument(this.store.get().doc.markdown);
+    } catch (error) {
+      console.error("Downpad: formatted copy failed", error);
+      if (!this.disposed) {
+        this.store.set({ banner: { kind: "error", message: "Could not copy formatted text. Please try again." } });
+      }
     }
   }
 

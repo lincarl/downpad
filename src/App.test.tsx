@@ -16,6 +16,7 @@ const runtime = vi.hoisted(() => ({
   selectLayout: vi.fn(),
   printDocument: vi.fn(),
   copyDocumentMarkdown: vi.fn(),
+  copyDocumentFormatted: vi.fn(),
   openSettings: vi.fn(),
   toggleDocumentTheme: vi.fn(),
   zoomDocument: vi.fn(),
@@ -172,12 +173,14 @@ describe("App shell", () => {
     expect(area.classList.contains("split")).toBe(true);
   });
 
-  it("keeps Settings in the application menu and exposes a document-theme toggle", async () => {
+  it("puts Settings last in the toolbar and exposes a document-theme toggle", async () => {
     const store = makeStore();
     render(<App store={store} />);
     const user = userEvent.setup();
 
-    expect(screen.queryByRole("menuitem", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Application menu" })).toBeNull();
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(document.querySelector(".toolbar")?.lastElementChild).toBe(settings);
     const themeButton = screen.getByRole("button", {
       name: "Switch to dark document theme",
     });
@@ -185,28 +188,55 @@ describe("App shell", () => {
     await user.click(themeButton);
     expect(runtime.toggleDocumentTheme).toHaveBeenCalledOnce();
 
-    await user.click(screen.getByRole("button", { name: "Application menu" }));
-    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    await user.click(settings);
     await waitFor(() => expect(runtime.openSettings).toHaveBeenCalledOnce());
   });
 
   it("closes a toolbar menu on Tab and moves on from its button", async () => {
     render(<App store={makeStore()} />);
     const user = userEvent.setup();
-    const menuButton = screen.getByRole("button", { name: "Application menu" });
+    const menuButton = screen.getByRole("button", { name: "Copy" });
 
     await user.click(menuButton);
     expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
     await user.tab();
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Recent" })));
-    await user.tab();
-    await waitFor(() => expect(document.activeElement?.textContent).toBe("Open"));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Print" })));
 
     await user.click(screen.getByRole("button", { name: "Save options" }));
     await user.tab({ shift: true });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Save"));
+  });
+
+  it("opens the copy choices left of Print and runs either format", async () => {
+    render(<App store={makeStore()} />);
+    const user = userEvent.setup();
+    const copy = screen.getByRole("button", { name: "Copy" });
+    expect(copy.nextElementSibling).toBe(screen.getByRole("button", { name: "Print" }));
+
+    await user.click(copy);
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Copy as markdown", "Copy formatted text",
+    ]);
+    await user.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() => expect(runtime.copyDocumentFormatted).toHaveBeenCalledOnce());
+    expect(document.activeElement).toBe(copy);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await user.click(copy);
+    await user.click(screen.getByRole("menuitem", { name: "Copy as markdown" }));
+    await waitFor(() => expect(runtime.copyDocumentMarkdown).toHaveBeenCalledOnce());
+  });
+
+  it("keeps Settings available on Recent while disabling document copy", async () => {
+    const store = makeStore();
+    store.set({ view: "recent" });
+    render(<App store={store} />);
+    const user = userEvent.setup();
+    expect(screen.getByRole("button", { name: "Copy" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(runtime.openSettings).toHaveBeenCalledOnce();
   });
 
   it("shows the sun action for a dark document surface", () => {

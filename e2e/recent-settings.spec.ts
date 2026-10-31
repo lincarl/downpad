@@ -1,9 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 
-/** Open the actual Settings dialog through the application menu. */
+/** Open the Settings dialog from its toolbar button. */
 async function settings(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Application menu" }).click();
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
 }
 
 test("General saves Recent preferences and reapplies the default search when Recent opens", async ({ page }) => {
