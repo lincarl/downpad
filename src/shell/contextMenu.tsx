@@ -1,6 +1,5 @@
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import { disposeReactRoot } from "@/app/disposeReactRoot";
 import { MenuRows, menuSurfaceClassName, moveMenuFocus, type MenuItem } from "@/components/ui/menu";
@@ -78,7 +77,7 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
   container.append(host);
   const root = createRoot(host);
   flushSync(() => {
-    root.render(<ContextMenu x={x} y={y} items={items} label={label} />);
+    root.render(<ContextMenu items={items} label={label} />);
   });
   const menu = host.querySelector<HTMLElement>(".md-context-menu");
   if (!menu) {
@@ -86,11 +85,13 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
     return;
   }
   active = { host, root, menu, restoreFocus, onDismiss };
+  // Measure at the local origin. A translated popover establishes its own
+  // containing block for fixed children, but the pointer and limits use the viewport.
   const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth)
-    menu.style.left = `${Math.max(0, window.innerWidth - rect.width - 4)}px`;
-  if (rect.bottom > window.innerHeight)
-    menu.style.top = `${Math.max(0, window.innerHeight - rect.height - 4)}px`;
+  const left = Math.max(0, Math.min(x, window.innerWidth - rect.width - 4));
+  const top = Math.max(0, Math.min(y, window.innerHeight - rect.height - 4));
+  menu.style.left = `${left - rect.left}px`;
+  menu.style.top = `${top - rect.top}px`;
   // Handle Escape before a dialog's document-level handler can close it. Only
   // the outside-pointer listener is delayed so the opening right-click cannot
   // immediately close its own menu.
@@ -105,16 +106,15 @@ export function showContextMenu(x: number, y: number, items: MenuItem[], label: 
   }, 0);
 }
 
-/** The menu element at `x`, `y`, named `label` for screen readers. Choosing a
- *  row closes the menu before the row's command runs. */
-function ContextMenu({ x, y, items, label }: { x: number; y: number; items: MenuItem[]; label: string }) {
-  const style: CSSProperties = { left: x, top: y };
+/** The menu is measured at its local origin before placement. Choosing a row
+ *  closes the menu before the row's command runs. */
+function ContextMenu({ items, label }: { items: MenuItem[]; label: string }) {
   return (
     <div
-      className={cn("md-context-menu fixed z-[1100]", menuSurfaceClassName)}
+      className={cn("md-context-menu fixed z-[1100] w-max", menuSurfaceClassName)}
       role="menu"
       aria-label={label}
-      style={style}
+      style={{ left: 0, top: 0 }}
     >
       <MenuRows
         items={items}

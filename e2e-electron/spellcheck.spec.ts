@@ -252,6 +252,17 @@ test("native editing menus work inside Settings and its nested dictionary dialog
     await field.click({ button: "right" });
     const menu = dialog.getByRole("menu", { name: "Edit", exact: true });
     await expect(menu).toBeVisible();
+    const fieldBox = (await field.boundingBox())!;
+    const menuBox = (await menu.boundingBox())!;
+    const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    expect(menuBox.x).toBeGreaterThanOrEqual(0);
+    expect(menuBox.y).toBeGreaterThanOrEqual(0);
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(menuBox.x).toBeLessThanOrEqual(fieldBox.x + fieldBox.width / 2 + 1);
+    expect(menuBox.y).toBeLessThanOrEqual(fieldBox.y + fieldBox.height / 2 + 1);
+    expect(menuBox.x + menuBox.width).toBeGreaterThan(fieldBox.x + fieldBox.width / 2);
+    expect(menuBox.y + menuBox.height).toBeGreaterThan(fieldBox.y + fieldBox.height / 2);
     await menu.getByRole("menuitem", { name: "Select all", exact: true }).click();
     await expect(field).toBeFocused();
     expect(await field.evaluate((element) => [
@@ -267,6 +278,12 @@ test("native editing menus work inside Settings and its nested dictionary dialog
   };
 
   await checkMenu(font, settings, "Georgia");
+  await settings.getByRole("checkbox", { name: "Use the system accent color" }).uncheck();
+  await settings.getByRole("button", { name: "Choose custom accent color" }).click();
+  const accent = page.getByRole("textbox", { name: "Accent color hex" });
+  await accent.fill("#aabbcc");
+  await checkMenu(accent, page.locator(".accent-popover"), "#aabbcc");
+  await page.keyboard.press("Escape");
   await settings.getByRole("tab", { name: "Spelling", exact: true }).click();
   await settings.getByRole("button", { name: "Manage dictionary…" }).click();
   const dictionary = page.getByRole("dialog", { name: "Custom dictionary", exact: true });
