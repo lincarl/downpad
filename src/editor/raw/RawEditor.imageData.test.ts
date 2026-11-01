@@ -65,6 +65,19 @@ describe("base64 image data collapsed in the Markdown view", () => {
     expect(chip()).toBeNull();
   });
 
+  it("shows the data when its size is pressed after an edit before it", () => {
+    open(text);
+    const before = chip();
+
+    viewOf().dispatch({ changes: { from: 0, insert: "Intro. " } });
+    // CodeMirror keeps the chip it drew, so the chip must find its new place.
+    expect(chip()).toBe(before);
+    press(chip()!);
+
+    expect(chip()).toBeNull();
+    expect(shownText()).toContain(pngData);
+  });
+
   it("shows the data while the caret is in it, so typing there is seen", () => {
     open(text);
 
