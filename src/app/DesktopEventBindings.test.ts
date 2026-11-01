@@ -39,6 +39,16 @@ vi.mock("../ipc/events", () => ({
   },
 }));
 
+beforeEach(() => {
+  disk.readFile.mockReset();
+  disk.writeFile.mockReset();
+});
+
+/** Retry an assertion every millisecond. The awaited calls happen a few
+ *  microtasks later, so vi.waitFor's default 50 ms interval cost each wait a
+ *  whole interval. */
+const eventually = (assertion: () => void) => vi.waitFor(assertion, { interval: 1 });
+
 function createTestBridge() {
   return {
     platform: "darwin",
@@ -125,7 +135,7 @@ describe("native close decisions", () => {
     let recorded!: () => void;
     session.flush.mockReturnValueOnce(new Promise<void>((resolve) => { recorded = resolve; }));
     events.closeRequested!();
-    await vi.waitFor(() => expect(session.flush).toHaveBeenCalledOnce());
+    await eventually(() => expect(session.flush).toHaveBeenCalledOnce());
     expect(bridge.closeWindow).not.toHaveBeenCalled();
 
     recorded();
@@ -135,6 +145,7 @@ describe("native close decisions", () => {
 
   it("cancels quit intent after declining discard and accepts a later close", async () => {
     vi.mocked(files.confirmCloseAll).mockResolvedValueOnce("cancel").mockResolvedValueOnce("discard");
+    store.addTab({ ...blankDoc(), filePath: "/docs/closing.md", markdown: "Unsaved text\n", isDirty: true });
     events.closeRequested!();
     await current;
 
@@ -142,12 +153,16 @@ describe("native close decisions", () => {
     expect(bridge.closeWindow).not.toHaveBeenCalled();
     expect(scheduler.clear).not.toHaveBeenCalled();
 
+    // Discard closes the window with the document still unsaved.
     events.closeRequested!();
     await current;
 
     expect(files.confirmCloseAll).toHaveBeenCalledTimes(2);
     expect(bridge.closeWindow).toHaveBeenCalledOnce();
     expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
+    expect(scheduler.start).not.toHaveBeenCalled();
+    expect(disk.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc.isDirty).toBe(true);
   });
 
   it("cancels quit intent when preparing the close fails", async () => {
@@ -167,7 +182,7 @@ describe("native close decisions", () => {
     disk.writeFile.mockImplementationOnce(() => new Promise((resolve) => { finishWrite = resolve; }));
     events.closeRequested!();
     const closing = current;
-    await vi.waitFor(() => expect(disk.writeFile).toHaveBeenCalledWith("/docs/closing.md", "Unsaved text\n", "lf"));
+    await eventually(() => expect(disk.writeFile).toHaveBeenCalledWith("/docs/closing.md", "Unsaved text\n", "lf"));
     expect(bridge.closeWindow).not.toHaveBeenCalled();
     expect(scheduler.clear).not.toHaveBeenCalled();
     // Repeated native close events share the pending close instead of prompting again.
@@ -199,7 +214,7 @@ describe("native close decisions", () => {
     let finishCleanup!: () => void;
     vi.mocked(scheduler.clear).mockImplementationOnce(() => new Promise((resolve) => { finishCleanup = resolve; }));
     events.closeRequested!();
-    await vi.waitFor(() => expect(scheduler.clear).toHaveBeenCalledOnce());
+    await eventually(() => expect(scheduler.clear).toHaveBeenCalledOnce());
     if (change === "typing") store.patchDoc({ markdown: "Later edits\n", isDirty: true });
     else store.setFilesPending(owner, true);
     finishCleanup();
@@ -250,10 +265,46 @@ describe("a file that changed on disk", () => {
   /** Report that the open file now holds `content`, and let the app read it. */
   async function changeOnDisk(content: string, modifiedMs = 200): Promise<void> {
     disk.readFile.mockResolvedValueOnce({ content, eol: "lf", hadBom: false, modifiedMs, sizeBytes: content.length });
-    await vi.waitFor(() => expect(events.fileChanged).not.toBeNull());
+    await eventually(() => expect(events.fileChanged).not.toBeNull());
     events.fileChanged!({ path: filePath, modifiedMs });
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+
+  it.each([
+    {
+      report: "its own save during later typing",
+      prepare: async (): Promise<FileChangedPayload> => {
+        disk.writeFile.mockResolvedValueOnce({ modifiedMs: 200 });
+        expect(await files.save()).toBe(true);
+        store.patchDoc({ markdown: "# Mine\n\nMore typing\n", isDirty: true });
+        return { path: filePath, modifiedMs: 200 };
+      },
+    },
+    {
+      report: "a change to another file",
+      prepare: async (): Promise<FileChangedPayload> => ({ path: "/docs/other.md", modifiedMs: 999 }),
+    },
+    {
+      report: "a change for an untitled document",
+      prepare: async (): Promise<FileChangedPayload> => {
+        store.patchDoc({ filePath: null });
+        // A Windows path, which sameFilePath cannot compare with no path.
+        return { path: "C:/docs/notes.md", modifiedMs: 999 };
+      },
+    },
+  ])("ignores $report", async ({ prepare }) => {
+    const payload = await prepare();
+    const before = store.get().doc;
+    // What the file holds after the save, which differs from the open text.
+    disk.readFile.mockResolvedValue({ content: "# Mine\n", eol: "lf", hadBom: false, modifiedMs: payload.modifiedMs, sizeBytes: 7 });
+    await eventually(() => expect(events.fileChanged).not.toBeNull());
+    events.fileChanged!(payload);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(disk.readFile).not.toHaveBeenCalled();
+    expect(store.get().banner).toBeNull();
+    expect(store.get().doc).toBe(before);
+  });
 
   it("counts the open text as unsaved once the user keeps it", async () => {
     await changeOnDisk("# Theirs\n");
@@ -289,7 +340,7 @@ describe("a file that changed on disk", () => {
     // The read for the change at 200 waits until the change at 300 is read.
     let finishOlderRead!: (payload: FilePayload) => void;
     disk.readFile.mockImplementationOnce(() => new Promise((resolve) => { finishOlderRead = resolve; }));
-    await vi.waitFor(() => expect(events.fileChanged).not.toBeNull());
+    await eventually(() => expect(events.fileChanged).not.toBeNull());
     events.fileChanged!({ path: filePath, modifiedMs: 200 });
     await changeOnDisk("# Theirs\n", 300);
     finishOlderRead({ content: "# Mine\n", eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: 7 });

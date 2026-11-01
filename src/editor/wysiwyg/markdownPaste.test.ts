@@ -262,3 +262,21 @@ describe("Markdown source pasted into the document", () => {
     expect(root.querySelector(".frontmatter-toggle")).not.toBeNull();
   });
 });
+
+describe("rich HTML pasted into the document", () => {
+  it("turns a table copied from a spreadsheet into a Markdown table", async () => {
+    const { editor, view } = await open();
+    paste(
+      view,
+      "Name\tQty\nApples\t3",
+      '<meta charset="utf-8"><table><tbody><tr><td>Name</td><td>Qty</td></tr><tr><td>Apples</td><td>3</td></tr></tbody></table>',
+    );
+    expect(editor.getMarkdown()).toBe("| Name   | Qty |\n| :----- | :-- |\n| Apples | 3   |\n");
+  });
+
+  it("keeps bold and struck text copied from a web page", async () => {
+    const { editor, view } = await open();
+    paste(view, "Some bold and gone", "<p>Some <strong>bold</strong> and <del>gone</del></p>");
+    expect(editor.getMarkdown()).toBe("Some **bold** and ~~gone~~\n");
+  });
+});

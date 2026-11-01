@@ -82,8 +82,10 @@ describe("showContextMenu", () => {
       { label: "A", run: () => {} },
       { label: "B", separatorBefore: true, run: () => {} },
     ], "Menu");
-    expect(menu().querySelectorAll(".md-context-menu-sep")).toHaveLength(1);
-    expect(menu().children[1].className).toBe("md-context-menu-sep");
+    const separators = screen.getAllByRole("separator");
+    expect(separators).toHaveLength(1);
+    expect(separators[0].previousElementSibling).toBe(screen.getByRole("menuitem", { name: "A" }));
+    expect(separators[0].nextElementSibling).toBe(screen.getByRole("menuitem", { name: "B" }));
   });
 
   it("closes on Tab and returns focus to where it was opened", () => {

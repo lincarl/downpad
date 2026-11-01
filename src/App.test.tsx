@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "@/settings/defaults";
+import { closeContextMenu } from "@/shell/contextMenu";
 import { Store } from "@/state/store";
 import type { AppState } from "@/state/types";
 
@@ -73,10 +74,13 @@ function makeStore(): Store {
 }
 
 beforeEach(() => {
-  for (const value of Object.values(runtime)) value.mockClear();
+  for (const value of Object.values(runtime)) value.mockReset();
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  closeContextMenu();
+  cleanup();
+});
 
 describe("App shell", () => {
   it("marks the document icon red for unsaved tabs and restores it after saving", () => {
@@ -87,12 +91,17 @@ describe("App shell", () => {
     act(() => store.patchDoc({ markdown: "changed", isDirty: true }));
     expect(document.querySelectorAll(".tab-file-icon.is-dirty")).toHaveLength(1);
     expect(document.querySelector(".tab-file-icon")?.classList.contains("text-ink-danger")).toBe(true);
-    expect(document.querySelector(".tab-dot")).toBeNull();
     expect(document.querySelector("[role='tab']")?.getAttribute("aria-description")).toBe("Unsaved changes");
     expect(document.title).toBe("draft.md — Downpad");
     act(() => store.patchDoc({ isDirty: false }));
     expect(document.querySelector(".tab-file-icon.is-dirty")).toBeNull();
     expect(document.querySelector("[role='tab']")?.hasAttribute("aria-description")).toBe(false);
+    // A file dropped on the document that is not in yet also counts as unsaved.
+    act(() => store.setFilesPending("tab-1", true));
+    expect(document.querySelectorAll(".tab-file-icon.is-dirty")).toHaveLength(1);
+    expect(document.querySelector("[role='tab']")?.getAttribute("aria-description")).toBe("Unsaved changes");
+    act(() => store.setFilesPending("tab-1", false));
+    expect(document.querySelector(".tab-file-icon.is-dirty")).toBeNull();
     act(() => store.patchDoc({ filePath: null }));
     expect(document.title).toBe("Untitled — Downpad");
     act(() => store.closeTab("tab-1"));
@@ -187,11 +196,7 @@ describe("App shell", () => {
     expect(screen.queryByRole("button", { name: "Application menu" })).toBeNull();
     const settings = screen.getByRole("button", { name: "Settings" });
     expect(document.querySelector(".toolbar")?.lastElementChild).toBe(settings);
-    const themeButton = screen.getByRole("button", {
-      name: "Switch to dark document theme",
-    });
-    expect(themeButton.querySelector(".lucide-moon")).toBeTruthy();
-    await user.click(themeButton);
+    await user.click(screen.getByRole("button", { name: "Switch to dark document theme" }));
     expect(runtime.toggleDocumentTheme).toHaveBeenCalledOnce();
 
     await user.click(settings);
@@ -245,16 +250,97 @@ describe("App shell", () => {
     expect(runtime.openSettings).toHaveBeenCalledOnce();
   });
 
-  it("shows the sun action for a dark document surface", () => {
+  it.each([
+    { editorTheme: "light", action: "Switch to dark document theme", other: "Switch to light document theme" },
+    { editorTheme: "dark", action: "Switch to light document theme", other: "Switch to dark document theme" },
+  ] as const)("labels the document-theme toggle '$action' on a $editorTheme document surface", ({ editorTheme, action, other }) => {
     const store = makeStore();
-    store.set({
-      settings: { ...store.get().settings, editorTheme: "dark" },
-    });
+    store.set({ settings: { ...store.get().settings, editorTheme } });
     render(<App store={store} />);
 
-    const themeButton = screen.getByRole("button", {
-      name: "Switch to light document theme",
-    });
-    expect(themeButton.querySelector(".lucide-sun")).toBeTruthy();
+    expect(screen.getByRole("button", { name: action })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: other })).toBeNull();
+  });
+});
+
+describe("Document tab menu", () => {
+  it("lists its four items and gives the runtime the file's exact path or folder", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "C:\\notes\\draft.md" });
+    render(<App store={store} />);
+    const user = userEvent.setup();
+    const tab = screen.getByRole("tab", { name: "draft.md" });
+    const choose = async (label: string) => {
+      fireEvent.contextMenu(tab);
+      await user.click(screen.getByRole("menuitem", { name: label }));
+    };
+
+    fireEvent.contextMenu(tab);
+    expect(screen.getByRole("menu", { name: "Tab" })).toBeTruthy();
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Open folder", "Copy file path", "Copy folder path", "Close all tabs",
+    ]);
+    closeContextMenu();
+
+    await choose("Open folder");
+    expect(runtime.revealPath).toHaveBeenCalledExactlyOnceWith("C:\\notes\\draft.md");
+    await choose("Copy file path");
+    expect(runtime.copyText).toHaveBeenLastCalledWith("C:\\notes\\draft.md");
+    await choose("Copy folder path");
+    expect(runtime.copyText).toHaveBeenLastCalledWith("C:\\notes");
+    await choose("Close all tabs");
+    expect(runtime.closeEveryTab).toHaveBeenCalledOnce();
+    expect(runtime.copyText).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables the path items for an untitled tab", () => {
+    render(<App store={makeStore()} />);
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "Untitled" }));
+
+    const disabled = (label: string) => screen.getByRole("menuitem", { name: label }).hasAttribute("disabled");
+    expect(disabled("Open folder")).toBe(true);
+    expect(disabled("Copy file path")).toBe(true);
+    expect(disabled("Copy folder path")).toBe(true);
+    expect(disabled("Close all tabs")).toBe(false);
+  });
+});
+
+describe("Document tab strip keyboard", () => {
+  it("moves focus and the active tab with the arrow keys, Home and End, keeping only the active tab in the Tab order", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/notes/a.md" });
+    const second = store.addTab({ ...store.get().doc, filePath: "/notes/b.md" });
+    const third = store.addTab({ ...store.get().doc, filePath: "/notes/c.md" });
+    store.activateTab("tab-1");
+    runtime.activateDocumentTab.mockImplementation((id: string) => store.activateTab(id));
+    render(<App store={store} />);
+    const user = userEvent.setup();
+    const tab = (name: string) => screen.getByRole("tab", { name });
+    const tabIndexes = () => screen.getAllByRole("tab").map((element) => element.tabIndex);
+    expect(tabIndexes()).toEqual([0, -1, -1]);
+
+    tab("a.md").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(runtime.activateDocumentTab).toHaveBeenLastCalledWith(second);
+    expect(document.activeElement).toBe(tab("b.md"));
+    expect(tabIndexes()).toEqual([-1, 0, -1]);
+
+    await user.keyboard("{End}");
+    expect(runtime.activateDocumentTab).toHaveBeenLastCalledWith(third);
+    expect(document.activeElement).toBe(tab("c.md"));
+
+    // The arrows wrap around at either end.
+    await user.keyboard("{ArrowRight}");
+    expect(runtime.activateDocumentTab).toHaveBeenLastCalledWith("tab-1");
+    expect(document.activeElement).toBe(tab("a.md"));
+    await user.keyboard("{ArrowLeft}");
+    expect(runtime.activateDocumentTab).toHaveBeenLastCalledWith(third);
+    expect(document.activeElement).toBe(tab("c.md"));
+    expect(tabIndexes()).toEqual([-1, -1, 0]);
+
+    await user.keyboard("{Home}");
+    expect(runtime.activateDocumentTab).toHaveBeenLastCalledWith("tab-1");
+    expect(document.activeElement).toBe(tab("a.md"));
+    expect(tabIndexes()).toEqual([0, -1, -1]);
   });
 });

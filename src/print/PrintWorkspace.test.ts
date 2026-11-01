@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { screen, within } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrinterInfo } from "../ipc/contracts";
@@ -174,20 +175,21 @@ describe("PrintWorkspace React view", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("renders the established workspace selectors and re-paginates from React controls", () => {
+  it("shows the print options and re-paginates from React controls", () => {
     act(() => workspace!.open(JOB));
 
-    const dialog = document.querySelector<HTMLElement>('.print-workspace[role="dialog"]');
-    expect(dialog?.getAttribute("aria-label")).toBe("Print");
-    expect(dialog?.querySelector(".print-ws-title")?.textContent).toBe("Print");
-    expect(dialog?.querySelector(".print-ws-paper")?.textContent).toBe(
+    const dialog = screen.getByRole("dialog", { name: "Print" });
+    expect(within(dialog).getByRole("heading", { name: "Print" })).toBeTruthy();
+    expect(dialog.querySelector(".print-ws-paper")?.textContent).toBe(
       "A4 · Portrait · 210 × 297 mm · 2 pages",
     );
-    expect(dialog?.querySelector(".print-ws-note")?.textContent).toBe("System dialog");
-    expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
+    // The browser build prints through the system dialog, so it lists no printers.
+    expect(within(within(dialog).getByRole("group", { name: "Printer" })).getByText("System dialog")).toBeTruthy();
+    expect(dialog.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
     expect(printRenderMocks.renderPrintPages).toHaveBeenCalledTimes(1);
 
     expect(radio("Document").checked).toBe(true);
+    expect(within(dialog).getByText("The formatted document, as the editor renders it.")).toBeTruthy();
     act(() => radio("Markdown").click());
     expect(radio("Markdown").checked).toBe(true);
 
@@ -197,12 +199,10 @@ describe("PrintWorkspace React view", () => {
       markdown: JOB.markdown,
       docTitle: JOB.docTitle,
     });
-    expect(dialog?.querySelector(".print-ws-hint")?.textContent).toContain(
-      "raw Markdown source",
-    );
+    expect(within(dialog).getByText("The raw Markdown source, in a monospace face.")).toBeTruthy();
     // React owns the surrounding preview while the pagination renderer owns the
     // page nodes within its dedicated slot; re-rendering must keep that boundary.
-    expect(dialog?.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
+    expect(dialog.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
   });
 
   it("prints the Markdown version of a document Downpad could not render, keeping the saved choice", () => {
@@ -211,9 +211,9 @@ describe("PrintWorkspace React view", () => {
     expect(radio("Markdown").checked).toBe(true);
     expect(radio("Document").disabled).toBe(true);
     expect(printRenderMocks.renderPrintPages.mock.calls[0]?.[0]).toMatchObject({ version: "markdown" });
-    expect(document.querySelector(".print-ws-hint")?.textContent).toBe(
-      "Downpad can't show this document in the Document view, so it prints the Markdown source.",
-    );
+    expect(
+      screen.getByText("Downpad can't show this document in the Document view, so it prints the Markdown source."),
+    ).toBeTruthy();
 
     editInput("Scale", "120");
     act(() => workspace!.close());
@@ -325,6 +325,8 @@ describe("PrintWorkspace React view", () => {
     expect(saveSettings).not.toHaveBeenCalled();
 
     editInput("Copies", "3");
+    changeSelect("Paper size", "letter");
+    act(() => radio("Landscape").click());
     changeSelect("Pages", "custom");
     const range = document.querySelector<HTMLInputElement>(".print-ws-range")!;
     act(() => {
@@ -348,7 +350,9 @@ describe("PrintWorkspace React view", () => {
       expect.objectContaining({
         printerName: "Office",
         copies: 3,
-        orientation: "portrait",
+        orientation: "landscape",
+        pageWidthIn: 11,
+        pageHeightIn: 8.5,
         pageRanges: "1-2",
       }),
     );
@@ -368,6 +372,36 @@ describe("PrintWorkspace React view", () => {
     expect(document.documentElement.classList.contains("printing")).toBe(false);
     expect(document.querySelector("body > .print-root")).toBeNull();
     expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the workspace open and ready to print again when the printer fails", async () => {
+    enableElectron();
+    let complete!: (result: { ok: boolean; message?: string }) => void;
+    const unlisten = vi.fn();
+    nativeMocks.onPrintCompleted.mockImplementationOnce((handler) => {
+      complete = handler;
+      return Promise.resolve(unlisten);
+    });
+    act(() => workspace!.open(JOB));
+    await flush();
+    const preview = document.querySelector(".print-ws-scaler > .print-root");
+
+    act(() => button("Print").click());
+    await flush();
+    act(() => complete({ ok: false, message: "The printer rejected the job." }));
+    await flush();
+
+    expect(workspace!.isOpen()).toBe(true);
+    expect(document.querySelector(".print-ws-scaler > .print-root")).toBe(preview);
+    expect(document.querySelector("body > .print-root")).toBeNull();
+    expect(document.documentElement.classList.contains("printing")).toBe(false);
+    expect(unlisten).toHaveBeenCalledOnce();
+
+    act(() => button("Print").click());
+    await flush();
+
+    expect(nativeMocks.printWebview).toHaveBeenCalledTimes(2);
+    expect(workspace!.isOpen()).toBe(false);
   });
 
   it("leaves the preview usable when the PDF dialog is cancelled", async () => {

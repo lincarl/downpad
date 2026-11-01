@@ -46,10 +46,6 @@ vi.mock("@milkdown/crepe", () => ({
       fakeCrepe.destroyCalls += 1;
       return fakeCrepe.destroyPromise;
     }
-
-    getMarkdown(): string {
-      return "settled markdown";
-    }
   },
 }));
 
@@ -73,13 +69,12 @@ describe("WysiwygEditor lifecycle", () => {
     const destroy = deferred();
     fakeCrepe.createPromise = create.promise;
     fakeCrepe.destroyPromise = destroy.promise;
-    const onChange = vi.fn();
     const editor = new WysiwygEditor();
 
     const mounting = editor.mount(
       document.createElement("div"),
       "original markdown",
-      { onChange },
+      { onChange: () => {} },
       serializerStyleFromSettings(DEFAULT_SETTINGS),
       {
         getSettings: () => DEFAULT_SETTINGS,
@@ -100,11 +95,8 @@ describe("WysiwygEditor lifecycle", () => {
     await Promise.resolve();
     expect(fakeCrepe.destroyCalls).toBe(1);
 
-    // Abandoned creation must not publish an initial change. Pending edits on
-    // a mounted editor are exercised with real transactions in the source tests.
-    await vi.runAllTimersAsync();
-    expect(onChange).not.toHaveBeenCalled();
-
+    // Change reports need Crepe's plugins, which this stand-in never runs. The
+    // source tests check that destroy cancels a pending report.
     destroy.resolve();
     await firstDestroy;
     expect(fakeCrepe.destroyCalls).toBe(1);

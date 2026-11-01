@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import filesystem, { lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import filesystem, { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
 import { writeMarkdown } from "./io";
@@ -117,4 +117,24 @@ it("continues queued and later saves after a failed atomic replacement without l
   expect(await readFile(path, "utf8")).toBe("Saved after the queue drained\n");
   expect((await stat(invalid)).isDirectory()).toBe(true);
   expect((await readdir(directory)).sort()).toEqual(["is-directory", "note.md"]);
+});
+
+it.skipIf(process.platform === "win32").each([
+  { label: "0600", mode: 0o600 },
+  { label: "0755", mode: 0o755 },
+])("keeps the file mode $label after a save", async ({ mode }) => {
+  const directory = await fixtureDirectory();
+  const path = join(directory, "note.md");
+  await writeFile(path, "Original text\n");
+  await chmod(path, mode);
+  // A fixed umask keeps the result independent of the shell that runs the tests.
+  const umask = process.umask(0o022);
+  try {
+    await writeMarkdown(path, "Saved text\n", "lf");
+  } finally {
+    process.umask(umask);
+  }
+  expect(await readFile(path, "utf8")).toBe("Saved text\n");
+  expect((await stat(path)).mode & 0o777).toBe(mode);
+  expect(await readdir(directory)).toEqual(["note.md"]);
 });

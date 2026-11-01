@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { assetName } from "../electron/updatePlan.ts";
 import { allocateCandidate, cleanupPlan, markLatest, nextCandidateTag, parseTag, pruneReleases, publishRelease, releaseAssets } from "./release.mjs";
 
 const repository = "example/app";
@@ -27,6 +30,8 @@ test("numbers candidates after the newest stable tag and continues a higher hand
   assert.equal(nextCandidateTag([...history, "v0.4.0-rc1"]), "v0.4.0-rc2");
   // A stable tag pushed without candidates still moves the next target past it.
   assert.equal(nextCandidateTag([...history, "v0.3.5-rc1", "v0.4.0"]), "v0.4.1-rc1");
+  // GitHub lists tags by name, so v0.10.0 comes before v0.9.0.
+  assert.equal(nextCandidateTag(["v0.10.0", "v0.9.0"]), "v0.10.1-rc1");
 });
 
 /** A fake GitHub API holding tags. `beforeCreate` can add a competing tag
@@ -125,6 +130,13 @@ test("a lost response finds the tag this run created", async () => {
   assert.equal(Object.keys(server.tags).length, 3);
 });
 
+test("a lightweight candidate tag on the commit is taken but never read as this run's candidate", async () => {
+  // A maintainer pushed v0.3.5-rc1 by hand, so it has no annotation to read.
+  const server = tagServer({ tags: { ...stableTags, "v0.3.5-rc1": { type: "commit", sha } } });
+  assert.equal(await allocateCandidate({ request: server.request, repository, sha, runId: "42" }), "v0.3.5-rc2");
+  assert.ok(!server.calls.some((call) => call.startsWith(`GET /repos/${repository}/git/tags/`)));
+});
+
 test("a failed tag creation that left no tag is reported", async () => {
   const server = tagServer({ tags: stableTags, failCreate: true });
   await assert.rejects(allocateCandidate({ request: server.request, repository, sha, runId: "42" }), /server error/);
@@ -136,6 +148,10 @@ test("rejects invalid run details before calling GitHub", async () => {
   await assert.rejects(allocateCandidate({ request: server.request, repository, sha, runId: "0" }), /run ID/);
   await assert.rejects(allocateCandidate({ request: server.request, repository: "bad name", sha, runId: "42" }), /repository/);
   assert.deepEqual(server.calls, []);
+});
+
+test("publishes each package under the name that installed copies download", () => {
+  for (const kind of ["appimage", "deb", "msi"]) assert.ok(releaseAssets("v1.2.3").includes(assetName(kind, "1.2.3")), kind);
 });
 
 let releaseId = 100;
@@ -160,6 +176,8 @@ test("after a stable release, keeps the three newest stable releases and removes
     release("v0.3.4", { assets: ["md-easy-0.3.4-win-x64.msi"] }),
     release("v0.3.5-rc1"),
     release("v0.3.5-rc2"),
+    // A draft stays, also at the released version.
+    release("v0.3.5-rc3", { draft: true }),
     release("v0.3.5"),
     release("v0.3.6-rc1"),
     release("v0.3.6-rc2", { draft: true }),
@@ -324,6 +342,21 @@ test("publishes an interrupted draft only after completing its uploads", async (
   assert.equal(data.entry.body, "Maintainer's release notes");
 });
 
+test("rejects another version's files or a repeated file name without changing the release", async (t) => {
+  const data = await publication(t);
+  const other = path.join(path.dirname(data.files[0]), "other");
+  await mkdir(other);
+  const foreign = releaseAssets("v0.3.4").map((name) => path.join(other, name));
+  // The AppImage name, from another folder, takes the place of SHA256SUMS.
+  const repeated = [...data.files.slice(0, 3), path.join(other, path.basename(data.files[0]))];
+  for (const file of [...foreign, repeated[3]]) await writeFile(file, "another CI artifact\n");
+  for (const files of [foreign, repeated]) {
+    await assert.rejects(publishRelease({ ...data.options, files }), /requires exactly these files/);
+  }
+  assert.deepEqual(data.commands, []);
+  assert.deepEqual(data.entry.assets, []);
+});
+
 test("rejects mismatched or unverifiable existing files before uploading anything", async (t) => {
   for (const invalid of [{ digest: `sha256:${"0".repeat(64)}` }, { digest: null }, { size: 1 }, { state: "starter" }]) {
     const data = await publication(t, { uploaded: 1 });
@@ -356,6 +389,10 @@ test("verifies the uploaded files instead of trusting a successful CLI exit", as
   await assert.rejects(publishRelease({ ...data.options, run: async () => {} }), /publication is incomplete/);
   assert.equal(data.entry.draft, true);
   assert.deepEqual(data.commands, []);
+  // An edit that exits successfully but leaves the draft does not publish it either.
+  const complete = await publication(t, { draft: true, uploaded: 4 });
+  await assert.rejects(publishRelease({ ...complete.options, run: async () => {} }), /v0\.3\.5 is not published/);
+  assert.equal(complete.entry.draft, true);
 });
 
 test("does not try publication when the release listing fails", async (t) => {
@@ -388,6 +425,35 @@ test("applies the plan across pages and keeps a release that another cleanup rem
   assert.ok(!server.deleted.includes("v0.3.5-rc2"));
   assert.deepEqual(server.releases.map((item) => item.tag_name).sort(), ["v0.1.118", "v0.1.119", "v0.3.5"]);
   assert.match(lines.join("\n"), /Skipping changed or removed release v0\.3\.5-rc2/);
+});
+
+test("treats a missing release as already removed only when the full listing confirms it", async () => {
+  const releases = () => [release("v0.3.4"), release("v0.3.5-rc1"), release("v0.3.5")];
+  const single = /\/releases\/\d+$/;
+  // A 404 alone proves nothing while the listing still has the release.
+  const hidden = releaseServer(releases());
+  const notFound = (route, options) => single.test(route)
+    ? Promise.reject(Object.assign(new Error("Not Found"), { status: 404 }))
+    : hidden.request(route, options);
+  await assert.rejects(pruneReleases({ request: notFound, repository, releasedTag: "v0.3.5", apply: true, log: () => {} }), /Not Found/);
+  assert.deepEqual(hidden.deleted, []);
+  // Another cleanup deletes the candidate just before this one reads it.
+  const raced = releaseServer(releases());
+  const removedMeanwhile = (route, options) => {
+    if (single.test(route)) raced.releases = raced.releases.filter((item) => item.tag_name !== "v0.3.5-rc1");
+    return raced.request(route, options);
+  };
+  const lines = [];
+  await pruneReleases({ request: removedMeanwhile, repository, releasedTag: "v0.3.5", apply: true, log: (line) => lines.push(line) });
+  assert.match(lines.join("\n"), /Release v0\.3\.5-rc1 was already removed/);
+});
+
+test("refuses cleanup when the release listing shifts while it is read", async () => {
+  const filler = Array.from({ length: 100 }, (_, index) => release(`v0.1.${index}`));
+  // A release published between two page reads repeats page 1's last entry on page 2.
+  const server = releaseServer([...filler, filler[99], release("v0.3.5")]);
+  await assert.rejects(pruneReleases({ request: server.request, repository, releasedTag: "v0.3.5", apply: true, log: () => {} }), /listing changed/);
+  assert.deepEqual(server.deleted, []);
 });
 
 test("stops when a newer stable release appears during cleanup", async () => {
@@ -461,4 +527,21 @@ test("gives up after five changes, but not when the fifth one holds", async () =
   await markLatest({ request: settled.request, repository, log: () => {} });
   assert.equal(settled.releases.find((item) => item.id === settled.latest)?.tag_name, "v0.3.9");
   assert.equal(settled.calls.filter((call) => call.startsWith("PATCH")).length, 5);
+});
+
+test("the command rejects unknown commands and prune options before any GitHub request", () => {
+  const script = fileURLToPath(new URL("./release.mjs", import.meta.url));
+  const usage = "Usage: release.mjs prune --released-tag vX.Y.Z [--apply]\n";
+  const cases = [
+    [["bogus"], "Expected candidate, publish, latest or prune.\n"],
+    [["prune", "--apply"], usage],
+    [["prune", "--released-tag"], usage],
+    [["prune", "--released-tag", "v1.2.3", "--aply"], usage],
+  ];
+  for (const [args, stderr] of cases) {
+    // Without a token, a request that slipped through would fail before reaching the network.
+    const result = spawnSync(process.execPath, [script, ...args], { encoding: "utf8", env: { ...process.env, GH_TOKEN: "" } });
+    assert.equal(result.status, 1, args.join(" "));
+    assert.equal(result.stderr, stderr);
+  }
 });

@@ -21,27 +21,35 @@ vi.stubGlobal("IntersectionObserver", class {
 
 let editor: WysiwygEditor | null = null;
 afterEach(async () => {
+  vi.useRealTimers();
   await editor?.destroy();
   editor = null;
   document.body.replaceChildren();
 });
 
-/** Mount the document editor on `markdown`, recording its change reports. */
+/** Mount the document editor on `markdown`, recording its change reports. The
+ *  timers and animation frames are fake from before the mount, so Crepe's first
+ *  frame runs on the fake clock. Faked after the mount, it would never run. */
 async function open(markdown: string): Promise<{ editor: WysiwygEditor; onChange: ReturnType<typeof vi.fn> }> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"] });
   const root = document.createElement("div");
   document.body.append(root);
   const onChange = vi.fn();
   editor = new WysiwygEditor();
-  await editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
+  const mounting = editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
     getSettings: () => DEFAULT_SETTINGS,
     getFilePath: () => null,
     requestSave: async () => false,
   });
+  let settled = false;
+  void mounting.then(() => (settled = true), () => (settled = true));
+  while (!settled) await vi.advanceTimersByTimeAsync(1);
+  await mounting;
   return { editor, onChange };
 }
 
 /** Wait past a list's first frame and the 200ms change report. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+const settle = () => vi.advanceTimersByTimeAsync(300);
 
 /** The editor's ProseMirror view, for undo checks the public API cannot make. */
 const viewOf = (opened: WysiwygEditor) =>

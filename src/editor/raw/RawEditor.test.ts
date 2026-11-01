@@ -30,6 +30,28 @@ function typeOver(editor: RawEditor, text: string): void {
 
 const FIND = { caseSensitive: true, wholeWord: false, regex: false };
 
+describe("RawEditor change reports", () => {
+  it("reports typing, a file put in and a drop's change at once, with the whole text, but not the other pane's mirror", () => {
+    const onChange = vi.fn();
+    const editor = new RawEditor();
+    editor.mount(document.createElement("div"), "First line.\n", { onChange });
+    editors.push(editor);
+
+    typeOver(editor, "Typed. ");
+    expect(onChange).toHaveBeenLastCalledWith("Typed. First line.\n");
+    editor.insertText("[a.csv](attachments/a.csv)");
+    expect(onChange).toHaveBeenLastCalledWith("Typed. [a.csv](attachments/a.csv)First line.\n");
+    editor.applyDropEdit({ from: 0, to: 0, insert: "![](a.png)\n\n", assoc: 1 });
+    expect(onChange).toHaveBeenLastCalledWith("![](a.png)\n\nTyped. [a.csv](attachments/a.csv)First line.\n");
+    expect(onChange).toHaveBeenCalledTimes(3);
+
+    // The split mirrors an edit the other pane has reported already.
+    editor.setText("Mirrored.\n");
+    expect(editor.getText()).toBe("Mirrored.\n");
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("RawEditor.insertText", () => {
   it("puts a dropped file after the selected text, such as the find card's match, not over it", () => {
     const editor = mountWithCaret("", "First line.\n");
@@ -129,6 +151,7 @@ describe("RawEditor.applyDropEdit", () => {
     ["at the start of its text", "1. One\n2. ", "Two\n3. Three\n", `1. One\n2. ${LINK}\n3. XTwo\n4. Three\n`],
     ["at the start of its line", "1. One\n", "2. Two\n3. Three\n", `1. One\n2. ${LINK}\nX3. Two\n4. Three\n`],
     ["at the start of a bulleted item's text", "- One\n- ", "Two\n- Three\n", `- One\n- ${LINK}\n- XTwo\n- Three\n`],
+    ["inside its number", "1. One\n2.", " Two\n", `1. One\n2. ${LINK}\n3.X Two\n`],
   ])("keeps a caret before the text of the item the file goes in before with that text, %s", (_where, before, after, expected) => {
     const editor = mountWithCaret(before, after);
     const insert = expected.replace("X", "").trimEnd();
@@ -198,26 +221,18 @@ describe("RawEditor.applyDropEdit", () => {
 
     expect(editor.getText()).toBe(insert.replace("item\\_40", "item\\_40X"));
   });
+});
 
-  /** Put `text` in the pane with the caret at `caret`, make a drop's `edit`,
-   *  and type X. */
-  function typeAfterDrop(editor: RawEditor, text: string, caret: number, edit: SourceEdit): string {
-    const { view } = editor as unknown as { view: EditorView };
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: caret } });
-    editor.applyDropEdit(edit);
-    editor.insertText("X");
-    return editor.getText();
-  }
-
+describe("dropEditChanges", () => {
   // Item texts and file names whose characters the link and the item share,
   // which a diff of characters matched up across them.
   const ITEMS = ["two", "Two", "apples", "call mom", "eggs", "tea", "notes", "see this", "milk", "task", "next step"];
-  const FILES = ["notes.csv", "report.pdf", "Two.csv", "data.csv"];
+  const ITEM_FILES = ["notes.csv", "report.pdf", "Two.csv", "data.csv"];
 
-  it.each(ITEMS.flatMap((item) => FILES.map((file) => [item, file])))(
+  // `applyDropEdit` moves the selection by `mapPos`, as its tests above check.
+  it.each(ITEMS.flatMap((item) => ITEM_FILES.map((file) => [item, file])))(
     "keeps a caret in the item %j, numbered or bulleted, in its place when %s goes in before it",
     (item, file) => {
-      const editor = mountWithCaret("");
       const link = `[${file}](attachments/${file})`;
       for (const marker of [(n: number) => `${n}. `, () => "- "]) {
         const list = (texts: string[]): string => texts.map((text, index) => marker(index + 1) + text).join("\n");
@@ -226,19 +241,18 @@ describe("RawEditor.applyDropEdit", () => {
         // Where column `column` of the text of line `line` is, or the line's start for null.
         const offset = (text: string, line: number, column: number | null): number =>
           text.split("\n").slice(0, line).join("\n").length + (line > 0 ? 1 : 0) + (column === null ? 0 : marker(line + 1).length + column);
+        const doc = Text.of(before.split("\n"));
+        const { changes, mapPos } = dropEditChanges(doc, { from: 0, to: before.length, insert: after, assoc: -1 });
+        expect(changes.apply(doc).toString(), marker(1)).toBe(after);
         // The item and the one after it, at the start of the line and of the
         // text, in the middle of the text and at its end.
         for (const [line, column] of [[1, null], [1, 0], [1, 2], [1, item.length], [2, null], [2, 0], [2, 5]] as const) {
-          const typed = typeAfterDrop(editor, before, offset(before, line, column), { from: 0, to: before.length, insert: after, assoc: -1 });
-          const at = offset(after, line + 1, column);
-          expect(typed, `${marker(1)}line ${line}, column ${column}`).toBe(after.slice(0, at) + "X" + after.slice(at));
+          expect(mapPos(offset(before, line, column)), `${marker(1)}line ${line}, column ${column}`).toBe(offset(after, line + 1, column));
         }
       }
     },
   );
-});
 
-describe("dropEditChanges", () => {
   /** A generator of numbers from 0 up to 1 with a fixed seed (mulberry32), so
    *  a failing list comes back the same. */
   function seeded(seed: number): () => number {

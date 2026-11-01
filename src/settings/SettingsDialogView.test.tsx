@@ -14,7 +14,7 @@ function renderDialog(initial: Settings = DEFAULT_SETTINGS, restartIfSaved?: () 
   render(
     <SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} restartIfSaved={restartIfSaved} />,
   );
-  return { onSave, onRequestClose, user: userEvent.setup() };
+  return { onSave, onRequestClose, user: userEvent.setup({ delay: null }) };
 }
 
 /** A theme card's radio inside the named picker ("UI theme" or "Document theme"). */
@@ -129,19 +129,75 @@ describe("SettingsDialogView pages", () => {
 
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave.mock.calls[0][0]).toMatchObject({
+    // Untouched fields on every page keep their values.
+    expect(onSave.mock.calls[0][0]).toEqual({
+      ...DEFAULT_SETTINGS,
       theme: "light",
       editorTheme: "follow-ui",
       editorWidthPx: 800,
       mdBulletChar: "*",
       recentFilesDefaultSearch: "all",
       recentFilesKeepRemoved: true,
-      // Untouched fields on other pages keep their values.
-      showFrontmatterPanel: DEFAULT_SETTINGS.showFrontmatterPanel,
-      recentFilesVisibleCount: DEFAULT_SETTINGS.recentFilesVisibleCount,
-      accentMode: "default",
     });
     expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  /** Every setting changed from its default, including those the dialog does not show. */
+  const customized: Settings = {
+    theme: "light",
+    editorTheme: "dark",
+    accentMode: "custom",
+    accentColor: "#ff8800",
+    editorWidthMode: "fill",
+    editorWidthPx: 900,
+    fontFamily: "Georgia",
+    editorFontScale: 1.25,
+    attachmentsFolderName: "assets",
+    embedImagesAsBase64: false,
+    maxEmbedSizeKB: 512,
+    linkDisplay: "text-only",
+    recentFilesMaxRetained: 50,
+    recentFilesVisibleCount: 20,
+    recentFilesDefaultSearch: "contents",
+    recentFilesKeepRemoved: true,
+    defaultView: "split",
+    collapseBase64InRawView: false,
+    spellCheckEnabled: false,
+    spellCheckLanguages: ["de-DE"],
+    showFrontmatterPanel: false,
+    maxRetainedTabEditors: 3,
+    mdBulletChar: "+",
+    mdEmphasisChar: "_",
+    mdStrongChar: "__",
+    mdHeadingStyle: "setext",
+    mdHardWrap: 72,
+    autosaveEnabled: true,
+    autosaveIntervalSeconds: 60,
+    recoverySnapshotIntervalSeconds: 20,
+    recoveryRetentionDays: 3,
+    printVersion: "markdown",
+    printPaperSize: "letter",
+    printOrientation: "landscape",
+    printMargins: "narrow",
+    printScalePercent: 90,
+    printHeaderTitle: true,
+    printHeaderDate: true,
+    printFooterPageNumbers: false,
+    printerName: "Office",
+    printCopies: 2,
+    hasSeenWelcome: true,
+    hasCheckedDefaultHandler: true,
+    autoUpdate: false,
+  };
+
+  it.each([
+    ["the defaults", DEFAULT_SETTINGS],
+    ["customized settings", customized],
+  ])("Save without changes writes the same settings for %s", async (_name, initial) => {
+    const { user, onSave } = renderDialog(initial);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0]).toEqual(initial);
   });
 
   it("saves an out-of-range number on a hidden page clamped to its range", async () => {

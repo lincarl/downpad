@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-// What screen readers learn from the real document editor's task boxes.
+// What screen readers learn from the real document editor's task boxes and
+// standalone images.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Crepe } from "@milkdown/crepe";
+import { editorViewCtx } from "@milkdown/kit/core";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import { WysiwygEditor } from "./WysiwygEditor";
@@ -57,5 +60,22 @@ describe("task boxes in the document editor", () => {
     await settle();
     expect(editor?.getMarkdown()).toBe("- [x] Open task\n- [x] Done task\n\n* Bullet\n");
     expect(markers(root)).toEqual(["img Done", "img Done", "hidden"]);
+  });
+});
+
+describe("standalone images in the document editor", () => {
+  it("are announced by their alt text, which a resize keeps in the Markdown", { timeout: 60_000 }, async () => {
+    const markdown = '![Alt text](a.png "Caption")\n';
+    const root = await open(markdown);
+    // Crepe's own image view gives the <img> the caption as its alt.
+    await vi.waitFor(() => expect(root.querySelector(".milkdown-image-block img")?.getAttribute("alt")).toBe("Alt text"));
+
+    // Crepe's own schema keeps the resize ratio in the alt slot, so a resize
+    // once saved ![1.50](a.png "Caption").
+    const view = (editor as unknown as { crepe: Crepe }).crepe.editor.ctx.get(editorViewCtx);
+    expect(view.state.doc.firstChild?.type.name).toBe("image-block");
+    view.dispatch(view.state.tr.setNodeAttribute(0, "ratio", 1.5));
+    expect(view.state.doc.firstChild?.attrs.ratio).toBe(1.5);
+    expect(editor?.getMarkdown()).toBe(markdown);
   });
 });

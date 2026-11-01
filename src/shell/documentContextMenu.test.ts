@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildItems, installDocumentContextMenu, type DocumentMenuActions } from "./documentContextMenu";
 import type { ElectronBridge } from "../ipc/bridge";
@@ -71,6 +72,7 @@ describe("buildItems", () => {
     expect(labels(items)).toEqual(["Copy as Markdown", "Print…"]);
     // The version choice lives in the print workspace, never as a submenu here.
     expect(items.filter((i) => i.label.startsWith("Print"))).toHaveLength(1);
+    expect(byLabel(items, "Print…").shortcut).toBe("Ctrl+P");
   });
 
   it("disables the document actions when nothing is open", () => {
@@ -140,6 +142,36 @@ describe("buildItems", () => {
     expect(byLabel(noSuggestions, "No spelling suggestions").disabled).toBe(true);
     expect(labels(noSuggestions)).toContain("Add to dictionary");
     expect(labels(buildItems(target("raw"), actions(), { word: "", suggestions: [], replace, add }))).not.toContain("Add to dictionary");
+  });
+});
+
+describe("Insert link", () => {
+  /** Choose Insert link over the selection "some words" and return the prompt's field. */
+  function insertLinkPrompt(insertLink: DocumentMenuActions["insertLink"]) {
+    const done = byLabel(buildItems(target("wysiwyg", "some words"), actions({ insertLink })), "Insert link…").run();
+    const field = screen.getByRole("textbox", { name: 'Link URL for "some words"' });
+    return { done, field };
+  }
+
+  it("asks for a URL named after the selection and links it without surrounding spaces", async () => {
+    const insertLink = vi.fn(() => true);
+    const { done, field } = insertLinkPrompt(insertLink);
+    fireEvent.change(field, { target: { value: "  https://x.test/page  " } });
+    screen.getByRole("button", { name: "Insert" }).click();
+    await done;
+    expect(insertLink.mock.calls).toEqual([["https://x.test/page"]]);
+  });
+
+  it.each([
+    ["Cancel", "https://x.test/page"],
+    ["Insert", "   "],
+  ])("links nothing after %s with %j in the field", async (button, value) => {
+    const insertLink = vi.fn(() => true);
+    const { done, field } = insertLinkPrompt(insertLink);
+    fireEvent.change(field, { target: { value } });
+    screen.getByRole("button", { name: button }).click();
+    await done;
+    expect(insertLink).not.toHaveBeenCalled();
   });
 });
 

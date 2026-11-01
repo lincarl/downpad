@@ -11,7 +11,7 @@ import { closeHistory, redo, undo } from "@milkdown/kit/prose/history";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
-import { serializerStyleFromSettings } from "../../state/types";
+import { serializerStyleFromSettings, type Settings } from "../../state/types";
 import { WysiwygEditor } from "./WysiwygEditor";
 
 // Crepe's code block view watches whether it is on screen, which jsdom cannot tell.
@@ -32,13 +32,14 @@ afterEach(async () => {
  *  Also returns its Crepe, for edits and checks the public API cannot make. */
 async function open(
   markdown: string,
+  settings: Settings = DEFAULT_SETTINGS,
 ): Promise<{ editor: WysiwygEditor; crepe: Crepe; view: EditorView; onChange: ReturnType<typeof vi.fn> }> {
   const root = document.createElement("div");
   document.body.append(root);
   const onChange = vi.fn();
   editor = new WysiwygEditor();
-  await editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(DEFAULT_SETTINGS), {
-    getSettings: () => DEFAULT_SETTINGS,
+  await editor.mount(root, markdown, { onChange }, serializerStyleFromSettings(settings), {
+    getSettings: () => settings,
     getFilePath: () => null,
     requestSave: async () => false,
   });
@@ -172,6 +173,21 @@ describe("an edit in the document view", () => {
     );
   });
 
+  const otherStyle: Settings = { ...DEFAULT_SETTINGS, mdBulletChar: "*", mdEmphasisChar: "_", mdStrongChar: "__", mdHeadingStyle: "setext" };
+  it.each([
+    ["the default Markdown style", DEFAULT_SETTINGS, "# Title Edited\n\n- a *b* **c** Edited\n\nKept  \nline.\n"],
+    ["another Markdown style", otherStyle, "Title Edited\n============\n\n* a _b_ __c__ Edited\n\nKept  \nline.\n"],
+  ])("writes the blocks it changed in %s from the settings", { timeout: 60_000 }, async (_name, settings, expected) => {
+    const { editor, view } = await open("# Title Edit\n\n- a b c Edit\n\nKept  \nline.\n", settings);
+    typeAfter(view, "Title Edit", "ed");
+    typeAfter(view, "c Edit", "ed");
+    // Marks read from the file keep the marker they had there, so add new ones.
+    const { emphasis, strong } = view.state.schema.marks;
+    const [b, c] = [after(view, "a b"), after(view, "b c")];
+    view.dispatch(view.state.tr.addMark(b - 1, b, emphasis.create()).addMark(c - 1, c, strong.create()));
+    expect(editor.getMarkdown()).toBe(expected);
+  });
+
   it("keeps the line breaks and indent around a changed block", { timeout: 60_000 }, async () => {
     const markdown = "Steps:\n- one\n- two\n\n\n\nAfter.\n\n  ```\n  code\n    more\n  ```\n";
     const { editor, view } = await open(markdown);
@@ -281,11 +297,13 @@ describe("an edit in the document view", () => {
     expect(editor.getMarkdown()).toBe(mirrored);
   });
 
-  it("writes and reads only the blocks an edit changed in a long file", { timeout: 60_000 }, async () => {
-    const sections = Array.from({ length: 150 }, (_, i) => `Section ${i}\n----------\n\n* Point ${i}\n\nText ${i}  \nmore.\n`);
-    const rows = Array.from({ length: 1_000 }, (_, i) => `| ${i} | row ${i} |`);
-    // A large table right above the paragraph that is edited.
-    sections[75] = sections[75].replace("\n\nText", `\n\n| n | name |\n|---|---|\n${rows.join("\n")}\n\nText`);
+  it("writes and reads only the blocks an edit changed", { timeout: 60_000 }, async () => {
+    // The write and parse counts below show what an edit costs, so a short
+    // file shows it as well as a long one.
+    const sections = Array.from({ length: 10 }, (_, i) => `Section ${i}\n----------\n\n* Point ${i}\n\nText ${i}  \nmore.\n`);
+    const rows = Array.from({ length: 20 }, (_, i) => `| ${i} | row ${i} |`);
+    // A table right above the paragraph that is edited.
+    sections[5] = sections[5].replace("\n\nText", `\n\n| n | name |\n|---|---|\n${rows.join("\n")}\n\nText`);
     const markdown = sections.join("\n");
     const { editor, crepe, view } = await open("Start.\n");
     // Count what the editor writes and reads from here on.
@@ -297,24 +315,28 @@ describe("an edit in the document view", () => {
     });
     const parse = vi.spyOn(crepe.editor.ctx.get(remarkCtx), "parse");
     editor.setMarkdown(markdown);
-    expect(view.state.doc.childCount).toBeGreaterThanOrEqual(450);
     expect(editor.getMarkdown()).toBe(markdown);
     parse.mockClear();
 
     // The first edit uses where the parse that opened the text put each block.
-    typeAfter(view, "Text 75", "!");
-    expect(editor.getMarkdown()).toBe(markdown.replace("Text 75  \n", "Text 75!\\\n"));
+    typeAfter(view, "Text 5", "!");
+    expect(editor.getMarkdown()).toBe(markdown.replace("Text 5  \n", "Text 5!\\\n"));
     expect(written).toEqual([1]);
     written.length = 0;
     // Later edits write the block they change. A blank line keeps it apart
     // from the table, so neither the table nor the paragraph is read back.
-    typeAfter(view, "Text 75!", "!");
-    expect(editor.getMarkdown()).toBe(markdown.replace("Text 75  \n", "Text 75!!\\\n"));
+    typeAfter(view, "Text 5!", "!");
+    expect(editor.getMarkdown()).toBe(markdown.replace("Text 5  \n", "Text 5!!\\\n"));
     expect(written).toEqual([1]);
     expect(parse).not.toHaveBeenCalled();
   });
 
   it("keeps the blocks between an insert near the start and an edit near the end of a long file", { timeout: 60_000 }, async () => {
+    // Keep more than 1,024 blocks between the two edits, the square root of
+    // MAX_CELLS in sourceBaseline.ts. alignBlocks gives up on that many, so only
+    // pairing the blocks the user did not touch by identity keeps them. In a
+    // shorter file alignBlocks pairs them by their text, and the test would pass
+    // even with that pairing broken.
     const markdown = Array.from({ length: 1_200 }, (_, i) => `Para ${i}  \nline.\n`).join("\n");
     const { editor, view } = await open(markdown);
     const { paragraph } = view.state.schema.nodes;
@@ -662,8 +684,9 @@ describe("a join between a changed block and the file's text", () => {
 
   it("gets a blank line when reading the join back would take longer than writing the whole body", { timeout: 60_000 }, async () => {
     // The list starts on its own line under the quote, but only reading the
-    // whole quote back would tell.
-    const quote = Array.from({ length: 2_000 }, (_, i) => `> Quoted line ${i}`).join("\n");
+    // whole quote back would tell. The quote's 5,300 characters are well over
+    // the 2,000 a file this size may read back (MIN_BUDGET in sourceBaseline.ts).
+    const quote = Array.from({ length: 300 }, (_, i) => `> Quoted line ${i}`).join("\n");
     const { editor, crepe, view } = await open(`${quote}\n- item\n`);
     const parse = vi.spyOn(crepe.editor.ctx.get(remarkCtx), "parse");
     typeAfter(view, "item", " edited");
@@ -673,14 +696,18 @@ describe("a join between a changed block and the file's text", () => {
 
   it("writes the whole body below a list left open at its end that would take too long to read back", { timeout: 60_000 }, async () => {
     // A blank line would keep the quote apart from the list, but the open
-    // fence would take it in and hold one more line.
-    const steps = Array.from({ length: 300 }, (_, i) => `- Step ${i}`).join("\n");
+    // fence would take it in and hold one more line. The list's 2,900
+    // characters are over the 2,000 a file this size may read back
+    // (MIN_BUDGET in sourceBaseline.ts), so the join is not read back.
+    const steps = Array.from({ length: 60 }, (_, i) => `- Step ${i} with a longer description of the step`).join("\n");
     const { editor, crepe, view } = await open(`${steps}\n- Run:\n\n  \`\`\`sh\n  echo hello\n`);
+    const parse = vi.spyOn(crepe.editor.ctx.get(remarkCtx), "parse");
     const { blockquote, paragraph } = view.state.schema.nodes;
     view.dispatch(view.state.tr.insert(blockWith(view, "echo hello").to, blockquote.create(null, paragraph.create(null, view.state.schema.text("Done.")))));
     const written = editor.getMarkdown();
     expect(written).toBe(crepe.editor.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc)));
     expect(written?.endsWith("  echo hello\n  ```\n\n> Done.\n")).toBe(true);
+    expect(parse).not.toHaveBeenCalled();
   });
 });
 

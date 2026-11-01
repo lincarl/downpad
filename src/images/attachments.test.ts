@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { attachmentFileName, extForMime, sanitizeTimestamp } from "./attachments";
 
 describe("extForMime", () => {
@@ -37,8 +37,15 @@ describe("attachmentFileName", () => {
     );
   });
 
-  it("contains no characters illegal in Windows filenames", () => {
-    const name = attachmentFileName("image/png", "2026-05-31T15:42:11.000Z");
-    expect(name).not.toMatch(/[<>:"/\\|?*]/);
+  it("names the image from the current UTC time by default, with no characters illegal in Windows filenames", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-31T15:42:11.250Z"));
+      const name = attachmentFileName("image/png");
+      expect(name).toBe("img-2026-05-31T15-42-11Z.png");
+      expect(name).not.toMatch(/[<>:"/\\|?*]/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

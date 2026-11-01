@@ -37,6 +37,25 @@ describe("Markdown file operations", () => {
     expect(await readdir(directory)).toEqual(["document.md"]);
   });
 
+  it.each([
+    { file: "CRLF throughout", raw: "# Title\r\n\r\nBody line\r\n", content: "# Title\n\nBody line\n", eol: "crlf", saved: "# Title\r\n\r\nBody line\r\n" },
+    { file: "LF throughout", raw: "a\nb\n", content: "a\nb\n", eol: "lf", saved: "a\nb\n" },
+    { file: "as many CRLF as LF endings", raw: "a\r\nb\nc", content: "a\nb\nc", eol: "crlf", saved: "a\r\nb\r\nc" },
+    { file: "mostly CRLF endings", raw: "a\r\nb\r\nc\n", content: "a\nb\nc\n", eol: "crlf", saved: "a\r\nb\r\nc\r\n" },
+    { file: "mostly LF endings", raw: "a\nb\nc\r\n", content: "a\nb\nc\n", eol: "lf", saved: "a\nb\nc\n" },
+    { file: "a single line", raw: "no newlines here", content: "no newlines here", eol: "lf", saved: "no newlines here" },
+    { file: "only lone CR endings", raw: "a\rb\r", content: "a\nb\n", eol: "lf", saved: "a\nb\n" },
+    { file: "a lone CR among CRLF and LF endings", raw: "a\rb\r\nc\nd", content: "a\nb\nc\nd", eol: "crlf", saved: "a\r\nb\r\nc\r\nd" },
+  ] as const)("opens a file with $file and saves it with the line ending it detected", async ({ raw, content, eol, saved }) => {
+    const path = join(await fixtureDirectory(), "document.md");
+    await writeFile(path, raw);
+    const opened = await readMarkdown(path);
+    expect(opened).toMatchObject({ content, eol, hadBom: false });
+    await writeMarkdown(path, opened.content, opened.eol);
+    expect(await readFile(path, "utf8")).toBe(saved);
+    expect(await readMarkdown(path)).toMatchObject({ content, eol });
+  });
+
   it("rejects invalid UTF-8 rather than silently corrupting an opened document", async () => {
     const path = join(await fixtureDirectory(), "invalid.md");
     await writeFile(path, Buffer.from([0xc3, 0x28]));
@@ -287,6 +306,19 @@ describe("Existing settings and history compatibility", () => {
     });
   });
 
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])("uses the defaults for numeric settings of %s", (value) => {
+    expect(normalizeSettings({ editorFontScale: value, editorWidthPx: value, maxEmbedSizeKB: value, printCopies: value })).toMatchObject({
+      editorFontScale: DEFAULT_SETTINGS.editorFontScale, editorWidthPx: DEFAULT_SETTINGS.editorWidthPx,
+      maxEmbedSizeKB: DEFAULT_SETTINGS.maxEmbedSizeKB, printCopies: DEFAULT_SETTINGS.printCopies,
+    });
+  });
+
+  it.each(["-1.5", "inf", "+inf", "-inf", "nan"])("loads the default font scale from a hand-edited editorFontScale = %s", async (value) => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    await writeFile(path, `editorFontScale = ${value}\neditorWidthPx = 960\n`);
+    expect(await loadSettingsFile(path)).toMatchObject({ editorFontScale: DEFAULT_SETTINGS.editorFontScale, editorWidthPx: 960 });
+  });
+
   it("bounds recent history settings to supported sizes and limits visible rows by retention", () => {
     expect(normalizeSettings({ recentFilesMaxRetained: 0, recentFilesVisibleCount: 0 }))
       .toMatchObject({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 1 });
@@ -395,6 +427,24 @@ describe("Existing settings and history compatibility", () => {
     ]);
   });
 
+  it("removes only the named recent file and keeps the other entry and its favorite flag", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    const kept = join(directory, "kept.md");
+    const removed = join(directory, "removed.md");
+    await store.recordOpened(kept, 1);
+    await store.recordOpened(removed, 2);
+    await store.setFavorite(kept, true);
+    await store.setFavorite(removed, true);
+    await store.removeRecent(join(directory, "never-opened.md"));
+    expect(await store.recent()).toHaveLength(2);
+    // Another spelling of the same path names the same entry.
+    await store.removeRecent(`${directory}/folder/../removed.md`);
+    expect(await store.recent()).toEqual([{ path: kept, lastOpenedMs: 1, favorite: true }]);
+    expect(JSON.parse(await readFile(join(directory, "recent.json"), "utf8")) as unknown).toEqual([{ p: kept, t: 1, f: true }]);
+  });
+
   it("loads valid recovery, removes expired/corrupt snapshots, and blocks session traversal", async () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);
@@ -468,14 +518,17 @@ describe("Existing settings and history compatibility", () => {
       filePath: null, markdown: `Unsaved document ${index}\n`, isDirty: true,
     }));
     const recovery = join(directory, "recovery");
-    for (const [index, snapshot] of snapshots.entries()) {
-      await store.writeSnapshot(snapshot);
+    await mkdir(recovery);
+    // Plain writes are enough here. Other tests cover the snapshot write path.
+    await Promise.all(snapshots.map(async (snapshot, index) => {
+      const file = join(recovery, `${snapshot.sessionId}.json`);
+      await writeFile(file, JSON.stringify(snapshot));
       const modified = new Date(now - 100_000 + index * 1_000);
-      await utimes(join(recovery, `${snapshot.sessionId}.json`), modified, modified);
-    }
+      await utimes(file, modified, modified);
+    }));
     const unreadable = { ...snapshots[0]!, sessionId: "unreadable", savedAt: "2000-01-01T00:00:00.000Z" };
-    await store.writeSnapshot(unreadable);
     const path = join(recovery, "unreadable.json");
+    await writeFile(path, JSON.stringify(unreadable));
     const original = await readFile(path);
     const originalRead = filesystem.readFile;
     const reading = vi.spyOn(filesystem, "readFile").mockImplementation(async (...args) => {
@@ -692,19 +745,50 @@ describe("Native print setup", () => {
 });
 
 describe("Desktop page and image access", () => {
-  it("rejects unexpected renderer pages and unsafe external protocols", () => {
-    expect(trustedPage("file:///app/dist/index.html#document", "file:///app/dist/index.html")).toBe(true);
-    expect(trustedPage("file:///etc/passwd", "file:///app/dist/index.html")).toBe(false);
-    expect(trustedPage("http://127.0.0.1:1420/other", "http://127.0.0.1:1420/")).toBe(false);
-    expect(externalUrl("https://example.com/document")).toBe("https://example.com/document");
-    expect(() => externalUrl("file:///etc/passwd")).toThrow("not supported");
-    expect(() => externalUrl("javascript:alert(1)")).toThrow("not supported");
-    const entry = "file:///app/dist/index.html";
-    expect(clipboardPermission("clipboard-sanitized-write", entry, entry, true)).toBe(true);
-    expect(clipboardPermission("clipboard-read", entry, entry, true)).toBe(true);
-    expect(clipboardPermission("clipboard-read", "https://example.com", entry, true)).toBe(false);
-    expect(clipboardPermission("clipboard-read", entry, entry, false)).toBe(false);
-    expect(clipboardPermission("geolocation", entry, entry, true)).toBe(false);
+  const fileEntry = "file:///app/dist/index.html";
+  const loopbackEntry = "http://127.0.0.1:1420/";
+
+  it.each([
+    { page: "the same file with a hash", url: "file:///app/dist/index.html#document", entry: fileEntry },
+    { page: "the same file with a query", url: "file:///app/dist/index.html?view=split", entry: fileEntry },
+    { page: "the same loopback page with a query and hash", url: "http://127.0.0.1:1420/?file=notes.md#top", entry: loopbackEntry },
+  ])("trusts $page", ({ url, entry }) => {
+    expect(trustedPage(url, entry)).toBe(true);
+  });
+
+  it.each([
+    { page: "another file", url: "file:///etc/passwd", entry: fileEntry },
+    { page: "the same path on a web host", url: "https://evil.example/app/dist/index.html", entry: fileEntry },
+    { page: "the same path on a file server", url: "file://server/app/dist/index.html", entry: fileEntry },
+    { page: "the same path under another scheme", url: "downpad-file:///app/dist/index.html", entry: fileEntry },
+    { page: "another loopback path", url: "http://127.0.0.1:1420/other", entry: loopbackEntry },
+    { page: "another loopback port", url: "http://127.0.0.1:1421/", entry: loopbackEntry },
+    { page: "another host with the same path", url: "http://localhost:1420/", entry: loopbackEntry },
+    { page: "HTTPS on the same host and port", url: "https://127.0.0.1:1420/", entry: loopbackEntry },
+    { page: "a file with the same path as a loopback entry", url: "file:///", entry: loopbackEntry },
+    { page: "a malformed address", url: "not a URL", entry: loopbackEntry },
+  ])("does not trust $page", ({ url, entry }) => {
+    expect(trustedPage(url, entry)).toBe(false);
+  });
+
+  it.each(["https://example.com/document", "http://example.com/notes", "mailto:someone@example.com"])("opens the external link %s", (url) => {
+    expect(externalUrl(url)).toBe(url);
+  });
+
+  it.each(["file:///etc/passwd", "javascript:alert(1)", "data:text/html,<script>alert(1)</script>"])("refuses the external link %s", (url) => {
+    expect(() => externalUrl(url)).toThrow("This link type is not supported.");
+  });
+
+  it.each([undefined, null, 42, { href: "https://example.com/" }])("refuses an external link that is not text: %j", (value) => {
+    expect(() => externalUrl(value)).toThrow("A link is required.");
+  });
+
+  it("allows clipboard access only to the entry page's main frame", () => {
+    expect(clipboardPermission("clipboard-sanitized-write", fileEntry, fileEntry, true)).toBe(true);
+    expect(clipboardPermission("clipboard-read", fileEntry, fileEntry, true)).toBe(true);
+    expect(clipboardPermission("clipboard-read", "https://example.com", fileEntry, true)).toBe(false);
+    expect(clipboardPermission("clipboard-read", fileEntry, fileEntry, false)).toBe(false);
+    expect(clipboardPermission("geolocation", fileEntry, fileEntry, true)).toBe(false);
   });
 
   it("authorizes linked images one at a time and rejects unknown URLs or changed symlink targets", async () => {
@@ -734,6 +818,22 @@ describe("Desktop page and image access", () => {
     const unsafe = join(documentDirectory, "script.js");
     await writeFile(unsafe, "alert(1)");
     await expect(access.imageUrl(unsafe)).rejects.toThrow("Only local images");
+  });
+
+  it.skipIf(process.platform === "win32")("judges a linked image by the type of the file it links to", async () => {
+    const directory = await fixtureDirectory();
+    const notes = join(directory, "notes.txt");
+    const image = join(directory, "image.png");
+    await writeFile(notes, "Private notes\n");
+    await writeFile(image, Uint8Array.of(1));
+    const disguised = join(directory, "photo.png");
+    const plainName = join(directory, "image-link.txt");
+    await symlink(notes, disguised);
+    await symlink(image, plainName);
+    const access = new ImageAccess();
+    await expect(access.imageUrl(disguised)).rejects.toThrow("Only local images");
+    const linked = new URL((await access.imageUrl(plainName))!);
+    expect(await access.resolveImage(linked.searchParams.get("token")!)).toBe(image);
   });
 
   it("answers a missing image with null and still rejects invalid paths", async () => {

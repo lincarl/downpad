@@ -31,8 +31,6 @@ vi.stubGlobal("DragEvent", class DragEvent extends MouseEvent {});
 
 let editor: WysiwygEditor | null = null;
 afterEach(async () => {
-  // The drop indicator hides its line 30ms after a drop, which needs the editor.
-  await new Promise((resolve) => setTimeout(resolve, 50));
   await editor?.destroy();
   editor = null;
   document.body.replaceChildren();
@@ -57,7 +55,7 @@ async function open(markdown: string): Promise<EditorView> {
     getFilePath: () => null,
     requestSave: async () => false,
   });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   const view = crepeOf(editor).editor.ctx.get(editorViewCtx);
   vi.spyOn(view.dom, "getBoundingClientRect").mockReturnValue(box(80, 400));
   return view;
@@ -253,9 +251,11 @@ describe("something dragged within the document", () => {
     const view = await open(`Intro.\n\nMove me.\n\n${TABLE}\nEnd.\n`);
     layOut(view, ["Intro.", "Move me."], ["End."]);
     dragBlock(view, "Move me.");
+    const before = view.state.doc;
     // Left of the table, at the top of the "1 | 2" row, in the table's upper
     // half, so above the table, right below the block.
     drop(view, view.dom, 10, 204);
+    expect(view.state.doc).toBe(before);
     expect(editor!.getMarkdown()).toBe(`Intro.\n\nMove me.\n\n${TABLE}\nEnd.\n`);
   });
 

@@ -215,9 +215,7 @@ describe("math and strikethrough delimiters", () => {
     expect(root.querySelectorAll(".ProseMirror > p")[0].textContent).toMatch(/^Costs \$5 and /);
     edit(editor);
     const saved = markdownOf(editor);
-    // Whether Milkdown escapes text that ends in a space depends on its text
-    // writer. Both forms open the same way.
-    expect(saved).toMatch(/^Costs \\?\$5 and \$x\$ here\. Edited\.\n$/);
+    expect(saved).toBe("Costs \\$5 and $x$ here. Edited.\n");
     expect(formulas((await open(saved)).root)).toEqual(["x"]);
   });
 

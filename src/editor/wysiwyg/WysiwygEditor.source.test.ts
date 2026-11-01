@@ -16,9 +16,9 @@ vi.stubGlobal("IntersectionObserver", class {
 
 let editor: WysiwygEditor | null = null;
 afterEach(async () => {
+  vi.useRealTimers();
   await editor?.destroy();
   editor = null;
-  vi.useRealTimers();
   document.body.replaceChildren();
 });
 
@@ -36,15 +36,21 @@ function start(markdown: string): { editor: WysiwygEditor; onChange: ReturnType<
   return { editor, onChange, root, mounting };
 }
 
-/** Mount the document editor on `markdown`, recording its change reports. */
+/** Mount the document editor on `markdown`, recording its change reports. The
+ *  timers and animation frames are fake from before the mount, so Crepe's first
+ *  frame runs on the fake clock. Faked after the mount, it would never run. */
 async function open(markdown: string): Promise<{ editor: WysiwygEditor; onChange: ReturnType<typeof vi.fn> }> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"] });
   const { editor, onChange, mounting } = start(markdown);
+  let settled = false;
+  void mounting.then(() => (settled = true), () => (settled = true));
+  while (!settled) await vi.advanceTimersByTimeAsync(1);
   await mounting;
   return { editor, onChange };
 }
 
 /** Wait past a list's first frame and the 200ms change report. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+const settle = () => vi.advanceTimersByTimeAsync(300);
 
 /** The last Markdown the editor reported. */
 const lastReport = (onChange: ReturnType<typeof vi.fn>) => onChange.mock.lastCall?.[0] as string | undefined;
@@ -75,7 +81,6 @@ describe("the document view's Markdown", () => {
   it("reports a live edit but cancels a pending report when destroyed", async () => {
     const { editor, onChange } = await open("Start.\n");
     await settle();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     onChange.mockClear();
 
     // Establish that a live edit reaches the report callback before checking

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateInfo } from "../src/ipc/contracts";
 import { CHECK_INTERVAL_MS, type PackageKind } from "./updatePlan";
 import { Updater, type UpdaterOptions } from "./updater";
@@ -89,6 +89,66 @@ describe("Updater checks", () => {
     await instance.checkNow();
     expect(instance.info().state).toEqual({ status: "failed", message: "Couldn't download Downpad 1.3.0. The downloaded update failed its integrity check and was discarded." });
     expect(await readdir(join(updates, "appimage"))).toEqual([]);
+  });
+
+  it("refuses a package that announces more than 1 GiB before saving any of it", async () => {
+    const github = server();
+    let read = false;
+    const { instance, updates } = await updater(async (url) => {
+      const response = await github.fetch(url);
+      if (!url.startsWith("https://example.com/")) return response;
+      // A body that records whether the updater began to read it.
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          read = true;
+          controller.enqueue(new Uint8Array([1]));
+          controller.close();
+        },
+      }, { highWaterMark: 0 });
+      return new Response(body, { headers: { "content-length": String(1024 ** 3 + 1) } });
+    });
+    await instance.checkNow();
+    expect(instance.info()).toMatchObject({
+      lastCheckMs: null,
+      state: { status: "failed", message: "Couldn't download Downpad 1.3.0. The download is larger than any Downpad package." },
+    });
+    expect(read).toBe(false);
+    expect(await readdir(join(updates, "appimage"))).toEqual([]);
+  });
+
+  it("abandons a download that receives nothing for a minute and removes the partial file", async () => {
+    const github = server();
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    let signal: AbortSignal | null | undefined;
+    let requested!: () => void;
+    const downloading = new Promise<void>((resolve) => { requested = resolve; });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { instance, updates } = await updater(async (url: string, init?: RequestInit) => {
+        if (!url.startsWith("https://example.com/")) return github.fetch(url);
+        signal = init?.signal;
+        requested();
+        return new Response(new ReadableStream<Uint8Array>({ start: (controller) => { body = controller; } }),
+          { headers: { "content-length": String(PACKAGE.length) } });
+      });
+      const check = instance.checkNow();
+      await downloading;
+      await vi.advanceTimersByTimeAsync(30_000);
+      body.enqueue(PACKAGE.subarray(0, 6));
+      // Each waitFor attempt also advances the fake clock by its 5 ms interval.
+      await vi.waitFor(() => expect(instance.info().state).toEqual({ status: "downloading", version: "1.3.0", percent: 25 }), { interval: 5 });
+      await vi.waitFor(async () => expect(await readdir(join(updates, "appimage"))).toEqual([`${github.name}.part`]), { interval: 5 });
+      // The chunk restarted the one-minute wait.
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(signal?.reason).toEqual(new Error("The download stopped responding."));
+      await vi.waitFor(() => expect(instance.info().state).toMatchObject({ status: "failed", message: expect.stringMatching(/^Couldn't download Downpad 1\.3\.0\. /) }), { interval: 5 });
+      await check;
+      expect(await readdir(join(updates, "appimage"))).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports up to date for the same, an older or a candidate release, and resets the interval", async () => {

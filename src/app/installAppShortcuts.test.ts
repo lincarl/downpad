@@ -83,13 +83,18 @@ describe("installAppShortcuts", () => {
     expect(actions.showFind).toHaveBeenNthCalledWith(1, "find");
     expect(actions.showFind).toHaveBeenNthCalledWith(2, "replace");
 
+    // The raw editor's own keymap listens on its content element, as
+    // CodeMirror's search keymap does, and must never see Ctrl+F.
     const raw = document.createElement("div");
     raw.className = "cm-editor";
     const rawInput = document.createElement("textarea");
+    const editorKeymap = vi.fn();
+    rawInput.addEventListener("keydown", editorKeymap);
     raw.append(rawInput);
     document.body.append(raw);
     expect(keydown("f", {}, rawInput).defaultPrevented).toBe(true);
     expect(actions.showFind).toHaveBeenNthCalledWith(3, "find");
+    expect(editorKeymap).not.toHaveBeenCalled();
 
     actions.store.set({ editorLayout: "markdown" });
     expect(keydown("f").defaultPrevented).toBe(true);

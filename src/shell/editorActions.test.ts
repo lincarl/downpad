@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 // Undo and Redo from a native menu run the focused editor's history, and
-// Chromium's own in a plain text field.
+// Chromium's own in a plain text field. Paste from the context menu hands the
+// clipboard to the editor's own paste handling.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RawEditor } from "../editor/raw/RawEditor";
-import { undoOrRedo } from "./editorActions";
+import { paste, undoOrRedo, type EditableTarget } from "./editorActions";
 
 let raw: RawEditor | null = null;
 afterEach(() => {
   raw?.destroy();
   raw = null;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  Reflect.deleteProperty(navigator, "clipboard");
   document.body.replaceChildren();
 });
 
@@ -102,5 +105,117 @@ describe("Undo and Redo from a native menu", () => {
     undoOrRedo("redo");
     expect(execCommand.mock.calls).toEqual([["undo"], ["redo"]]);
     expect(seen).toEqual([]);
+  });
+});
+
+/** jsdom has no DataTransfer. This one keeps the flavors and files a paste carries. */
+class TestDataTransfer {
+  readonly files: File[] = [];
+  readonly items = {
+    add: (file: File): void => {
+      this.files.push(file);
+    },
+  };
+  private readonly data = new Map<string, string>();
+  get types(): string[] {
+    return [...this.data.keys(), ...(this.files.length ? ["Files"] : [])];
+  }
+  setData(type: string, value: string): void {
+    this.data.set(type, value);
+  }
+  getData(type: string): string {
+    return this.data.get(type) ?? "";
+  }
+}
+
+/** jsdom has no ClipboardEvent either. */
+class TestClipboardEvent extends Event {
+  readonly clipboardData: DataTransfer | null;
+  constructor(type: string, init: ClipboardEventInit = {}) {
+    super(type, init);
+    this.clipboardData = init.clipboardData ?? null;
+  }
+}
+
+/** Put `flavors` (type to content) on a stand-in system clipboard, and record
+ *  the text that a paste puts in itself. */
+function clipboard(flavors: Record<string, string>, { richReadRefused = false } = {}) {
+  vi.stubGlobal("DataTransfer", TestDataTransfer);
+  vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
+  const read = vi.fn(async () => {
+    if (richReadRefused) throw new DOMException("Read permission denied.", "NotAllowedError");
+    return [{ types: Object.keys(flavors), getType: async (type: string) => new Blob([flavors[type]], { type }) }];
+  });
+  const readText = vi.fn(async () => flavors["text/plain"] ?? "");
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { read, readText } });
+  const inserted: string[] = [];
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: (command: string, _showUi?: boolean, value?: string): boolean => {
+      if (command === "insertText") inserted.push(value ?? "");
+      return true;
+    },
+  });
+  return { inserted };
+}
+
+/** An editable of `kind`, recording what each paste event on it carried. With
+ *  `take`, its editor consumes the paste, as smart paste does. */
+function editable(kind: EditableTarget["kind"], take: boolean) {
+  const el = document.createElement(kind === "field" ? "input" : "div");
+  document.body.append(el);
+  const pastes: Array<{ text: string; html: string; files: string[] }> = [];
+  el.addEventListener("paste", (event) => {
+    const data = (event as ClipboardEvent).clipboardData!;
+    pastes.push({
+      text: data.getData("text/plain"),
+      html: data.getData("text/html"),
+      files: Array.from(data.files).map((file) => `${file.name} ${file.type}`),
+    });
+    if (take) event.preventDefault();
+  });
+  return { target: { el, kind }, pastes };
+}
+
+describe("Paste from the context menu", () => {
+  const rich = { "text/plain": "a b", "text/html": "<p>a <b>b</b></p>", "image/png": "PNG" };
+
+  it("hands the clipboard's text, HTML and image to the document as a paste", async () => {
+    const { inserted } = clipboard(rich);
+    const { target, pastes } = editable("wysiwyg", true);
+    await paste(target, false);
+    expect(pastes).toEqual([{ text: "a b", html: "<p>a <b>b</b></p>", files: ["pasted.png image/png"] }]);
+    expect(inserted).toEqual([]);
+  });
+
+  it("puts the text in itself when no editor takes the paste", async () => {
+    const { inserted } = clipboard(rich);
+    const { target, pastes } = editable("raw", false);
+    await paste(target, false);
+    expect(pastes).toHaveLength(1);
+    expect(inserted).toEqual(["a b"]);
+  });
+
+  it("puts in only the text for Paste as plain text and for a form field", async () => {
+    const { inserted } = clipboard(rich);
+    const documentView = editable("wysiwyg", true);
+    await paste(documentView.target, true);
+    const field = editable("field", true);
+    await paste(field.target, false);
+    expect(documentView.pastes).toEqual([]);
+    expect(field.pastes).toEqual([]);
+    expect(inserted).toEqual(["a b", "a b"]);
+  });
+
+  it("pastes the plain text when reading the rich clipboard is refused, and nothing from an empty clipboard", async () => {
+    clipboard({ "text/plain": "plain words", "text/html": "<b>x</b>" }, { richReadRefused: true });
+    const { target, pastes } = editable("wysiwyg", true);
+    await paste(target, false);
+    expect(pastes).toEqual([{ text: "plain words", html: "", files: [] }]);
+
+    const { inserted } = clipboard({});
+    await paste(target, false);
+    expect(pastes).toHaveLength(1);
+    expect(inserted).toEqual([]);
   });
 });

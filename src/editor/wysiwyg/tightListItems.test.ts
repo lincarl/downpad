@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { Editor, defaultValueCtx, editorViewCtx, remarkStringifyOptionsCtx } from "@milkdown/kit/core";
+import { Editor, defaultValueCtx, editorViewCtx, parserCtx, remarkStringifyOptionsCtx } from "@milkdown/kit/core";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { TextSelection } from "@milkdown/kit/prose/state";
@@ -111,6 +111,36 @@ describe("blocks in a tight list item", () => {
     press(view, "Enter");
     input(view, steps);
     expect(currentMarkdown()).toBe(`Start.\n\n${list}`);
+  });
+
+  // Each block goes straight into the item, as a paste or a drop would put it
+  // there, right after a block that would take it in.
+  it.each([
+    // A quote right after a quote would join it.
+    ["a quote after a quote", "- A\n  > q\n- B\n", "> r\n", "- A\n\n  > q\n\n  > r\n- B\n"],
+    // Text right after a quote would continue the quote's last paragraph.
+    ["text after a quote", "- A\n  > q\n- B\n", "x\n", "- A\n\n  > q\n\n  x\n- B\n"],
+    // A table right after a nested list would join its last item.
+    [
+      "a table after a nested list",
+      "- A\n  - n\n- B\n",
+      "| a |\n| - |\n| 1 |\n",
+      "- A\n\n  - n\n\n  | a |\n  | - |\n  | 1 |\n- B\n",
+    ],
+    // Text right after a table would become another row.
+    [
+      "text after a table",
+      "- A\n  | a |\n  | - |\n  | 1 |\n- B\n",
+      "tail\n",
+      "- A\n\n  | a |\n  | - |\n  | 1 |\n\n  tail\n- B\n",
+    ],
+  ])("writes %s added to the item with blank lines between its blocks", async (_name, list, added, expected) => {
+    const view = await open(list);
+    const block = editor!.ctx.get(parserCtx)(added).firstChild!;
+    const item = view.state.doc.firstChild!.firstChild!;
+    // The end of the first item's content, after its last block.
+    view.dispatch(view.state.tr.insert(2 + item.content.size, block));
+    expect(currentMarkdown()).toBe(expected);
   });
 
   it("keeps a blank line after an item whose text was deleted", async () => {

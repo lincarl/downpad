@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { findMatchRanges, type FindOptions } from "./findEngine";
+import { Schema, type Node as ProseNode } from "@milkdown/kit/prose/model";
+import { findMatchRanges, searchDoc, type FindOptions } from "./findEngine";
 
 const opts = (over: Partial<FindOptions> = {}): FindOptions => ({
   caseSensitive: false,
@@ -61,5 +62,44 @@ describe("findMatchRanges", () => {
   it("does not loop forever on zero-width regex matches", () => {
     const ranges = findMatchRanges("abc", "x*", opts({ regex: true }));
     expect(ranges).toEqual([]); // all matches are zero-width and skipped
+  });
+});
+
+// A small schema with a mark and an inline atom, as in the document view.
+const schema = new Schema({
+  nodes: {
+    doc: { content: "block+" },
+    paragraph: { group: "block", content: "inline*" },
+    text: { group: "inline" },
+    image: { group: "inline", inline: true, atom: true },
+  },
+  marks: { strong: {} },
+});
+const p = (...content: (string | ProseNode)[]) =>
+  schema.nodes.paragraph.create(null, content.map((part) => (typeof part === "string" ? schema.text(part) : part)));
+const strong = (text: string) => schema.text(text, [schema.marks.strong.create()]);
+
+describe("searchDoc", () => {
+  // The paragraphs start at 0, 13, 18 and 22. The image sits at 15.
+  const doc = schema.nodes.doc.create(null, [
+    p("hello wo", strong("rl"), "d"),
+    p("a", schema.nodes.image.create(), "b"),
+    p("ab"),
+    p("c"),
+  ]);
+
+  it("finds a match across inline marks as one range", () => {
+    expect(searchDoc(doc, "world", opts())).toEqual([{ from: 7, to: 12 }]);
+  });
+
+  it("never matches across text blocks or an inline atom", () => {
+    expect(searchDoc(doc, "abc", opts())).toEqual([]);
+    expect(searchDoc(doc, "a b", opts())).toEqual([]);
+    expect(searchDoc(doc, "ab", opts())).toEqual([{ from: 19, to: 21 }]);
+    // Text after the atom keeps its own position.
+    expect(searchDoc(doc, "b", opts())).toEqual([
+      { from: 16, to: 17 },
+      { from: 20, to: 21 },
+    ]);
   });
 });

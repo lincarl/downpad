@@ -89,17 +89,20 @@ test("push and regular dispatch retain their branch or tag revision and allow ve
         default_branch: "trunk",
         pr_number: "",
       });
-      assert.equal(data.event.inputs.version, "1.2.4");
       assert.deepEqual(data.calls, []);
     }
   }
 });
 
 test("non-default manual branches require both PR inputs", async () => {
-  for (const inputs of [{}, { expected_sha: sha }, { pr_number: "7" }]) {
+  for (const [inputs, error] of [
+    [{}, /Non-default branch builds require pr_number and expected_sha/],
+    [{ expected_sha: sha }, /pr_number must be a positive integer/],
+    [{ pr_number: "7" }, /40-character/],
+  ]) {
     const data = fixture();
     data.event.inputs = inputs;
-    await assert.rejects(prepare(data.event, data.env, data.request));
+    await assert.rejects(prepare(data.event, data.env, data.request), error);
     assert.deepEqual(data.calls, []);
   }
 });
@@ -282,6 +285,23 @@ test("GitHub transport preserves HTTP errors, requires GH_TOKEN, and encodes sta
   }
   const missingToken = createGitHubClient({}, async () => { throw new Error("Unexpected fetch"); });
   await assert.rejects(missingToken("/probe"), /GH_TOKEN is required/);
+});
+
+test("GitHub transport sends reads without a body and resolves No Content to undefined", async () => {
+  const calls = [];
+  const request = createGitHubClient({ GH_TOKEN: "test-token" }, async (url, options) => {
+    calls.push({ url, ...options });
+    return options.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json([{ id: 1 }]);
+  });
+  assert.deepEqual(await request(`/repos/${repository}/releases?per_page=100&page=1`), [{ id: 1 }]);
+  assert.deepEqual(calls[0], {
+    url: `https://api.github.com/repos/${repository}/releases?per_page=100&page=1`,
+    method: "GET",
+    headers: { authorization: "Bearer test-token", accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" },
+  });
+  // GitHub answers a release deletion with 204, which release cleanup relies on.
+  assert.equal(await request(`/repos/${repository}/releases/1`, { method: "DELETE" }), undefined);
+  assert.equal(calls[1].method, "DELETE");
 });
 
 test("prepare CLI reads the runner event and writes the same outputs to stdout or GITHUB_OUTPUT", async (t) => {

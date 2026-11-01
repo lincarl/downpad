@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-// Find in the Markdown view never matches base64 image data, collapsed or not,
-// so Replace all cannot corrupt an embedded image.
+// The Markdown view can show long base64 image data as its size. Find there
+// never matches base64 image data, collapsed or not, so Replace all cannot
+// corrupt an embedded image.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { RawEditor } from "./RawEditor";
 import type { FindOptions } from "../wysiwyg/findEngine";
 
@@ -30,6 +31,49 @@ function open(text: string, collapseBase64 = true): RawEditor {
   editor.mount(root, text, { onChange: () => {} }, { collapseBase64 });
   return editor;
 }
+
+describe("base64 image data collapsed in the Markdown view", () => {
+  const text = `First line.\n\n${png}\n`;
+  const chip = () => document.querySelector(".cm-base64-collapsed");
+  const shownText = () => document.querySelector(".cm-content")!.textContent;
+  const viewOf = () => EditorView.findFromDOM(document.querySelector<HTMLElement>(".cm-editor")!)!;
+  const press = (element: Element) => element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+
+  it("shows long data as its size, and keeps the data in the text", () => {
+    const editor = open(text);
+
+    expect(chip()?.textContent).toBe("…[0.1 KB]");
+    expect(shownText()).toContain("![pasted](data:image/png;base64,…[0.1 KB])");
+    expect(shownText()).not.toContain(pngData);
+    expect(editor.getText()).toBe(text);
+  });
+
+  it("shows data too short to collapse as it is", () => {
+    open(`First line.\n\n${gif}\n`);
+
+    expect(chip()).toBeNull();
+    expect(shownText()).toContain(gif);
+  });
+
+  it("shows the data once its size is pressed, and keeps it shown through an edit before it", () => {
+    open(text);
+
+    press(chip()!);
+    expect(chip()).toBeNull();
+    expect(shownText()).toContain(pngData);
+    viewOf().dispatch({ changes: { from: 0, insert: "Intro. " } });
+    expect(chip()).toBeNull();
+  });
+
+  it("shows the data while the caret is in it, so typing there is seen", () => {
+    open(text);
+
+    viewOf().dispatch({ selection: { anchor: text.indexOf(pngData) + 5 } });
+
+    expect(chip()).toBeNull();
+    expect(shownText()).toContain(pngData);
+  });
+});
 
 describe("find in the Markdown view", () => {
   it.each([

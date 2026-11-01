@@ -84,6 +84,7 @@ describe("a press below the document's last block", () => {
     ["a table", "| A | B |\n| --- | --- |\n| x1 | y1 |", "paragraph", ""],
     ["a code block", "```js\nconst a = 1;\n```", "paragraph", ""],
     ["a math block", "$$\nE = mc^2\n$$", "paragraph", ""],
+    ["a Mermaid diagram", "```mermaid\ngraph TD; A-->B;\n```", "paragraph", ""],
     ["an image on its own line", "![Bar](bar.svg)", "paragraph", ""],
     ["a rule", "---", "paragraph", ""],
   ])("after %s puts the caret at the end of the last line", { timeout: 60_000 }, async (_name, last, type, text) => {

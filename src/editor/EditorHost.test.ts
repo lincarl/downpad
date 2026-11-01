@@ -632,6 +632,29 @@ describe("EditorHost split divider", () => {
 
     await host.dispose();
   });
+
+  it("keeps each pane at least a fifth of the split from the keyboard", async () => {
+    const root = document.createElement("div");
+    const host = new EditorHost(root, makeStore());
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    const divider = root.querySelector<HTMLElement>(".split-divider")!;
+    const press = (key: string) => {
+      divider.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      return [divider.getAttribute("aria-valuenow"), divider.getAttribute("aria-valuetext")];
+    };
+
+    expect([divider.getAttribute("aria-valuemin"), divider.getAttribute("aria-valuemax")]).toEqual(["20", "80"]);
+    expect(["End", "ArrowRight", "Home", "ArrowLeft"].map(press)).toEqual([
+      ["80", "80% document"],
+      ["80", "80% document"],
+      ["20", "20% document"],
+      ["20", "20% document"],
+    ]);
+    expect(root.style.getPropertyValue("--split-left")).toBe("20.000%");
+
+    await host.dispose();
+  });
 });
 
 describe("EditorHost build", () => {
@@ -644,6 +667,27 @@ describe("EditorHost build", () => {
     // The document pane writes the text its own way, but nothing was edited.
     expect(store.get().doc).toMatchObject({ markdown: "original markdown", isDirty: false });
     expect(fakeEditors.rawText).toBe("original markdown");
+    await host.dispose();
+  });
+
+  it("keeps the document pane, and so its undo history, through the split and the Markdown view", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const documentPane = root.querySelector(".editor-pane-wysiwyg");
+    fakeEditors.wysiwygChange!("original markdown, typed in the document");
+
+    await host.setLayout("split");
+    expect(fakeEditors.rawText).toBe("original markdown, typed in the document");
+    await host.setLayout("document");
+    await host.setLayout("markdown");
+    await host.setLayout("document");
+
+    expect(fakeEditors.mountCalls).toBe(1);
+    expect(fakeEditors.destroyCalls).toBe(0);
+    expect(root.querySelector(".editor-pane-wysiwyg:not([hidden])")).toBe(documentPane);
+    expect(store.get().doc.markdown).toBe("original markdown, typed in the document");
     await host.dispose();
   });
 });
@@ -1858,6 +1902,125 @@ describe("EditorHost flush", () => {
     fakeEditors.wysiwygChange!("older document text");
 
     expect(store.get().doc.markdown).toBe("newer Markdown text");
+    await host.dispose();
+  });
+});
+
+describe("EditorHost change reports", () => {
+  /** How long the split waits for typing to pause before it mirrors an edit
+   *  (`SYNC_DEBOUNCE_MS`). */
+  const SYNC_DELAY_MS = 120;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("mirrors an edit in either split pane into the other once typing pauses, without a click or a flush", async () => {
+    const host = new EditorHost(document.createElement("div"), makeStore());
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+
+    fakeEditors.rawText = "typed in Markdown";
+    fakeEditors.rawChange!(fakeEditors.rawText);
+    vi.advanceTimersByTime(SYNC_DELAY_MS - 1);
+    expect(fakeEditors.mirrored).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(fakeEditors.mirrored).toBe("typed in Markdown");
+
+    fakeEditors.wysiwygChange!("typed in Markdown, then the document");
+    vi.advanceTimersByTime(SYNC_DELAY_MS - 1);
+    expect(fakeEditors.rawText).toBe("typed in Markdown");
+    vi.advanceTimersByTime(1);
+    expect(fakeEditors.rawText).toBe("typed in Markdown, then the document");
+    await host.dispose();
+  });
+
+  it("writes a late report from a document pane behind another tab into its own tab only", async () => {
+    const store = makeStore();
+    const host = new EditorHost(document.createElement("div"), store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    const reportFromFirstTab = fakeEditors.wysiwygChange!;
+    const second = store.addTab({ ...store.get().doc, markdown: "other markdown", savedMarkdown: "other markdown" });
+    await host.reloadActiveDoc();
+
+    reportFromFirstTab("original markdown, typed before the switch");
+    vi.advanceTimersByTime(SYNC_DELAY_MS);
+
+    const doc = (id: string) => store.get().tabs.find((tab) => tab.id === id)!.doc;
+    expect(doc("tab-1")).toMatchObject({ markdown: "original markdown, typed before the switch", isDirty: true });
+    expect(doc(second)).toMatchObject({ markdown: "other markdown", isDirty: false });
+    // Nothing goes into the panes in front.
+    expect(fakeEditors.mirrored).toBeNull();
+    expect(fakeEditors.rawText).toBe("other markdown");
+    // Back on the first tab, its Markdown pane shows the report.
+    store.activateTab("tab-1");
+    await host.showActiveDoc();
+    expect(fakeEditors.rawText).toBe("original markdown, typed before the switch");
+    await host.dispose();
+  });
+});
+
+describe("EditorHost retained tabs", () => {
+  /** Open a document in a new tab in front, and show it. */
+  async function openTab(store: Store, host: EditorHost, markdown: string): Promise<string> {
+    const id = store.addTab({ ...store.get().doc, markdown, savedMarkdown: markdown });
+    await host.reloadActiveDoc();
+    return id;
+  }
+
+  /** Bring a tab to the front, as a click on it does. */
+  async function showTab(store: Store, host: EditorHost, id: string): Promise<void> {
+    store.activateTab(id);
+    await host.showActiveDoc();
+  }
+
+  it("drops the panes of the tab shown longest ago beyond the limit, never those of the tab in front", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    store.set({ settings: { ...store.get().settings, maxRetainedTabEditors: 2 } });
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const second = await openTab(store, host, "second tab");
+    const third = await openTab(store, host, "third tab");
+    expect(root.querySelectorAll(".editor-pane")).toHaveLength(2);
+
+    await showTab(store, host, second);
+    await showTab(store, host, "tab-1");
+    await showTab(store, host, second);
+    await showTab(store, host, third);
+
+    // Each tab shown again is built again only when it was shown longest ago.
+    expect(fakeEditors.mounted.map((build) => build.markdown)).toEqual([
+      "original markdown",
+      "second tab",
+      "third tab",
+      "original markdown",
+      "third tab",
+    ]);
+    expect(root.querySelectorAll(".editor-pane")).toHaveLength(2);
+    expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
+    await host.dispose();
+  });
+
+  it("drops the panes beyond a lowered limit at once, keeping those of the tab in front", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    await openTab(store, host, "second tab");
+    await openTab(store, host, "third tab");
+    const inFront = root.querySelector(".editor-pane-wysiwyg:not([hidden])");
+    expect(root.querySelectorAll(".editor-pane")).toHaveLength(3);
+
+    store.set({ settings: { ...store.get().settings, maxRetainedTabEditors: 1 } });
+    await host.applyRetentionLimit();
+
+    expect([...root.querySelectorAll(".editor-pane")]).toEqual([inFront]);
+    expect(fakeEditors.destroyCalls).toBe(2);
     await host.dispose();
   });
 });
