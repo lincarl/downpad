@@ -143,9 +143,35 @@ describe("Updater checks", () => {
       expect(signal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(signal?.reason).toEqual(new Error("The download stopped responding."));
-      await vi.waitFor(() => expect(instance.info().state).toMatchObject({ status: "failed", message: expect.stringMatching(/^Couldn't download Downpad 1\.3\.0\. /) }), { interval: 5 });
+      await vi.waitFor(() => expect(instance.info().state).toEqual({ status: "failed", message: "Couldn't download Downpad 1.3.0. The download stopped responding." }), { interval: 5 });
       await check;
       expect(await readdir(join(updates, "appimage"))).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("abandons a download whose server never answers for a minute", async () => {
+    const github = server();
+    let requested!: () => void;
+    const downloading = new Promise<void>((resolve) => { requested = resolve; });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { instance } = await updater(async (url: string, init?: RequestInit) => {
+        if (!url.startsWith("https://example.com/")) return github.fetch(url);
+        requested();
+        // Like fetch, reject with the abort reason before any response arrives.
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+        });
+      });
+      const check = instance.checkNow();
+      await downloading;
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(instance.info().state).toEqual({ status: "downloading", version: "1.3.0", percent: 0 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await check;
+      expect(instance.info().state).toEqual({ status: "failed", message: "Couldn't download Downpad 1.3.0. The download stopped responding." });
     } finally {
       vi.useRealTimers();
     }
