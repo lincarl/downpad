@@ -263,6 +263,17 @@ describe("Markdown source pasted into the document", () => {
   });
 });
 
+describe("a URL pasted over selected text", () => {
+  it("links the selected text and undoes in one step", async () => {
+    const { editor, view } = await open("Read the docs today.\n");
+    selectText(view, "docs");
+    paste(view, "https://example.com/docs\n");
+    expect(editor.getMarkdown()).toBe("Read the [docs](https://example.com/docs) today.\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor.getMarkdown()).toBe("Read the docs today.\n");
+  });
+});
+
 describe("rich HTML pasted into the document", () => {
   it("turns a table copied from a spreadsheet into a Markdown table", async () => {
     const { editor, view } = await open();

@@ -276,6 +276,18 @@ describe("a pasted image", () => {
     expect(pasteImages).not.toHaveBeenCalled();
     expect(editor!.getMarkdown()).toContain("Pasted text.");
   });
+
+  it("with Markdown text pastes the text as Markdown, with its frontmatter as metadata", { timeout: 60_000 }, async () => {
+    const pasteImages = vi.fn<(files: File[]) => void>();
+    const root = await open("", undefined, { pasteImages });
+
+    pasteImage(root, "---\ntitle: pasted\n---\n\n# Heading\n");
+
+    expect(pasteImages).not.toHaveBeenCalled();
+    expect(editor!.getMarkdown()).toBe("---\ntitle: pasted\n---\n\n# Heading\n");
+    expect(root.querySelector(".frontmatter-toggle")).not.toBeNull();
+    expect(root.querySelector(".ProseMirror")!.textContent).not.toContain("title:");
+  });
 });
 
 describe("a late answer", () => {

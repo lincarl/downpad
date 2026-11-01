@@ -4,6 +4,7 @@
 //   image    → hand to the app, which stores it and puts it in (below)
 //   markdown → splice into Markdown source before rendering it
 //   text     → fall through to ProseMirror's default plain-text paste
+//   URL over selected text → link the text (§5.6)
 //
 // Plain Markdown is inserted through the source callback. Rich HTML follows
 // Milkdown's existing paste path, with its `insert` macro as a fallback.
@@ -23,7 +24,7 @@
 
 import { $prose } from "@milkdown/kit/utils";
 import { parserCtx } from "@milkdown/kit/core";
-import { Plugin, PluginKey } from "@milkdown/kit/prose/state";
+import { Plugin, PluginKey, TextSelection, type Transaction } from "@milkdown/kit/prose/state";
 import { closeHistory } from "@milkdown/kit/prose/history";
 import { CellSelection } from "@milkdown/kit/prose/tables";
 import { insert } from "@milkdown/kit/utils";
@@ -42,16 +43,24 @@ function isSingleUrl(text: string): boolean {
   return /^https?:\/\/\S+$/.test(text);
 }
 
+/** Dispatch a paste's transaction as one undo step of its own. */
+function dispatchPaste(view: EditorView, tr: Transaction): void {
+  view.dispatch(closeHistory(tr).setMeta("paste", true).setMeta("uiEvent", "paste").scrollIntoView());
+  view.dispatch(closeHistory(view.state.tr));
+}
+
 /**
- * Spec §5.6: pasting a URL over a non-empty selection wraps the selection in a
- * link (selection stays as the link text). Returns true if it handled the paste.
+ * Spec §5.6: pasting a URL over selected text links the text, which stays
+ * selected. Returns true if it handled the paste. It runs from the DOM paste
+ * handler, because Milkdown's clipboard plugin would otherwise replace the
+ * text with the URL as an autolink.
  */
 function tryLinkOverSelection(view: EditorView, text: string): boolean {
   const sel = view.state.selection;
   const linkType = view.state.schema.marks.link;
-  if (sel.empty || !linkType || !isSingleUrl(text.trim())) return false;
-  const tr = view.state.tr.addMark(sel.from, sel.to, linkType.create({ href: text.trim() }));
-  view.dispatch(tr.scrollIntoView());
+  const url = text.trim();
+  if (!(sel instanceof TextSelection) || sel.empty || !linkType || !isSingleUrl(url)) return false;
+  dispatchPaste(view, view.state.tr.addMark(sel.from, sel.to, linkType.create({ href: url })));
   return true;
 }
 
@@ -83,7 +92,8 @@ export function smartPastePlugin(wctx: WysiwygContext, pasteMarkdown: (markdown:
                 return true;
               }
               // Crepe consumes text before handlePaste reaches this plugin.
-              // Take Markdown here, including highlighted HTML copied with it.
+              // Take Markdown here, including highlighted HTML or an image
+              // copied with it, and a URL pasted over selected text.
               // A code block's own editor keeps every paste literal.
               const { selection, storedMarks } = view.state;
               if (selection.$from.parent.type.spec.code) return false;
@@ -93,8 +103,11 @@ export function smartPastePlugin(wctx: WysiwygContext, pasteMarkdown: (markdown:
                 // The serializer chooses enough backticks to keep code literal.
                 // Splicing into its source would let a pasted backtick close it.
                 event.preventDefault();
-                view.dispatch(closeHistory(view.state.tr.insertText(normalizeToLf(text))).setMeta("paste", true).setMeta("uiEvent", "paste").scrollIntoView());
-                view.dispatch(closeHistory(view.state.tr));
+                dispatchPaste(view, view.state.tr.insertText(normalizeToLf(text)));
+                return true;
+              }
+              if (tryLinkOverSelection(view, text)) {
+                event.preventDefault();
                 return true;
               }
               if (!looksLikeMarkdown(text)) return false;
@@ -111,9 +124,12 @@ export function smartPastePlugin(wctx: WysiwygContext, pasteMarkdown: (markdown:
               return true;
             },
           },
+          // Milkdown's clipboard plugin leaves this a paste it does not
+          // take, such as one with the selection starting in a code block.
+          // ProseMirror's own paste keeps text in code literal.
           handlePaste: (view: EditorView, event: ClipboardEvent): boolean => {
             const dt = event.clipboardData;
-            if (!dt) return false;
+            if (!dt || view.state.selection.$from.parent.type.spec.code) return false;
             const action = resolvePaste(snapshotFromDataTransfer(dt));
             switch (action.kind) {
               case "image":
@@ -125,12 +141,7 @@ export function smartPastePlugin(wctx: WysiwygContext, pasteMarkdown: (markdown:
                 insert(action.md)(mctx);
                 return true;
               default:
-                // text / empty: a URL pasted over a selection becomes a link
-                // (§5.6); otherwise let ProseMirror handle plain-text paste.
-                if (tryLinkOverSelection(view, dt.getData("text/plain") || "")) {
-                  event.preventDefault();
-                  return true;
-                }
+                // text / empty: let ProseMirror handle plain-text paste.
                 return false;
             }
           },
