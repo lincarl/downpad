@@ -47,21 +47,26 @@ function press(toolbar: HTMLElement, label: string): void {
 }
 
 describe("the document selection toolbar", () => {
-  it.each([1, 2, 3, 4])("turns selected text into H%i while preserving inline formatting and undo", { timeout: 60_000 }, async (level) => {
+  it("turns selected text into H1 to H4 while preserving inline formatting and undo", { timeout: 60_000 }, async () => {
     const original = "Some **bold** text.\n";
     const { editor, view, toolbar } = await open(original);
     expect([...toolbar.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual([
       "Heading 1", "Heading 2", "Heading 3", "Heading 4", "Bold", "Italic", "Strikethrough", "Inline code", "Link",
     ]);
-    expect(toolbar.querySelector(`[aria-label="Heading ${level}"]`)?.classList.contains("active")).toBe(false);
-    press(toolbar, `Heading ${level}`);
-    expect(view.state.doc.firstChild?.type.name).toBe("heading");
-    expect(view.state.doc.firstChild?.attrs.level).toBe(level);
-    expect(editor.getMarkdown()).toBe(`${"#".repeat(level)} Some **bold** text.\n`);
-    expect(view.state.doc.textBetween(view.state.selection.from, view.state.selection.to)).toBe("Some bold text.");
-    await vi.waitFor(() => expect(toolbar.querySelector(`[aria-label="Heading ${level}"]`)?.classList.contains("active")).toBe(true));
-    expect(undo(view.state, view.dispatch)).toBe(true);
-    expect(editor.getMarkdown()).toBe(original);
+    /** The heading levels the toolbar marks as the selection's. */
+    const active = () => [...toolbar.querySelectorAll('[data-toolbar-item^="heading-"].active')].map((item) => item.getAttribute("aria-label"));
+    for (const level of [1, 2, 3, 4]) {
+      // The toolbar updates its state 20 ms after a change.
+      await vi.waitFor(() => expect(active()).toEqual([]), { interval: 5 });
+      press(toolbar, `Heading ${level}`);
+      expect(view.state.doc.firstChild?.type.name).toBe("heading");
+      expect(view.state.doc.firstChild?.attrs.level).toBe(level);
+      expect(editor.getMarkdown()).toBe(`${"#".repeat(level)} Some **bold** text.\n`);
+      expect(view.state.doc.textBetween(view.state.selection.from, view.state.selection.to)).toBe("Some bold text.");
+      await vi.waitFor(() => expect(active()).toEqual([`Heading ${level}`]), { interval: 5 });
+      expect(undo(view.state, view.dispatch)).toBe(true);
+      expect(editor.getMarkdown()).toBe(original);
+    }
   });
 
   it("shows a heading level only when all selected text blocks use it", { timeout: 60_000 }, async () => {
@@ -72,5 +77,30 @@ describe("the document selection toolbar", () => {
     await vi.waitFor(() => expect(toolbar.querySelector('[aria-label="Heading 3"]')?.classList.contains("active")).toBe(true));
     press(toolbar, "Heading 1");
     expect(editor.getMarkdown()).toBe("# First\n\n# Second\n");
+  });
+
+  it("stays shown while focus is in it or only the window loses focus, and hides when focus goes elsewhere", { timeout: 60_000 }, async () => {
+    const { view, toolbar } = await open("Some text.\n");
+    const bold = toolbar.querySelector<HTMLButtonElement>('button[aria-label="Bold"]')!;
+    bold.focus();
+    expect(document.activeElement).toBe(bold);
+    expect(toolbar.dataset.show).toBe("true");
+
+    // Switching windows blurs the document but leaves it the active element.
+    view.focus();
+    view.dom.dispatchEvent(new FocusEvent("blur"));
+    expect(document.activeElement).toBe(view.dom);
+    expect(toolbar.dataset.show).toBe("true");
+
+    const outside = document.createElement("input");
+    document.body.append(outside);
+    outside.focus();
+    expect(toolbar.dataset.show).toBe("false");
+
+    // Focus coming back shows it only once the selection changes.
+    view.focus();
+    expect(toolbar.dataset.show).toBe("false");
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 5)));
+    await vi.waitFor(() => expect(toolbar.dataset.show).toBe("true"));
   });
 });

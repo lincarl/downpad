@@ -14,6 +14,27 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * Model the browser's finite argument limit on every DOM method that takes
+ * nodes as arguments, without building a huge fixture.
+ */
+function limitDomArguments(limit: number): void {
+  // Takes the method before spyOn replaces it, so the guard calls the real one.
+  const limited = (original: (...nodes: (Node | string)[]) => void) =>
+    function (this: ParentNode | ChildNode, ...nodes: (Node | string)[]): void {
+      if (nodes.length > limit) throw new RangeError("DOM argument limit exceeded");
+      original.apply(this, nodes);
+    };
+  for (const name of ["append", "prepend", "replaceChildren", "replaceWith", "before", "after"] as const) {
+    const guard = limited(Element.prototype[name]);
+    vi.spyOn(Element.prototype, name).mockImplementation(guard);
+  }
+  for (const name of ["append", "prepend", "replaceChildren"] as const) {
+    const guard = limited(DocumentFragment.prototype[name]);
+    vi.spyOn(DocumentFragment.prototype, name).mockImplementation(guard);
+  }
+}
+
 it("prepares complete code and line numbers within a DOM argument limit", async () => {
   const sourceLines = Array.from({ length: 256 }, (_, index) => `line ${index + 1}`);
   sourceLines[1] = "";
@@ -22,12 +43,7 @@ it("prepares complete code and line numbers within a DOM argument limit", async 
   const live = document.createElement("div");
   live.innerHTML = '<div class="cm-editor"><div class="cm-content"><div class="cm-line"><span class="syntax">line 1</span></div></div><div class="cm-gutters" style="min-height: 9000px"><div class="cm-lineNumbers"><div class="cm-gutterElement" style="visibility: hidden; height: 10px; margin-top: 20px">1</div></div></div></div>';
 
-  // Model the browser's finite argument limit without building a huge fixture.
-  const replaceChildren = Element.prototype.replaceChildren;
-  vi.spyOn(Element.prototype, "replaceChildren").mockImplementation(function (this: Element, ...nodes) {
-    if (nodes.length > 64) throw new RangeError("DOM argument limit exceeded");
-    replaceChildren.call(this, ...nodes);
-  });
+  limitDomArguments(64);
 
   const job = await preparePrintJob({
     markdown: sourceLines.join("\n"),

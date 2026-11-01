@@ -1522,7 +1522,9 @@ describe("splitIntoPages, fitting each piece of a block with its top margin and 
 
   it("fits each piece of a code block CodeMirror has not drawn with the block's margin and padding", () => {
     // Crepe shows a code block outside the window as a plain `pre` until it
-    // scrolls into view, so a long document prints most of its code that way.
+    // scrolls into view. printDocument swaps that `pre` for a CodeMirror copy
+    // before printing (printCodeBlocks.test.ts), so this keeps splitPre working
+    // for any `pre` that still reaches the paginator.
     const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
     const code = document.createElement("code");
     code.dataset.stack = "";

@@ -37,7 +37,7 @@ const nativeInfo: SpellcheckInfo = {
 async function openSpelling(initial: Settings = DEFAULT_SETTINGS, restartIfSaved?: () => Promise<boolean>) {
   const onSave = vi.fn<(next: Settings) => void>();
   const onRequestClose = vi.fn();
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} restartIfSaved={restartIfSaved} />);
   await user.click(screen.getByRole("tab", { name: "Spelling" }));
   return { user, onSave, onRequestClose };

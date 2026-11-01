@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { EditorHost } from "../editor/EditorHost";
 import { FileService } from "../files/FileService";
-import type { FilePayload, Session, Snapshot } from "../ipc/contracts";
+import type { ElectronBridge } from "../ipc/bridge";
+import type { DefaultHandler, FilePayload, Session, Snapshot } from "../ipc/contracts";
 import type { RecoveryHandlers } from "../recovery/RecoveryDialog";
 import { SettingsModel } from "../settings/SettingsModel";
 import { createAppStore } from "./createAppStore";
@@ -27,6 +28,9 @@ const native = vi.hoisted(() => ({
   getLaunchArgs: vi.fn<() => Promise<string | null>>(async () => null),
   loadSession: vi.fn<() => Promise<Session>>(),
   saveSession: vi.fn<(session: Session) => Promise<void>>(),
+  getDefaultMdHandler: vi.fn<() => Promise<DefaultHandler>>(),
+  openDefaultAppsSettings: vi.fn<() => Promise<void>>(),
+  ask: vi.fn<(message: string) => Promise<boolean>>(),
 }));
 const recovery = vi.hoisted(() => ({
   open: vi.fn<(snapshots: Snapshot[], handlers: RecoveryHandlers) => Promise<void>>(),
@@ -42,6 +46,12 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   getLaunchArgs: native.getLaunchArgs,
   loadSession: native.loadSession,
   saveSession: native.saveSession,
+  getDefaultMdHandler: native.getDefaultMdHandler,
+  openDefaultAppsSettings: native.openDefaultAppsSettings,
+}));
+vi.mock("../ipc/dialogs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/dialogs")>()),
+  ask: native.ask,
 }));
 vi.mock("../recovery/RecoveryDialog", () => ({
   RecoveryDialog: class {
@@ -63,6 +73,7 @@ afterEach(async () => {
   await host?.dispose();
   host = null;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 /** Exercise startup with real file-service reads and a controlled dialog choice. */
@@ -78,12 +89,12 @@ function setup() {
   vi.spyOn(files, "watch").mockImplementation(() => {});
   host = new EditorHost(document.createElement("div"), store);
   const lifecycle = { disposed: false };
+  const settings = new SettingsModel(store, () => {});
   const startup = new StartupCoordinator({
-    store, files, editorHost: host,
-    settings: new SettingsModel(store, () => {}),
+    store, files, editorHost: host, settings,
     isDisposed: () => lifecycle.disposed,
   });
-  return { store, startup, lifecycle, presenter };
+  return { store, startup, lifecycle, presenter, settings };
 }
 
 it("keeps recovery and reports failed original opens without claiming startup loaded a document", async () => {
@@ -172,6 +183,80 @@ it("does not delete an untitled recovery entry or count it as an opened original
   expect(await startup.resolve()).toBe(false);
   expect(native.readFile).not.toHaveBeenCalled();
   expect(native.deleteSnapshot).not.toHaveBeenCalled();
+});
+
+it("opens the welcome document on first run as a saved untitled document and remembers it was seen", async () => {
+  const { store, startup, settings } = setup();
+  store.set((state) => ({ settings: { ...state.settings, hasSeenWelcome: false } }));
+  native.listRecoverySnapshots.mockResolvedValue([]);
+  const save = vi.spyOn(settings, "save").mockResolvedValue();
+  const welcome = vi.fn(async () => new Response("# Welcome asset\n"));
+  vi.stubGlobal("fetch", welcome);
+
+  expect(await startup.resolve()).toBe(true);
+  expect(welcome).toHaveBeenCalledExactlyOnceWith("welcome.md");
+  expect(store.get().tabs).toHaveLength(1);
+  expect(store.get().doc).toMatchObject({ markdown: "# Welcome asset\n", filePath: null, isDirty: false, savedMarkdown: "# Welcome asset\n" });
+  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hasSeenWelcome: true }));
+});
+
+describe("the one-time default app prompt on Windows", () => {
+  /** Start up on `platform`, recording settings saves instead of writing them. */
+  function promptSetup(platform = "win32") {
+    const startup = setup();
+    // The prompt reads only the platform from the bridge. Its dialog is mocked.
+    window.downpadDesktop = { platform } as ElectronBridge;
+    const save = vi.spyOn(startup.settings, "save").mockResolvedValue();
+    return { ...startup, save };
+  }
+
+  afterEach(() => {
+    delete window.downpadDesktop;
+  });
+
+  it("saves that it checked before the check finishes and asks nothing when Downpad is the default", async () => {
+    const { startup, save } = promptSetup();
+    let finishCheck!: (handler: DefaultHandler) => void;
+    native.getDefaultMdHandler.mockReturnValue(new Promise((resolve) => { finishCheck = resolve; }));
+
+    const prompting = startup.maybePromptDefaultHandler();
+    expect(native.getDefaultMdHandler).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hasCheckedDefaultHandler: true }));
+    finishCheck({ progId: "Downpad.md", isDefault: true });
+    await prompting;
+
+    expect(native.ask).not.toHaveBeenCalled();
+    expect(native.openDefaultAppsSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { answer: "Open settings", accept: true, outcome: "opens" },
+    { answer: "Not now", accept: false, outcome: "does not open" },
+  ])("$outcome Default apps when Downpad is not the default and the user answers $answer", async ({ accept }) => {
+    const { startup } = promptSetup();
+    native.getDefaultMdHandler.mockResolvedValue({ progId: "Other.md", isDefault: false });
+    native.ask.mockResolvedValue(accept);
+    native.openDefaultAppsSettings.mockResolvedValue();
+
+    await startup.maybePromptDefaultHandler();
+
+    expect(native.ask).toHaveBeenCalledOnce();
+    expect(native.openDefaultAppsSettings).toHaveBeenCalledTimes(accept ? 1 : 0);
+  });
+
+  it.each([
+    { when: "on Linux", platform: "linux", checked: false },
+    { when: "after the first check", platform: "win32", checked: true },
+  ])("does nothing $when", async ({ platform, checked }) => {
+    const { store, startup, save } = promptSetup(platform);
+    store.set((state) => ({ settings: { ...state.settings, hasCheckedDefaultHandler: checked } }));
+
+    await startup.maybePromptDefaultHandler();
+
+    expect(save).not.toHaveBeenCalled();
+    expect(native.getDefaultMdHandler).not.toHaveBeenCalled();
+    expect(native.ask).not.toHaveBeenCalled();
+  });
 });
 
 describe("opening a recovered snapshot", () => {

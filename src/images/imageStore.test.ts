@@ -79,8 +79,9 @@ describe("bytesToBase64", () => {
   it("round-trips every byte across multiple chunks and a partial final chunk", () => {
     const big = Uint8Array.from({ length: 0x8000 * 2 + 5 }, (_, index) =>
       (index * 37 + Math.floor(index / 0x8000)) % 256);
-    const decoded = Uint8Array.from(atob(bytesToBase64(big)), (character) => character.charCodeAt(0));
-    expect(decoded).toEqual(big);
+    // A byte-at-a-time reference, free of the chunking under test.
+    const binary = Array.from(big, (byte) => String.fromCharCode(byte)).join("");
+    expect(bytesToBase64(big)).toBe(btoa(binary));
   });
 });
 

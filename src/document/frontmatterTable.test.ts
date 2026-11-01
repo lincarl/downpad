@@ -183,9 +183,16 @@ describe("adding fields", () => {
 
   it("appends a top-level field at the very end when atLineIndex is past the end", () => {
     const t = parseFrontmatterTable("---\na: 1\n---\n");
-    const { block, lineIndex } = insertFieldAt(t, t.lines.length, "", "b", "2");
+    const { block, lineIndex } = insertFieldAt(t, t.lines.length + 3, "", "b", "2");
     expect(block).toBe("---\na: 1\nb: 2\n---\n");
     expect(lineIndex).toBe(1);
+  });
+
+  it("inserts a top-level field at the top when atLineIndex is before the start", () => {
+    const t = parseFrontmatterTable("---\na: 1\nc: 3\n---\n");
+    const { block, lineIndex } = insertFieldAt(t, -1, "", "b", "2");
+    expect(block).toBe("---\nb: 2\na: 1\nc: 3\n---\n");
+    expect(lineIndex).toBe(0);
   });
 
   it("inserts a top-level field in the gap BEFORE a mapping, not inside it (children stay grouped)", () => {

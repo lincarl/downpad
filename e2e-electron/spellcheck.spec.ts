@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {} from "../src/ipc/bridge";
 
@@ -16,7 +16,12 @@ test.beforeEach(async () => {
     'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\nspellCheckLanguages = ["en-US"]\n');
 });
 
-test.afterEach(async () => { await close(); });
+test.afterEach(async ({}, testInfo) => {
+  await close();
+  // Keep a failed run's profile and document for inspection. A file another
+  // process still holds must not fail a test that passed.
+  if (testInfo.status === testInfo.expectedStatus) await rm(directory, { recursive: true, force: true, maxRetries: 10 }).catch(() => {});
+});
 
 /** Launch the real app with a disposable profile and wait for its ready state. */
 async function launch(markdown?: string): Promise<void> {
@@ -52,29 +57,32 @@ async function spellingSettings(): Promise<Locator> {
   return dialog;
 }
 
-/** Locate a word even when syntax highlighting splits the line. */
-async function wordPoint(container: Locator, word: string): Promise<{ x: number; y: number }> {
+/** Locate a word, or its later copy at `occurrence`, even when syntax
+ *  highlighting splits the line. `spellcheck` tells whether Chromium may check it. */
+async function wordPoint(container: Locator, word: string, occurrence = 0): Promise<{ x: number; y: number; spellcheck: boolean }> {
   await container.scrollIntoViewIfNeeded();
-  return container.evaluate((element, text) => {
+  return container.evaluate((element, [text, occurrence]) => {
+    let skip = occurrence;
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      const from = node.textContent?.indexOf(text) ?? -1;
-      if (from < 0) continue;
-      const range = document.createRange();
-      range.setStart(node, from);
-      range.setEnd(node, from + text.length);
-      const box = range.getBoundingClientRect();
-      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      for (let from = node.textContent!.indexOf(text); from >= 0; from = node.textContent!.indexOf(text, from + text.length)) {
+        if (skip-- > 0) continue;
+        const range = document.createRange();
+        range.setStart(node, from);
+        range.setEnd(node, from + text.length);
+        const box = range.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2, spellcheck: node.parentElement!.spellcheck };
+      }
     }
     throw new Error(`Word not found: ${text}`);
-  }, word);
+  }, [word, occurrence] as const);
 }
 
-/** Right-click the middle of a word. */
-async function wordMenu(container: Locator, word: string): Promise<Locator> {
+/** Right-click the middle of a word, or of its later copy at `occurrence`. */
+async function wordMenu(container: Locator, word: string, occurrence = 0): Promise<Locator> {
   await page.keyboard.press("Escape");
-  const point = await wordPoint(container, word);
+  const point = await wordPoint(container, word, occurrence);
   await page.mouse.click(point.x, point.y, { button: "right" });
   const menu = page.getByRole("menu", { name: "Edit", exact: true });
   await expect(menu).toBeVisible();
@@ -197,11 +205,21 @@ test("custom spelling words persist and can be removed through Settings", async 
 });
 
 test("spelling checks prose while excluding inline and fenced code in both editors", async () => {
-  await launch("# Spelling notes\n\nA speling example with `inlinezorblax`.\n\n```text\nfencedzorblax\n```\n");
+  // Each code word also stands in the prose beside it, and its prose copy must
+  // be flagged first. Chromium checks lazily, and the Markdown editor redraws
+  // other copies of a right-clicked word as selection matches, which clears
+  // their flags. So the code copy must also be excluded from checking.
+  await launch("# Spelling notes\n\nA speling example with inlinezorblax and `inlinezorblax`.\n\n" +
+    "The fencedzorblax sample:\n\n```text\nfencedzorblax\n```\n");
+  /** Wait until the prose copy of `word` is flagged, then expect the code copy at `occurrence` not to be. */
+  const excluded = async (prose: Locator, code: Locator, word: string, occurrence = 0): Promise<void> => {
+    await misspellingMenu(prose, word);
+    expect((await wordPoint(code, word, occurrence)).spellcheck, `${word} in code is not checked`).toBe(false);
+    await expect((await wordMenu(code, word, occurrence)).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
+  };
   const document = page.locator(".milkdown .ProseMirror");
-  await misspellingMenu(document.locator("p").first(), "speling");
-  await expect((await wordMenu(document.locator("p code"), "inlinezorblax")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
-  await expect((await wordMenu(document.locator(".cm-content"), "fencedzorblax")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
+  await excluded(document.locator("p").first(), document.locator("p code"), "inlinezorblax");
+  await excluded(document.locator("p").nth(1), document.locator(".cm-content"), "fencedzorblax");
   await page.keyboard.press("Escape");
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const source = page.locator(".editor-pane-raw .cm-content");
@@ -211,9 +229,8 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await source.locator(".cm-line", { hasText: "A speling example" }).click();
   await page.keyboard.press("End");
   await page.keyboard.press("Space");
-  await misspellingMenu(source, "speling");
-  await expect((await wordMenu(source, "inlinezorblax")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
-  await expect((await wordMenu(source, "fencedzorblax")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
+  await excluded(source, source, "inlinezorblax", 1);
+  await excluded(source, source, "fencedzorblax", 1);
   const correction = await misspellingMenu(source, "speling");
   await correction.getByRole("menuitem", { name: "spelling", exact: true }).click();
   await expect(source).toContainText("A spelling example");
@@ -223,9 +240,16 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   // New syntax receives exclusions without a view rebuild or settings change.
   await source.click();
   await page.keyboard.press("ControlOrMeta+End");
-  await page.keyboard.insertText("\n\nA `newinlinezorblax` example.\n\n```text\nnewfencedzorblax\n```\n");
-  await expect((await wordMenu(source, "newinlinezorblax")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
-  await expect((await wordMenu(source, "newfencedzorblax")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
+  await page.keyboard.insertText("\n\nA newinlinezorblax and `newinlinezorblax` example.\n\n" +
+    "The newfencedzorblax sample:\n\n```text\nnewfencedzorblax\n```\n");
+  // Chromium checks inserted text only once a key is typed on its line.
+  for (const line of ["A newinlinezorblax and", "The newfencedzorblax sample:"]) {
+    await source.locator(".cm-line", { hasText: line }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Space");
+  }
+  await excluded(source, source, "newinlinezorblax", 1);
+  await excluded(source, source, "newfencedzorblax", 1);
   await page.keyboard.press("Escape");
   const settings = await spellingSettings();
   await settings.getByRole("checkbox", { name: "Spell check", exact: true }).uncheck();
@@ -264,8 +288,10 @@ test("native editing menus work inside Settings and its nested dictionary dialog
   const font = settings.getByRole("textbox", { name: "Body font:" });
   await font.fill("Georgia");
 
-  /** Exercise pointer targeting and Escape within the field's own modal. */
-  const checkMenu = async (field: Locator, dialog: Locator, text: string): Promise<void> => {
+  /** Exercise pointer targeting and Escape within the field's own modal.
+   *  `clamped` says the menu cannot open at the pointer without passing the
+   *  window's edge, so it must move back inside. */
+  const checkMenu = async (field: Locator, dialog: Locator, text: string, clamped = false): Promise<void> => {
     await field.click({ button: "right" });
     const menu = dialog.getByRole("menu", { name: "Edit", exact: true });
     await expect(menu).toBeVisible();
@@ -276,6 +302,10 @@ test("native editing menus work inside Settings and its nested dictionary dialog
     expect(menuBox.y).toBeGreaterThanOrEqual(0);
     expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.width);
     expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(viewport.height);
+    if (clamped) {
+      const past = Math.max(fieldBox.x + fieldBox.width / 2 + menuBox.width - viewport.width, fieldBox.y + fieldBox.height / 2 + menuBox.height - viewport.height);
+      expect(past, "a menu at the pointer would pass the window's edge").toBeGreaterThan(0);
+    }
     expect(menuBox.x).toBeLessThanOrEqual(fieldBox.x + fieldBox.width / 2 + 1);
     expect(menuBox.y).toBeLessThanOrEqual(fieldBox.y + fieldBox.height / 2 + 1);
     expect(menuBox.x + menuBox.width).toBeGreaterThan(fieldBox.x + fieldBox.width / 2);
@@ -300,6 +330,10 @@ test("native editing menus work inside Settings and its nested dictionary dialog
   const accent = page.getByRole("textbox", { name: "Accent color hex" });
   await accent.fill("#aabbcc");
   await checkMenu(accent, page.locator(".accent-popover"), "#aabbcc");
+  // In a small window the menu moves back inside it while still touching the pointer.
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(800, 600));
+  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([800, 600]);
+  await checkMenu(accent, page.locator(".accent-popover"), "#aabbcc", true);
   await page.keyboard.press("Escape");
   await settings.getByRole("tab", { name: "Spelling", exact: true }).click();
   await settings.getByRole("button", { name: "Manage dictionary…" }).click();

@@ -32,7 +32,7 @@ vi.mock("../../ipc/commands", async (importOriginal) => ({
 
 import { WysiwygEditor } from "./WysiwygEditor";
 import type { WysiwygContext } from "./context";
-import { forgetImageAnswers } from "./imageView";
+import { ANSWER_WAIT_MS, forgetImageAnswers } from "./imageView";
 
 // Crepe's code block view watches whether it is on screen, which jsdom cannot tell.
 vi.stubGlobal("IntersectionObserver", class {
@@ -75,6 +75,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   Object.defineProperty(HTMLImageElement.prototype, "src", srcProperty);
   await editor?.destroy();
   editor = null;
@@ -115,6 +116,11 @@ const viewOf = (opened: WysiwygEditor) =>
 /** The src each image in the editor has now. */
 const sources = (root: HTMLElement) => [...root.querySelectorAll("img")].map((image) => image.getAttribute("src"));
 
+/** Fake the clock, timers and animation frames before a mount, so a test can
+ *  pass the wait for answers (ANSWER_WAIT_MS) without waiting in real time. */
+const fakeClock = () =>
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "requestAnimationFrame", "cancelAnimationFrame"] });
+
 describe("the first render", () => {
   it("shows local images at their own URL", { timeout: 60_000 }, async () => {
     native.convertFileSrc.mockImplementation(async (path) => (path === "/docs/pic.png" ? "downpad-file://pic" : null));
@@ -128,37 +134,42 @@ describe("the first render", () => {
     expect(native.convertFileSrc).toHaveBeenCalledTimes(2);
   });
 
-  it("shows the document when the main process is slow to answer", { timeout: 60_000 }, async () => {
+  it("keeps a split mirror made while it waits for answers, and shows the document when the wait ends", { timeout: 60_000 }, async () => {
+    fakeClock();
     native.convertFileSrc.mockImplementation(() => new Promise(() => {}));
-    const started = Date.now();
-
-    const root = await open(DOCUMENT);
-
-    expect(Date.now() - started).toBeLessThan(5_000);
-    expect(root.querySelectorAll("img")).toHaveLength(3);
-  });
-
-  it("keeps a split mirror made while it waits for answers", { timeout: 60_000 }, async () => {
-    native.convertFileSrc.mockImplementation(() => new Promise(() => {}));
+    const started = performance.now();
     const { root, mounting } = start(DOCUMENT);
-    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalled());
+    let mounted = false;
+    void mounting.then(() => (mounted = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(native.convertFileSrc).toHaveBeenCalled();
 
     // Markdown typed in the split while the document pane is still being built.
     editor!.setMarkdown("![Block](pic.png)\n\nNew text.\n");
-    await mounting;
+    // The main process never answers. The first render waits ANSWER_WAIT_MS,
+    // which the design keeps to a second at most.
+    await vi.advanceTimersByTimeAsync(ANSWER_WAIT_MS - 1);
+    expect(mounted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mounted).toBe(true);
+    expect(performance.now() - started).toBeLessThanOrEqual(1_000);
 
+    expect(root.querySelectorAll("img")).toHaveLength(1);
     expect(root.querySelector(".ProseMirror p")?.textContent).toBe("New text.");
     expect(editor!.getMarkdown()).toBe("![Block](pic.png)\n\nNew text.\n");
   });
 
   it("writes the text it opened with when undo takes back a split mirror made while it waits", { timeout: 60_000 }, async () => {
+    fakeClock();
     native.convertFileSrc.mockImplementation(() => new Promise(() => {}));
     const opened = "![Block](pic.png)\n\nLine  \nnext.\n";
     const { mounting } = start(opened);
-    await vi.waitFor(() => expect(native.convertFileSrc).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(native.convertFileSrc).toHaveBeenCalled();
 
     // The Markdown pane changes the paragraph while the document pane is still being built.
     editor!.setMarkdown(opened.replace("next.", "next, typed."));
+    await vi.advanceTimersByTimeAsync(ANSWER_WAIT_MS);
     await mounting;
     const view = viewOf(editor!);
     undo(view.state, view.dispatch);

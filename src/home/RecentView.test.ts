@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { RecentView, type RecentPreferences } from "./RecentView";
+import { screen } from "@testing-library/react";
+import { RecentView, type RecentPreferences, type RecentViewCallbacks } from "./RecentView";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import type { ContentSearchCallbacks, ContentSearchSummary, RecentDataSource } from "./recentData";
 import type { RecentEntry } from "../state/types";
@@ -19,7 +20,7 @@ const entry = (path: string, favorite: boolean): RecentEntry => ({
 const ALPHA = entry("C:/n/alpha.md", true);
 const BRAVO = entry("C:/n/bravo.md", false);
 const CHARLIE = entry("C:/n/charlie.md", true);
-const CONTENT: Record<string, string> = {
+const CONTENT: Readonly<Record<string, string>> = {
   "C:/n/alpha.md": "the quick brown fox",
   "C:/n/bravo.md": "the quick red fox",
   "C:/n/charlie.md": "lazy dog",
@@ -31,9 +32,9 @@ interface MockData extends RecentDataSource {
   cancelled: string[];
 }
 
-/** A data source over CONTENT. With `hold`, a scan reports its first hit and then
+/** A data source over `content`. With `hold`, a scan reports its first hit and then
  * waits until it is cancelled, as a long scan would. */
-function makeData(entries: RecentEntry[], { hold = false } = {}): MockData {
+function makeData(entries: RecentEntry[], { hold = false, content = CONTENT } = {}): MockData {
   const cancelled: string[] = [];
   const waiting = new Map<string, () => void>();
   return {
@@ -54,7 +55,7 @@ function makeData(entries: RecentEntry[], { hold = false } = {}): MockData {
       const q = query.toLowerCase();
       let matched = 0;
       for (const e of entries) {
-        const text = CONTENT[e.path] ?? "";
+        const text = content[e.path] ?? "";
         if (!text.toLowerCase().includes(q)) continue;
         matched++;
         // Mirror the backend: report the matching line and a preview of it.
@@ -76,10 +77,11 @@ function makeData(entries: RecentEntry[], { hold = false } = {}): MockData {
 
 let summary = "";
 let opened: string[] = [];
+const views: RecentView[] = [];
 
 async function mount(data: RecentDataSource, visibleCount = 100, preferences: RecentPreferences = {
   ...DEFAULT_SETTINGS, recentFilesVisibleCount: visibleCount,
-}): Promise<RecentView> {
+}, callbacks: Partial<RecentViewCallbacks> = {}): Promise<RecentView> {
   const rv = new RecentView(data, () => preferences, {
     onOpenFile(path) { opened.push(path); },
     onSummaryChange(text) {
@@ -90,7 +92,9 @@ async function mount(data: RecentDataSource, visibleCount = 100, preferences: Re
     },
     reveal() {},
     copy() {},
+    ...callbacks,
   });
+  views.push(rv);
   document.body.appendChild(rv.element);
   await rv.refresh();
   await flush();
@@ -149,6 +153,7 @@ beforeEach(() => {
   opened = [];
 });
 afterEach(() => {
+  for (const view of views.splice(0)) view.destroy();
   vi.useRealTimers();
 });
 
@@ -165,7 +170,6 @@ describe("RecentView preferences", () => {
     await refresh;
     await search(rv, "quick");
     expect(names(rv)).toEqual(["alpha.md", "bravo.md"]);
-    rv.destroy();
   });
 
   it("ignores metadata requested while a later history refresh is loading", async () => {
@@ -184,7 +188,6 @@ describe("RecentView preferences", () => {
     resolveOld([{ path: CHARLIE.path, exists: false, sizeBytes: 0, folderExists: true }]);
     await flush();
     expect(names(rv)).toEqual(["charlie.md"]);
-    rv.destroy();
   });
 
   it("uses the saved search scope on entry and applies a changed default", async () => {
@@ -203,7 +206,6 @@ describe("RecentView preferences", () => {
     rv.applyPreferences(true);
     expect(names(rv)).toEqual([]);
     expect(progress(rv)).toBe("");
-    rv.destroy();
   });
 
   it("hides missing favorites and recent files, fills the visible limit, and retains history", async () => {
@@ -228,7 +230,6 @@ describe("RecentView preferences", () => {
     await search(rv, "quick");
     expect(names(rv)).toEqual([]);
     expect(remove).not.toHaveBeenCalled();
-    rv.destroy();
   });
 
   it("shows a missing file again after it returns and ignores an old metadata response", async () => {
@@ -247,7 +248,6 @@ describe("RecentView preferences", () => {
     await rv.refresh();
     await flush();
     expect(names(rv)).toEqual(["bravo.md"]);
-    rv.destroy();
   });
 
   it.each([false, true])("ignores an older row-open result reporting exists=%s", async (exists) => {
@@ -271,7 +271,6 @@ describe("RecentView preferences", () => {
     expect(opened).toEqual([]);
     await search(rv, "bravo");
     expect(names(rv)).toEqual(["bravo.md"]);
-    rv.destroy();
   });
 });
 
@@ -308,6 +307,22 @@ describe("RecentView — sections and stars", () => {
     expect(names(rv)).toEqual(["bravo.md", "charlie.md", "alpha.md"]);
     rv.onLeave();
     expect(names(rv)).toEqual(["bravo.md", "alpha.md", "charlie.md"]);
+  });
+
+  it("puts a star back when the history cannot save it", async () => {
+    const data = makeData(fresh(ALPHA, BRAVO, CHARLIE));
+    data.setFavorite = async () => {
+      throw new Error("history locked");
+    };
+    const rv = await mount(data);
+    star(rv, "bravo.md").click();
+    star(rv, "alpha.md").click();
+    expect(star(rv, "bravo.md").classList.contains("on")).toBe(true);
+    expect(star(rv, "alpha.md").classList.contains("on")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(star(rv, "bravo.md").classList.contains("on")).toBe(false);
+    expect(star(rv, "alpha.md").classList.contains("on")).toBe(true);
   });
 
   it("caps the history but never the favourites", async () => {
@@ -451,8 +466,7 @@ describe("RecentView — match highlighting & content snippet", () => {
 
   it("never marks the filename during a Contents search, even if the name contains the term", async () => {
     const quick = entry("C:/n/quick.md", false);
-    CONTENT[quick.path] = "a quick brown note";
-    const rv = await mount(makeData([quick]));
+    const rv = await mount(makeData([quick], { content: { [quick.path]: "a quick brown note" } }));
     clickScope(rv, "Contents");
     await search(rv, "quick");
 
@@ -469,6 +483,47 @@ describe("RecentView — match highlighting & content snippet", () => {
     await vi.advanceTimersByTimeAsync(200);
 
     expect($(rv, ".recent-name .recent-match")?.textContent).toBe("stanbul");
+  });
+});
+
+describe("RecentView missing files", () => {
+  const FOUND = "C:/n/found.md";
+
+  it.each([
+    ["Locate removes the old entry, opens the picked file and refreshes", "Locate", FOUND,
+      [`remove ${BRAVO.path}`, `open ${FOUND}`, "list"], []],
+    ["a cancelled Locate changes nothing", "Locate", null, [], ["bravo.md"]],
+    ["Remove from history removes the entry and refreshes", "Remove from history", FOUND,
+      [`remove ${BRAVO.path}`, "list"], []],
+    ["Cancel changes nothing", "Cancel", FOUND, [], ["bravo.md"]],
+  ] as const)("%s", async (_name, choice, picked, calls, listed) => {
+    const entries = fresh(BRAVO);
+    const data = makeData(entries);
+    const log: string[] = [];
+    data.stat = async (paths) => paths.map((path) => ({ path, exists: false, sizeBytes: 0, folderExists: true }));
+    const list = data.list;
+    data.list = async () => {
+      log.push("list");
+      return list();
+    };
+    data.remove = async (path) => {
+      log.push(`remove ${path}`);
+      entries.splice(entries.findIndex((e) => e.path === path), 1);
+    };
+    // Missing files stay listed only when the setting keeps them.
+    const rv = await mount(data, 100, { ...DEFAULT_SETTINGS, recentFilesKeepRemoved: true }, {
+      onOpenFile: (path) => {
+        log.push(`open ${path}`);
+      },
+      pickFile: async () => picked,
+    });
+    log.length = 0;
+
+    $<HTMLButtonElement>(rv, ".recent-row-open")!.click();
+    screen.getByRole("button", { name: choice }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log).toEqual(calls);
+    expect(names(rv)).toEqual(listed);
   });
 });
 

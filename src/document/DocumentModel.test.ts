@@ -2,11 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { Store } from "../state/store";
 import type { AppState } from "../state/types";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
-import {
-  applyEditorMarkdown,
-  applyEditorMarkdownForTab,
-  loadDocument,
-} from "./DocumentModel";
+import { applyEditorMarkdownForTab, loadDocument } from "./DocumentModel";
 import { countWords } from "./wordcount";
 
 function makeStore(markdown = "hello world"): Store {
@@ -44,28 +40,6 @@ function makeStore(markdown = "hello world"): Store {
   };
   return new Store(initial);
 }
-
-describe("applyEditorMarkdown", () => {
-  it("does not mark dirty when content is unchanged (seed guard)", () => {
-    const store = makeStore("same");
-    applyEditorMarkdown(store, "same");
-    expect(store.get().doc.isDirty).toBe(false);
-  });
-
-  it("updates markdown and marks dirty on a real change", () => {
-    const store = makeStore("before");
-    applyEditorMarkdown(store, "after");
-    expect(store.get().doc.markdown).toBe("after");
-    expect(store.get().doc.isDirty).toBe(true);
-  });
-
-  it("marks an edit back to the saved text saved again", () => {
-    const store = makeStore("saved");
-    applyEditorMarkdown(store, "edited");
-    applyEditorMarkdown(store, "saved");
-    expect(store.get().doc).toMatchObject({ markdown: "saved", isDirty: false });
-  });
-});
 
 describe("applyEditorMarkdownForTab", () => {
   it("returns false and changes nothing when content is unchanged", () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitFrontmatter, joinFrontmatter, frontmatterInnerYaml } from "./frontmatter";
+import { splitFrontmatter, joinFrontmatter } from "./frontmatter";
 
 /** Expect joining the split of `md` to give `md` back. */
 const roundTrips = (md: string) => {
@@ -77,12 +77,5 @@ describe("joinFrontmatter", () => {
   it("starts body text on its own line after a block that ends the file", () => {
     expect(joinFrontmatter({ frontmatter: "---\na: 1\n---", separator: "", body: "Hello\n" })).toBe("---\na: 1\n---\nHello\n");
     expect(joinFrontmatter({ frontmatter: "---\na: 1\n---", separator: "", body: "" })).toBe("---\na: 1\n---");
-  });
-});
-
-describe("frontmatterInnerYaml", () => {
-  it("extracts the YAML body without delimiters", () => {
-    const { frontmatter } = splitFrontmatter("---\ntitle: Hi\nn: 2\n---\nbody");
-    expect(frontmatterInnerYaml(frontmatter!)).toBe("title: Hi\nn: 2\n");
   });
 });

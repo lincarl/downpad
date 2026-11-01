@@ -47,10 +47,3 @@ export function joinFrontmatter({ frontmatter, separator, body }: FrontmatterSpl
   const newline = rest !== "" && !frontmatter.endsWith("\n") ? "\n" : "";
   return frontmatter + newline + rest;
 }
-
-/** Extract just the inner YAML (without delimiters), for editing as raw text. */
-export function frontmatterInnerYaml(frontmatter: string): string {
-  // Drop the opening `---\n` and the closing delimiter line (+ its newline).
-  const withoutOpen = frontmatter.replace(/^---[ \t]*\n/, "");
-  return withoutOpen.replace(/(---|\.\.\.)[ \t]*(\n|$)$/, "");
-}

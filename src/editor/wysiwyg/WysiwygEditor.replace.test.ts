@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
-// Replace in the document view, with the real editor. Replace moves on to the
-// next match, and an autolink's target follows its text.
+// Replace and Insert link in the document view, with the real editor. Replace
+// moves on to the next match, and an autolink's target follows its text.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Crepe } from "@milkdown/crepe";
+import { editorViewCtx } from "@milkdown/kit/core";
+import { undo, undoDepth } from "@milkdown/kit/prose/history";
+import { TextSelection } from "@milkdown/kit/prose/state";
 import { DEFAULT_SETTINGS } from "../../settings/defaults";
 import { serializerStyleFromSettings } from "../../state/types";
 import { WysiwygEditor } from "./WysiwygEditor";
@@ -78,5 +82,23 @@ describe("replace in the document view", () => {
         "Read [the sample guide](https://example.com/guide) or [https://sample.com](https://mirror.org).\n\n" +
         "Open [sample.md](example.md), [#sample](#example) or [sample.com](http://example.com).\n",
     );
+  });
+});
+
+describe("Insert link in the document view", () => {
+  it("links the selected text in one undo step, and does nothing without a selection", { timeout: 60_000 }, async () => {
+    const editor = await open("See docs here.\n");
+    const view = (editor as unknown as { crepe: Crepe }).crepe.editor.ctx.get(editorViewCtx);
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 5)));
+    expect(editor.insertLink("https://example.com")).toBe(false);
+    expect(editor.getMarkdown()).toBe("See docs here.\n");
+
+    // Select "docs".
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 5, 9)));
+    expect(editor.insertLink("https://example.com")).toBe(true);
+    expect(editor.getMarkdown()).toBe("See [docs](https://example.com) here.\n");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor.getMarkdown()).toBe("See docs here.\n");
+    expect(undoDepth(view.state)).toBe(0);
   });
 });

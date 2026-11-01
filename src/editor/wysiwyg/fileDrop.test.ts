@@ -35,6 +35,10 @@ const viewOf = (opened: WysiwygEditor) =>
 /** A box on the page, from `left` to 600px. */
 const box = (top: number, bottom: number, left = 0) => DOMRect.fromRect({ x: left, y: top, width: 600 - left, height: bottom - top });
 
+/** Wait for the next animation frame, where Crepe's list item views put back
+ *  the selection they saw when they were drawn. */
+const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
 /** Mount the document editor on `markdown`, wait past its first frame, and
  *  give the editor a box from 80px to 280px down the page. */
 async function open(markdown: string): Promise<WysiwygEditor> {
@@ -46,7 +50,7 @@ async function open(markdown: string): Promise<WysiwygEditor> {
     getFilePath: () => null,
     requestSave: async () => false,
   });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await nextFrame();
   vi.spyOn(viewOf(editor).dom, "getBoundingClientRect").mockReturnValue(box(80, 280));
   return editor;
 }
@@ -94,7 +98,7 @@ function deleteAround(opened: WysiwygEditor, dir: -1 | 1): void {
 
 /** Wait for the editor's node views to settle after an edit, as they have
  *  before the next key. Some of them update the document then. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+const settle = nextFrame;
 
 const IMAGE = "![](attachments/pic.png)";
 const IMAGE_B = "![](attachments/pic-b.png)";

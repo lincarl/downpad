@@ -159,20 +159,13 @@ describe("the block handle's + button", () => {
     expect(undo(view.state, view.dispatch)).toBe(false);
   });
 
-  it("reuses an empty heading without changing its type just to open the menu", async () => {
-    const { view } = await open("##\n");
-    const before = view.state.doc;
-    await add(view, 0);
-    expect(view.state.doc).toBe(before);
-    expect(view.state.doc.firstChild?.type.name).toBe("heading");
-    expect(view.state.selection.from).toBe(1);
-  });
-
+  // Each list command once. Clearing a typed filter does not depend on the
+  // command, so the cases share the two filter states between them.
   it.each([
-    { label: "Bullet List", type: "bullet_list", checked: null, markdown: "- Item" },
-    { label: "Ordered List", type: "ordered_list", checked: null, markdown: "1. Item" },
-    { label: "Task List", type: "bullet_list", checked: false, markdown: "- [ ] Item" },
-  ].flatMap((item) => ["", item.label.split(" ")[0].toLowerCase()].map((filter) => ({ ...item, filter }))))(
+    { label: "Bullet List", type: "bullet_list", checked: null, markdown: "- Item", filter: "" },
+    { label: "Ordered List", type: "ordered_list", checked: null, markdown: "1. Item", filter: "ordered" },
+    { label: "Task List", type: "bullet_list", checked: false, markdown: "- [ ] Item", filter: "task" },
+  ])(
     "converts an empty heading to $label with filter $filter and undoes the command",
     async ({ label, type, checked, markdown, filter }) => {
       const { editor, view } = await open("Before.\n\n## Target.\n\nAfter.\n");

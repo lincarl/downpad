@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,7 +26,7 @@ test.beforeEach(async () => {
   await writeFile(path.join(userData, "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\n");
 });
 
-test.afterEach(async () => {
+test.afterEach(async ({}, testInfo) => {
   if (app) {
     // Every test uses a disposable profile. Approve discarding its unsaved
     // edits so cleanup cannot wait on a native confirmation dialog.
@@ -36,6 +36,12 @@ test.afterEach(async () => {
     await app.close();
   }
   app = undefined;
+  // Keep a failed test's profile and files for inspection. A file that
+  // Windows still holds open must not fail a passed test, so removal retries
+  // and then gives up quietly.
+  if (testInfo.status === testInfo.expectedStatus) {
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
+  }
 });
 
 /** Start the desktop app, with `file` as its launch argument, and resolve once
@@ -148,7 +154,7 @@ test("the toolbar copies the whole document as Markdown or formatted text to the
   await expect(source).toContainText("A **bold** paragraph.");
 });
 
-test("launching a Markdown file renders formatting and relative images in an isolated renderer", async () => {
+test("launching a Markdown file renders formatting and relative images in an isolated renderer that keeps its page, and whose menu copies and prints it", async () => {
   const file = path.join(directory, "launch.md");
   await writeFile(path.join(directory, "image.png"), onePixelPng);
   await writeFile(file, "# Electron Markdown\n\nA **formatted** document.\n\n| Feature | Result |\n| --- | --- |\n| Open | Works |\n\n![Local image](image.png)\n");
@@ -177,32 +183,57 @@ test("launching a Markdown file renders formatting and relative images in an iso
   expect(preferences.contextIsolation).toBe(true);
   expect(preferences.nodeIntegration).toBe(false);
   expect(preferences.sandbox).toBe(true);
+  expect(preferences.webSecurity).toBe(true);
   expect(await app!.evaluate(({ app }) => app.commandLine.hasSwitch("no-sandbox"))).toBe(false);
-  await page.screenshot({ path: path.join(directory, "electron-open.png") });
+
+  // The same menu prints the document.
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Print…", exact: true }).click();
+  await expect(page.locator(".print-workspace")).toBeVisible();
+  await expect(page.locator(".print-page").first()).toBeVisible();
+
+  // A new window or a navigation to the web goes to the browser instead,
+  // and the window keeps Downpad's page. Playwright waits for a navigation
+  // that never finishes, so the main process checks the page from here on.
+  await app!.evaluate(({ shell }) => {
+    const opened: string[] = [];
+    Reflect.set(globalThis, "openedExternally", opened);
+    shell.openExternal = async (url) => { opened.push(url); };
+  });
+  const pageUrl = page.url();
+  await page.evaluate(() => {
+    window.open("https://example.com/new-window");
+    location.href = "https://example.com/navigation";
+  });
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "openedExternally"))).toEqual([
+    "https://example.com/new-window",
+    "https://example.com/navigation",
+  ]);
+  expect(await app!.evaluate(async ({ BrowserWindow }) => {
+    const windows = BrowserWindow.getAllWindows();
+    const contents = windows[0]!.webContents;
+    return {
+      windows: windows.length,
+      url: contents.getURL(),
+      heading: await contents.executeJavaScript("document.querySelector('.milkdown .ProseMirror h1')?.textContent"),
+    };
+  })).toEqual({ windows: 1, url: pageUrl, heading: "Electron Markdown" });
 });
 
-test("a missing local image shows its placeholder without handler errors or failed loads in print", async () => {
-  const file = path.join(directory, "missing-image.md");
-  await writeFile(file, "# Missing image\n\n![Gone](missing.png)\n");
-  await launch();
-  const errors: string[] = [];
-  app!.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-  await chooseOpen(file);
-  await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
-  // The printed copy must not look the path up next to Downpad's own page.
-  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-  await page.getByRole("button", { name: "Print", exact: true }).click();
-  const printed = page.locator(".print-page img");
-  await expect(printed).toHaveCount(1);
-  await expect.poll(() => printed.evaluateAll((images) => images.every((image) => image instanceof HTMLImageElement && image.complete))).toBe(true);
-  expect(errors).toEqual([]);
-});
-
-test("the renderer's Content Security Policy allows Downpad's content and blocks inline scripts and eval", async () => {
+test("the renderer's Content Security Policy allows Downpad's content and blocks inline scripts, eval, and web scripts, connections and frames", async () => {
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64");
   // Copy image converts a GIF to PNG through a blob: URL.
   const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-  const server = createServer((_request, response) => response.writeHead(200, { "Content-Type": "image/png" }).end(png));
+  // The server answers the web image, and would run a script, answer a
+  // fetch and show a frame if the policy let them through.
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? "");
+    if (request.url === "/remote.js") response.writeHead(200, { "Content-Type": "text/javascript" }).end("document.body.dataset.remoteScript = 'ran';");
+    else if (request.url === "/remote.html") response.writeHead(200, { "Content-Type": "text/html" }).end("<p>Remote frame</p>");
+    else if (request.url === "/remote.txt") response.writeHead(200, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" }).end("fetched");
+    else response.writeHead(200, { "Content-Type": "image/png" }).end(png);
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const address = server.address();
@@ -283,24 +314,89 @@ test("the renderer's Content Security Policy allows Downpad's content and blocks
         resolve({ inlineScript: document.body.dataset.inlineScript ?? "blocked", evaluated });
       });
     }))).toEqual({ inlineScript: "blocked", evaluated: false });
+
+    // A script, a connection and a frame from the web are all blocked
+    // before any request leaves the renderer.
+    const web = `http://127.0.0.1:${address.port}`;
+    const fetched = await page.evaluate((origin) => {
+      const script = document.createElement("script");
+      script.src = `${origin}/remote.js`;
+      document.head.append(script);
+      const frame = document.createElement("iframe");
+      frame.src = `${origin}/remote.html`;
+      document.body.append(frame);
+      return fetch(`${origin}/remote.txt`).then((response) => response.text(), () => "blocked");
+    }, web);
+    expect(fetched).toBe("blocked");
+    // Chromium reports only the origin of a blocked frame.
+    await expect.poll(() => log.evaluate(({ violations }) => [...violations].sort())).toEqual([
+      `connect-src ${web}/remote.txt`,
+      `frame-src ${web}/`,
+      "script-src eval",
+      `script-src-elem ${web}/remote.js`,
+      "script-src-elem inline",
+    ]);
+    expect(await page.evaluate(() => document.body.dataset.remoteScript ?? "blocked")).toBe("blocked");
+    // Only the web image reached the server.
+    expect([...new Set(requests)]).toEqual(["/web.png"]);
   } finally {
     server.close();
   }
 });
 
-test("opening a file with local images makes no failed loads", async () => {
+test("opening and printing a file with local and missing images makes no failed loads or handler errors", async () => {
   const file = path.join(directory, "images.md");
   await writeFile(path.join(directory, "image.png"), onePixelPng);
   await writeFile(file, "# Images\n\n![Block](image.png)\n\n![Missing](missing.png)\n\nInline ![inline](image.png) and ![gone](gone.png).\n");
   await launch();
+  // Errors from the main process, such as a failed image lookup, and from
+  // the page, such as a failed load.
   const errors: string[] = [];
+  app!.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   await chooseOpen(file);
   await expect(page.locator(".milkdown-image-block.md-image-missing")).toHaveAttribute("data-md-path", "missing.png");
   const loaded = () => page.locator(".ProseMirror img").evaluateAll((images) => images.filter((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0).length);
   await expect.poll(loaded).toBe(2);
-  // Each image starts at its own URL, never at its path next to Downpad's page.
+  // Each image starts at its own URL, never at its path next to Downpad's
+  // page, and so does the printed copy.
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  const printed = page.locator(".print-page img");
+  await expect(printed).toHaveCount(4);
+  await expect.poll(() => printed.evaluateAll((images) => images.every((image) => image instanceof HTMLImageElement && image.complete))).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test("Pele diagrams follow the document theme and print in light colors", async () => {
+  const file = path.join(directory, "diagram.md");
+  await writeFile(file, "```mermaid\nflowchart LR\naccTitle: Publishing\nDraft --> Review --> Published\n```\n");
+  await launch(file);
+  const drawing = page.locator(".editor-pane-wysiwyg svg.pele");
+  await expect(drawing).toBeVisible();
+  await expect(drawing).toHaveAccessibleName("Publishing");
+  /** The fill of the diagram's first label and the color of the text around
+   *  it, which the document theme or the printed page sets. */
+  const colors = (diagram: Locator, surface: string) => diagram.locator(".pele-label").first().evaluate((label, selector) => ({
+    label: getComputedStyle(label).fill,
+    text: getComputedStyle(label.closest(selector)!).color,
+  }), surface);
+  const light = await colors(drawing, ".milkdown");
+  expect(light.label).toBe(light.text);
+  const markup = await drawing.evaluate((element) => element.outerHTML);
+  await page.getByRole("button", { name: "Switch to dark document theme", exact: true }).click();
+  await expect.poll(async () => (await colors(drawing, ".milkdown")).text).not.toBe(light.text);
+  const dark = await colors(drawing, ".milkdown");
+  expect(dark.label).toBe(dark.text);
+  // The theme changes the colors without drawing the diagram again.
+  expect(await drawing.evaluate((element) => element.outerHTML)).toBe(markup);
+
+  // The printed page has its own light colors, whatever the document theme.
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  const printed = page.locator(".print-page svg.pele");
+  await expect(printed).toBeVisible();
+  const ink = await colors(printed, ".print-doc");
+  expect(ink.label).toBe(ink.text);
+  expect(ink.label).not.toBe(dark.label);
 });
 
 test("a missing inline image shows its path in a chip, which a click locates", async () => {
@@ -1725,6 +1821,75 @@ test("a click or Shift+click beside the frontmatter table keeps editor focus, wh
   await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: Survey\n---\n\nFirst line.b\n\nLast line.a\n");
 });
 
+test("frontmatter starts collapsed and keyboard toggles keep their state across views and tabs without editing YAML", async () => {
+  const frontmatter = ["---", "title: Welcome", "tags: [demo, markdown]", "metadata:", "  category: demo", "---"];
+  const file = path.join(directory, "disclosure.md");
+  const plain = path.join(directory, "disclosure-plain.md");
+  await writeFile(file, [...frontmatter, "", "# Disclosure", ""].join("\n"));
+  await writeFile(plain, "Plain document.\n");
+  await launch(file);
+  await chooseOpen(plain);
+  const fileTab = page.getByRole("tab", { name: "disclosure.md", exact: true });
+  await fileTab.click();
+  const livePane = page.locator(".editor-pane-wysiwyg:not([hidden])");
+  const toggle = livePane.locator(".frontmatter-toggle");
+  const content = livePane.locator(".frontmatter-content");
+  const notDirty = () => expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
+  const showView = (name: "Document" | "Split" | "Markdown") => page.getByRole("radio", { name, exact: true }).click();
+  /** Show the Markdown view and check that it has the YAML exactly as it was. */
+  const expectUnchangedYaml = async () => {
+    await showView("Markdown");
+    const source = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
+    await expect(source).toBeVisible();
+    await source.press("ControlOrMeta+Home");
+    await expect.poll(() => source.locator(".cm-line").evaluateAll((lines) => lines.slice(0, 6).map((line) => line.textContent))).toEqual(frontmatter);
+    await notDirty();
+  };
+  await expect(livePane.locator("h1")).toHaveText("Disclosure");
+  await expect(toggle).toHaveAccessibleName(/^Frontmatter \d+ fields$/);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAttribute("aria-controls", /\S+/);
+  await expect(content).toHaveAttribute("id", (await toggle.getAttribute("aria-controls"))!);
+  await expect(content).toHaveAttribute("hidden", "");
+  await expect(content).toBeHidden();
+  await notDirty();
+
+  // Enter opens the button and Space closes it. Both states survive the
+  // retained panes, including a visit to a tab without frontmatter.
+  for (const expanded of [true, false]) {
+    await toggle.focus();
+    await page.keyboard.press(expanded ? "Enter" : "Space");
+    await expect(toggle).toBeFocused();
+    await expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
+    if (expanded) {
+      // The open table has no height limit or scroll area of its own.
+      await expect(content).toBeVisible();
+      await expect(content).not.toHaveAttribute("hidden");
+      await expect(content).toHaveCSS("max-height", "none");
+      await expect(content).toHaveCSS("overflow-y", "visible");
+      await expect(livePane.locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) }).locator(".frontmatter-value-edit")).toHaveText("Welcome");
+    } else {
+      await expect(content).toHaveAttribute("hidden", "");
+      await expect(content).toBeHidden();
+    }
+
+    await expectUnchangedYaml();
+    await showView("Split");
+    await expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
+    await showView("Document");
+    await expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
+
+    await page.getByRole("tab", { name: "disclosure-plain.md", exact: true }).click();
+    await expect(livePane.locator(".ProseMirror p").first()).toHaveText("Plain document.");
+    await expect(toggle).toHaveCount(0);
+    await fileTab.click();
+    await expect(livePane.locator("h1")).toHaveText("Disclosure");
+    await expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
+    await notDirty();
+  }
+  await expectUnchangedYaml();
+});
+
 /** The point `fraction` of the way across the character at `index` of the
  *  first text in `element`. */
 function pointInText(element: Locator, index: number, fraction: number): Promise<{ x: number; y: number }> {
@@ -1772,6 +1937,40 @@ test("a double-click selects the text of a read-only key in the frontmatter tabl
   const point = await pointInText(key, 3, 0.5);
   await page.mouse.dblclick(point.x, point.y);
   await expect.poll(selectedText).toBe("complex");
+});
+
+test("a narrow Split pane keeps a readable text column and room for the block handle", async () => {
+  const file = path.join(directory, "narrow-split.md");
+  await writeFile(file, "# Narrow split\n\nFirst paragraph of the narrow split.\n");
+  await launch(file);
+  const resize = (width: number) => app!.evaluate(({ BrowserWindow }, contentWidth) => BrowserWindow.getAllWindows()[0]!.setContentSize(contentWidth, 720), width);
+  // Crepe pads the document 120px a side, which left the Split pane of an 800px
+  // window a text column 100px wide. A 1000px window keeps that padding.
+  const editor = page.locator(".editor-pane-wysiwyg .ProseMirror");
+  await resize(1000);
+  await expect(editor).toHaveCSS("padding-left", "120px");
+  await expect(editor).toHaveCSS("padding-right", "120px");
+
+  await resize(800);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const textColumn = () => editor.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  });
+  await expect.poll(textColumn).toBeGreaterThanOrEqual(220);
+
+  // The block handle shows left of the text and stays inside the pane.
+  const paragraph = editor.locator(":scope > p").first();
+  await paragraph.hover({ position: { x: 4, y: 4 } });
+  const handle = page.locator(".editor-pane-wysiwyg .milkdown-block-handle");
+  await expect(handle).toHaveAttribute("data-show", "true");
+  const pane = (await page.locator(".editor-pane-wysiwyg").boundingBox())!;
+  const text = (await paragraph.boundingBox())!;
+  // The handle slides into place, so wait for it to settle.
+  await expect.poll(async () => {
+    const box = await handle.boundingBox();
+    return box !== null && box.x >= pane.x && box.x + box.width <= text.x;
+  }).toBe(true);
 });
 
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
@@ -2268,29 +2467,27 @@ async function clickInShown(text: string, index: number): Promise<void> {
 }
 
 /** Last blocks of a document by name, as Markdown. The formula whose code is
- *  hidden shows its preview alone. */
+ *  hidden shows its preview alone. After any last block that is not a
+ *  paragraph or a heading, Crepe keeps the same empty line last, so a click
+ *  below it lands at the same place. paddingPresses.test.ts checks the end
+ *  after each of the other kinds, such as a list, a table or a code block.
+ *  The split's pane changes only where the document sits, so it checks a
+ *  line of text and a block that takes no caret. */
 const LAST_BLOCKS = {
   "paragraph": "Last line.",
   "heading": "## Last heading",
-  "list": "- one\n- two",
-  "task list": "- [ ] one\n- [ ] two",
-  "quote": "> Quote text.",
-  "table": "| A | B |\n| --- | --- |\n| x1 | y1 |",
-  "code block": "```js\nconst a = 1;\n```",
-  "math block": "$$\nE = mc^2\n$$",
-  "Mermaid diagram": "```mermaid\ngraph TD; A-->B;\n```",
   "image": "![Bar](bar.svg)",
-  "rule": "---",
   "formula whose code is hidden": "$$\nE = mc^2\n$$",
 };
 
 for (const layout of ["Document", "Split"] as const) {
   test(`a click below the end of the document puts the caret at the end after any last block, in the ${layout === "Document" ? "Document view" : "split's document pane"}`, async () => {
-    test.setTimeout(150_000);
     await writeFile(path.join(directory, "bar.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="16"><rect width="48" height="16" fill="#c33"/></svg>');
     // Each document starts with its own text, so a check waits for that
     // document and never passes on the one shown before.
-    const documents = Object.entries(LAST_BLOCKS).map(([name, last], index) => ({ name, last, intro: `Intro ${index}.`, file: path.join(directory, `below-end-${index}.md`) }));
+    const documents = Object.entries(LAST_BLOCKS)
+      .filter(([name]) => layout === "Document" || name === "paragraph" || name === "image")
+      .map(([name, last], index) => ({ name, last, intro: `Intro ${index}.`, file: path.join(directory, `below-end-${index}.md`) }));
     for (const { file, intro, last } of documents) await writeFile(file, `${intro}\n\n${last}\n`);
     await launch(documents[0]!.file);
     if (layout === "Split") await page.getByRole("radio", { name: "Split", exact: true }).click();
@@ -2298,8 +2495,7 @@ for (const layout of ["Document", "Split"] as const) {
       if (index > 0) await chooseOpen(file);
       const view = shownDocument();
       await expect(view.locator("p", { hasText: intro })).toBeVisible();
-      if (name === "Mermaid diagram") await expect(view.locator(".mermaid-preview svg")).toBeVisible();
-      if (name.includes("formula") || name === "math block") await expect(view.locator(".katex")).toBeVisible();
+      if (name.includes("formula")) await expect(view.locator(".katex")).toBeVisible();
       if (name === "image") await expect.poll(() => view.locator(".milkdown-image-block img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth)).toBe(48);
       if (name.includes("hidden")) {
         await view.locator(".milkdown-code-block .preview-toggle-button").click();
@@ -2911,10 +3107,7 @@ test("text typed, composed or pasted right after a link goes after it", async ()
   await clickOn("three", -1, 0.25);
   await page.keyboard.press("ArrowRight");
   await page.keyboard.type("c");
-  // Crepe's list item views put the selection back a frame after they are
-  // drawn, which clears the marks set for the caret.
   await endOf("item ");
-  await page.waitForTimeout(300);
   await page.keyboard.type("d");
   await endOf("in ");
   await page.keyboard.type("e");
@@ -3068,21 +3261,7 @@ test("plain text dropped on a link does not take the link", async () => {
   );
 });
 
-test("Left at a link's end where text follows types into the link", async () => {
-  const file = path.join(directory, "link-side.md");
-  await writeFile(file, "A [link](https://example.com/b)s and more.\n");
-  await launch(file);
-  // Left first moves to the link's end, then keeps the caret there on the
-  // link's side.
-  await clickOn("s and more.", 0, 0.75);
-  await page.keyboard.press("ArrowLeft");
-  await page.keyboard.press("ArrowLeft");
-  await page.keyboard.type("xyz");
-  await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("A [linkxyz](https://example.com/b)s and more.\n");
-});
-
-test("the caret at a link's end is drawn after its URL, and before it on the link's side", async () => {
+test("the caret at a link's end is drawn after its URL, and before it on the link's side, where typed text goes into the link", async () => {
   const file = path.join(directory, "link-caret.md");
   await writeFile(file, "Intro [link](https://example.com/a)\n\nA [link](https://example.com/b)s and more.\n\nTwo [one](https://example.com/1)[two](https://example.com/2) end\n");
   await launch(file);
@@ -3117,6 +3296,8 @@ test("the caret at a link's end is drawn after its URL, and before it on the lin
     const { caret, left } = await measure(1);
     return caret - left;
   }).toBeLessThanOrEqual(0);
+  // On the link's side, typed text goes into the link.
+  await page.keyboard.type("xyz");
   // Between two links, Right keeps the caret in place on the second link's
   // side, where typed text joins that link after the first link's URL.
   await clickOn("one", -1, 0.75);
@@ -3128,6 +3309,10 @@ test("the caret at a link's end is drawn after its URL, and before it on the lin
   await expect(page.locator(".prosemirror-virtual-cursor")).toHaveClass(/prosemirror-virtual-cursor-right/);
   const { caret, right } = await measure(2);
   expect(Math.abs(caret - right)).toBeLessThanOrEqual(2);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(
+    "Intro [link](https://example.com/a)x\n\nA [linkxyz](https://example.com/b)s and more.\n\nTwo [one](https://example.com/1)[two](https://example.com/2) end\n",
+  );
 });
 
 test("a click on the URL shown after a link puts the caret at the link's end, and Ctrl or Cmd+click opens that link", async () => {
@@ -3493,7 +3678,7 @@ function describeElement(element: Element): string {
   return parts.join(" < ");
 }
 
-test("the document view names every image and control it shows, and hides none that Tab reaches", async () => {
+test("the document view names every image and control it shows, hides none that Tab reaches, and tells screen readers which slash menu block is highlighted", async () => {
   const file = path.join(directory, "names.md");
   await writeFile(path.join(directory, "image.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=", "base64"));
   await writeFile(file, [
@@ -3539,6 +3724,14 @@ test("the document view names every image and control it shows, and hides none t
     });
     for (const element of focusable.result.value as string[]) failures.add(`${state}: focusable inside aria-hidden ${element}`);
   };
+  /** The option Chromium reports as the document editor's active descendant. */
+  const activeOption = async (): Promise<string | null> => {
+    const { nodes } = await session.send("Accessibility.getFullAXTree");
+    const textbox = nodes.find((node) => node.role?.value === "textbox" && node.name?.value === "Document editor");
+    const target = textbox?.properties?.find((property) => property.name === "activedescendant")?.value.relatedNodes?.[0];
+    const option = target && nodes.find((node) => node.backendDOMNodeId === target.backendDOMNodeId);
+    return option ? `${option.role?.value} ${option.name?.value}` : null;
+  };
   // Crepe draws a code block, and its diagram, once the block is on screen.
   await page.locator(".milkdown-code-block").last().scrollIntoViewIfNeeded();
   await expect(page.locator(".mermaid-preview svg")).toBeVisible();
@@ -3583,6 +3776,20 @@ test("the document view names every image and control it shows, and hides none t
   await page.keyboard.type("/");
   await expect(page.locator(".milkdown-slash-menu")).toHaveAttribute("data-show", "true");
   await check("slash menu");
+  // Focus stays in the document while the arrow keys move the menu's
+  // highlight, which Chromium reports as the editor's active descendant.
+  await expect(page.getByRole("listbox", { name: "Insert block" })).toBeVisible();
+  await expect.poll(activeOption).toBe("option Text");
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(activeOption).toBe("option Heading 1");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox", { name: "Insert block" })).toBeHidden();
+  await expect.poll(activeOption).toBeNull();
+  await expect(editor).not.toHaveAttribute("aria-controls");
+  // Escape leaves the slash typed, so type it again to open the menu.
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("/");
+  await expect(page.locator(".milkdown-slash-menu")).toHaveAttribute("data-show", "true");
   await page.keyboard.type("image");
   await expect(page.locator(".milkdown-slash-menu li.hover")).toHaveText("Image");
   await page.keyboard.press("Enter");
@@ -3666,34 +3873,6 @@ test("a toolbar tooltip stays open while the pointer is over it", async () => {
   await expect(tooltip).toBeVisible();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height + 150, { steps: 8 });
   await expect(tooltip).toBeHidden();
-});
-
-test("the slash menu tells screen readers which block is highlighted", async () => {
-  const file = path.join(directory, "slash.md");
-  await writeFile(file, "First line.\n");
-  await launch(file);
-  const cdp = await page.context().newCDPSession(page);
-  /** The option Chromium reports as the document editor's active descendant. */
-  const activeOption = async (): Promise<string | null> => {
-    const { nodes } = await cdp.send("Accessibility.getFullAXTree");
-    const editor = nodes.find((node) => node.role?.value === "textbox" && node.name?.value === "Document editor");
-    const target = editor?.properties?.find((property) => property.name === "activedescendant")?.value.relatedNodes?.[0];
-    const option = target && nodes.find((node) => node.backendDOMNodeId === target.backendDOMNodeId);
-    return option ? `${option.role?.value} ${option.name?.value}` : null;
-  };
-  await page.locator(".milkdown .ProseMirror p").first().click();
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
-  // Focus stays in the document while the arrow keys move the menu's highlight.
-  await page.keyboard.type("/");
-  await expect(page.getByRole("listbox", { name: "Insert block" })).toBeVisible();
-  await expect.poll(activeOption).toBe("option Text");
-  await page.keyboard.press("ArrowDown");
-  await expect.poll(activeOption).toBe("option Heading 1");
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("listbox", { name: "Insert block" })).toBeHidden();
-  await expect.poll(activeOption).toBeNull();
-  await expect(page.locator(".milkdown > .ProseMirror")).not.toHaveAttribute("aria-controls");
 });
 
 test("native Open, edit, Save, and external file reload use actual files", async () => {
@@ -3974,13 +4153,15 @@ test("launching with a file builds its document editor once", async () => {
   await writeFile(launched, "# Launched file\n");
   await writeFile(later, "# Later file\n");
   await launch();
-  // As in the reload test below, settle the first renderer's file listener.
+  // Settle the first renderer's file listener, so main knows of it before
+  // the reload.
   await page.evaluate(async () => {
     window.downpadDesktop!.listen("open-file-requested", () => {});
     await window.downpadDesktop!.invoke("settings_path");
   });
-  // Count document editors from the start of a reloaded renderer, which reads
-  // the first queued file as its launch argument.
+  // Count document editors from the start of a reloaded renderer. Main queues
+  // the files requested while the reload starts. The new renderer reads the
+  // first as its launch argument and gets the second once it listens.
   const session = await page.context().newCDPSession(page);
   await session.send("Page.enable");
   await session.send("Page.addScriptToEvaluateOnNewDocument", {
@@ -3999,6 +4180,8 @@ test("launching with a file builds its document editor once", async () => {
   // The second file arrives only after startup has finished, so any second
   // build of the launched file has happened by the time it shows.
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Later file");
+  await expect(page.getByRole("tab", { name: "launched.md", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "later.md", exact: true })).toBeVisible();
   // One build for each file.
   expect(await page.evaluate(() => Reflect.get(window, "editorBuilds"))).toBe(2);
 });
@@ -4180,40 +4363,48 @@ test("the first-run welcome document opens as saved with its exact text", async 
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
-test("an undo right after Save marks the document unsaved again", async () => {
+test("undoing every edit marks the document saved again, and an undo right after Save marks it unsaved", async () => {
   const file = path.join(directory, "undo.md");
   // No heading: the heading-id plugin's first update would hide the case.
   await writeFile(file, "First line.\n");
   await launch(file);
   const paragraph = page.locator(".milkdown .ProseMirror p").first();
+  const icon = page.getByRole("tab", { name: "undo.md", exact: true }).locator(".tab-file-icon");
+  const dirtyIcon = page.getByRole("tab", { name: "undo.md", exact: true }).locator(".tab-file-icon.is-dirty");
+  const savedColor = await icon.evaluate((element) => getComputedStyle(element).color);
   await paragraph.click();
   await page.keyboard.press("End");
+  await page.keyboard.type(" Typed.");
+  await expect(page).toHaveTitle("undo.md — Downpad");
+  await expect(dirtyIcon).toBeVisible();
+  // The icon of an unsaved document is drawn in the danger color.
+  const danger = await icon.evaluate((element) => {
+    const sample = document.createElement("span");
+    sample.style.color = "var(--ink-danger)";
+    element.parentElement!.append(sample);
+    const color = getComputedStyle(sample).color;
+    sample.remove();
+    return color;
+  });
+  expect(danger).not.toBe(savedColor);
+  await expect(icon).toHaveCSS("color", danger);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(paragraph).toHaveText("First line.");
+  await expect(page).toHaveTitle("undo.md — Downpad");
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
+  await expect(icon).toHaveCSS("color", savedColor);
+
   await page.keyboard.type(" Undone.");
   await page.keyboard.press("ControlOrMeta+s");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
   // The file has the typed words but the document no longer does.
   await expect(page).toHaveTitle("undo.md — Downpad");
-  await expect(page.getByRole("tab", { name: "undo.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
+  await expect(dirtyIcon).toBeVisible();
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Undone.\n");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
   await expect(page).toHaveTitle("undo.md — Downpad");
-  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
-});
-
-test("undoing every edit marks the document saved again", async () => {
-  const file = path.join(directory, "undo-all.md");
-  await writeFile(file, "First line.\n");
-  await launch(file);
-  const paragraph = page.locator(".milkdown .ProseMirror p").first();
-  await paragraph.click();
-  await page.keyboard.press("End");
-  await page.keyboard.type(" Typed.");
-  await expect(page).toHaveTitle("undo-all.md — Downpad");
-  await expect(page.getByRole("tab", { name: "undo-all.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+z");
-  await expect(paragraph).toHaveText("First line.");
-  await expect(page).toHaveTitle("undo-all.md — Downpad");
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
@@ -4256,14 +4447,15 @@ test("closing a tab right after typing asks before discarding the edit", async (
   await expect(paragraph).toHaveText("First line. Not lost.");
 });
 
-/** Answer close prompts by label and retain their options for assertions. */
+/** Answer close prompts by label and keep their message and options in
+ *  `closePrompts` for assertions. */
 async function chooseCloseAction(choice: "Save" | "Cancel" | "Discard"): Promise<void> {
   await app!.evaluate(({ dialog }, action) => {
-    const prompts: Array<{ buttons: string[]; defaultId?: number; cancelId?: number }> = [];
+    const prompts: Array<{ message: string; buttons: string[]; defaultId?: number; cancelId?: number }> = [];
     Reflect.set(globalThis, "closePrompts", prompts);
     dialog.showMessageBox = async (...args: unknown[]) => {
-      const options = args.at(-1) as { buttons: string[]; defaultId?: number; cancelId?: number };
-      prompts.push({ buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId });
+      const options = args.at(-1) as { message: string; buttons: string[]; defaultId?: number; cancelId?: number };
+      prompts.push({ message: options.message, buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId });
       return { response: options.buttons.indexOf(action), checkboxChecked: false };
     };
   }, choice);
@@ -4331,7 +4523,7 @@ test("Save on close writes an inactive tab before removing it", async () => {
   await expect(page.getByRole("tab", { name: /keep-active\.md/ })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror p").first()).toHaveText("Second document. Unsaved.");
   expect(await app!.evaluate(() => Reflect.get(globalThis, "closePrompts"))).toEqual([
-    { buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
+    { message: '"save-inactive.md" has unsaved changes. Save before closing?', buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
   ]);
 });
 
@@ -4394,15 +4586,15 @@ test("temporarily unavailable documents reopen after later restarts in their sav
   app = undefined;
   await unlink(unavailable);
 
-  for (let restart = 0; restart < 2; restart++) {
-    await launch();
-    await expect(page.locator(".tab-label")).toHaveText(["available-first.md", "available-last.md"]);
-    await app!.close();
-    app = undefined;
-    expect(JSON.parse(await readFile(path.join(directory, "profile", "session.json"), "utf8"))).toEqual({
-      files: [first, unavailable, last], active: unavailable,
-    });
-  }
+  // A restart while the file is unavailable saves the same session again, so
+  // every later restart starts from it.
+  await launch();
+  await expect(page.locator(".tab-label")).toHaveText(["available-first.md", "available-last.md"]);
+  await app!.close();
+  app = undefined;
+  expect(JSON.parse(await readFile(path.join(directory, "profile", "session.json"), "utf8"))).toEqual({
+    files: [first, unavailable, last], active: unavailable,
+  });
 
   await writeFile(unavailable, "# Available again\n");
   await launch();
@@ -4429,6 +4621,55 @@ test("Save on closing all tabs writes both named and untitled documents", async 
   expect(await readFile(named, "utf8")).toBe("Named document. Saved.\n");
   expect(await readFile(untitled, "utf8")).toBe("Untitled document.\n");
   expect(await app!.evaluate(() => (Reflect.get(globalThis, "closePrompts") as unknown[]).length)).toBe(1);
+});
+
+test("Discard closes an unsaved tab or every tab without saving, and Cancel on Close all tabs keeps them as typed", async () => {
+  const names = ["discard-first.md", "discard-middle.md", "discard-last.md"];
+  const files = names.map((name) => path.join(directory, name));
+  for (const [index, file] of files.entries()) await writeFile(file, `Saved ${index + 1}.\n`);
+  await launch(files[0]);
+  await chooseOpen(files[1]!);
+  await chooseOpen(files[2]!);
+  const shown = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  const tab = (name: string) => page.getByRole("tab", { name: new RegExp(name.replace(".", "\\.")) });
+  for (const [index, name] of names.entries()) {
+    await tab(name).click();
+    await expect(shown).toHaveText(`Saved ${index + 1}.`);
+    await typeAtEnd(shown, " Unsaved.");
+  }
+  const prompts = () => app!.evaluate(() => Reflect.get(globalThis, "closePrompts"));
+  const prompt = (message: string) => ({ message, buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 });
+  const saved = () => Promise.all(files.map((file) => readFile(file, "utf8")));
+
+  // Discard on the active tab closes it and shows its right neighbour.
+  await tab("discard-middle.md").click();
+  await expect(shown).toHaveText("Saved 2. Unsaved.");
+  await chooseCloseAction("Discard");
+  await tab("discard-middle.md").locator(".tab-close").click();
+  await expect(page.locator(".tab-label")).toHaveText(["discard-first.md", "discard-last.md"]);
+  await expect(tab("discard-last.md")).toHaveAttribute("aria-selected", "true");
+  await expect(shown).toHaveText("Saved 3. Unsaved.");
+  expect(await prompts()).toEqual([prompt('"discard-middle.md" has unsaved changes. Save before closing?')]);
+
+  // Cancel on Close all tabs keeps both tabs and their edits.
+  await chooseCloseAction("Cancel");
+  await tab("discard-last.md").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Close all tabs", exact: true }).click();
+  await expect.poll(prompts).toEqual([prompt("2 documents have unsaved changes. Save before closing?")]);
+  await expect(page.locator(".tab-label")).toHaveText(["discard-first.md", "discard-last.md"]);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(2);
+  await expect(shown).toHaveText("Saved 3. Unsaved.");
+  await tab("discard-first.md").click();
+  await expect(shown).toHaveText("Saved 1. Unsaved.");
+
+  // Discard on Close all tabs closes both and shows Recent.
+  await chooseCloseAction("Discard");
+  await tab("discard-first.md").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Close all tabs", exact: true }).click();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await expect(page.locator(".recent-name").first()).toBeVisible();
+  expect(await prompts()).toEqual([prompt("2 documents have unsaved changes. Save before closing?")]);
+  expect(await saved()).toEqual(["Saved 1.\n", "Saved 2.\n", "Saved 3.\n"]);
 });
 
 test("Save on close keeps an untitled tab after cancellation or write failure", async () => {
@@ -4659,6 +4900,30 @@ async function holdImageAnswers(): Promise<void> {
   });
 }
 
+/** Run `act`, a click, and expect its press to have come before a document
+ *  view showing `text` was built, so the click came while that view waited
+ *  for its images. A press that came too late would pass without testing
+ *  the race. */
+async function beforeDocumentBuilt(text: string, act: () => Promise<void>): Promise<void> {
+  await page.evaluate((text) => {
+    const times: { pressed?: number; built?: number } = {};
+    Reflect.set(globalThis, "buildRace", times);
+    const built = () => [...document.querySelectorAll(".editor-pane-wysiwyg .ProseMirror")].some((view) => view.textContent?.includes(text));
+    if (built()) times.built = performance.now();
+    const observer = new MutationObserver(() => {
+      if (!built()) return;
+      times.built ??= performance.now();
+      observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    document.addEventListener("pointerdown", () => { times.pressed ??= performance.now(); }, { capture: true, once: true });
+  }, text);
+  await act();
+  const { pressed, built } = await page.evaluate(() => Reflect.get(globalThis, "buildRace") as { pressed?: number; built?: number });
+  expect(pressed, "the click's press").toBeDefined();
+  expect(built === undefined || pressed! < built, `the click came before the view of "${text}" was built`).toBe(true);
+}
+
 test("typing in the split's Markdown pane while a reload from disk builds keeps the file's new text", async () => {
   await writeFile(path.join(directory, "pixel.png"), onePixelPng);
   const { file, documentLine, markdownLine } = await openSplit("reload-while-typing.md", "Old text.\n\n![pixel](pixel.png)\n");
@@ -4706,7 +4971,7 @@ test("switching tabs while a reload from disk builds shows the other tab, then t
   await page.getByRole("button", { name: "Reload", exact: true }).click();
   // Switch tabs while the document pane for the reload waits for its image.
   await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
-  await page.getByRole("tab", { name: "other.md", exact: true }).click();
+  await beforeDocumentBuilt("New text from disk.", () => page.getByRole("tab", { name: "other.md", exact: true }).click());
   // The other tab's panes replace the Markdown pane from before the reload.
   await expect(documentLine).toHaveText("Other file.");
   await expect(markdownLine).toHaveText("Other file.");
@@ -4737,7 +5002,7 @@ test("a Reload clicked while a layout switch builds the document view shows the 
   await page.getByRole("radio", { name: "Split", exact: true }).click();
   // Reload while the document pane for the split waits for its image.
   await page.waitForFunction(() => document.querySelector(".editor-pane-wysiwyg") !== null, undefined, { polling: "raf" });
-  await reload.click();
+  await beforeDocumentBuilt("Old text on disk.", () => reload.click());
   // The build from the old text is done again from the new.
   await expect(documentLine).toHaveText("New text from disk.");
   await expect(markdownLine).toHaveText("New text from disk.");
@@ -4762,7 +5027,7 @@ test("Split chosen while a reload from disk builds shows both panes with the fil
   // Choose Split while the document pane for the reload waits for its image.
   await page.waitForFunction(() => !document.querySelector(".editor-pane-wysiwyg:not([hidden])"), undefined, { polling: "raf" });
   const split = page.getByRole("radio", { name: "Split", exact: true });
-  await split.click();
+  await beforeDocumentBuilt("New text from disk.", () => split.click());
   await expect(split).toHaveAttribute("aria-checked", "true");
   // The window switches to the split once the reload's document pane shows.
   await expect(documentLine).toHaveText("New text from disk.");
@@ -6071,6 +6336,51 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
+test("a mouse click on a find option keeps typing in the field it was in", async () => {
+  const file = path.join(directory, "find-options.md");
+  await writeFile(file, "# Welcome\n\nHello there.\n");
+  await launch(file);
+  const findInput = page.getByRole("textbox", { name: "Find in document" });
+  const matchCase = page.getByRole("checkbox", { name: "Match case" });
+  const wholeWord = page.getByRole("checkbox", { name: "Whole word" });
+  await page.locator(heading).click();
+  await page.keyboard.press("ControlOrMeta+h");
+  await expect(findInput).toBeFocused();
+  await page.keyboard.type("Wel");
+  // A click on the label's text, then on the check box itself.
+  await page.getByText("Match case", { exact: true }).click();
+  await expect(matchCase).toBeChecked();
+  await expect(findInput).toBeFocused();
+  await page.keyboard.type("co");
+  await wholeWord.click();
+  await expect(wholeWord).toBeChecked();
+  await expect(findInput).toBeFocused();
+  await page.keyboard.type("me");
+  await expect(findInput).toHaveValue("Welcome");
+  await expect(findInput).toBeFocused();
+
+  const replaceInput = page.getByRole("textbox", { name: "Replace with" });
+  await replaceInput.click();
+  await page.keyboard.type("Hel");
+  await page.getByText("Match case", { exact: true }).click();
+  await expect(replaceInput).toBeFocused();
+  await page.keyboard.type("lo");
+  await expect(replaceInput).toHaveValue("Hello");
+  await expect(matchCase).not.toBeChecked();
+
+  // From anywhere else, such as the document, a click focuses the check box.
+  await page.locator(heading).click();
+  await wholeWord.click();
+  await expect(wholeWord).toBeFocused();
+  await wholeWord.click();
+
+  // The keyboard keeps focus on the check box.
+  await wholeWord.focus();
+  await page.keyboard.press("Space");
+  await expect(wholeWord).toBeFocused();
+  await expect(wholeWord).not.toBeChecked();
+});
+
 test("the find count follows edits made while the card is open", async () => {
   const file = path.join(directory, "find-count.md");
   await writeFile(file, "Alpha zeta.\n\nMiddle line.\n\nOmega zeta.\n");
@@ -6764,19 +7074,6 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
   await expect.poll(() => readFile(file, "utf8")).toBe(original.replace("# keep", "# keep v2").replace("body.", "body. Typed."));
 });
 
-test("a file that ends in a list opens as saved", async () => {
-  const file = path.join(directory, "list-end.md");
-  await writeFile(file, "First line.\n\n- Last item\n");
-  await launch(file);
-  // The document view adds an empty line after a final list, for typing below it.
-  await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
-  // Switching views reports any document change at once.
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
-  await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("- Last item");
-  await expect(page).toHaveTitle("list-end.md — Downpad");
-  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
-});
-
 test("pasting a copy of the whole document preserves source spacing without adding an empty paragraph", async () => {
   const file = path.join(directory, "copy-all.md");
   await writeFile(file, "Intro.\n\n> Quote\n");
@@ -6803,9 +7100,11 @@ test("pasting a copy of the whole document preserves source spacing without addi
   await expect.poll(() => readFile(file, "utf8")).toBe("Intro.\n\nIntro.\n\n> Quote\n\n\n> Quote\n");
 });
 
-test("an edit to a file that ends in a code block saves no extra blank line", async () => {
+test("a file that ends in a list opens as saved, and an edit to one that ends in a code block saves no extra blank line", async () => {
   const file = path.join(directory, "code-end.md");
+  const listFile = path.join(directory, "list-end.md");
   await writeFile(file, "First line.\n\n```js\nlet x = 1;\n```\n");
+  await writeFile(listFile, "First line.\n\n- Last item\n");
   await launch(file);
   const paragraph = page.locator(".milkdown .ProseMirror > p").first();
   // The document view adds an empty line after a final code block, for typing
@@ -6819,6 +7118,15 @@ test("an edit to a file that ends in a code block saves no extra blank line", as
   await typeAtEnd(paragraph, " Edited.");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line. Edited.\n\n```js\nlet x = 1;\n```\n");
+  // It adds one after a final list too, which leaves the file saved.
+  await chooseOpen(listFile);
+  await expect(shownDocument().locator("li")).toHaveText("Last item");
+  await expect(shownDocument().locator(":scope > p")).toHaveCount(2);
+  // Switching views reports any document change at once.
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(page.locator(".editor-pane-raw:not([hidden]) .cm-content")).toContainText("- Last item");
+  await expect(page).toHaveTitle("list-end.md — Downpad");
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("find scrolls to each match and highlights matches inside code blocks", async () => {
@@ -7048,25 +7356,6 @@ test("a long path in the status bar is cut short to fit a narrow window", async 
     expect(layout.wordCount).toBeLessThanOrEqual(width);
     expect(layout.path.whole).toBeGreaterThan(layout.path.shown);
   }
-});
-
-test("an edit in the document view keeps the blank line after the frontmatter", async () => {
-  const file = path.join(directory, "frontmatter.md");
-  await writeFile(file, "---\ntitle: x\n---\n\nFirst line.\n");
-  await launch(file);
-  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), " Typed.");
-  await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: x\n---\n\nFirst line. Typed.\n");
-});
-
-test("text typed after frontmatter that ends the file starts a new line", async () => {
-  const file = path.join(directory, "frontmatter-only.md");
-  // Saved without a final newline, as some editors do.
-  await writeFile(file, "---\ntitle: x\n---");
-  await launch(file);
-  await typeAtEnd(page.locator(".milkdown .ProseMirror p").first(), "Hello");
-  await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("---\ntitle: x\n---\nHello\n");
 });
 
 test("lists typed in the document view save an item nested by Tab without a blank line", async () => {
@@ -7838,6 +8127,15 @@ test("Delete in a row's menu selects the row that moves into its place and opens
   await expect.poll(() => readFile(file, "utf8")).toBe("Intro paragraph above the table.\n\n| Name | Notes |\n| ---- | ----- |\n| a1   | b1    |\n| Z    |       |\n");
 });
 
+/** The pages of the PDF `file` and the width and height of each page box,
+ *  which Chromium writes as plain text. */
+async function pdfPages(file: string): Promise<{ pages: number; boxes: { width: number; height: number }[] }> {
+  const text = (await readFile(file)).toString("latin1");
+  const boxes = [...text.matchAll(/\/MediaBox\s*\[\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\]/g)]
+    .map(([, left, bottom, right, top]) => ({ width: Number(right) - Number(left), height: Number(top) - Number(bottom) }));
+  return { pages: text.match(/\/Type\s*\/Page(?![A-Za-z])/g)?.length ?? 0, boxes };
+}
+
 test("the print workspace exports a real PDF and preserves landscape and page ranges", async () => {
   const file = path.join(directory, "print.md");
   const rows = Array.from({ length: 90 }, (_, index) => `| Row ${index + 1} | Value ${index + 1} |`);
@@ -7847,12 +8145,15 @@ test("the print workspace exports a real PDF and preserves landscape and page ra
   await page.getByRole("button", { name: "Print", exact: true }).click();
   await expect(page.locator(".print-workspace")).toBeVisible();
   await expect.poll(() => page.locator(".print-page").count()).toBeGreaterThan(1);
-  await page.screenshot({ path: path.join(directory, "electron-print.png") });
   const pdf = path.join(directory, "document.pdf");
   await chooseSave(pdf);
   await page.getByRole("button", { name: "Save as PDF", exact: true }).click();
   await expect(page.locator(".print-workspace")).toBeHidden({ timeout: 30_000 });
   expect((await readFile(pdf)).subarray(0, 5).toString()).toBe("%PDF-");
+  const portrait = await pdfPages(pdf);
+  expect(portrait.pages).toBeGreaterThan(1);
+  expect(portrait.boxes.length).toBeGreaterThan(0);
+  for (const box of portrait.boxes) expect(box.height).toBeGreaterThan(box.width);
 
   await page.getByRole("button", { name: "Print", exact: true }).click();
   await page.locator(".print-workspace").getByRole("radio", { name: "Landscape", exact: true }).check();
@@ -7867,6 +8168,10 @@ test("the print workspace exports a real PDF and preserves landscape and page ra
     try { return (await readFile(landscapePdf)).subarray(0, 5).toString(); }
     catch { return ""; }
   }).toBe("%PDF-");
+  const landscape = await pdfPages(landscapePdf);
+  expect(landscape.pages).toBe(1);
+  expect(landscape.boxes.length).toBeGreaterThan(0);
+  for (const box of landscape.boxes) expect(box.width).toBeGreaterThan(box.height);
 });
 
 test("the empty line after a final list adds no blank sheet to the print", async () => {
@@ -8031,8 +8336,7 @@ test("the Markdown version continues a source line taller than a page on the nex
   await page.getByRole("button", { name: "Save as PDF", exact: true }).click();
   await expect(page.locator(".print-workspace")).toBeHidden({ timeout: 30_000 });
   // Every sheet reaches the PDF as a page of its own.
-  const pages = (await readFile(pdf)).toString("latin1").match(/\/Type\s*\/Page(?![A-Za-z])/g);
-  expect(pages).toHaveLength(sheets.length);
+  expect((await pdfPages(pdf)).pages).toBe(sheets.length);
 });
 
 test("Print submits the document to an installed test printer", async () => {
@@ -8056,7 +8360,7 @@ test("the preload rejects unknown commands", async () => {
     try { await invoke("unknown-command"); return "accepted"; }
     catch (error) { return String(error); }
   });
-  expect(result).not.toBe("accepted");
+  expect(result).toBe("Error: Unknown desktop command.");
 });
 
 test("a crashed renderer does not trap native window close", async () => {
@@ -8084,36 +8388,6 @@ test("a crashed renderer does not trap native window close", async () => {
 
   expect(crashed).toBe(true);
   await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
-});
-
-test("file requests during reload reach the replacement renderer", async () => {
-  const original = path.join(directory, "before-reload.md");
-  const first = path.join(directory, "queued-first.md");
-  const second = path.join(directory, "queued-second.md");
-  await writeFile(original, "# Before reload\n");
-  await writeFile(first, "# First queued file\n");
-  await writeFile(second, "# Second queued file\n");
-  await launch(original);
-  await expect(page.locator(heading)).toHaveText("Before reload");
-  await page.evaluate(async () => {
-    window.downpadDesktop!.listen("open-file-requested", () => {});
-    await window.downpadDesktop!.invoke("settings_path");
-  });
-
-  const reloaded = page.waitForEvent("domcontentloaded");
-  await app!.evaluate(({ app, BrowserWindow }, paths) => {
-    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
-    contents.once("did-start-navigation", (details) => {
-      if (!details.isMainFrame || details.isSameDocument) return;
-      for (const filePath of paths) app.emit("open-file", { preventDefault: () => {} }, filePath);
-    });
-    contents.reload();
-  }, [first, second]);
-  await reloaded;
-
-  await expect(page.getByRole("tab", { name: "queued-first.md", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "queued-second.md", exact: true })).toBeVisible();
-  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Second queued file");
 });
 
 test("same-document navigation preserves the unsaved close confirmation", async () => {

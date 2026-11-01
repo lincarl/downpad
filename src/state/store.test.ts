@@ -133,6 +133,28 @@ describe("Store tabs", () => {
     expect(store.get().doc.markdown).toBe("");
   });
 
+  it("closeTab prefers the right neighbour of an active middle tab", () => {
+    const store = makeStore();
+    const second = store.addTab(sampleDoc("second"));
+    const third = store.addTab(sampleDoc("third"));
+    store.activateTab(second);
+    expect(store.closeTab(second)).toBe(third);
+    expect(store.get().activeTabId).toBe(third);
+    expect(store.get().doc.markdown).toBe("third");
+  });
+
+  it("closeTab of an inactive tab keeps the active tab and its doc", () => {
+    const store = makeStore();
+    const first = store.get().activeTabId!;
+    const second = store.addTab(sampleDoc("second"));
+    const third = store.addTab(sampleDoc("third"));
+    const doc = store.get().doc;
+    expect(store.closeTab(first)).toBe(third);
+    expect(store.get().tabs.map((t) => t.id)).toEqual([second, third]);
+    expect(store.get().activeTabId).toBe(third);
+    expect(store.get().doc).toBe(doc);
+  });
+
   it("replaceActiveDoc creates a tab when none is open", () => {
     const store = makeStore();
     store.closeTab(store.get().activeTabId!);

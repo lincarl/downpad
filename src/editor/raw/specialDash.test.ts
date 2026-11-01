@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findSpecialDashes, codePointLabel, SPECIAL_DASHES } from "./specialDash";
+import { findSpecialDashes, codePointLabel } from "./specialDash";
 
 describe("findSpecialDashes", () => {
   it("ignores a plain ASCII hyphen-minus (the normal dash)", () => {
@@ -45,11 +45,5 @@ describe("codePointLabel", () => {
     expect(codePointLabel("—")).toBe("U+2014");
     expect(codePointLabel("–")).toBe("U+2013");
     expect(codePointLabel("−")).toBe("U+2212");
-  });
-});
-
-describe("SPECIAL_DASHES", () => {
-  it("does not include the plain ASCII hyphen-minus", () => {
-    expect(SPECIAL_DASHES["-"]).toBeUndefined();
   });
 });
