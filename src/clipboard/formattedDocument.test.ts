@@ -44,7 +44,7 @@ describe("formatted document", () => {
       "[Windows](C:/notes/other.md)",
       "[File](file:///notes/other.md)",
       "![Local image](images/diagram.png)",
-      "![Web image](//example.com/image.png)",
+      "![Web image](https://example.com/image.png)",
       "[Unsafe](javascript:alert%281%29)",
     ].join("\n\n");
     for (const [filePath, relative, image] of [
@@ -66,6 +66,68 @@ describe("formatted document", () => {
     expect(html).toBe("<p><a>Unresolved</a></p>");
   });
 
+  it("omits image sources and link destinations that name another computer", async () => {
+    const targets = [
+      "file://server/share/a.png",
+      "//server/share/a.png",
+      "\\\\server\\share\\a.png",
+      "/\\server/share/a.png",
+      "\\/server/share/a.png",
+      "\\\\?\\UNC\\server\\share\\a.png",
+      "\\\\.\\pipe\\a.png",
+      "%2F%2Fserver/share/a.png",
+      "%5C%5Cserver%5Cshare%5Ca.png",
+      "FILE:\\\\server\\share\\a.png",
+      "file:////server/share/a.png",
+      "file:///%5C%5Cserver/share/a.png",
+      "%66ile%3A%2F%2Fserver/share/a.png",
+      "/%09/server/share/a.png",
+      "/%5Cserver/share/a.png#%",
+      "%2F%2Fserver/share/a.png?bad=%",
+    ];
+    // Escape literal backslashes so Markdown passes each target to the schema.
+    const markdown = targets.map((target, index) => {
+      const destination = target.replace(/\\/g, "\\\\");
+      return `![Blocked image ${index}](<${destination}>)\n\n[Blocked link ${index}](<${destination}>) and ![Inline image ${index}](<${destination}>)`;
+    }).join("\n\n");
+    for (const filePath of [null, "/notes/index.md", "\\\\trusted-server\\share\\index.md"]) {
+      const { html, text } = await formatDocument(markdown, filePath);
+      const root = document.implementation.createHTMLDocument("").createElement("div");
+      root.innerHTML = html;
+      expect(root.querySelectorAll("img")).toHaveLength(targets.length * 2);
+      expect(root.querySelectorAll("a")).toHaveLength(targets.length);
+      expect(root.querySelector("[src], [href]")).toBeNull();
+      for (let index = 0; index < targets.length; index++) {
+        expect(text).toContain(`Blocked image ${index}`);
+        expect(text).toContain(`Blocked link ${index}`);
+        expect(text).toContain(`Inline image ${index}`);
+      }
+    }
+  });
+
+  it("keeps explicit web, local file, data image and contact URLs", async () => {
+    const { html } = await formatDocument([
+      "![HTTP](http://example.com/image.png)",
+      "![HTTPS](https://example.com/image.png)",
+      "![Local](file://localhost/notes/image.png)",
+      "![Embedded](data:image/png;base64,AAAA)",
+      "[Email](mailto:reader@example.com)",
+      "[Phone](tel:+15550101000)",
+      "[FTP](ftp://example.com/notes.md)",
+    ].join("\n\n"));
+    const root = document.implementation.createHTMLDocument("").createElement("div");
+    root.innerHTML = html;
+    expect([...root.querySelectorAll("img")].map((image) => image.getAttribute("src"))).toEqual([
+      "http://example.com/image.png",
+      "https://example.com/image.png",
+      "file:///notes/image.png",
+      "data:image/png;base64,AAAA",
+    ]);
+    expect([...root.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "mailto:reader@example.com", "tel:+15550101000", "ftp://example.com/notes.md",
+    ]);
+  });
+
   it("builds the copy without loading its images", async () => {
     // An <img> made in the page loads its src at once, even outside the page,
     // and Chromium reads `//server/share/a.png` there from the file server.
@@ -73,7 +135,7 @@ describe("formatted document", () => {
     try {
       const { html } = await formatDocument("![Shared](//server/share/a.png) and ![Local](a.png)", "/notes/index.md");
       expect(creating.mock.calls.map(([tag]) => tag)).not.toContain("img");
-      expect(html).toBe('<p><img src="https://server/share/a.png" alt="Shared" title=""> and <img src="file:///notes/a.png" alt="Local" title=""></p>');
+      expect(html).toBe('<p><img alt="Shared" title=""> and <img src="file:///notes/a.png" alt="Local" title=""></p>');
     } finally {
       creating.mockRestore();
     }

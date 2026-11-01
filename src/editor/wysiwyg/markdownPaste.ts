@@ -38,7 +38,19 @@ export function pasteMarkdownSource(state: EditorState, markdown: string, { writ
   const source = write(doc);
   let marker = "downpadpasteposition";
   while (source.includes(marker) || inserted.includes(marker)) marker += "x";
-  const marked = write(state.tr.insertText(marker).doc);
+  const marks = state.storedMarks ?? (selection.empty ? selection.$from.marks() : selection.$from.marksAcross(selection.$to)) ?? [];
+  // Replacing a range from prose into code with inline text joins the code
+  // suffix to the prose. Keep its code wrapper in both the source probe and
+  // the rendered insertion used to repair conflicting marks.
+  const codeTail = !selection.$from.sameParent(selection.$to) && selection.$to.parent.type.spec.code
+    ? selection.$to.parent.copy(Fragment.empty)
+    : null;
+  const markerText = state.schema.text(marker, marks);
+  const marked = write(codeTail
+    ? state.tr.replaceSelection(new Slice(Fragment.fromArray([
+      selection.$from.parent.copy(Fragment.from(markerText)), codeTail,
+    ]), 1, 1)).doc
+    : state.tr.insertText(marker).doc);
   const at = marked.indexOf(marker);
   if (at < 0 || marked.indexOf(marker, at + marker.length) >= 0) return null;
   let body = marked.slice(0, at) + inserted + marked.slice(at + marker.length);
@@ -48,7 +60,6 @@ export function pasteMarkdownSource(state: EditorState, markdown: string, { writ
   const clipboard = parse(inserted);
   if (!parsed || !clipboard) return null;
 
-  const marks = state.storedMarks ?? (selection.empty ? selection.$from.marks() : selection.$from.marksAcross(selection.$to)) ?? [];
   let content = clipboard.content;
   // An image on its own parses as a block, but inside this paragraph it is
   // inline. Compare the splice with an insertion in that same context.
@@ -64,14 +75,20 @@ export function pasteMarkdownSource(state: EditorState, markdown: string, { writ
     content.firstChild.forEach((node) => inline.push(node.mark(node.marks.reduce((set, mark) => mark.addToSet(set), marks))));
     content = Fragment.from(content.firstChild.copy(Fragment.from(inline)));
   }
-  const placed = state.tr.replaceSelection(Slice.maxOpen(content));
+  const slice = Slice.maxOpen(content);
+  const placed = state.tr.replaceSelection(codeTail
+    ? new Slice(content.append(Fragment.from(codeTail)), slice.openStart, 1)
+    : slice);
   const same = serialize(parsed) === serialize(placed.doc);
   // Splicing **new** into **left target right** would let its delimiters
   // close the surrounding bold mark. Serialize that edited block instead.
   if (marks.length && !same) {
     // Record the endpoint in the repaired source too. Serialization can
     // normalize nodes, so a position in `placed.doc` is not a source position.
-    const repaired = write(placed.insertText(marker, placed.selection.to).doc);
+    const endpoint = codeTail && placed.selection.$to.parent.type.spec.code
+      ? Selection.near(placed.doc.resolve(placed.selection.$to.before()), -1).to
+      : placed.selection.to;
+    const repaired = write(placed.insertText(marker, endpoint).doc);
     end = repaired.indexOf(marker);
     if (end < 0 || repaired.indexOf(marker, end + marker.length) >= 0) return null;
     body = repaired.slice(0, end) + repaired.slice(end + marker.length);

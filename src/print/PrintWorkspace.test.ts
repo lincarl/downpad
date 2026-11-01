@@ -416,8 +416,46 @@ describe("PrintWorkspace React view", () => {
 
   it("reports a PDF export that fails to start", async () => {
     enableElectron();
+    const unlisten = vi.fn();
+    nativeMocks.onPrintCompleted.mockImplementationOnce(() => Promise.resolve(unlisten));
     nativeMocks.saveDialog.mockResolvedValueOnce("/docs/notes.pdf");
     nativeMocks.printWebviewToPdf.mockRejectedValueOnce(new Error("A print job is already running."));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    act(() => workspace!.open(JOB));
+    await flush();
+    const preview = document.querySelector(".print-ws-scaler > .print-root");
+
+    act(() => button("Save as PDF").click());
+    await flush();
+
+    expect(nativeMocks.printWebviewToPdf).toHaveBeenCalledOnce();
+    expect(workspace!.isOpen()).toBe(true);
+    expect(document.querySelector(".print-ws-status")?.textContent).toBe("A print job is already running.");
+    expect(button("Cancel").disabled).toBe(false);
+    expect(button("Save as PDF").disabled).toBe(false);
+    expect(document.querySelector(".print-ws-scaler > .print-root")).toBe(preview);
+    expect(document.querySelector("body > .print-root")).toBeNull();
+    expect(document.documentElement.classList.contains("printing")).toBe(false);
+    expect(unlisten).toHaveBeenCalledOnce();
+
+    nativeMocks.saveDialog.mockResolvedValueOnce("/docs/notes.pdf");
+    act(() => button("Save as PDF").click());
+    await flush();
+
+    expect(nativeMocks.printWebviewToPdf).toHaveBeenCalledTimes(2);
+    expect(workspace!.isOpen()).toBe(false);
+  });
+
+  it.each([
+    { error: "The print service is unavailable.", message: "The print service is unavailable." },
+    { error: new Error(""), message: "Printing failed." },
+    { error: "  ", message: "Printing failed." },
+    { error: undefined, message: "Printing failed." },
+    { error: { code: "UNKNOWN" }, message: "Printing failed." },
+  ])("reports a PDF startup rejection as $message", async ({ error, message }) => {
+    enableElectron();
+    nativeMocks.saveDialog.mockResolvedValueOnce("/docs/notes.pdf");
+    nativeMocks.printWebviewToPdf.mockRejectedValueOnce(error);
     vi.spyOn(console, "error").mockImplementation(() => {});
     act(() => workspace!.open(JOB));
     await flush();
@@ -425,11 +463,9 @@ describe("PrintWorkspace React view", () => {
     act(() => button("Save as PDF").click());
     await flush();
 
-    expect(nativeMocks.printWebviewToPdf).toHaveBeenCalledOnce();
+    expect(document.querySelector(".print-ws-status")?.textContent).toBe(message);
     expect(workspace!.isOpen()).toBe(true);
-    expect(document.querySelector(".print-ws-status")?.textContent).toBe("Printing failed.");
-    expect(button("Cancel").disabled).toBe(false);
-    expect(document.documentElement.classList.contains("printing")).toBe(false);
+    expect(button("Save as PDF").disabled).toBe(false);
   });
 
   it("leaves the preview usable when the PDF dialog is cancelled", async () => {

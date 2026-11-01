@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WebContentsPrintOptions } from "electron";
 
@@ -388,4 +388,34 @@ test("Print hands the chosen setup to the printer, closes when it prints, and st
   await expect(workspace).toBeHidden();
   expect(await jobs()).toHaveLength(2);
   expect((await jobs())[1]).toEqual((await jobs())[0]);
+});
+
+test("a rejected PDF export shows the backend reason and allows a successful retry", async () => {
+  await launch("# PDF retry\n\nA document to export after a startup failure.\n");
+  await openPrint();
+  const workspace = page.locator(".print-workspace");
+  const savePdf = workspace.getByRole("button", { name: "Save as PDF", exact: true });
+  // A relative destination makes the real main-process handler reject the job
+  // before it starts, so its error crosses the isolated preload bridge.
+  await app!.evaluate(({ dialog }) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: "relative.pdf" });
+  });
+
+  await savePdf.click();
+
+  await expect(workspace.locator(".print-ws-status")).toContainText("An absolute file path is required.");
+  await expect(page.locator("html")).not.toHaveClass(/\bprinting\b/);
+  await expect(page.locator("body > .print-root")).toHaveCount(0);
+  await expect(workspace.locator(".print-page").first()).toBeVisible();
+  await expect(savePdf).toBeEnabled();
+  await expect(workspace.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+
+  const pdf = path.join(directory, "retry.pdf");
+  await app!.evaluate(({ dialog }, destination) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: destination });
+  }, pdf);
+  await savePdf.click();
+
+  await expect(workspace).toBeHidden();
+  expect((await readFile(pdf)).subarray(0, 5).toString()).toBe("%PDF-");
 });
