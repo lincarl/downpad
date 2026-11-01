@@ -4,10 +4,11 @@
 //   1. proxyDomURL — map a markdown `src` to something the WebView can load:
 //      data:/http: pass through; a relative/absolute file path is resolved
 //      against the document dir and turned into an Electron asset URL so linked
-//      images render inline. A local image that cannot be loaded gets an empty
-//      data: URL, which fails at once, so the image shows as missing. Answers
-//      are kept for the window, so an image asked about before (see
-//      lookUpImages and preloadImages.ts) shows its URL from its first render.
+//      images render inline. A local image that cannot be loaded, and a network
+//      path such as `//server/share/a.png`, gets an empty data: URL, which fails
+//      at once, so the image shows as missing. Answers are kept for the window,
+//      so an image asked about before (see lookUpImages and preloadImages.ts)
+//      shows its URL from its first render.
 //   2. onImageLoadError — when an image fails to load, show it as missing: an
 //      image block as a placeholder with the broken icon and its path, an inline
 //      image as a chip in its line with the icon and its path. A click on either
@@ -27,7 +28,7 @@ import { NodeSelection, Plugin, PluginKey } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { isElectron } from "../../ipc/env";
-import { collapseDotSegments, isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
+import { collapseDotSegments, isNetworkPath, isRemoteOrData, resolveImagePath } from "../../images/pathResolve";
 import { resolveImageSrc } from "../../images/imageStore";
 import type { WysiwygContext } from "./context";
 
@@ -412,7 +413,11 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
      *  outside Electron. An empty src stays empty so Crepe shows its upload input.
      *  A local path the main process does not authorize (missing, not an image, or
      *  otherwise refused), or one relative to a document that is not saved yet,
-     *  becomes UNAVAILABLE_IMAGE.
+     *  becomes UNAVAILABLE_IMAGE. So does a network path such as `//server/share/a.png`
+     *  or `file://server/share/a.png` (isNetworkPath), at once and without asking
+     *  the main process. The packaged page is a file: URL, so Chromium would otherwise
+     *  fetch such a src from the server over SMB on Windows, both as a file:
+     *  URL passed through and as the raw src a view shows while it waits.
      *
      *  Once the main process has answered for a local image, later calls return
      *  that answer at once. Crepe's image views render the raw src until an
@@ -427,7 +432,9 @@ export function imageBlockFeatureConfig(viewRef: ViewRef, ctx: WysiwygContext) {
      *  src has changed since. An answer for a path no image in the document shows
      *  any more never settles, so it cannot replace a newer one. */
     proxyDomURL: (url: string): string | Promise<string> => {
-      if (!url || !isElectron() || isRemoteOrData(url)) return url;
+      if (!url || !isElectron()) return url;
+      if (isRemoteOrData(url)) return /^file:/i.test(url) && isNetworkPath(url) ? UNAVAILABLE_IMAGE : url;
+      // Null for a network path too (resolveImagePath).
       const path = localPath(url);
       if (!path) return UNAVAILABLE_IMAGE;
       const known = lookUp(path);

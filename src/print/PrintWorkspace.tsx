@@ -276,11 +276,11 @@ export class PrintWorkspace {
     });
   }
 
-  /** Focus Cancel, the safe default (Enter closes, as Back used to), falling back
-   *  to the first control and then the workspace itself. */
+  /** Focus Cancel, the safe default (Enter closes, as Back used to). While a job
+   *  disables Cancel, focus the first control instead, or else the workspace. */
   private focusWorkspace(): void {
     const target =
-      this.host?.querySelector<HTMLElement>(".print-ws-cancel") ??
+      this.host?.querySelector<HTMLElement>(".print-ws-cancel:not([disabled])") ??
       this.focusableElements()[0] ??
       this.host?.querySelector<HTMLElement>(".print-workspace");
     target?.focus({ preventScroll: true });
@@ -306,6 +306,7 @@ export class PrintWorkspace {
       rangeError: this.rangeError(),
       summary: this.summaryText,
       status: this.statusText,
+      busy: this.busy,
       electron: isElectron(),
       documentRendered: this.job?.documentNode != null,
     };
@@ -482,6 +483,7 @@ export class PrintWorkspace {
     const workspaceHost = this.host;
     const workspaceScaler = this.scaler;
     this.busy = true;
+    this.publish();
     document.body.appendChild(root);
     const previousTransform = root.style.transform;
     root.style.transform = "";
@@ -499,7 +501,7 @@ export class PrintWorkspace {
       } else root.remove();
       if (this.host === workspaceHost) {
         this.busy = false;
-        this.setStatus("");
+        this.publish();
         this.fitPreview();
       }
     }
@@ -507,7 +509,9 @@ export class PrintWorkspace {
 
   /** Start a backend print job and wait for its `print-completed` event. The
    *  listener has to be in place before the job starts. Electron events aren't
-   *  buffered — so it is torn down explicitly if the job never starts. */
+   *  buffered, so it is torn down explicitly if the job never starts. `label`
+   *  shows while the job runs and is cleared after it, unless a failure message
+   *  has replaced it. */
   private async runNative(start: () => Promise<void>, label: string): Promise<void> {
     this.setStatus(label);
     const waiter = waitForPrintCompleted();
@@ -525,6 +529,7 @@ export class PrintWorkspace {
       else this.flash(result.message || "Printing was cancelled.");
     } finally {
       if (this.activePrintCancel === waiter.cancel) this.activePrintCancel = null;
+      if (this.host && this.statusText === label) this.setStatus("");
     }
   }
 
@@ -664,6 +669,9 @@ interface PrintWorkspaceSnapshot {
   rangeError: string | null;
   summary: string;
   status: string;
+  /** A print or PDF job is running. Cancel waits for it, as Escape does, since
+   *  closing would remove the sheets while Electron still prints them. */
+  busy: boolean;
   electron: boolean;
   /** False when the document could not be rendered; the Markdown version prints. */
   documentRendered: boolean;
@@ -946,6 +954,7 @@ function PrintWorkspaceView({
           type="button"
           variant="outline"
           className="dialog-btn print-ws-cancel ml-auto"
+          disabled={view.busy}
           onClick={onClose}
         >
           Cancel

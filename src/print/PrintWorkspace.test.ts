@@ -388,9 +388,19 @@ describe("PrintWorkspace React view", () => {
 
     act(() => button("Print").click());
     await flush();
+    expect(document.querySelector(".print-ws-status")?.textContent).toBe("Printing…");
+    // Leaving mid-job would tear down the sheets while Electron still prints
+    // them, so Cancel and Escape wait for the job to end.
+    expect(button("Cancel").disabled).toBe(true);
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(workspace!.isOpen()).toBe(true);
     act(() => complete({ ok: false, message: "The printer rejected the job." }));
     await flush();
 
+    expect(document.querySelector(".print-ws-status")?.textContent).toBe("The printer rejected the job.");
+    expect(button("Cancel").disabled).toBe(false);
     expect(workspace!.isOpen()).toBe(true);
     expect(document.querySelector(".print-ws-scaler > .print-root")).toBe(preview);
     expect(document.querySelector("body > .print-root")).toBeNull();
@@ -402,6 +412,24 @@ describe("PrintWorkspace React view", () => {
 
     expect(nativeMocks.printWebview).toHaveBeenCalledTimes(2);
     expect(workspace!.isOpen()).toBe(false);
+  });
+
+  it("reports a PDF export that fails to start", async () => {
+    enableElectron();
+    nativeMocks.saveDialog.mockResolvedValueOnce("/docs/notes.pdf");
+    nativeMocks.printWebviewToPdf.mockRejectedValueOnce(new Error("A print job is already running."));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    act(() => workspace!.open(JOB));
+    await flush();
+
+    act(() => button("Save as PDF").click());
+    await flush();
+
+    expect(nativeMocks.printWebviewToPdf).toHaveBeenCalledOnce();
+    expect(workspace!.isOpen()).toBe(true);
+    expect(document.querySelector(".print-ws-status")?.textContent).toBe("Printing failed.");
+    expect(button("Cancel").disabled).toBe(false);
+    expect(document.documentElement.classList.contains("printing")).toBe(false);
   });
 
   it("leaves the preview usable when the PDF dialog is cancelled", async () => {

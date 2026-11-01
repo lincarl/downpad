@@ -122,6 +122,9 @@ it("continues queued and later saves after a failed atomic replacement without l
 it.skipIf(process.platform === "win32").each([
   { label: "0600", mode: 0o600 },
   { label: "0755", mode: 0o755 },
+  // The umask strips group and other write bits from a newly created file.
+  { label: "0664", mode: 0o664 },
+  { label: "0666", mode: 0o666 },
 ])("keeps the file mode $label after a save", async ({ mode }) => {
   const directory = await fixtureDirectory();
   const path = join(directory, "note.md");

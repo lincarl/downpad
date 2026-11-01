@@ -376,9 +376,11 @@ test("Print hands the chosen setup to the printer, closes when it prints, and st
     // Letter in micrometres, portrait. Electron turns it for landscape.
     pageSize: { width: 215_900, height: 279_400 },
   });
-  // The failed job hands the sheets back to the preview and lets the user retry.
+  // The failed job hands the sheets back to the preview, says why it failed and
+  // lets the user retry.
   await expect(page.locator("html")).not.toHaveClass(/\bprinting\b/);
   await expect(workspace).toBeVisible();
+  await expect(workspace.locator(".print-ws-status")).toHaveText("Printer offline");
   await expect(workspace.locator(".print-page").first()).toBeVisible();
   await expect(print).toBeEnabled();
 

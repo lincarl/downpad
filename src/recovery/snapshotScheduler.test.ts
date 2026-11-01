@@ -329,6 +329,36 @@ it.each([
   expect(native.writeFile.mock.calls).toEqual(saves ? [["/docs/notes.md", "# Draft\n", "lf"]] : []);
 });
 
+it("follows changed intervals without a restart or an extra save", async () => {
+  const { store } = scheduledDocument({}, {
+    autosaveEnabled: true, autosaveIntervalSeconds: 30, recoverySnapshotIntervalSeconds: 10,
+  });
+  /** Put new settings in the store, as a Settings save or a hand edit does. */
+  const change = (patch: Partial<Settings>) => store.set((state) => ({ settings: { ...state.settings, ...patch } }));
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  change({ autosaveIntervalSeconds: 5, recoverySnapshotIntervalSeconds: 2 });
+  await vi.advanceTimersByTimeAsync(1_999);
+  expect(native.writeSnapshot).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(native.writeSnapshot).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(2_999);
+  expect(native.writeFile).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(native.writeFile).toHaveBeenCalledTimes(1);
+
+  change({ autosaveIntervalSeconds: 60 });
+  store.patchDoc({ markdown: "# Edited\n", isDirty: true });
+  await vi.advanceTimersByTimeAsync(30_000);
+  // A change to another setting keeps the countdown.
+  change({ theme: "dark" });
+  await vi.advanceTimersByTimeAsync(29_999);
+  expect(native.writeFile).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(native.writeFile).toHaveBeenCalledTimes(2);
+  expect(vi.getTimerCount()).toBe(2);
+});
+
 it("stops both timers without deleting the recovery snapshot", async () => {
   const { store, scheduler } = scheduledDocument({}, { autosaveEnabled: true });
   await vi.advanceTimersByTimeAsync(5_000);

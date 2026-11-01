@@ -128,24 +128,26 @@ function takesInTextAfter(state: EditorState, from: number): boolean {
   return tree?.topNode.lastChild?.name !== "Paragraph";
 }
 
+/** The chip that stands in for a collapsed base64 payload. Pressing it shows
+ *  the payload. CodeMirror keeps a chip it drew while the size stays the same,
+ *  also after an edit before it, so the chip looks up where it is when
+ *  pressed. */
 class CollapsedWidget extends WidgetType {
-  constructor(
-    private readonly size: string,
-    private readonly onExpand: () => void,
-  ) {
+  constructor(private readonly size: string) {
     super();
   }
   eq(other: CollapsedWidget): boolean {
     return other.size === this.size;
   }
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const span = document.createElement("span");
     span.className = "cm-base64-collapsed";
     span.textContent = `…[${this.size}]`;
     span.title = "Base64 image data. Click to show it.";
     span.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      this.onExpand();
+      // A widget's DOM resolves to the start of its range, the payload start.
+      view.dispatch({ effects: expandEffect.of(view.posAtDOM(span)) });
     });
     return span;
   }
@@ -202,13 +204,7 @@ export function base64Collapse(): Extension {
             if (this.expanded.has(payloadStart)) continue;
             if (sel.from <= payloadEnd && sel.to >= payloadStart) continue; // editing it
             const size = formatSize((payload.length * 3) / 4);
-            builder.add(
-              payloadStart,
-              payloadEnd,
-              Decoration.replace({
-                widget: new CollapsedWidget(size, () => view.dispatch({ effects: expandEffect.of(payloadStart) })),
-              }),
-            );
+            builder.add(payloadStart, payloadEnd, Decoration.replace({ widget: new CollapsedWidget(size) }));
           }
         }
         return builder.finish();

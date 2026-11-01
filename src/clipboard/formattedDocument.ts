@@ -25,10 +25,14 @@ export async function formatDocument(markdown: string, filePath: string | null =
   try {
     await editor.create();
     const { frontmatter, body } = splitFrontmatter(markdown);
-    const root = document.createElement("div");
+    // Build the copy in a document without a window. An <img> made in the page
+    // loads its src at once, even outside the page, and the raw src of an image
+    // such as `//server/share/a.png` would be read from that file server.
+    const inert = document.implementation.createHTMLDocument("");
+    const root = inert.createElement("div");
     if (frontmatter) {
-      const pre = document.createElement("pre");
-      const code = document.createElement("code");
+      const pre = inert.createElement("pre");
+      const code = inert.createElement("code");
       code.textContent = frontmatter.trimEnd();
       pre.append(code);
       root.append(pre);
@@ -50,13 +54,13 @@ export async function formatDocument(markdown: string, filePath: string | null =
         title: mark.attrs.title,
       }, 0],
     });
-    root.append(serializer.serializeFragment(parsed.content));
+    root.append(serializer.serializeFragment(parsed.content, { document: inert }));
 
     // Task state lives in Milkdown attributes and otherwise disappears when
     // another app pastes the list without Downpad's styles or node views.
     for (const item of root.querySelectorAll("li[data-checked]")) {
       const label = item.getAttribute("data-checked") === "true" ? "☑ " : "☐ ";
-      (item.querySelector("p") ?? item).prepend(document.createTextNode(label));
+      (item.querySelector("p") ?? item).prepend(inert.createTextNode(label));
     }
     for (const element of root.querySelectorAll("[href], [src]")) {
       for (const name of ["href", "src"]) {

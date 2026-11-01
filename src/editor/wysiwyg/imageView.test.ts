@@ -62,6 +62,22 @@ describe("proxyDomURL", () => {
     expect(native.convertFileSrc).not.toHaveBeenCalled();
   });
 
+  it.each(["//h/s/a.png", "\\\\h\\s\\a.png", "%2F%2Fh/s/a.png", "%5C%5Ch%5Cs%5Ca.png", "/\\h/s/a.png", " //h/s/a.png", "file://h/s/a.png", "file:////h/s/a.png"])(
+    "shows the network image %j as missing at once, without asking the main process",
+    (src) => {
+      // Chromium would fetch the raw src from a server, so it never reaches an <img>.
+      expect(proxyDomURL("\\\\server\\share\\a.md")(src)).toBe("data:,");
+      expect(native.convertFileSrc).not.toHaveBeenCalled();
+    },
+  );
+
+  it("asks about an image relative to a document on a network share", async () => {
+    native.convertFileSrc.mockResolvedValueOnce("downpad-file://local/image?token=t");
+    expect(await proxyDomURL("\\\\server\\share\\a.md")("pic.png")).toBe("downpad-file://local/image?token=t");
+    expect(native.convertFileSrc).toHaveBeenCalledWith("\\\\server\\share/pic.png");
+    expect(proxyDomURL("/docs/a.md")("file:///docs/pic.png")).toBe("file:///docs/pic.png");
+  });
+
   it.each([
     ["an image", "downpad-file://local/image?token=t", "downpad-file://local/image?token=t"],
     ["a missing image", null, "data:,"],

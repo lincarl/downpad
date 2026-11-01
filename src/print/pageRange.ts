@@ -15,7 +15,7 @@ export function pageRangeError(range: string, pageCount: number): string | null 
     if (!match) return "Use page numbers and ranges, such as 1-3, 5.";
     const from = Number(match[1]);
     const to = Number(match[2] ?? match[1]);
-    if (from < 1) return "Page numbers start at 1.";
+    if (from < 1 || to < 1) return "Page numbers start at 1.";
     if (to < from) return `Write ranges from low to high, such as ${to}-${from}.`;
     if (pageCount > 0 && to > pageCount) {
       return pageCount === 1 ? "This document has 1 page." : `This document has ${pageCount} pages.`;

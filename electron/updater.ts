@@ -371,6 +371,8 @@ export class Updater {
       });
       await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream<Uint8Array>), progress,
         createWriteStream(part), { signal: controller.signal });
+      // The transfer is over, so a later failure is never a stall.
+      clearTimeout(stall);
       if (hash.digest("hex") !== asset.sha256) {
         throw new Error("The downloaded update failed its integrity check and was discarded.");
       }
@@ -381,7 +383,10 @@ export class Updater {
       this.setState({ status: "ready", version });
     } catch (error) {
       await rm(part, { force: true }).catch(() => {});
-      if (this.manual) this.setState({ status: "failed", message: `Couldn't download Downpad ${version}. ${reason(error)}` });
+      // A stall during the body ends the pipeline with a generic AbortError,
+      // so report the stall itself.
+      const failure: unknown = controller.signal.aborted ? controller.signal.reason : error;
+      if (this.manual) this.setState({ status: "failed", message: `Couldn't download Downpad ${version}. ${reason(failure)}` });
       else this.settle();
     } finally {
       clearTimeout(stall);
