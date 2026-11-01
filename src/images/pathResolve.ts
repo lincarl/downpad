@@ -125,8 +125,11 @@ export function resolveMarkdownLinkTarget(href: string, docPath: string | null):
   // `//host/path` is a protocol-relative web URL and, like `\\host\path` or
   // `%2F%2Fhost/path`, a UNC path once decoded. Never a local file we open.
   // Reject before the isAbsolutePath check, which would otherwise accept it.
-  if (isNetworkPath(href)) return null;
-  const path = safeDecode(href.split(/[?#]/, 1)[0]);
+  // Check the part that opens, because a malformed escape in the query or
+  // fragment, as in `%2F%2Fhost/a.md#%`, keeps the whole href from decoding.
+  const target = href.split(/[?#]/, 1)[0];
+  if (isNetworkPath(href) || isNetworkPath(target)) return null;
+  const path = safeDecode(target);
   if (!path || !MARKDOWN_LINK_EXT.test(path)) return null;
   if (isAbsolutePath(path)) return path;
   if (!docPath) return null;

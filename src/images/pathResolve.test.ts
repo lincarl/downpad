@@ -137,7 +137,11 @@ describe("resolveMarkdownLinkTarget", () => {
     expect(resolveMarkdownLinkTarget("/home/me/a.md", null)).toBe("/home/me/a.md");
   });
 
-  it.each(["//h/s/notes.md", "\\\\h\\s\\notes.md", "%2F%2Fh/s/notes.md", "%5C%5Ch%5Cs%5Cnotes.md", "/%5Ch/s/notes.md", "\\\\?\\UNC\\h\\s\\notes.md"])(
+  it.each([
+    "//h/s/notes.md", "\\\\h\\s\\notes.md", "%2F%2Fh/s/notes.md", "%5C%5Ch%5Cs%5Cnotes.md", "/%5Ch/s/notes.md", "\\\\?\\UNC\\h\\s\\notes.md",
+    // A malformed escape after the path keeps the whole href from decoding.
+    "%2F%2Fh/s/notes.md#%", "%5C%5Ch%5Cs%5Cnotes.md?%zz",
+  ])(
     "returns null for the network path %j",
     (href) => {
       expect(resolveMarkdownLinkTarget(href, doc)).toBeNull();
