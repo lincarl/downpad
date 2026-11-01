@@ -492,7 +492,8 @@ export class PrintWorkspace {
       await job();
     } catch (err) {
       console.error("Downpad: print failed", err);
-      this.flash("Printing failed.");
+      const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+      this.flash(message.trim() ? message : "Printing failed.");
     } finally {
       document.documentElement.classList.remove("printing");
       root.style.transform = previousTransform;

@@ -154,6 +154,74 @@ test("the toolbar copies the whole document as Markdown or formatted text to the
   await expect(source).toContainText("A **bold** paragraph.");
 });
 
+test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {
+  const file = path.join(directory, "paste-code-boundary.md");
+  const original = "Before.\n\n```js\nconst original = 1;\nconst keep = 2;\n```\n\nAfter.\n";
+  await writeFile(file, original);
+  await launch(file);
+  const code = page.locator(".milkdown .ProseMirror .milkdown-code-block");
+  await expect(code.locator(".cm-line")).toHaveCount(2);
+  await clickOn("Before.", -1, 0.75);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Shift+ArrowDown");
+  await app!.evaluate(({ clipboard }) => clipboard.writeText(" **pasted**"));
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(page.locator(".milkdown .ProseMirror > p").first()).toHaveText("Before. pasted");
+  await expect(code).toHaveCount(1);
+  await expect(code.locator(".cm-line").last()).toHaveText("const keep = 2;");
+  await page.keyboard.type("!");
+  await expect(page.locator(".milkdown .ProseMirror > p").first()).toHaveText("Before. pasted!");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toMatch(/```js\n[^]*const keep = 2;\n```\n\nAfter\.\n$/);
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.press("ControlOrMeta+z");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe(original);
+});
+
+test("formatted copies omit network image sources and link destinations while keeping their text", async () => {
+  const file = path.join(directory, "copy-network-targets.md");
+  const markdown = [
+    "# Copy network targets",
+    "![Blocked image](file://server/share/a.png)",
+    "Inline ![Encoded image](%5C%5Cserver%5Cshare%5Ca.png).",
+    "[Blocked link](file://server/share/notes.md)",
+    "![Local image](image.png)",
+  ].join("\n\n") + "\n";
+  await writeFile(path.join(directory, "image.png"), onePixelPng);
+  await writeFile(file, markdown);
+  await launch(file);
+  const copy = page.locator(".toolbar").getByRole("button", { name: "Copy", exact: true });
+  await copy.click();
+  await page.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
+  await expect.poll(clipboardText).toBe(markdown);
+  await copy.click();
+  await page.getByRole("menuitem", { name: "Copy formatted text", exact: true }).click();
+  await expect.poll(clipboardText).toBe("Copy network targets\n\nBlocked image\n\nInline Encoded image.\n\nBlocked link\n\nLocal image");
+  const html = await app!.evaluate(async ({ clipboard }) => {
+    const items = await clipboard.read();
+    const item = items.find((entry) => entry.types.includes("text/html"));
+    return item ? (await item.getType("text/html")).text() : "";
+  });
+  const destinations = await page.evaluate((copiedHtml) => {
+    const root = document.implementation.createHTMLDocument("").createElement("div");
+    root.innerHTML = copiedHtml;
+    return {
+      images: [...root.querySelectorAll("img")].map((image) => ({ alt: image.alt, src: image.getAttribute("src") })),
+      links: [...root.querySelectorAll("a")].map((link) => ({ text: link.textContent, href: link.getAttribute("href") })),
+    };
+  }, html);
+  expect(destinations).toEqual({
+    images: [
+      { alt: "Blocked image", src: null },
+      { alt: "Encoded image", src: null },
+      { alt: "Local image", src: pathToFileURL(path.join(directory, "image.png")).href },
+    ],
+    links: [{ text: "Blocked link", href: null }],
+  });
+  expect(await readFile(file, "utf8")).toBe(markdown);
+});
+
 test("launching a Markdown file renders formatting and relative images in an isolated renderer that keeps its page, and whose menu copies and prints it", async () => {
   const file = path.join(directory, "launch.md");
   await writeFile(path.join(directory, "image.png"), onePixelPng);

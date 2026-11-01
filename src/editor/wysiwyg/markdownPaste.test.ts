@@ -164,6 +164,37 @@ describe("Markdown source pasted into the document", () => {
     expect(view.state.doc.textContent).toBe("Before target after.! after.");
   });
 
+  it.each([false, true])("keeps unselected code fenced when a selection ends inside it, reversed %s", async (reversed) => {
+    const initial = "Before.\n\n```js\nremove keep();\nnext();\n```\n\nUntouched\n=========\n";
+    const { editor, view } = await open(initial);
+    const from = 1 + "Before.".length;
+    const to = view.state.doc.firstChild!.nodeSize + 1 + "remove ".length;
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, reversed ? to : from, reversed ? from : to)));
+    paste(view, " **new**");
+    expect(editor.getMarkdown()).toBe("Before. **new**\n\n```js\nkeep();\nnext();\n```\n\nUntouched\n=========\n");
+    expect(view.state.doc.child(1).type.name).toBe("code_block");
+    expect(view.state.doc.child(1).attrs.language).toBe("js");
+    view.dispatch(view.state.tr.insertText("!"));
+    expect(view.state.doc.firstChild?.textContent).toBe("Before. new!");
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(undo(view.state, view.dispatch)).toBe(true);
+    expect(editor.getMarkdown()).toBe(initial);
+  });
+
+  it("keeps the code suffix and caret when pasted blocks conflict with marks before the code", async () => {
+    const { view } = await open("Before **left target**\n\n```js\nremove keep();\n```\n");
+    selectText(view, "target");
+    const to = view.state.doc.firstChild!.nodeSize + 1 + "remove ".length;
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.selection.from, to)));
+    paste(view, "**one**\n\n**two**");
+    expect(view.state.doc.child(2).type.name).toBe("code_block");
+    expect(view.state.doc.child(2).textContent).toBe("keep();");
+    expect([...view.dom.querySelectorAll("strong")].map((node) => node.textContent)).toEqual(["left one", "two"]);
+    view.dispatch(view.state.tr.insertText("!"));
+    expect(view.state.doc.child(1).textContent).toBe("two!");
+    expect(view.state.doc.child(2).textContent).toBe("keep();");
+  });
+
   it("tracks the source endpoint when pasted blocks join the surrounding text", async () => {
     const { view } = await open("Before target after.\n");
     selectText(view, "target");

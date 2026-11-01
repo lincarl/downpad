@@ -3,6 +3,7 @@ import { parserCtx, schemaCtx } from "@milkdown/kit/core";
 import { DOMSerializer } from "@milkdown/kit/prose/model";
 import { splitFrontmatter } from "../document/frontmatter";
 import { oneLineDisplayMath, pandocInlineMath } from "../editor/wysiwyg/mathDelimiters";
+import { isNetworkPath } from "../images/pathResolve";
 
 export interface FormattedDocument {
   html: string;
@@ -48,9 +49,9 @@ export async function formatDocument(markdown: string, filePath: string | null =
     }, {
       ...DOMSerializer.marksFromSchema(schema),
       // The editor's link serializer drops file URLs and Windows drive paths.
-      // Clipboard links need their own safe, absolute destinations.
+      // Preserve their source for the same URL checks as images below.
       link: (mark) => ["a", {
-        href: portableUrl(String(mark.attrs.href), false, filePath),
+        href: String(mark.attrs.href),
         title: mark.attrs.title,
       }, 0],
     });
@@ -89,14 +90,15 @@ export async function copyFormattedDocument(markdown: string, filePath: string |
   })]);
 }
 
-/** Resolve local targets against the document, excluding executable URL schemes. */
+/** Resolve local targets against the document, excluding network paths and executable schemes. */
 function portableUrl(value: string, image: boolean, filePath: string | null): string | null {
   try {
     let target = value.trim();
-    if (!target) return null;
+    // Check the source before resolving it. A relative target in a document
+    // opened from a share is allowed, but a target that names a server is not.
+    // A malformed escape in a query or fragment must not hide an encoded path.
+    if (!target || isNetworkPath(target) || isNetworkPath(target.split(/[?#]/, 1)[0])) return null;
     if (/^[A-Za-z]:[\\/]/.test(target)) target = `file:///${target.replace(/\\/g, "/")}`;
-    else if (target.startsWith("\\\\")) target = `file:${target.replace(/\\/g, "/")}`;
-    else if (target.startsWith("//")) target = `https:${target}`;
     else if (target.startsWith("/")) target = `file://${target}`;
     const url = new URL(target, filePath ? fileUrl(filePath) : undefined);
     if (["https:", "http:", "file:"].includes(url.protocol)) return url.href;
