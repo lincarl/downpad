@@ -27,7 +27,8 @@ async function renameAtomic(source: string, destination: string): Promise<void> 
   }
 }
 
-/** Replace the real target after its complete replacement reaches disk, preserving symlinks. */
+/** Replace the real target after its complete replacement reaches disk, preserving symlinks
+ *  and an existing target's permissions. A new file gets the default mode for the umask. */
 export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<void> {
   const requested = absolutePath(destination);
   const path = await realpath(requested).catch(async (error: unknown) => {
@@ -43,6 +44,8 @@ export async function writeAtomic(destination: string, bytes: Uint8Array | strin
   const mode = await stat(path).then((info) => info.mode, () => undefined);
   const file = await open(temporary, "wx", mode);
   try {
+    // The umask strips bits from the mode given to open. Windows has no umask.
+    if (mode !== undefined && process.platform !== "win32") await file.chmod(mode & 0o7777);
     await file.writeFile(bytes);
     await file.sync();
     await file.close();
