@@ -22,6 +22,8 @@ describe("pageRangeError", () => {
   it("rejects page 0 and ranges written high to low", () => {
     expect(pageRangeError("0-2", 5)).toBe("Page numbers start at 1.");
     expect(pageRangeError("4-2", 5)).toBe("Write ranges from low to high, such as 2-4.");
+    // Reversing a range that ends at page 0 would suggest "0-2", which is invalid too.
+    expect(pageRangeError("2-0", 5)).toBe("Page numbers start at 1.");
   });
 
   it("checks only the syntax before the pages are laid out", () => {
