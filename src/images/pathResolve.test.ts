@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isRemoteOrData,
   isAbsolutePath,
+  isNetworkPath,
   dirName,
   resolveImagePath,
   resolveMarkdownLinkTarget,
@@ -33,6 +34,41 @@ describe("isAbsolutePath", () => {
   });
 });
 
+describe("isNetworkPath", () => {
+  // Opening any of these on Windows contacts the named server over SMB.
+  it.each([
+    "//h/s/a.png",
+    "\\\\h\\s\\a.png",
+    "%2F%2Fh/s/a.png",
+    "%5C%5Ch%5Cs%5Ca.png",
+    "/\\h/s/a.png",
+    "\\/h/s/a.png",
+    "\\\\?\\UNC\\h\\s\\a.png",
+    "\\\\.\\pipe\\a.png",
+    // Chromium's URL parser drops these, so the raw src reaches the server too.
+    " //h/s/a.png",
+    "/\t/h/s/a.png",
+    "file://h/s/a.png",
+    "FILE:\\\\h\\s\\a.png",
+    "file:////h/s/a.png",
+    "file:///%5C%5Ch/s/a.png",
+  ])("flags %j", (value) => {
+    expect(isNetworkPath(value)).toBe(true);
+  });
+
+  it.each([
+    "attachments/a.png",
+    "C:\\notes\\a.png",
+    "C:/notes/a.png",
+    "/home/me/a.png",
+    "file:///C:/notes/a.png",
+    "file://localhost/home/me/a.png",
+    "https://example.com/a.png",
+  ])("leaves %j alone", (value) => {
+    expect(isNetworkPath(value)).toBe(false);
+  });
+});
+
 describe("dirName", () => {
   it("returns the directory for both slash styles", () => {
     expect(dirName("C:\\notes\\doc.md")).toBe("C:\\notes");
@@ -58,6 +94,19 @@ describe("resolveImagePath", () => {
   it("returns null for a relative path with no document anchor", () => {
     expect(resolveImagePath("attachments/a.png", null)).toBeNull();
   });
+  it.each(["//h/s/a.png", "\\\\h\\s\\a.png", "%2F%2Fh/s/a.png", "%5C%5Ch%5Cs%5Ca.png", "/\\h/s/a.png", " //h/s/a.png"])(
+    "never resolves the network path %j",
+    (src) => {
+      expect(resolveImagePath(src, "C:/notes/doc.md")).toBeNull();
+      expect(resolveImagePath(src, "\\\\server\\share\\doc.md")).toBeNull();
+      expect(resolveImagePath(src, null)).toBeNull();
+    },
+  );
+  it("resolves images relative to a document on a network share, and local absolute paths", () => {
+    expect(resolveImagePath("attachments/a.png", "\\\\server\\share\\doc.md")).toBe("\\\\server\\share/attachments/a.png");
+    expect(resolveImagePath("C:\\img\\a.png", "\\\\server\\share\\doc.md")).toBe("C:\\img\\a.png");
+    expect(resolveImagePath("/home/me/a.png", null)).toBe("/home/me/a.png");
+  });
 });
 
 describe("resolveMarkdownLinkTarget", () => {
@@ -82,11 +131,22 @@ describe("resolveMarkdownLinkTarget", () => {
     );
   });
 
-  it("passes absolute .md paths through (both slash styles + UNC)", () => {
+  it("passes absolute .md paths through (both slash styles)", () => {
     expect(resolveMarkdownLinkTarget("C:/other/a.md", null)).toBe("C:/other/a.md");
     expect(resolveMarkdownLinkTarget("C:\\other\\a.md", null)).toBe("C:\\other\\a.md");
     expect(resolveMarkdownLinkTarget("/home/me/a.md", null)).toBe("/home/me/a.md");
-    expect(resolveMarkdownLinkTarget("\\\\srv\\share\\a.md", null)).toBe("\\\\srv\\share\\a.md");
+  });
+
+  it.each(["//h/s/notes.md", "\\\\h\\s\\notes.md", "%2F%2Fh/s/notes.md", "%5C%5Ch%5Cs%5Cnotes.md", "/%5Ch/s/notes.md", "\\\\?\\UNC\\h\\s\\notes.md"])(
+    "returns null for the network path %j",
+    (href) => {
+      expect(resolveMarkdownLinkTarget(href, doc)).toBeNull();
+      expect(resolveMarkdownLinkTarget(href, null)).toBeNull();
+    },
+  );
+
+  it("resolves a relative link in a document on a network share", () => {
+    expect(resolveMarkdownLinkTarget("chapter1.md", "\\\\server\\share\\index.md")).toBe("\\\\server\\share/chapter1.md");
   });
 
   it("recognizes every markdown extension, case-insensitively", () => {

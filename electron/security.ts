@@ -44,11 +44,16 @@ export class ImageAccess {
 
   /** Authorize one local image and return its URL, or null when the file does not exist.
    *  A missing image is a normal document state that the renderer shows as a placeholder,
-   *  so it must not reject and make Electron log a handler error. */
+   *  so it must not reject and make Electron log a handler error. Both the requested
+   *  path and the file it leads to must be named as images. The requested name is
+   *  checked before any filesystem call, so a path that is not an image never reaches
+   *  the disk or, for a UNC path on Windows, a file server. */
   async imageUrl(value: unknown): Promise<string | null> {
+    const requested = absolutePath(value);
+    if (!imageMime(requested)) throw new Error("Only local images can be loaded.");
     let path: string;
     try {
-      path = await realpath(absolutePath(value));
+      path = await realpath(requested);
     } catch (error) {
       if (error instanceof Error && "code" in error && typeof error.code === "string"
         && MISSING_PATH_ERRORS.has(error.code)) return null;

@@ -66,6 +66,19 @@ describe("formatted document", () => {
     expect(html).toBe("<p><a>Unresolved</a></p>");
   });
 
+  it("builds the copy without loading its images", async () => {
+    // An <img> made in the page loads its src at once, even outside the page,
+    // and Chromium reads `//server/share/a.png` there from the file server.
+    const creating = vi.spyOn(document, "createElement");
+    try {
+      const { html } = await formatDocument("![Shared](//server/share/a.png) and ![Local](a.png)", "/notes/index.md");
+      expect(creating.mock.calls.map(([tag]) => tag)).not.toContain("img");
+      expect(html).toBe('<p><img src="https://server/share/a.png" alt="Shared" title=""> and <img src="file:///notes/a.png" alt="Local" title=""></p>');
+    } finally {
+      creating.mockRestore();
+    }
+  });
+
   it("separates footnote labels from body text in plain-text copies", async () => {
     const { html, text } = await formatDocument("Text[^1] and another[^note].\n\n[^1]: A footnote.\n\n[^note]: A **named** footnote.");
     expect(text).toBe("Text[1] and another[note].\n\n[1] A footnote.\n\n[note] A named footnote.");

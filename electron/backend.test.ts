@@ -820,7 +820,7 @@ describe("Desktop page and image access", () => {
     await expect(access.imageUrl(unsafe)).rejects.toThrow("Only local images");
   });
 
-  it.skipIf(process.platform === "win32")("judges a linked image by the type of the file it links to", async () => {
+  it.skipIf(process.platform === "win32")("judges a linked image by its own name and the file it links to", async () => {
     const directory = await fixtureDirectory();
     const notes = join(directory, "notes.txt");
     const image = join(directory, "image.png");
@@ -832,8 +832,23 @@ describe("Desktop page and image access", () => {
     await symlink(image, plainName);
     const access = new ImageAccess();
     await expect(access.imageUrl(disguised)).rejects.toThrow("Only local images");
-    const linked = new URL((await access.imageUrl(plainName))!);
-    expect(await access.resolveImage(linked.searchParams.get("token")!)).toBe(image);
+    await expect(access.imageUrl(plainName)).rejects.toThrow("Only local images");
+  });
+
+  it("refuses a path that is not an image before touching the filesystem", async () => {
+    // On Windows, realpath on a UNC path contacts its server, which can leak the user's credentials.
+    const resolving = vi.spyOn(filesystem, "realpath");
+    try {
+      syncBuiltinESMExports();
+      const access = new ImageAccess();
+      for (const path of [resolve("//server/share/notes.md"), resolve("/notes/notes.txt"), resolve("/notes/image")]) {
+        await expect(access.imageUrl(path)).rejects.toThrow("Only local images");
+      }
+      expect(resolving).not.toHaveBeenCalled();
+    } finally {
+      resolving.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 
   it("answers a missing image with null and still rejects invalid paths", async () => {
