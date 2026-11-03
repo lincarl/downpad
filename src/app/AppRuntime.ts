@@ -409,8 +409,11 @@ export class AppRuntime {
    *  when saving is on. Autosave and the saves of a close prompt do not
    *  upload. */
   private async saveByUser(saveAs: boolean): Promise<void> {
+    const tabId = this.store.get().activeTabId;
     const saved = await (saveAs ? this.files.saveAs() : this.files.save());
-    if (saved) this.git.afterUserSave();
+    // Upload the saved document, also if another tab became active meanwhile.
+    const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
+    if (saved) this.git.afterUserSave(path);
   }
 
   /** Re-mount the WYSIWYG editor so changed serializer style (§5.16) or link

@@ -200,22 +200,30 @@ export interface GitOpenFile {
   unsaved: boolean;
 }
 
-/** How Upload, Get latest or discarding changes ended. */
-export type GitSyncResult =
+/** How Upload, Get latest or discarding changes ended, without the files
+ *  that changed. */
+export type GitOutcome =
   | {
       kind: "done";
       /** Whether a commit reached the remote. */
       uploaded: boolean;
-      /** The open documents whose files changed, as the caller named them. */
-      changedOpenFiles: string[];
       /** Whose remote changes were combined into the document, or null. */
       combinedWith: string | null;
     }
   /** Nothing to get, or nothing to upload. */
   | { kind: "up-to-date" }
-  /** The document and the remote changed the same lines. Nothing changed. */
+  /** The document and the remote changed the same lines. The document is
+   *  unchanged. */
   | { kind: "conflict"; author: string; timeMs: number }
   /** These files have changes that are not saved or not uploaded, and the
-   *  latest version would replace them. Nothing changed. */
+   *  latest version would replace them. They are unchanged. */
   | { kind: "blocked"; files: string[] }
   | { kind: "failed"; message: string };
+
+/** How Upload, Get latest or discarding changes ended. */
+export type GitSyncResult = GitOutcome & {
+  /** The open documents whose files changed, as the caller named them. An
+   *  action that stopped after it got changes lists them too, so the caller
+   *  can reload them. */
+  changedOpenFiles: string[];
+};

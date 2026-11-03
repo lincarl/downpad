@@ -50,8 +50,8 @@ export class GitSync {
   /** Work that waits for the running action to end, such as the conflict
    *  dialog that an Upload ran into. */
   private followUp: (() => Promise<void>) | null = null;
-  /** Whether an Upload was asked for while another action ran. */
-  private uploadQueued = false;
+  /** Saved documents whose Upload waits for a running Git action. */
+  private readonly pendingUploads = new Set<string>();
   private activity: GitState["activity"] = null;
   /** The document that `activity` is for. */
   private activityPath: string | null = null;
@@ -99,24 +99,29 @@ export class GitSync {
 
   /** Upload the active document: save it, then commit and push it. */
   upload(): Promise<void> {
-    return this.exclusive(() => this.runUpload(false), { wait: true });
+    const path = this.activePath();
+    return this.exclusive(() => this.runUpload(path, false), { wait: true });
   }
 
-  /** Upload after the user saved the active document, when Upload when
-   *  saving is on. An Upload asked for while another runs follows it. */
-  afterUserSave(): void {
-    const { settings, git } = this.deps.store.get();
-    if (!settings.gitUploadOnSave || !git || this.disposed) return;
-    if (this.running) {
-      this.uploadQueued = true;
-      return;
-    }
-    void this.exclusive(() => this.runUpload(true));
+  /** Upload the document at `path`, which the user just saved, when Upload
+   *  when saving is on and it is in a repository. The Upload waits for a
+   *  running Git action, and still uploads that document if another tab is
+   *  active by then. */
+  afterUserSave(path: string | null): void {
+    if (!path || !this.deps.store.get().settings.gitUploadOnSave || this.disposed) return;
+    if (this.pendingUploads.has(path)) return;
+    this.pendingUploads.add(path);
+    void this.exclusive(async () => {
+      // A save during this Upload asks for another.
+      this.pendingUploads.delete(path);
+      await this.runUpload(path, true);
+    }, { wait: true });
   }
 
   /** Get latest for the active document's repository. */
   getLatest(): Promise<void> {
-    return this.exclusive(() => this.runGetLatest(), { wait: true });
+    const path = this.activePath();
+    return this.exclusive(() => this.runGetLatest(path), { wait: true });
   }
 
   /** Handle a notice bar action. Returns false for actions of other notices. */
@@ -199,7 +204,16 @@ export class GitSync {
       const markdown = this.activeTab()?.doc.markdown ?? tab.doc.markdown;
       const preview = await gitPreviewCombine(path, markdown).catch(() => ({ clean: false }));
       if (this.disposed || this.activePath() !== path || this.running || this.dialogOpen) return;
-      if (preview.clean) {
+      if (!preview.clean && status.unuploadedCommits > 0) {
+        // Discarding or saving the user's version cannot take back commits
+        // that another Git program made, so leave the overlap to it.
+        if (!this.conflictsShown.has(change.commit)) {
+          this.conflictsShown.add(change.commit);
+          this.showError(
+            `${change.author} changed the same parts of “${fileName(path)}” as commits that another Git program made here and did not upload. Combine them with that Git program.`,
+          );
+        }
+      } else if (preview.clean) {
         this.showNotice({
           kind: "remote-changed",
           message: `${change.author} changed this document ${timeAgo(change.timeMs)}. Get latest to combine their changes with yours.`,
@@ -226,8 +240,8 @@ export class GitSync {
     // Nothing that is not uploaded changes, so get the latest version quietly.
     await this.exclusive(async () => {
       const result = await gitGetLatest(path, this.openFiles(), false).catch((error: unknown) => failed(error));
+      await this.reloadChanged(result.changedOpenFiles);
       if (result.kind === "done") {
-        await this.reloadChanged(result.changedOpenFiles);
         this.clearNotice(GIT_GET_LATEST);
       } else if (result.kind === "failed") {
         const git = this.deps.store.get().git;
@@ -239,17 +253,17 @@ export class GitSync {
 
   // ── Upload and Get latest ────────────────────────────────────────────────
 
-  private async runUpload(fromSave: boolean): Promise<void> {
-    const path = this.activePath();
+  /** Upload the document at `path`. The toolbar's Upload saves the active
+   *  document first. An Upload after a save uploads what was saved, also
+   *  for a document that is no longer active. */
+  private async runUpload(path: string | null, fromSave: boolean): Promise<void> {
     if (!path || !(await this.ready(path))) return;
-    if (!fromSave && !(await this.saveIfUnsaved(path))) return;
-    if (this.activePath() !== path) return;
+    if (!fromSave && (!(await this.saveIfUnsaved(path)) || this.activePath() !== path)) return;
     const result = await this.during(path, "uploading", () => gitUpload(path, this.openFiles()));
     await this.finish(path, result, "upload", fromSave);
   }
 
-  private async runGetLatest(): Promise<void> {
-    const path = this.activePath();
+  private async runGetLatest(path: string | null): Promise<void> {
     if (!path || !(await this.ready(path))) return;
     // The latest version may change the document, so its changes are saved first.
     if (!(await this.saveIfUnsaved(path))) return;
@@ -262,7 +276,8 @@ export class GitSync {
   private async ready(path: string): Promise<boolean> {
     const git = this.deps.store.get().git;
     if (git && sameFilePath(git.path, path)) return true;
-    return (await this.refresh()) !== null;
+    if (path === this.activePath()) return (await this.refresh()) !== null;
+    return (await gitStatus(path, false).catch(() => null)) !== null;
   }
 
   /** Save the active document if it has unsaved changes. Returns false when
@@ -278,13 +293,15 @@ export class GitSync {
     });
   }
 
-  /** Report the outcome of an Upload or Get latest. */
+  /** Report the outcome of an Upload or Get latest, after reloading the open
+   *  documents it changed, however it ended. */
   private async finish(path: string, result: GitSyncResult, action: Action, fromSave: boolean): Promise<void> {
     const name = fileName(path);
+    await this.reloadChanged(result.changedOpenFiles);
+    const active = path === this.activePath();
     switch (result.kind) {
       case "done":
         this.clearNotice();
-        await this.reloadChanged(result.changedOpenFiles);
         if (result.combinedWith) {
           this.showNotice({
             kind: "info",
@@ -303,13 +320,14 @@ export class GitSync {
         }
         break;
       case "conflict":
-        this.followUp = () => this.resolveConflict(path, result);
+        if (active) this.followUp = () => this.resolveConflict(path, result);
+        else this.showError(`“${name}” is not uploaded, because ${result.author} changed the same parts of it. Show it to choose what to keep.`);
         break;
       case "blocked":
         if (result.files.some((file) => sameFilePath(file, path))) {
           // The user typed while the upload ran, and the remote changed the
-          // document meanwhile. A check then tells them what to do.
-          this.followUp = () => this.check({ force: true });
+          // document meanwhile. A check tells them what to do when it shows.
+          if (active) this.followUp = () => this.check({ force: true });
           break;
         }
         this.showError(
@@ -368,14 +386,31 @@ export class GitSync {
     }
     const others = this.openFiles().filter((file) => !sameFilePath(file.path, path));
     const result = await this.during(path, "getting-latest", () => gitDiscard(path, others));
-    if (result.kind !== "done" && result.kind !== "up-to-date") {
-      await this.finish(path, result, "get-latest", false);
+    if (result.changedOpenFiles.some((file) => sameFilePath(file, path))) {
+      // The file is put back. Typing while Git ran went into the editor
+      // after the copy was kept, so keep a newer copy before replacing it.
+      this.deps.flush();
+      const latest = this.deps.store.get().tabs.find((entry) => entry.id === tab.id);
+      if (latest && latest.doc.filePath === path && latest.doc.markdown !== tab.doc.markdown) {
+        try {
+          copy = await keepDiscardedCopy(path, latest.doc.markdown);
+        } catch (error) {
+          this.showError(`Downpad could not keep a copy of your latest changes, so the document still shows them. ${errorText(error)}`);
+          return;
+        }
+      }
+      if (this.deps.store.get().activeTabId === tab.id) {
+        await this.deps.keepingPlace(() => this.deps.files.openPath(path, { reload: true, discardUnsaved: true }));
+      } else if (await this.deps.files.refreshFromDisk(tab.id, { discardUnsaved: true })) {
+        await this.deps.discardEditors(tab.id);
+      }
+    }
+    const rest = { ...result, changedOpenFiles: result.changedOpenFiles.filter((file) => !sameFilePath(file, path)) };
+    if (rest.kind !== "done") {
+      await this.finish(path, rest, "get-latest", false);
       return;
     }
-    if (this.activePath() === path) {
-      await this.deps.keepingPlace(() => this.deps.files.openPath(path, { reload: true, discardUnsaved: true }));
-    }
-    if (result.kind === "done") await this.reloadChanged(result.changedOpenFiles.filter((file) => !sameFilePath(file, path)));
+    await this.reloadChanged(rest.changedOpenFiles);
     this.conflict = null;
     this.discardedCopy = copy;
     this.showNotice({
@@ -407,12 +442,12 @@ export class GitSync {
     }
     const newPath = this.deps.store.get().tabs.find((entry) => entry.id === tab.id)?.doc.filePath ?? path;
     const result = await this.during(path, "getting-latest", () => gitDiscard(path, this.openFiles()));
-    if (result.kind !== "done" && result.kind !== "up-to-date") {
+    if (result.kind !== "done") {
       await this.finish(path, result, "get-latest", false);
       return;
     }
     await this.deps.files.openBeside(path, tab.id).catch((error: unknown) => this.showError(errorText(error)));
-    if (result.kind === "done") await this.reloadChanged(result.changedOpenFiles);
+    await this.reloadChanged(result.changedOpenFiles);
     this.conflict = null;
     this.showNotice({
       kind: "info",
@@ -444,10 +479,6 @@ export class GitSync {
     const followUp = this.followUp;
     this.followUp = null;
     if (followUp) await followUp();
-    if (this.uploadQueued && !this.disposed) {
-      this.uploadQueued = false;
-      await this.exclusive(() => this.runUpload(true));
-    }
   }
 
   /** Show `activity` for the document at `path` while `operation` runs. */
@@ -539,5 +570,5 @@ function errorText(error: unknown): string {
 }
 
 function failed(error: unknown): GitSyncResult {
-  return { kind: "failed", message: errorText(error) };
+  return { kind: "failed", message: errorText(error), changedOpenFiles: [] };
 }

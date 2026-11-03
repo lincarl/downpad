@@ -177,6 +177,29 @@ describe("GitSync conflicts", () => {
     expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md");
   });
 
+  it("keeps a newer copy when the user typed while Git ran", async () => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/first.md");
+    git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/latest.md");
+    git.discard.mockImplementation(async () => {
+      store.patchDoc({ markdown: "# Notes\n\nMine, and more\n" });
+      return done([PATH]);
+    });
+    await sync.check({ force: true });
+    expect(git.keepCopy).toHaveBeenLastCalledWith(PATH, "# Notes\n\nMine, and more\n");
+    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true, discardUnsaved: true });
+    sync.handleBannerAction(GIT_OPEN_COPY);
+    expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/latest.md");
+  });
+
+  it("leaves an overlap with another Git program's commits to that program", async () => {
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? { ...behind, ahead: 1, unuploadedCommits: 1 } : clean));
+    await sync.check({ force: true });
+    expect(deps.askConflict).not.toHaveBeenCalled();
+    expect(store.get().banner).toMatchObject({ kind: "error" });
+    expect(store.get().banner?.message).toContain("another Git program");
+  });
+
   it("discards nothing when it cannot keep a copy", async () => {
     deps.askConflict.mockResolvedValue("discard");
     git.keepCopy.mockRejectedValue(new Error("Disk full"));
@@ -222,11 +245,11 @@ describe("GitSync upload", () => {
     openDocument();
     await sync.check();
     git.upload.mockResolvedValue(done([], { uploaded: true }));
-    sync.afterUserSave();
+    sync.afterUserSave(PATH);
     expect(git.upload).not.toHaveBeenCalled();
 
     store.set({ settings: { ...DEFAULT_SETTINGS, gitUploadOnSave: true } });
-    sync.afterUserSave();
+    sync.afterUserSave(PATH);
     await vi.waitFor(() => expect(git.upload).toHaveBeenCalledTimes(1));
     // A save never asks to save again.
     expect(deps.files.save).not.toHaveBeenCalled();
@@ -235,15 +258,55 @@ describe("GitSync upload", () => {
   it("explains a failed upload", async () => {
     openDocument();
     await sync.check();
-    git.upload.mockResolvedValue({ kind: "failed", message: "Git could not sign in to github.com." });
+    git.upload.mockResolvedValue({ kind: "failed", message: "Git could not sign in to github.com.", changedOpenFiles: [] });
     await sync.upload();
     expect(store.get().banner).toEqual({ kind: "error", message: "Upload failed. Git could not sign in to github.com." });
+  });
+
+  it("uploads after the first save into a repository, before Downpad knew the repository", async () => {
+    openDocument();
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitUploadOnSave: true } });
+    expect(store.get().git).toBeNull();
+    git.upload.mockResolvedValue(done([], { uploaded: true }));
+    sync.afterUserSave(PATH);
+    await vi.waitFor(() => expect(git.upload).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }]));
+  });
+
+  it("uploads the saved document after a running action, also once another tab is active", async () => {
+    openDocument();
+    await sync.check();
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitUploadOnSave: true } });
+    let finishFirst!: (result: GitSyncResult) => void;
+    git.upload.mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)));
+    git.upload.mockResolvedValue(done([], { uploaded: true }));
+    const first = sync.upload();
+    await vi.waitFor(() => expect(git.upload).toHaveBeenCalledTimes(1));
+    sync.afterUserSave(PATH);
+    store.addTab({ ...store.get().doc, filePath: "/work/other.md" });
+    finishFirst(done([], { uploaded: true }));
+    await first;
+    await vi.waitFor(() => expect(git.upload).toHaveBeenCalledTimes(2));
+    expect(git.upload.mock.calls[1][0]).toBe(PATH);
+  });
+
+  it("reloads the documents an upload changed before it failed", async () => {
+    openDocument();
+    const background = store.get().activeTabId!;
+    store.addTab({ ...store.get().doc, filePath: "/work/notes2.md" });
+    store.activateTab(background);
+    await sync.check();
+    git.upload.mockResolvedValue({ kind: "failed", message: "No connection.", changedOpenFiles: ["/work/notes2.md"] });
+    await sync.upload();
+    const other = store.get().tabs.find((tab) => tab.doc.filePath === "/work/notes2.md")!;
+    expect(deps.files.refreshFromDisk).toHaveBeenCalledWith(other.id);
+    expect(deps.discardEditors).toHaveBeenCalledWith(other.id);
+    expect(store.get().banner?.message).toBe("Upload failed. No connection.");
   });
 
   it("asks about a conflict that the upload ran into", async () => {
     openDocument();
     await sync.check();
-    git.upload.mockResolvedValue({ kind: "conflict", author: "Anna Berg", timeMs: remoteChange.timeMs });
+    git.upload.mockResolvedValue({ kind: "conflict", author: "Anna Berg", timeMs: remoteChange.timeMs, changedOpenFiles: [] });
     await sync.upload();
     expect(deps.askConflict).toHaveBeenCalledTimes(1);
   });

@@ -10,7 +10,7 @@ import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from ".
 import type { FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
-import { blankDoc, hasUnsavedChanges, type DocumentState } from "../state/types";
+import { blankDoc, hasUnsavedChanges, type DocumentState, type Tab } from "../state/types";
 import type { Store } from "../state/store";
 
 const MD_FILTERS = [
@@ -147,13 +147,15 @@ export class FileService {
 
   /** Read a tab's file again into the tab, which is not the active one, so
    *  its editors are built from the new text when it is shown. A tab with
-   *  unsaved changes keeps them. Returns whether the tab took the new text. */
-  async refreshFromDisk(tabId: string): Promise<boolean> {
+   *  unsaved changes keeps them, unless `discardUnsaved` says the user chose
+   *  to discard them. Returns whether the tab took the new text. */
+  async refreshFromDisk(tabId: string, { discardUnsaved = false }: { discardUnsaved?: boolean } = {}): Promise<boolean> {
+    const kept = (tab: Tab): boolean => !discardUnsaved && hasUnsavedChanges(tab);
     const before = this.store.get().tabs.find((tab) => tab.id === tabId);
-    if (!before?.doc.filePath || hasUnsavedChanges(before) || this.store.get().activeTabId === tabId) return false;
+    if (!before?.doc.filePath || kept(before) || this.store.get().activeTabId === tabId) return false;
     const payload = await readFile(before.doc.filePath);
     const tab = this.store.get().tabs.find((entry) => entry.id === tabId);
-    if (!tab || tab.doc.filePath !== before.doc.filePath || hasUnsavedChanges(tab) || this.store.get().activeTabId === tabId) return false;
+    if (!tab || tab.doc.filePath !== before.doc.filePath || kept(tab) || this.store.get().activeTabId === tabId) return false;
     this.store.patchDocById(tabId, fileDocument(before.doc.filePath, payload, tab.doc.frontmatterCollapsed));
     return true;
   }

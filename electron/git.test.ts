@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discardChanges, explainGitError, getLatest, gitStatus, keepDiscardedCopy, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
+import { discardChanges, explainGitError, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
 
 let root: string;
 /** The remote that both clones upload to. */
@@ -104,7 +104,7 @@ describe("getLatest", () => {
   it("never replaces an open document with unsaved changes", async () => {
     await pushFrom(theirs, { "notes.md": NOTES.replace("First", "1st") });
     const result = await getLatest(notes(), open(true), false);
-    expect(result).toEqual({ kind: "blocked", files: [notes()] });
+    expect(result).toEqual({ kind: "blocked", files: [notes()], changedOpenFiles: [] });
     expect(await readFile(notes(), "utf8")).toBe(NOTES);
   });
 
@@ -112,7 +112,7 @@ describe("getLatest", () => {
     await pushFrom(theirs, { "other.md": "Changed\n" });
     await writeFile(join(mine, "other.md"), "Mine\n");
     const result = await getLatest(notes(), open(), false);
-    expect(result).toEqual({ kind: "blocked", files: [join(mine, "other.md")] });
+    expect(result).toEqual({ kind: "blocked", files: [join(mine, "other.md")], changedOpenFiles: [] });
     expect(await readFile(join(mine, "other.md"), "utf8")).toBe("Mine\n");
   });
 
@@ -142,7 +142,7 @@ describe("getLatest", () => {
   });
 
   it("says when there is nothing new", async () => {
-    expect(await getLatest(notes(), open(), false)).toEqual({ kind: "up-to-date" });
+    expect(await getLatest(notes(), open(), false)).toEqual({ kind: "up-to-date", changedOpenFiles: [] });
   });
 });
 
@@ -151,15 +151,17 @@ describe("upload", () => {
     await mkdir(join(mine, "attachments"));
     await writeFile(join(mine, "attachments", "a b.png"), "png");
     await writeFile(join(mine, "unrelated.txt"), "Not linked\n");
+    await writeFile(join(mine, "credentials.json"), "secret");
     await writeFile(join(mine, "other.md"), "Other, not uploaded\n");
-    await writeFile(notes(), `${NOTES}\n![](attachments/a%20b.png)\n`);
+    // A file named in the text, or in code, is no link.
+    await writeFile(notes(), `${NOTES}\nNever upload credentials.json.\n\n\`[x](unrelated.txt)\`\n\n![](attachments/a%20b.png)\n`);
 
     expect(await upload(notes(), open())).toEqual({ kind: "done", uploaded: true, changedOpenFiles: [], combinedWith: null });
     run(theirs, "pull", "--quiet", "--ff-only");
     expect(await readFile(join(theirs, "notes.md"), "utf8")).toContain("a%20b.png");
     expect(await readFile(join(theirs, "attachments", "a b.png"), "utf8")).toBe("png");
     expect(run(theirs, "log", "-1", "--format=%s%n%an")).toBe("Update notes.md\nMe\n");
-    expect(run(mine, "status", "--porcelain")).toBe(" M other.md\n?? unrelated.txt\n");
+    expect(run(mine, "status", "--porcelain")).toBe(" M other.md\n?? credentials.json\n?? unrelated.txt\n");
     expect(await gitStatus(notes(), { fetch: false })).toMatchObject({ changed: false, ahead: 0, behind: 0 });
   });
 
@@ -224,8 +226,18 @@ describe("upload", () => {
     expect(run(mine, "status", "--porcelain")).toBe(" M notes.md\n");
   });
 
+  it("names the open documents it got changes for, also when the push then fails", async () => {
+    await pushFrom(theirs, { "other.md": "Theirs\n" });
+    await writeFile(notes(), NOTES.replace("Third", "3rd"));
+    run(mine, "config", "remote.origin.pushurl", join(root, "missing.git"));
+    const other = join(mine, "other.md");
+    const result = await upload(notes(), [...open(), { path: other, unsaved: false }]);
+    expect(result).toMatchObject({ kind: "failed", changedOpenFiles: [other] });
+    expect(await readFile(other, "utf8")).toBe("Theirs\n");
+  });
+
   it("says when there is nothing to upload", async () => {
-    expect(await upload(notes(), open())).toEqual({ kind: "up-to-date" });
+    expect(await upload(notes(), open())).toEqual({ kind: "up-to-date", changedOpenFiles: [] });
   });
 });
 
@@ -237,6 +249,41 @@ describe("discardChanges", () => {
     expect(result).toMatchObject({ kind: "done" });
     expect(await readFile(notes(), "utf8")).toBe(NOTES.replace("First paragraph", "Their paragraph"));
     expect(run(mine, "status", "--porcelain")).toBe("");
+  });
+});
+
+describe("discardChanges with commits that are not uploaded", () => {
+  it("leaves changes in another Git program's commits alone", async () => {
+    await pushFrom(theirs, { "notes.md": NOTES.replace("First paragraph", "Their paragraph") });
+    await writeFile(notes(), NOTES.replace("First paragraph", "My paragraph"));
+    run(mine, "commit", "--quiet", "-am", "Mine, not uploaded");
+    const result = await discardChanges(notes(), open());
+    expect(result).toMatchObject({ kind: "failed", changedOpenFiles: [] });
+    expect(await readFile(notes(), "utf8")).toContain("My paragraph");
+  });
+});
+
+describe("linkedPaths", () => {
+  it("finds the paths of links, images, link definitions and HTML, and nothing in prose or code", () => {
+    const text = [
+      "Never upload credentials.json or [notes](https://example.com/a.png).",
+      "",
+      "![a](attachments/a%20b.png \"Title\") [b](<docs/my file.pdf>) [c](#top) [d](/abs.png) [e](notes.md#part)",
+      "",
+      "[ref]: ./ref.png",
+      "",
+      "`![code](code.png)`",
+      "",
+      "```",
+      "![fenced](fenced.png)",
+      "```",
+      "",
+      '<img src="html.png"> <a href=\'page.html?x=1\'>x</a> <https://example.com/auto.png>',
+    ].join("\n");
+    expect(linkedPaths(text, "/work")).toEqual(
+      ["/work/attachments/a b.png", "/work/docs/my file.pdf", "/work/notes.md", "/work/ref.png", "/work/html.png", "/work/page.html"]
+        .map((path) => resolve(path)),
+    );
   });
 });
 

@@ -6,8 +6,9 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
-import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../src/ipc/contracts";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { GFM, parser as markdownParser } from "@lezer/markdown";
+import type { GitFileStatus, GitOpenFile, GitOutcome, GitSyncResult } from "../src/ipc/contracts";
 import { readMarkdown, writeAtomic, writeMarkdown } from "./io";
 
 /** The repository, branch and remote branch of one document. */
@@ -406,7 +407,7 @@ export async function previewCombine(path: string, ours: string): Promise<{ clea
 /** Results of bringing the branch up to date before the caller goes on. */
 type Integration =
   | { kind: "integrated"; changedOpenFiles: string[]; combinedWith: string | null }
-  | Exclude<GitSyncResult, { kind: "done" | "up-to-date" }>;
+  | Exclude<GitOutcome, { kind: "done" | "up-to-date" }>;
 
 /**
  * Bring the branch up to the remote branch, which has `behind` commits that it
@@ -430,13 +431,11 @@ async function integrate(context: GitContext, ahead: number, openFiles: readonly
   if (ahead > 0) {
     // Commits that another Git program made here and did not upload are
     // merged, as `git pull` would. Downpad leaves no such commits itself.
-    if (documentChanged) {
-      return { kind: "failed", message: "This repository has commits that are not uploaded. Upload or combine them with a Git program first." };
-    }
+    if (documentChanged) return { kind: "failed", message: UNUPLOADED_COMMITS };
     const merged = await git(["merge", "--no-edit", "@{upstream}"], { cwd: context.root });
     if (merged.code !== 0) {
       await git(["merge", "--abort"], { cwd: context.root });
-      return { kind: "failed", message: "Downpad cannot combine the commits that are not uploaded with the latest version. Use a Git program to combine them." };
+      return { kind: "failed", message: UNUPLOADED_COMMITS };
     }
     return { kind: "integrated", changedOpenFiles, combinedWith: null };
   }
@@ -465,8 +464,12 @@ async function integrate(context: GitContext, ahead: number, openFiles: readonly
   return { kind: "integrated", changedOpenFiles, combinedWith: merged === ours.content ? null : change?.author ?? "Someone" };
 }
 
+/** Why Downpad leaves commits that another Git program made to that program. */
+const UNUPLOADED_COMMITS =
+  "This repository has commits that another Git program made and did not upload, and Downpad cannot combine them with the latest version. Upload or combine them with that Git program first.";
+
 /** Reject actions while another Git program has left the repository mid-merge. */
-async function readyForChanges(context: GitContext): Promise<GitSyncResult | null> {
+async function readyForChanges(context: GitContext): Promise<GitOutcome | null> {
   if (await unfinishedOperation(context)) {
     return { kind: "failed", message: "Another Git program left a merge or rebase unfinished in this repository. Finish it there first." };
   }
@@ -474,9 +477,33 @@ async function readyForChanges(context: GitContext): Promise<GitSyncResult | nul
 }
 
 /** Report an unexpected error as a failed result. */
-function failure(error: unknown): GitSyncResult {
+function failure(error: unknown): GitOutcome {
   if (error instanceof GitUnavailable) return { kind: "failed", message: "Git is not installed." };
   return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+}
+
+/** Run a Git action on the document at `path` in its repository's queue.
+ *  The action records the open documents whose files it changes in
+ *  `changedOpenFiles`, which the result reports however the action ends. */
+async function action(
+  path: string,
+  run: (context: GitContext, changedOpenFiles: string[]) => Promise<GitOutcome>,
+): Promise<GitSyncResult> {
+  const context = await contextOf(path);
+  if (!context) {
+    return { kind: "failed", message: "This document is no longer in a Git repository with a remote branch.", changedOpenFiles: [] };
+  }
+  return inRepository(context.root, async () => {
+    const changedOpenFiles: string[] = [];
+    let outcome: GitOutcome;
+    try {
+      const blocked = await readyForChanges(context);
+      outcome = blocked ?? (await run(context, changedOpenFiles));
+    } catch (error) {
+      outcome = failure(error);
+    }
+    return { ...outcome, changedOpenFiles: [...new Set(changedOpenFiles)] };
+  });
 }
 
 /**
@@ -485,65 +512,99 @@ function failure(error: unknown): GitSyncResult {
  * conflict. `openFiles` lists the open documents, which are reloaded or
  * protected.
  */
-export async function getLatest(path: string, openFiles: readonly GitOpenFile[], interactive: boolean): Promise<GitSyncResult> {
-  const context = await contextOf(path);
-  if (!context) return { kind: "failed", message: "This document is no longer in a Git repository with a remote branch." };
-  return inRepository(context.root, async () => {
-    try {
-      const fetchError = await fetchRemote(context, interactive);
-      if (fetchError) return { kind: "failed", message: fetchError };
-      const blocked = await readyForChanges(context);
-      if (blocked) return blocked;
-      const { ahead, behind } = await aheadBehind(context);
-      if (behind === 0) return { kind: "up-to-date" };
-      const result = await integrate(context, ahead, openFiles);
-      if (result.kind !== "integrated") return result;
-      return { kind: "done", uploaded: false, changedOpenFiles: result.changedOpenFiles, combinedWith: result.combinedWith };
-    } catch (error) {
-      return failure(error);
-    }
+export function getLatest(path: string, openFiles: readonly GitOpenFile[], interactive: boolean): Promise<GitSyncResult> {
+  return action(path, async (context, changedOpenFiles) => {
+    const fetchError = await fetchRemote(context, interactive);
+    if (fetchError) return { kind: "failed", message: fetchError };
+    const { ahead, behind } = await aheadBehind(context);
+    if (behind === 0) return { kind: "up-to-date" };
+    const result = await integrate(context, ahead, openFiles);
+    if (result.kind !== "integrated") return result;
+    changedOpenFiles.push(...result.changedOpenFiles);
+    return { kind: "done", uploaded: false, combinedWith: result.combinedWith };
   });
 }
 
 /**
  * Discard the document's changes that are not uploaded, then get latest.
- * The caller keeps a copy of the changes first (`keepDiscardedCopy`).
+ * The caller keeps a copy of the changes first (`keepDiscardedCopy`). Once
+ * the file is put back, the result lists `path` among the changed files,
+ * however the rest ends. Changes in commits that another Git program made
+ * are not discarded.
  */
-export async function discardChanges(path: string, openFiles: readonly GitOpenFile[]): Promise<GitSyncResult> {
-  const context = await contextOf(path);
-  if (!context) return { kind: "failed", message: "This document is no longer in a Git repository with a remote branch." };
-  return inRepository(context.root, async () => {
-    try {
-      const fetchError = await fetchRemote(context, true);
-      if (fetchError) return { kind: "failed", message: fetchError };
-      const blocked = await readyForChanges(context);
-      if (blocked) return blocked;
-      if (await hasFile(context, "HEAD")) await gitText(["checkout", "HEAD", "--", context.rel], { cwd: context.root });
-      else if (await hasFile(context, "@{upstream}")) await unlink(context.file);
-      const { ahead, behind } = await aheadBehind(context);
-      if (behind === 0) return { kind: "done", uploaded: false, changedOpenFiles: [], combinedWith: null };
-      const others = openFiles.filter((file) => !samePath(resolve(file.path), resolve(path)));
-      const result = await integrate(context, ahead, others);
-      if (result.kind !== "integrated") return result;
-      return { kind: "done", uploaded: false, changedOpenFiles: result.changedOpenFiles, combinedWith: null };
-    } catch (error) {
-      return failure(error);
+export function discardChanges(path: string, openFiles: readonly GitOpenFile[]): Promise<GitSyncResult> {
+  return action(path, async (context, changedOpenFiles) => {
+    const fetchError = await fetchRemote(context, true);
+    if (fetchError) return { kind: "failed", message: fetchError };
+    const committed = Number((await git(["rev-list", "--count", "@{upstream}..HEAD", "--", context.rel], { cwd: context.root }))
+      .stdout.toString("utf8").trim()) || 0;
+    if (committed > 0) return { kind: "failed", message: UNUPLOADED_COMMITS };
+    if (await hasFile(context, "HEAD")) {
+      await gitText(["checkout", "HEAD", "--", context.rel], { cwd: context.root });
+      changedOpenFiles.push(path);
+    } else if (await hasFile(context, "@{upstream}")) {
+      await unlink(context.file);
+      changedOpenFiles.push(path);
     }
+    const { ahead, behind } = await aheadBehind(context);
+    if (behind === 0) return { kind: "done", uploaded: false, combinedWith: null };
+    const others = openFiles.filter((file) => !samePath(resolve(file.path), resolve(path)));
+    const result = await integrate(context, ahead, others);
+    if (result.kind !== "integrated") return result;
+    changedOpenFiles.push(...result.changedOpenFiles);
+    return { kind: "done", uploaded: false, combinedWith: null };
   });
+}
+
+const markdown = markdownParser.configure(GFM);
+const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * The local paths that a document's links and images point to: the
+ * destinations of Markdown links, images and link definitions, and the `src`
+ * and `href` of HTML tags. Code and plain text name no path, so a file name
+ * mentioned in prose is never one. Web addresses, absolute paths and links
+ * within the document are left out.
+ */
+export function linkedPaths(text: string, folder: string): string[] {
+  const destinations: string[] = [];
+  markdown.parse(text).iterate({
+    enter(node) {
+      const source = text.slice(node.from, node.to);
+      if (node.name === "URL" && node.node.parent?.name !== "Autolink") {
+        destinations.push(source.replace(/^<|>$/g, ""));
+      } else if (node.name === "HTMLTag" || node.name === "HTMLBlock") {
+        for (const match of source.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) {
+          destinations.push(match[1] ?? match[2] ?? match[3] ?? "");
+        }
+      }
+    },
+  });
+  const paths: string[] = [];
+  for (const destination of destinations) {
+    const link = destination.trim().replace(/\\([!-/:-@[-`{-~])/g, "$1").replace(/[?#].*$/, "");
+    if (!link || SCHEME.test(link) || /^[\\/]/.test(link)) continue;
+    let decoded = link;
+    try {
+      decoded = decodeURIComponent(link);
+    } catch {
+      // A stray % stays as written.
+    }
+    paths.push(resolve(folder, decoded));
+  }
+  return paths;
 }
 
 /** Files that the document links to and that are new or changed, such as the
  *  images in its attachments folder, so Upload sends them along. */
 async function linkedChanges(context: GitContext): Promise<string[]> {
   const folder = dirname(context.file);
-  const text = (await readMarkdown(context.file)).content;
-  const inFolder = gitPath(context, folder);
-  const candidates = await changedFiles(context, inFolder ? [inFolder] : null);
-  return candidates.filter((path) => {
-    if (samePath(path, context.file) || /^\.(md|markdown|mdown|mkd)$/i.test(extname(path))) return false;
-    const link = relative(folder, path).split(sep).join("/");
-    return text.includes(link) || text.includes(encodeURI(link));
-  });
+  const linked = linkedPaths((await readMarkdown(context.file)).content, folder);
+  const inWorkTree = linked
+    .map((path) => gitPath(context, path))
+    .filter((rel) => rel && !rel.startsWith("../") && rel !== context.rel);
+  if (inWorkTree.length === 0) return [];
+  return changedFiles(context, [...new Set(inWorkTree)]);
 }
 
 /** Whether `git push --porcelain` output says that someone moved the remote
@@ -558,72 +619,70 @@ export function pushWasOutrun(output: string): boolean {
  * the commit. It first brings the branch up to date, combining the document
  * with remote changes when they touch other lines. If someone uploads in
  * between, the remote rejects the push; the commit is then taken back and the
- * whole upload runs again, at most UPLOAD_ATTEMPTS times. A failed push also
- * takes the commit back, so Downpad never leaves commits that are not
- * uploaded.
+ * whole upload runs again, at most UPLOAD_ATTEMPTS times. A push that fails
+ * otherwise, or does not finish, also takes the commit back, so Downpad never
+ * leaves commits that are not uploaded.
  */
-export async function upload(path: string, openFiles: readonly GitOpenFile[]): Promise<GitSyncResult> {
-  const context = await contextOf(path);
-  if (!context) return { kind: "failed", message: "This document is no longer in a Git repository with a remote branch." };
-  return inRepository(context.root, async () => {
-    const changedOpenFiles: string[] = [];
+export function upload(path: string, openFiles: readonly GitOpenFile[]): Promise<GitSyncResult> {
+  return action(path, async (context, changedOpenFiles) => {
     let combinedWith: string | null = null;
-    try {
-      for (let attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt++) {
-        const fetchError = await fetchRemote(context, true);
-        if (fetchError) return { kind: "failed", message: fetchError };
-        const blocked = await readyForChanges(context);
-        if (blocked) return blocked;
-        let { ahead, behind } = await aheadBehind(context);
-        if (behind > 0) {
-          const result = await integrate(context, ahead, openFiles);
-          if (result.kind !== "integrated") return result;
-          changedOpenFiles.push(...result.changedOpenFiles);
-          combinedWith ??= result.combinedWith;
-          ({ ahead } = await aheadBehind(context));
-        }
+    for (let attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt++) {
+      const fetchError = await fetchRemote(context, true);
+      if (fetchError) return { kind: "failed", message: fetchError };
+      let { ahead, behind } = await aheadBehind(context);
+      if (behind > 0) {
+        const result = await integrate(context, ahead, openFiles);
+        if (result.kind !== "integrated") return result;
+        changedOpenFiles.push(...result.changedOpenFiles);
+        combinedWith ??= result.combinedWith;
+        ({ ahead } = await aheadBehind(context));
+      }
 
-        const paths = [context.file, ...(await linkedChanges(context))].map((file) => gitPath(context, file));
-        const toCommit = await changedFiles(context, paths);
-        if (toCommit.length === 0 && ahead === 0) {
-          return changedOpenFiles.length > 0
-            ? { kind: "done", uploaded: false, changedOpenFiles: unique(changedOpenFiles), combinedWith }
-            : { kind: "up-to-date" };
+      const paths = [context.file, ...(await linkedChanges(context))].map((file) => gitPath(context, file));
+      const toCommit = await changedFiles(context, paths);
+      if (toCommit.length === 0 && ahead === 0) {
+        return changedOpenFiles.length > 0 ? { kind: "done", uploaded: false, combinedWith } : { kind: "up-to-date" };
+      }
+      let commit: string | null = null;
+      const committed = toCommit.map((file) => gitPath(context, file));
+      if (committed.length > 0) {
+        const isNew = !(await hasFile(context, "HEAD"));
+        await gitText(["add", "--", ...committed], { cwd: context.root });
+        const message = `${isNew ? "Add" : "Update"} ${context.rel}`;
+        const result = await git(
+          ["commit", "--quiet", "--only", "-m", message, "--", ...committed.map((file) => `:(literal)${file}`)],
+          { cwd: context.root, hooks: true, interactive: true },
+        ).catch(async (error: unknown) => {
+          await git(["reset", "--quiet", "HEAD", "--", ...committed], { cwd: context.root }).catch(() => {});
+          throw error;
+        });
+        if (result.code !== 0) {
+          await git(["reset", "--quiet", "HEAD", "--", ...committed], { cwd: context.root });
+          return { kind: "failed", message: explainGitError(result.stderr) };
         }
-        let commit: string | null = null;
-        let committed: string[] = [];
-        if (toCommit.length > 0) {
-          committed = toCommit.map((file) => gitPath(context, file));
-          const isNew = !(await hasFile(context, "HEAD"));
-          await gitText(["add", "--", ...committed], { cwd: context.root });
-          const message = `${isNew ? "Add" : "Update"} ${context.rel}`;
-          const result = await git(
-            ["commit", "--quiet", "--only", "-m", message, "--", ...committed.map((path) => `:(literal)${path}`)],
-            { cwd: context.root, hooks: true, interactive: true },
-          );
-          if (result.code !== 0) {
-            await git(["reset", "--quiet", "HEAD", "--", ...committed], { cwd: context.root });
-            return { kind: "failed", message: explainGitError(result.stderr) };
-          }
-          commit = (await gitText(["rev-parse", "HEAD"], { cwd: context.root })).trim();
-        }
+        commit = (await gitText(["rev-parse", "HEAD"], { cwd: context.root })).trim();
+      }
 
-        const pushed = await git(
+      let pushed: RunResult;
+      try {
+        pushed = await git(
           ["push", "--porcelain", context.remote, `HEAD:${context.mergeRef}`],
           { cwd: context.root, hooks: true, interactive: true },
         );
-        // A push also moves the remote branch that this branch tracks.
-        if (pushed.code === 0) {
-          return { kind: "done", uploaded: true, changedOpenFiles: unique(changedOpenFiles), combinedWith };
-        }
-        if (commit) await takeBack(context, commit, committed);
-        const output = `${pushed.stdout.toString("utf8")}\n${pushed.stderr}`;
-        if (!pushWasOutrun(output)) return { kind: "failed", message: explainGitError(output) };
+      } catch (error) {
+        // A push that does not finish, as after a timeout, takes its commit
+        // back too. If the remote took it after all, the next Upload or Get
+        // latest finds it there.
+        if (commit) await takeBack(context, commit, committed).catch(() => {});
+        throw error;
       }
-      return { kind: "failed", message: "Others uploaded changes at the same time. Try again." };
-    } catch (error) {
-      return failure(error);
+      // A push also moves the remote branch that this branch tracks.
+      if (pushed.code === 0) return { kind: "done", uploaded: true, combinedWith };
+      if (commit) await takeBack(context, commit, committed);
+      const output = `${pushed.stdout.toString("utf8")}\n${pushed.stderr}`;
+      if (!pushWasOutrun(output)) return { kind: "failed", message: explainGitError(output) };
     }
+    return { kind: "failed", message: "Others uploaded changes at the same time. Try again." };
   });
 }
 
@@ -634,10 +693,6 @@ async function takeBack(context: GitContext, commit: string, paths: string[]): P
   if (head !== commit) return;
   await gitText(["reset", "--quiet", "--soft", "HEAD~1"], { cwd: context.root });
   await git(["reset", "--quiet", "HEAD", "--", ...paths], { cwd: context.root });
-}
-
-function unique(paths: string[]): string[] {
-  return [...new Set(paths)];
 }
 
 /**
