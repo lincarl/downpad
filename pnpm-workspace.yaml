@@ -2,6 +2,7 @@
 strictPeerDependencies: false
 autoInstallPeers: true
 allowBuilds:
+  '@arcstudio-labs/electron-system-spellcheck': true
   electron: true
   electron-winstaller: true
   esbuild: true

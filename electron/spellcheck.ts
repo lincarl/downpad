@@ -1,10 +1,13 @@
 import type { Session } from "electron";
+import type { EventEmitter } from "node:events";
 import type { SpellcheckInfo } from "../src/ipc/contracts";
 import type { Settings } from "../src/state/types";
+import { spellingWord, spellingWords, type NativeSpellingResult, type NativeSuggestionsResult } from "./spellingRequests";
+import type { WindowsSpelling } from "./systemSpellcheck";
 
 type SpellingSession = Pick<Session, "availableSpellCheckerLanguages" | "getSpellCheckerLanguages" |
   "setSpellCheckerLanguages" | "setSpellCheckerEnabled" | "listWordsInSpellCheckerDictionary" |
-  "addWordToSpellCheckerDictionary" | "removeWordFromSpellCheckerDictionary">;
+  "addWordToSpellCheckerDictionary" | "removeWordFromSpellCheckerDictionary"> & Pick<EventEmitter, "on" | "removeListener">;
 
 /** Match OS language preferences to Chromium's supported dictionary identifiers. */
 export function systemSpellcheckLanguages(preferred: readonly string[], available: readonly string[]): string[] {
@@ -21,11 +24,45 @@ export function systemSpellcheckLanguages(preferred: readonly string[], availabl
 
 /** Keep the native checker in sync with app preferences without duplicating its dictionary. */
 export class Spellchecker {
+  private configuration = "";
+  private readonly loadedLanguages = new Set<string>();
+  private readonly failedLanguages = new Set<string>();
+  private readonly changed = (): void => {
+    this.windows?.invalidate();
+    this.onChanged();
+  };
+  private readonly initialized = (_event: unknown, language: string): void => {
+    this.loadedLanguages.add(language);
+    this.failedLanguages.delete(language);
+    this.changed();
+  };
+  private readonly downloadFailed = (_event: unknown, language: string): void => {
+    this.failedLanguages.add(language);
+    this.changed();
+  };
+  private readonly downloadStarted = (_event: unknown, language: string): void => {
+    this.failedLanguages.delete(language);
+  };
+
   constructor(
     private readonly session: SpellingSession,
     private readonly platform: string,
     private readonly preferredLanguages: () => string[],
-  ) {}
+    private readonly onChanged: () => void = () => {},
+    private readonly windows?: WindowsSpelling,
+  ) {
+    this.session.on("spellcheck-dictionary-initialized", this.initialized);
+    this.session.on("spellcheck-dictionary-download-failure", this.downloadFailed);
+    this.session.on("spellcheck-dictionary-download-begin", this.downloadStarted);
+  }
+
+  /** Remove session listeners when the application shuts down. */
+  dispose(): void {
+    this.session.removeListener("spellcheck-dictionary-initialized", this.initialized);
+    this.session.removeListener("spellcheck-dictionary-download-failure", this.downloadFailed);
+    this.session.removeListener("spellcheck-dictionary-download-begin", this.downloadStarted);
+    this.windows?.invalidate();
+  }
 
   /** Apply enabled state and supported languages, falling back to the system preferences. */
   apply(settings: Pick<Settings, "spellCheckEnabled" | "spellCheckLanguages">): void {
@@ -34,10 +71,16 @@ export class Spellchecker {
       const selected = settings.spellCheckLanguages.filter((language) => available.includes(language));
       const languages = selected.length ? [...new Set(selected)] : systemSpellcheckLanguages(this.preferredLanguages(), available);
       if (JSON.stringify(languages) !== JSON.stringify(this.session.getSpellCheckerLanguages())) {
+        for (const language of this.loadedLanguages) if (!languages.includes(language)) this.loadedLanguages.delete(language);
         this.session.setSpellCheckerLanguages(languages);
       }
     }
     this.session.setSpellCheckerEnabled(settings.spellCheckEnabled);
+    const configuration = JSON.stringify([settings.spellCheckEnabled, this.session.getSpellCheckerLanguages()]);
+    if (this.configuration !== configuration) {
+      this.configuration = configuration;
+      this.changed();
+    }
   }
 
   /** Report capabilities so settings never offer an unsupported native operation. */
@@ -59,22 +102,47 @@ export class Spellchecker {
 
   /** Add one custom word and report native failures instead of implying it was saved. */
   async add(word: string): Promise<void> {
-    validateDictionaryWord(word);
+    spellingWord(word);
     if ((await this.words()).includes(word)) return;
     if (!this.session.addWordToSpellCheckerDictionary(word)) throw new Error("The word could not be added to the dictionary.");
+    this.changed();
   }
 
   /** Remove one saved word, leaving dictionary persistence to the native checker. */
   async remove(word: string): Promise<void> {
-    validateDictionaryWord(word);
+    spellingWord(word);
     if (!(await this.words()).includes(word)) return;
     if (!this.session.removeWordFromSpellCheckerDictionary(word)) throw new Error("The word could not be removed from the dictionary.");
+    this.changed();
   }
-}
 
-/** Reject empty words, whitespace, and control characters before passing text to Chromium. */
-function validateDictionaryWord(word: string): void {
-  if (!word || word.length > 128 || /[\s\p{Cc}\p{Cs}]/u.test(word)) {
-    throw new Error("Enter a single word of at most 128 characters, without spaces.");
+  /** Use the existing session dictionary as the authority for accepted custom words. */
+  async check(input: unknown): Promise<NativeSpellingResult> {
+    const words = spellingWords(input);
+    this.ready();
+    const accepted = new Set(await this.words());
+    const remaining = words.filter((word) => !accepted.has(word));
+    return this.windows ? this.windows.check(remaining, this.session.getSpellCheckerLanguages(), this.preferredLanguages()) :
+      { words: remaining, useHunspell: true };
+  }
+
+  /** Request corrections from the same dictionaries that checked the word. */
+  suggestions(input: unknown): NativeSuggestionsResult {
+    const word = spellingWord(input);
+    this.ready();
+    return this.windows ? this.windows.suggestions(word, this.session.getSpellCheckerLanguages(), this.preferredLanguages()) :
+      { suggestions: [], useHunspell: true };
+  }
+
+  /** Do not interpret an unloaded or failed Hunspell dictionary as accepting every word. */
+  ready(): void {
+    if (this.platform === "darwin") return;
+    const languages = this.session.getSpellCheckerLanguages();
+    if (!languages.length) throw new Error("No spelling dictionary is selected.");
+    const required = this.windows?.hunspellLanguages(languages, this.preferredLanguages()) ?? languages;
+    const failed = required.filter((language) => this.failedLanguages.has(language));
+    if (failed.length) throw new Error(`The spelling dictionary could not be downloaded (${failed.join(", ")}). Check your connection and try again.`);
+    const loading = required.filter((language) => !this.loadedLanguages.has(language));
+    if (loading.length) throw new Error(`The spelling dictionary is still loading (${loading.join(", ")}). Try again shortly.`);
   }
 }

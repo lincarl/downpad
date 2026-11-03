@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, nativeTheme, webUtils, type IpcMainInvokeEvent, type MessageBoxOptions } from "electron";
+import { contextBridge, ipcRenderer, nativeTheme, webFrame, webUtils, type IpcMainInvokeEvent, type MessageBoxOptions } from "electron";
 import { build } from "esbuild";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -29,6 +29,8 @@ const native = vi.hoisted(() => {
       getZoomFactor: () => 1.5,
       replaceMisspelling: vi.fn(),
       session: {
+        on: vi.fn(),
+        removeListener: vi.fn(),
         setPermissionRequestHandler: (handler: Listener) => { callbacks.permissionRequest = handler; },
         setPermissionCheckHandler: (handler: Listener) => { callbacks.permissionCheck = handler; },
         availableSpellCheckerLanguages: ["en-US"],
@@ -71,6 +73,8 @@ const native = vi.hoisted(() => {
     rendererOn: vi.fn(),
     rendererOff: vi.fn(),
     rendererSend: vi.fn(),
+    isWordMisspelled: vi.fn<(word: string) => boolean>(),
+    getWordSuggestions: vi.fn<(word: string) => string[]>(),
   };
 });
 
@@ -104,11 +108,13 @@ vi.mock("electron", () => ({
     handle: (scheme: string, handler: (request: Request) => Promise<Response>) => native.protocols.set(scheme, handler),
   },
   screen: {},
+  session: { defaultSession: native.window.webContents.session },
   shell: { openExternal: native.openExternal, showItemInFolder: native.showItemInFolder },
   systemPreferences: {},
   contextBridge: { exposeInMainWorld: native.exposeInMainWorld },
   ipcRenderer: { invoke: native.invoke, on: native.rendererOn, removeListener: native.rendererOff, send: native.rendererSend },
   webUtils: {},
+  webFrame: { isWordMisspelled: native.isWordMisspelled, getWordSuggestions: native.getWordSuggestions },
 }));
 
 // Start the real IPC registration without accessing a profile, watching files,
@@ -190,7 +196,7 @@ beforeAll(async () => {
   runInNewContext(preload.outputFiles[0]!.text, {
     require: (name: string) => {
       if (name !== "electron") throw new Error(`Unexpected preload dependency ${name}`);
-      return { contextBridge, ipcRenderer, webUtils };
+      return { contextBridge, ipcRenderer, webFrame, webUtils };
     },
     process: { platform: process.platform },
   });
@@ -426,6 +432,28 @@ describe("downpad-file protocol", () => {
 });
 
 describe("preload bridge", () => {
+  it("uses native results without webFrame when selected Windows languages need no Hunspell fallback", async () => {
+    native.invoke.mockResolvedValueOnce({ words: ["speling"], useHunspell: false });
+    await expect(bridge.checkSpelling(["speling", "hello"])).resolves.toEqual(["speling"]);
+    expect(native.isWordMisspelled).not.toHaveBeenCalled();
+  });
+
+  it("checks only unaccepted words with the renderer and combines bounded suggestions", async () => {
+    native.invoke.mockResolvedValueOnce({ words: ["speling", "hello"], useHunspell: true });
+    native.isWordMisspelled.mockImplementation((word) => word === "speling");
+    await expect(bridge.checkSpelling(["speling", "hello", "Customword"])).resolves.toEqual(["speling"]);
+    expect(native.isWordMisspelled.mock.calls).toEqual([["speling"], ["hello"]]);
+    native.invoke.mockResolvedValueOnce({ suggestions: ["first", "second"], useHunspell: true });
+    native.getWordSuggestions.mockReturnValue(["second", "third", "fourth", "fifth", "sixth", "seventh"]);
+    await expect(bridge.spellingSuggestions("speling")).resolves.toEqual(["first", "second", "third", "fourth", "fifth", "sixth"]);
+  });
+
+  it("rejects invalid spelling requests before crossing the IPC boundary", async () => {
+    await expect(bridge.checkSpelling(["two words"])).rejects.toThrow("single word");
+    await expect(bridge.spellingSuggestions("x".repeat(129))).rejects.toThrow("single word");
+    expect(native.invoke).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["close-requested", "downpad:close-listener"],
     ["open-file-requested", "downpad:open-listener"],

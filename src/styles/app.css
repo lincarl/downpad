@@ -1585,6 +1585,15 @@ body {
   max-width: min(var(--editor-width), calc(100% - 72px));
 }
 
+[data-managed-spelling] .md-spelling-error {
+  text-decoration: underline wavy #d73232 1px;
+  text-underline-offset: 3px;
+}
+
+::highlight(md-spelling-metadata) {
+  text-decoration: underline wavy #d73232 1px;
+}
+
 @media print {
   /* The sheets carry their own margins, so the paper itself gets none —
      otherwise the printer would add a second margin around our page boxes. */

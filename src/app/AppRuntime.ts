@@ -108,6 +108,8 @@ export class AppRuntime {
       hasDocument: () => this.store.get().activeTabId !== null,
       print: () => void this.printActiveDocument(),
       copyMarkdown: () => void this.copyMarkdown(),
+      canCheckSpelling: () => this.editorHost.canCheckSpelling(),
+      checkSpelling: () => this.checkDocumentSpelling(),
       insertLink: (href) => this.editorHost.insertLink(href),
       reportError: (message) => this.store.set({ banner: { kind: "error", message } }),
     }));
@@ -187,6 +189,22 @@ export class AppRuntime {
 
   newDocument(): void {
     this.run(() => this.files.newDocument());
+  }
+
+  /** Report a full spelling check without changing the document or its selection. */
+  private async checkDocumentSpelling(): Promise<void> {
+    const tabId = this.store.get().activeTabId;
+    if (!tabId) return;
+    try {
+      const count = await this.editorHost.checkSpelling();
+      if (this.disposed || this.store.get().activeTabId !== tabId) return;
+      const message = count === 0 ? "Spelling check complete. No misspellings found."
+        : `Spelling check complete. ${count} possible ${count === 1 ? "misspelling" : "misspellings"} marked.`;
+      this.store.set({ banner: { kind: "info", message } });
+    } catch (error) {
+      if (this.disposed || this.store.get().activeTabId !== tabId) return;
+      this.store.set({ banner: { kind: "error", message: error instanceof Error ? error.message : "Could not check document spelling." } });
+    }
   }
 
   openDocument(): void {

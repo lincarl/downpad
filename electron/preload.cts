@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils, type IpcRendererEvent } from "electron";
 import type { DesktopCommandArgs, DesktopCommandResults, DesktopEventPayloads, ElectronBridge } from "../src/ipc/bridge";
+import { spellingWord, spellingWords, type NativeSpellingResult, type NativeSuggestionsResult } from "./spellingRequests";
 
 const commands = new Set<keyof DesktopCommandArgs>([
   "read_file", "write_file", "path_exists", "watch_file", "unwatch_file", "ensure_attachments_dir", "write_attachment",
@@ -14,13 +15,23 @@ const commands = new Set<keyof DesktopCommandArgs>([
 const events = new Set<keyof DesktopEventPayloads>([
   "settings-changed", "file-changed", "open-file-requested", "print-completed", "search-result", "close-requested",
   "history-requested", "update-changed",
-  "spelling-context-menu",
+  "spelling-context-menu", "spelling-changed",
 ]);
 let closeListeners = 0;
 let openListeners = 0;
 
 const bridge: ElectronBridge = {
   platform: process.platform,
+  async checkSpelling(input) {
+    const words = spellingWords(input);
+    const result: NativeSpellingResult = await ipcRenderer.invoke("downpad:check-spelling", words);
+    return result.useHunspell ? result.words.filter((word) => webFrame.isWordMisspelled(word)) : result.words;
+  },
+  async spellingSuggestions(input) {
+    const word = spellingWord(input);
+    const result: NativeSuggestionsResult = await ipcRenderer.invoke("downpad:spelling-suggestions", word);
+    return [...new Set([...result.suggestions, ...(result.useHunspell ? webFrame.getWordSuggestions(word) : [])])].slice(0, 6);
+  },
   invoke<K extends keyof DesktopCommandArgs>(command: K, args?: DesktopCommandArgs[K]): Promise<DesktopCommandResults[K]> {
     if (!commands.has(command)) return Promise.reject(new Error("Unknown desktop command."));
     return ipcRenderer.invoke("downpad:invoke", command, args) as Promise<DesktopCommandResults[K]>;

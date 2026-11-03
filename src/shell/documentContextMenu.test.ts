@@ -7,12 +7,17 @@ import type { SpellingMenuContext } from "../ipc/contracts";
 import type { EditableTarget } from "./editorActions";
 import { editableAt, hasSelection, selectedText } from "./editorActions";
 import type { MenuItem } from "./contextMenu";
+import { hasEditorSpelling, spellingAt } from "../editor/spelling";
+
+vi.mock("../editor/spelling", () => ({ hasEditorSpelling: vi.fn(() => false), spellingAt: vi.fn() }));
 
 function actions(overrides: Partial<DocumentMenuActions> = {}): DocumentMenuActions {
   return {
     hasDocument: () => true,
     print: () => {},
     copyMarkdown: () => {},
+    canCheckSpelling: () => true,
+    checkSpelling: async () => {},
     insertLink: () => true,
     ...overrides,
   };
@@ -46,6 +51,8 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(hasEditorSpelling).mockReturnValue(false);
+  vi.mocked(spellingAt).mockReset();
   document.body.replaceChildren();
 });
 
@@ -69,7 +76,7 @@ describe("buildItems", () => {
 
   it("offers only the document actions off an editable, and exactly one Print entry", () => {
     const items = buildItems(null, actions());
-    expect(labels(items)).toEqual(["Copy as Markdown", "Print…"]);
+    expect(labels(items)).toEqual(["Copy as Markdown", "Check document spelling", "Print…"]);
     // The version choice lives in the print workspace, never as a submenu here.
     expect(items.filter((i) => i.label.startsWith("Print"))).toHaveLength(1);
     expect(byLabel(items, "Print…").shortcut).toBe("Ctrl+P");
@@ -79,6 +86,7 @@ describe("buildItems", () => {
     const items = buildItems(null, actions({ hasDocument: () => false }));
     expect(byLabel(items, "Print…").disabled).toBe(true);
     expect(byLabel(items, "Copy as Markdown").disabled).toBe(true);
+    expect(byLabel(items, "Check document spelling").disabled).toBe(true);
   });
 
   it("adds the editing commands over editable text", () => {
@@ -91,6 +99,7 @@ describe("buildItems", () => {
       "Insert link…",
       "Select all",
       "Copy as Markdown",
+      "Check document spelling",
       "Print…",
     ]);
   });
@@ -126,6 +135,13 @@ describe("buildItems", () => {
     byLabel(items, "Copy as Markdown").run();
     expect(print).toHaveBeenCalledOnce();
     expect(copyMarkdown).toHaveBeenCalledOnce();
+  });
+
+  it("checks the whole document and disables checking when unavailable", async () => {
+    const checkSpelling = vi.fn(async () => {});
+    await byLabel(buildItems(null, actions({ checkSpelling })), "Check document spelling").run();
+    expect(checkSpelling).toHaveBeenCalledOnce();
+    expect(byLabel(buildItems(null, actions({ canCheckSpelling: () => false })), "Check document spelling").disabled).toBe(true);
   });
 
   it("adds native corrections and dictionary actions before the existing editing menu", async () => {
@@ -296,5 +312,58 @@ describe("native spelling menu bridge", () => {
     receive({ id: 2, x: 20, y: 30, word: "newword", suggestions: ["New correction"] });
     expect(document.querySelector(".md-context-menu")?.textContent).toContain("New correction");
     expect(invoke).not.toHaveBeenCalledWith("spelling_menu_action", { contextId: 2, action: "dismiss" });
+  });
+});
+
+describe("editor spelling menu", () => {
+  let editable: HTMLDivElement;
+  const reportError = vi.fn();
+
+  beforeEach(() => {
+    vi.mocked(hasEditorSpelling).mockReturnValue(true);
+    editable = document.createElement("div");
+    editable.className = "ProseMirror";
+    document.body.append(editable);
+    cleanups.push(installDocumentContextMenu(actions({ reportError })));
+  });
+
+  /** Open the menu without waiting for Chromium to mark the current word. */
+  function request(): void {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 30 });
+    editable.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  }
+
+  it("checks the clicked word directly and replaces it through the editor", async () => {
+    const replace = vi.fn(async () => {});
+    vi.mocked(spellingAt).mockResolvedValue({ word: "speling", suggestions: ["spelling"], replace, add: async () => {} });
+    request();
+    (await screen.findByRole("menuitem", { name: "spelling" })).click();
+    expect(spellingAt).toHaveBeenCalledWith(editable, 20, 30);
+    expect(replace).toHaveBeenCalledWith("spelling");
+    expect(document.querySelector(".md-context-menu")).toBeNull();
+  });
+
+  it("discards an answer after typing, a new click, or teardown", async () => {
+    let resolve!: (value: null) => void;
+    vi.mocked(spellingAt).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    request();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    resolve(null);
+    await Promise.resolve();
+    expect(document.querySelector(".md-context-menu")).toBeNull();
+    request();
+    cleanups.pop()!();
+    resolve(null);
+    await Promise.resolve();
+    expect(document.querySelector(".md-context-menu")).toBeNull();
+  });
+
+  it("keeps editing commands available and reports checker failures", async () => {
+    vi.mocked(spellingAt).mockRejectedValue(new Error("Dictionary unavailable"));
+    request();
+    expect(await screen.findByRole("menuitem", { name: "Check document spelling" })).toBeTruthy();
+    expect(reportError).toHaveBeenCalledWith("Could not check this word. Try checking the document again.");
+    expect(screen.queryByRole("menuitem", { name: "Add to dictionary" })).toBeNull();
   });
 });

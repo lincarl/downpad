@@ -29,6 +29,7 @@ let editor: WysiwygEditor | null = null;
 afterEach(async () => {
   await editor?.destroy();
   editor = null;
+  delete window.downpadDesktop;
   document.body.replaceChildren();
 });
 
@@ -84,6 +85,41 @@ function menuShows(role: "col-drag-handle" | "row-drag-handle"): string | undefi
 }
 
 describe("Downpad's table view", () => {
+  it("keeps selected cells and faded controls in place when spelling highlights change", { timeout: 60_000 }, async () => {
+    Object.defineProperty(window, "downpadDesktop", { configurable: true, value: {
+      checkSpelling: async () => ["short"],
+      listen: () => () => {},
+    } });
+    const view = await open();
+    const cells = cellPositions(view.state.doc);
+    for (const selection of [
+      CellSelection.colSelection(view.state.doc.resolve(cells[0]!)),
+      CellSelection.rowSelection(view.state.doc.resolve(cells[2]!)),
+      CellSelection.create(view.state.doc, cells[2]!, cells[5]!),
+    ]) {
+      view.dispatch(view.state.tr.setSelection(selection));
+      await nextFrame();
+      const paragraph = cellParagraph("short text");
+      const handles = [...document.querySelectorAll<HTMLElement>(".milkdown-table-block [data-role$='drag-handle']")];
+      for (const handle of handles) handle.dataset.show = "false";
+      const doc = view.state.doc;
+      expect(await editor!.checkSpelling()).toBe(1);
+      await nextFrame();
+      expect(paragraph.isConnected).toBe(true);
+      expect(view.state.doc).toBe(doc);
+      expect(view.state.selection).toBe(selection);
+      expect(paragraph.querySelector(".md-spelling-error")?.textContent).toBe("short");
+      for (const handle of handles) {
+        expect(handle.isConnected).toBe(true);
+        expect(handle.dataset.show).toBe("false");
+      }
+      editor!.setSpellcheck(false);
+      expect(paragraph.isConnected).toBe(true);
+      expect(paragraph.querySelector(".md-spelling-error")).toBeNull();
+      editor!.setSpellcheck(true);
+    }
+  });
+
   it("keeps the cells when a cell selection ends, so a press on a cell still lands", { timeout: 60_000 }, async () => {
     const view = await open();
     const cells = cellPositions(view.state.doc);
@@ -108,6 +144,25 @@ describe("Downpad's table view", () => {
     replaceWithSame(view);
     expect(paragraph.isConnected).toBe(true);
     expect(editor!.getMarkdown()).toBe(markdown);
+  });
+
+  it("keeps selected cells during a split edit before a table with spelling highlights", { timeout: 60_000 }, async () => {
+    Object.defineProperty(window, "downpadDesktop", { configurable: true, value: {
+      checkSpelling: async () => ["short"],
+      listen: () => () => {},
+    } });
+    const view = await open();
+    const cells = cellPositions(view.state.doc);
+    view.dispatch(view.state.tr.setSelection(CellSelection.create(view.state.doc, cells[2]!, cells[5]!)));
+    await nextFrame();
+    expect(await editor!.checkSpelling()).toBe(1);
+    const paragraph = cellParagraph("short text");
+    editor!.setMarkdown(markdown.replace("Intro.", "Intro. More."));
+    expect(paragraph.isConnected).toBe(true);
+    expect(view.state.selection).toBeInstanceOf(CellSelection);
+    expect(document.querySelectorAll(".selectedCell")).toHaveLength(4);
+    expect(paragraph.querySelector(".md-spelling-error")).toBeNull();
+    expect(editor!.getMarkdown()).toBe(markdown.replace("Intro.", "Intro. More."));
   });
 
   it("opens the menu of a whole row or column once it is selected, and closes it once that selection ends", { timeout: 60_000 }, async () => {

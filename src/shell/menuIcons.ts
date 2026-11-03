@@ -11,6 +11,7 @@ import {
   PencilLine,
   Printer,
   Scissors,
+  SpellCheck,
   TextSelect,
   Trash2,
 } from "lucide-react";
@@ -25,6 +26,7 @@ export const MENU_ICONS = {
   link: Link,
   markdown: FileCode2,
   print: Printer,
+  spelling: SpellCheck,
   /** Mervin's badged "copy path" glyph: a file with a copy badge. */
   copyPath: FileCopyIcon,
   replaceImage: ImageUp,

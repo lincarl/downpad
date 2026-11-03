@@ -89,32 +89,11 @@ async function wordMenu(container: Locator, word: string, occurrence = 0): Promi
   return menu;
 }
 
-/** Wait for the downloaded dictionary to flag actual document text. */
+/** Wait for checking without moving focus or typing a delimiter to trigger it. */
 async function misspellingMenu(container: Locator, word: string): Promise<Locator> {
-  const editor = container.locator("xpath=ancestor-or-self::*[@contenteditable='true'][1]");
-  const source = await editor.evaluate((element) => element.classList.contains("cm-content"));
   await expect.poll(async () => {
-    if (!source) {
-      // A real pointer focus starts the rendered document's initial scan.
-      await page.getByRole("button", { name: "Settings", exact: true }).focus();
-      const point = await wordPoint(container, word);
-      await page.mouse.click(point.x, point.y);
-    }
     const menu = await wordMenu(container, word);
-    const found = await menu.getByRole("menuitem", { name: "Add to dictionary", exact: true }).count();
-    if (!found && source) {
-      await page.keyboard.press("Escape");
-      // Native keyboard focus starts Chromium's scan even when CodeMirror's
-      // scripted mouse focus does not. Leave the editor focused between polls
-      // so an asynchronous scan can finish before another menu takes focus.
-      await editor.focus();
-      await page.keyboard.press("Shift+Tab");
-      await page.keyboard.press("Tab");
-      await expect(editor).toBeFocused();
-      const point = await wordPoint(container, word);
-      await page.mouse.click(point.x, point.y);
-    }
-    return found;
+    return menu.getByRole("menuitem", { name: "Add to dictionary", exact: true }).count();
   }, { timeout: 30_000, message: "The native spelling dictionary must load and flag the misspelling." }).toBe(1);
   return page.getByRole("menu", { name: "Edit", exact: true });
 }
@@ -205,10 +184,7 @@ test("custom spelling words persist and can be removed through Settings", async 
 });
 
 test("spelling checks prose while excluding inline and fenced code in both editors", async () => {
-  // Each code word also stands in the prose beside it, and its prose copy must
-  // be flagged first. Chromium checks lazily, and the Markdown editor redraws
-  // other copies of a right-clicked word as selection matches, which clears
-  // their flags. So the code copy must also be excluded from checking.
+  // The same word is flagged in prose and excluded in code in both editors.
   await launch("# Spelling notes\n\nA speling example with inlinezorblax and `inlinezorblax`.\n\n" +
     "The fencedzorblax sample:\n\n```text\nfencedzorblax\n```\n");
   /** Wait until the prose copy of `word` is flagged, then expect the code copy at `occurrence` not to be. */
@@ -223,12 +199,7 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await page.keyboard.press("Escape");
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const source = page.locator(".editor-pane-raw .cm-content");
-  await expect(source).toHaveAttribute("spellcheck", "true");
-  // CodeMirror places its caret through script. A real edit starts Chromium's
-  // spelling scan even when the editor already held programmatic focus.
-  await source.locator(".cm-line", { hasText: "A speling example" }).click();
-  await page.keyboard.press("End");
-  await page.keyboard.press("Space");
+  await expect(source).toHaveAttribute("spellcheck", "false");
   await excluded(source, source, "inlinezorblax", 1);
   await excluded(source, source, "fencedzorblax", 1);
   const correction = await misspellingMenu(source, "speling");
@@ -242,12 +213,6 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await page.keyboard.press("ControlOrMeta+End");
   await page.keyboard.insertText("\n\nA newinlinezorblax and `newinlinezorblax` example.\n\n" +
     "The newfencedzorblax sample:\n\n```text\nnewfencedzorblax\n```\n");
-  // Chromium checks inserted text only once a key is typed on its line.
-  for (const line of ["A newinlinezorblax and", "The newfencedzorblax sample:"]) {
-    await source.locator(".cm-line", { hasText: line }).click();
-    await page.keyboard.press("End");
-    await page.keyboard.press("Space");
-  }
   await excluded(source, source, "newinlinezorblax", 1);
   await excluded(source, source, "newfencedzorblax", 1);
   await page.keyboard.press("Escape");
@@ -258,26 +223,95 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await expect((await wordMenu(source, "speling")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
 });
 
-test("changing documents dismisses spelling choices and rejects their stale native context", async () => {
-  await launch("A speling example.\n");
-  await page.evaluate(() => {
-    window.downpadDesktop!.listen("spelling-context-menu", (context) => Reflect.set(window, "lastSpellingContext", context.id));
+for (const layout of ["Document", "Markdown"] as const) {
+  test(`${layout} checks new and edited words without a trailing space`, async () => {
+    await launch("spelling\n");
+    await page.getByRole("radio", { name: layout, exact: true }).click();
+    const editor = page.getByRole("textbox", { name: layout === "Document" ? "Document editor" : "Markdown source editor", exact: true });
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+Home");
+    for (let position = 0; position < 4; position++) await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Delete");
+    await expect(editor.locator(".md-spelling-error")).toHaveText("speling");
+    await page.keyboard.type("l");
+    await expect(editor.locator(".md-spelling-error")).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+n");
+    await expect(page.getByRole("tab", { name: "Untitled" })).toBeVisible();
+    await page.getByRole("radio", { name: layout, exact: true }).click();
+    await editor.click();
+    await page.keyboard.type("speling");
+    await expect(editor.locator(".md-spelling-error")).toHaveText("speling");
+    const menu = await wordMenu(editor, "speling");
+    await menu.getByRole("menuitem", { name: "spelling", exact: true }).click();
+    await expect(editor.locator(".md-spelling-error")).toHaveCount(0);
+    await expect(editor).toContainText("spelling");
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
+
+  test(`${layout} checks loaded text and the entire document without editing it`, async () => {
+    const markdown = "A spelling example.\n\n" + "A sentence with correct words.\n\n".repeat(160) + "A speling example.\n";
+    await launch(markdown);
+    await page.getByRole("radio", { name: layout, exact: true }).click();
+    const editor = page.getByRole("textbox", { name: layout === "Document" ? "Document editor" : "Markdown source editor", exact: true });
+    const firstLine = editor.locator(layout === "Document" ? "p" : ".cm-line").first();
+    const menu = await wordMenu(firstLine, "spelling");
+    await menu.getByRole("menuitem", { name: "Check document spelling", exact: true }).click();
+    await expect(page.getByText("Spelling check complete. 1 possible misspelling marked.", { exact: true })).toBeVisible();
+    expect(await readFile(path.join(directory, "spelling.md"), "utf8")).toBe(markdown);
+    await editor.focus();
+    await page.keyboard.press("ControlOrMeta+End");
+    await expect(editor.locator(".md-spelling-error")).toHaveText("speling");
+    await page.keyboard.press("ControlOrMeta+s");
+    expect(await readFile(path.join(directory, "spelling.md"), "utf8")).toBe(markdown);
+  });
+}
+
+test("full checks include metadata text while ignoring YAML keys, comments and typed values", async () => {
+  await launch('---\ntitlle: "speling"\npublished: false\ncommented: # speling\n---\n\nA speling example.\n');
+  const paragraph = page.locator(".milkdown .ProseMirror p").first();
+  await expect(paragraph.locator(".md-spelling-error")).toHaveText("speling");
+  let menu = await wordMenu(paragraph, "speling");
+  await menu.getByRole("menuitem", { name: "Check document spelling", exact: true }).click();
+  await expect(page.getByText("Spelling check complete. 2 possible misspellings marked.", { exact: true })).toBeVisible();
+  const disclosure = page.getByRole("button", { name: "Frontmatter 3 fields", exact: true });
+  if (await disclosure.getAttribute("aria-expanded") === "false") await disclosure.click();
+  const value = page.locator('.frontmatter-value-edit[data-line="0"]');
+  await expect(value).toBeVisible();
+  await expect.poll(() => page.evaluate(() => [...(CSS.highlights.get("md-spelling-metadata") ?? [])].map((range) => range.toString())))
+    .toContain("speling");
+  menu = await wordMenu(value, "speling");
+  await menu.getByRole("menuitem", { name: "spelling", exact: true }).click();
+  await expect(value).toHaveText('"spelling"');
+  await expect(paragraph.locator(".md-spelling-error")).toHaveText("speling");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(value).toHaveText('"speling"');
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  const source = page.getByRole("textbox", { name: "Markdown source editor", exact: true });
+  await expect(source.locator(".md-spelling-error")).toHaveText(["speling", "speling"]);
+  menu = await wordMenu(source, "speling");
+  await menu.getByRole("menuitem", { name: "Check document spelling", exact: true }).click();
+  await expect(page.getByText("Spelling check complete. 2 possible misspellings marked.", { exact: true })).toBeVisible();
+});
+
+test("print previews preserve misspelled text without spelling underlines", async () => {
+  await launch("A **speling** example.\n");
+  const paragraph = page.locator(".milkdown .ProseMirror p").first();
+  await expect(paragraph.locator(".md-spelling-error")).toHaveText("speling");
+  await expect(paragraph.locator(".md-spelling-error")).toHaveCSS("text-decoration-style", "wavy");
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  const preview = page.locator(".print-workspace .print-flow");
+  await expect(preview.locator("strong")).toHaveText("speling");
+  await expect(preview.locator(".md-spelling-error, [data-managed-spelling]")).toHaveCount(0);
+  await expect(preview.locator("strong")).toHaveCSS("text-decoration-line", "none");
+});
+
+test("changing documents dismisses editor spelling choices", async () => {
+  await launch("A speling example.\n");
   const paragraph = page.locator(".milkdown .ProseMirror p").first();
   await misspellingMenu(paragraph, "speling");
-  const contextId = await page.evaluate(() => Reflect.get(window, "lastSpellingContext") as number);
   await page.keyboard.press("ControlOrMeta+n");
   await expect(page.getByRole("menu", { name: "Edit", exact: true })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Untitled" })).toBeVisible();
-  const error = await page.evaluate(async (id) => {
-    try {
-      await window.downpadDesktop!.invoke("spelling_menu_action", { contextId: id, action: "replace", suggestion: "spelling" });
-      return "unexpected success";
-    } catch (error) {
-      return String(error);
-    }
-  }, contextId);
-  expect(error).toContain("This spelling menu has closed.");
   expect(await readFile(path.join(directory, "spelling.md"), "utf8")).toBe("A speling example.\n");
 });
 

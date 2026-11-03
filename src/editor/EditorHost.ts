@@ -33,6 +33,7 @@ import type { DropTarget } from "./wysiwyg/fileDrop";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
 import { applySpellcheck } from "./wysiwyg/spellcheck";
+import { managedSpellingAvailable } from "./spelling";
 import type { WysiwygContext } from "./wysiwyg/context";
 import type { FindController } from "./wysiwyg/findBar";
 import type { FindCounts, FindOptions } from "./wysiwyg/findEngine";
@@ -619,7 +620,26 @@ export class EditorHost implements FindController {
     if (this.disposed) return;
     const enabled = this.store.get().settings.spellCheckEnabled;
     applySpellcheck(this.root, enabled);
-    for (const pane of this.panes.values()) pane.raw?.setSpellcheck(enabled);
+    for (const pane of this.panes.values()) {
+      pane.raw?.setSpellcheck(enabled);
+      pane.wysiwyg?.setSpellcheck(enabled);
+    }
+  }
+
+  /** Whether the active document can run an explicit native spelling scan. */
+  canCheckSpelling(): boolean {
+    return !this.disposed && !!this.active() && this.store.get().settings.spellCheckEnabled && managedSpellingAvailable();
+  }
+
+  /** Recheck the active document and its visible split mirror, counting once. */
+  async checkSpelling(): Promise<number> {
+    if (!this.canCheckSpelling()) throw new Error("Enable spell check in Settings to check this document.");
+    this.flush({ keepTypedMark: true });
+    const active = this.active();
+    if (!active) throw new Error("Open a document to check its spelling.");
+    const panes = [...this.panes.values()].filter((pane) => pane.tabId === active.tabId && !pane.el.hidden);
+    const counts = await Promise.all(panes.map((pane) => (pane.wysiwyg ?? pane.raw)?.checkSpelling() ?? Promise.resolve(0)));
+    return counts[panes.indexOf(active)] ?? 0;
   }
 
   // ── FindController (§5.13): the find card routes to the visible document

@@ -19,6 +19,8 @@ function createTestBridge() {
     revealItemInFolder: async () => {},
     setTheme: async () => {},
     getPathForFile: () => "",
+    checkSpelling: async () => [],
+    spellingSuggestions: async () => [],
     convertFileSrc: async (path: string) => path,
     closeWindow: async () => {},
     cancelWindowClose: async () => {},

@@ -6964,16 +6964,26 @@ test("closing find after scrolling keeps both split panes' visible lines in plac
  *  start through the first word on its second line. */
 function throughSecondLine(line: Locator): Promise<string> {
   return line.evaluate((element) => {
-    const text = element.firstChild;
-    if (!(text instanceof Text)) throw new Error("The line does not start with its text.");
+    const text = element.textContent ?? "";
+    const nodes: { node: Text; from: number; to: number }[] = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let offset = 0;
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      nodes.push({ node, from: offset, to: offset + node.length });
+      offset += node.length;
+    }
     const word = document.createRange();
     let firstTop: number | undefined;
-    for (const { 0: found, index } of text.data.matchAll(/\S+/g)) {
-      word.setStart(text, index);
-      word.setEnd(text, index + found.length);
+    for (const { 0: found, index } of text.matchAll(/\S+/g)) {
+      const end = index + found.length;
+      const startNode = nodes.find(({ from, to }) => from <= index && to > index)!;
+      const endNode = nodes.find(({ from, to }) => from < end && to >= end)!;
+      word.setStart(startNode.node, index - startNode.from);
+      word.setEnd(endNode.node, end - endNode.from);
       const top = word.getBoundingClientRect().top;
       firstTop ??= top;
-      if (top > firstTop + 1) return text.data.slice(0, index + found.length);
+      if (top > firstTop + 1) return text.slice(0, end);
     }
     throw new Error("The line does not wrap.");
   });

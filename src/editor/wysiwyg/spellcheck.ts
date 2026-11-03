@@ -5,10 +5,9 @@ import { Plugin } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 
-/** Set the inherited spelling preference for document prose and frontmatter.
- *  Code owns its exclusions through editor attributes. The Markdown pane
- *  applies the preference through RawEditor.setSpellcheck because CodeMirror
- *  supplies its own content attribute. */
+/** Set native spelling for browser-preview prose and frontmatter controls.
+ *  Installed editor roots disable native marks and use their model controllers.
+ *  Code owns its exclusions through editor attributes. */
 export function applySpellcheck(root: HTMLElement, enabled: boolean): void {
   root.setAttribute("spellcheck", String(enabled));
 }

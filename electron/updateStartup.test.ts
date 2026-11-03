@@ -26,11 +26,17 @@ const startup = vi.hoisted(() => ({
 
 vi.mock("electron", () => {
   const window = {
+    isDestroyed: () => false,
     webContents: {
+      isDestroyed: () => false,
+      isCrashed: () => false,
+      send: () => {},
       mainFrame: { url: "" },
       setWindowOpenHandler: () => {},
       on: () => {},
       session: {
+        on: () => {},
+        removeListener: () => {},
         setPermissionRequestHandler: () => {},
         setPermissionCheckHandler: () => {},
         availableSpellCheckerLanguages: ["en-US"],
@@ -67,6 +73,7 @@ vi.mock("electron", () => {
     net: {},
     protocol: { registerSchemesAsPrivileged: () => {}, handle: () => {} },
     screen: {},
+    session: { defaultSession: window.webContents.session },
     shell: {},
     systemPreferences: {},
   };

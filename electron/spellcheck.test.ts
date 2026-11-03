@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { parse } from "smol-toml";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeSettings, patchSettingsToml } from "./settings";
 import { Spellchecker, systemSpellcheckLanguages } from "./spellcheck";
+import { WindowsSpelling } from "./systemSpellcheck";
 
 /** A native-session substitute that keeps language and custom-word state. */
-function fixture(platform = "linux") {
+function fixture(platform = "linux", changed = vi.fn(), windows?: WindowsSpelling) {
   let languages = ["en-US"];
   const words = new Set(["Downpad", "Zorblax"]);
-  const session = {
+  const session = Object.assign(new EventEmitter(), {
     availableSpellCheckerLanguages: ["en-US", "en-GB", "sv", "nb"],
     getSpellCheckerLanguages: () => languages,
     setSpellCheckerLanguages: vi.fn((selected: string[]) => { languages = selected; }),
@@ -16,8 +18,8 @@ function fixture(platform = "linux") {
     listWordsInSpellCheckerDictionary: vi.fn(async () => [...words]),
     addWordToSpellCheckerDictionary: vi.fn((word: string) => { words.add(word); return true; }),
     removeWordFromSpellCheckerDictionary: vi.fn((word: string) => words.delete(word)),
-  };
-  return { session, checker: new Spellchecker(session, platform, () => ["sv-SE", "en-GB"]) };
+  });
+  return { session, changed, checker: new Spellchecker(session, platform, () => ["sv-SE", "en-GB"], changed, windows) };
 }
 
 describe("native spelling preferences", () => {
@@ -87,5 +89,60 @@ describe("native custom dictionary", () => {
     await expect(checker.remove("Downpad")).rejects.toThrow("could not be removed");
     session.listWordsInSpellCheckerDictionary.mockRejectedValue(new Error("Read failed"));
     await expect(checker.words()).rejects.toThrow("Read failed");
+  });
+});
+
+describe("on-demand native spelling", () => {
+  it("filters session custom words before asking the renderer on Linux", async () => {
+    const { checker, session } = fixture();
+    session.emit("spellcheck-dictionary-initialized", {}, "en-US");
+    expect(await checker.check(["Downpad", "typo"])).toEqual({ words: ["typo"], useHunspell: true });
+    await checker.add("typo");
+    expect(await checker.check(["typo"])).toEqual({ words: [], useHunspell: true });
+    await checker.remove("typo");
+    expect(await checker.check(["typo"])).toEqual({ words: ["typo"], useHunspell: true });
+  });
+
+  it("waits for loaded dictionaries, reports failed downloads, and removes listeners", () => {
+    const { checker, session, changed } = fixture();
+    checker.apply({ spellCheckEnabled: true, spellCheckLanguages: ["en-US", "sv"] });
+    expect(() => checker.ready()).toThrow("still loading");
+    session.emit("spellcheck-dictionary-initialized", {}, "en-US");
+    expect(() => checker.ready()).toThrow("sv");
+    session.emit("spellcheck-dictionary-download-failure", {}, "sv");
+    expect(() => checker.ready()).toThrow("could not be downloaded");
+    session.emit("spellcheck-dictionary-initialized", {}, "sv");
+    expect(() => checker.ready()).not.toThrow();
+    expect(changed).toHaveBeenCalledTimes(4);
+    checker.dispose();
+    expect(session.listenerCount("spellcheck-dictionary-initialized")).toBe(0);
+    expect(session.listenerCount("spellcheck-dictionary-download-failure")).toBe(0);
+  });
+
+  it("honors custom words and rebuilds Windows checkers after dictionary changes", async () => {
+    const create = vi.fn(() => ({
+      getLanguages: () => ["en-US"], setLanguage: () => true,
+      check: () => [{ start: 0, length: 1 }], getSuggestions: () => ["word"],
+    }));
+    const { checker, changed } = fixture("win32", vi.fn(), new WindowsSpelling(create));
+    expect(await checker.check(["Downpad", "typo"])).toEqual({ words: ["typo"], useHunspell: false });
+    await checker.add("typo");
+    expect(await checker.check(["typo"])).toEqual({ words: [], useHunspell: false });
+    await checker.remove("typo");
+    expect(await checker.check(["typo"])).toEqual({ words: ["typo"], useHunspell: false });
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires only actual Hunspell fallback dictionaries to finish loading on Windows", async () => {
+    const create = () => ({
+      getLanguages: () => ["en-US"], setLanguage: () => true,
+      check: () => [{ start: 0, length: 1 }], getSuggestions: () => [],
+    });
+    const { checker, session } = fixture("win32", vi.fn(), new WindowsSpelling(create));
+    checker.apply({ spellCheckEnabled: true, spellCheckLanguages: ["en-US", "sv"] });
+    await expect(checker.check(["typo"])).rejects.toThrow("still loading (sv)");
+    session.emit("spellcheck-dictionary-initialized", {}, "sv");
+    expect(await checker.check(["typo"])).toEqual({ words: ["typo"], useHunspell: true });
   });
 });
