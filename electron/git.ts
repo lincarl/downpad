@@ -574,9 +574,7 @@ export function linkedPaths(text: string, folder: string): string[] {
       if (node.name === "URL" && node.node.parent?.name !== "Autolink") {
         destinations.push(source.replace(/^<|>$/g, ""));
       } else if (node.name === "HTMLTag" || node.name === "HTMLBlock") {
-        for (const match of source.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) {
-          destinations.push(match[1] ?? match[2] ?? match[3] ?? "");
-        }
+        destinations.push(...htmlLinks(source));
       }
     },
   });
@@ -595,8 +593,41 @@ export function linkedPaths(text: string, folder: string): string[] {
   return paths;
 }
 
+/**
+ * The values of the `src` and `href` attributes of the tags in `html`. Each
+ * tag's attributes are read in order, so text in another attribute's value,
+ * such as `title="src=a.png"`, or in a comment, is no link.
+ */
+function htmlLinks(html: string): string[] {
+  const links: string[] = [];
+  const text = html.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+  const tag = /<[a-z][a-z0-9-]*/gi;
+  const attribute = /\s+([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/y;
+  const end = /\s*\/?>/y;
+  for (let start = tag.exec(text); start; start = tag.exec(text)) {
+    let at = start.index + start[0].length;
+    for (;;) {
+      end.lastIndex = at;
+      if (end.test(text)) {
+        at = end.lastIndex;
+        break;
+      }
+      attribute.lastIndex = at;
+      const match = attribute.exec(text);
+      if (!match) break;
+      at = attribute.lastIndex;
+      const name = match[1]!.toLowerCase();
+      if (name === "src" || name === "href") links.push(match[2] ?? match[3] ?? match[4] ?? "");
+    }
+    // The next tag starts after this one, never inside its attribute values.
+    tag.lastIndex = at;
+  }
+  return links;
+}
+
 /** Files that the document links to and that are new or changed, such as the
- *  images in its attachments folder, so Upload sends them along. */
+ *  images in its attachments folder, so Upload sends them along. Only the
+ *  files themselves count, so a link to a folder sends nothing in it. */
 async function linkedChanges(context: GitContext): Promise<string[]> {
   const folder = dirname(context.file);
   const linked = linkedPaths((await readMarkdown(context.file)).content, folder);
@@ -604,7 +635,8 @@ async function linkedChanges(context: GitContext): Promise<string[]> {
     .map((path) => gitPath(context, path))
     .filter((rel) => rel && !rel.startsWith("../") && rel !== context.rel);
   if (inWorkTree.length === 0) return [];
-  return changedFiles(context, [...new Set(inWorkTree)]);
+  const changed = await changedFiles(context, [...new Set(inWorkTree)]);
+  return changed.filter((file) => linked.some((path) => samePath(path, file)));
 }
 
 /** Whether `git push --porcelain` output says that someone moved the remote

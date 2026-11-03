@@ -77,6 +77,34 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+describe("replacing a document with its file after a discard", () => {
+  it("replaces unsaved changes that are the kept text, and shows the file", async () => {
+    const { store, presenter, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    expect(await files.replaceFromDisk(tabId, filePath, (markdown) => markdown === "# Original content\n")).toBe("shown");
+    expect(store.get().doc).toMatchObject({ markdown: onDisk.content, isDirty: false, frontmatterCollapsed: true });
+    expect(presenter.reloadActiveDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps text typed after the copy, which the editor reports only in its flush", async () => {
+    const { store, presenter, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    presenter.flush.mockImplementation(() => store.patchDoc({ markdown: "# Original content\n\nTyped\n" }));
+    expect(await files.replaceFromDisk(tabId, filePath, (markdown) => markdown === "# Original content\n")).toBe("changed");
+    expect(store.get().doc.markdown).toBe("# Original content\n\nTyped\n");
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+  });
+
+  it("leaves a tab that holds another file by now", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    store.patchDoc({ filePath: "/docs/renamed.md" });
+    expect(await files.replaceFromDisk(tabId, filePath, () => true)).toBe("gone");
+    expect(store.get().doc).toMatchObject({ filePath: "/docs/renamed.md", markdown: "# Original content\n" });
+    expect(native.readFile).not.toHaveBeenCalled();
+  });
+});
+
 describe("saving document snapshots", () => {
   it("collects edits the editor has not reported before taking the snapshot", async () => {
     const { store, presenter, files } = setup();

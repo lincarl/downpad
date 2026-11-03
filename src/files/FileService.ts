@@ -76,11 +76,10 @@ export class FileService {
    * Open a known path (drag-drop, the Recent view, launch args). If the file is
    * already open, focuses that tab; if the active tab is an empty untitled
    * buffer, replaces it; otherwise opens a new tab. Reload rereads an existing
-   * tab from disk after confirming any unsaved changes, unless
-   * `discardUnsaved` says the user chose to discard them already. If that tab
-   * closes during the read, its result is discarded.
+   * tab from disk after confirming any unsaved changes. If that tab closes
+   * during the read, its result is discarded.
    */
-  async openPath(path: string, options: { reload?: boolean; discardUnsaved?: boolean } = {}): Promise<void> {
+  async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
     this.present.flush();
 
     const existing = this.store.get().tabs.find((t) => samePath(t.doc.filePath, path));
@@ -91,7 +90,7 @@ export class FileService {
       return;
     }
 
-    if (existing?.doc.isDirty && !options.discardUnsaved) {
+    if (existing?.doc.isDirty) {
       const label = path.split(/[\\/]/).pop() ?? path;
       const discard = await this.confirmDiscard(`"${label}" has unsaved changes. Discard them and reload?`);
       if (!discard) return;
@@ -147,17 +146,45 @@ export class FileService {
 
   /** Read a tab's file again into the tab, which is not the active one, so
    *  its editors are built from the new text when it is shown. A tab with
-   *  unsaved changes keeps them, unless `discardUnsaved` says the user chose
-   *  to discard them. Returns whether the tab took the new text. */
-  async refreshFromDisk(tabId: string, { discardUnsaved = false }: { discardUnsaved?: boolean } = {}): Promise<boolean> {
-    const kept = (tab: Tab): boolean => !discardUnsaved && hasUnsavedChanges(tab);
+   *  unsaved changes keeps them. Returns whether the tab took the new text. */
+  async refreshFromDisk(tabId: string): Promise<boolean> {
     const before = this.store.get().tabs.find((tab) => tab.id === tabId);
-    if (!before?.doc.filePath || kept(before) || this.store.get().activeTabId === tabId) return false;
+    if (!before?.doc.filePath || hasUnsavedChanges(before) || this.store.get().activeTabId === tabId) return false;
     const payload = await readFile(before.doc.filePath);
     const tab = this.store.get().tabs.find((entry) => entry.id === tabId);
-    if (!tab || tab.doc.filePath !== before.doc.filePath || kept(tab) || this.store.get().activeTabId === tabId) return false;
+    if (!tab || tab.doc.filePath !== before.doc.filePath || hasUnsavedChanges(tab) || this.store.get().activeTabId === tabId) return false;
     this.store.patchDocById(tabId, fileDocument(before.doc.filePath, payload, tab.doc.frontmatterCollapsed));
     return true;
+  }
+
+  /**
+   * Replace a tab's document, unsaved changes and all, with its file `path`
+   * as it is on disk, after the user chose to discard those changes. `kept`
+   * says whether the tab's latest text is the text that the caller kept a
+   * copy of. It is asked after the read, in the same step as the
+   * replacement, so text typed since the copy is never replaced. Returns
+   * "shown" when it replaced the active tab's document and showed it,
+   * "stored" when it replaced another tab's, whose editors the caller drops,
+   * "changed" when the text was not the kept one, and "gone" when the tab
+   * no longer holds `path`.
+   */
+  async replaceFromDisk(tabId: string, path: string, kept: (markdown: string) => boolean): Promise<"shown" | "stored" | "changed" | "gone"> {
+    const owner = (): Tab | undefined =>
+      this.store.get().tabs.find((tab) => tab.id === tabId && tab.doc.filePath === path);
+    if (!owner()) return "gone";
+    const payload = await readFile(path);
+    this.present.flush();
+    const tab = owner();
+    if (!tab) return "gone";
+    if (tab.filesPending || !kept(tab.doc.markdown)) return "changed";
+    const doc = fileDocument(path, payload, tab.doc.frontmatterCollapsed);
+    if (this.store.get().activeTabId !== tabId) {
+      this.store.patchDocById(tabId, doc);
+      return "stored";
+    }
+    this.store.replaceActiveDoc(doc);
+    await this.present.reloadActiveDoc();
+    return "shown";
   }
 
   /** True if the active tab is a pristine untitled buffer that open can reuse.

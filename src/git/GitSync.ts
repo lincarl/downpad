@@ -28,7 +28,7 @@ const MIN_FETCH_INTERVAL_MS = 60_000;
 
 export interface GitSyncDependencies {
   store: Store;
-  files: Pick<FileService, "save" | "saveAs" | "openPath" | "openBeside" | "refreshFromDisk">;
+  files: Pick<FileService, "save" | "saveAs" | "openPath" | "openBeside" | "refreshFromDisk" | "replaceFromDisk">;
   /** Collect typing that the editors have not reported yet. */
   flush(): void;
   /** Drop a background tab's editors, so they are built from its new text. */
@@ -387,22 +387,29 @@ export class GitSync {
     const others = this.openFiles().filter((file) => !sameFilePath(file.path, path));
     const result = await this.during(path, "getting-latest", () => gitDiscard(path, others));
     if (result.changedOpenFiles.some((file) => sameFilePath(file, path))) {
-      // The file is put back. Typing while Git ran went into the editor
-      // after the copy was kept, so keep a newer copy before replacing it.
-      this.deps.flush();
-      const latest = this.deps.store.get().tabs.find((entry) => entry.id === tab.id);
-      if (latest && latest.doc.filePath === path && latest.doc.markdown !== tab.doc.markdown) {
+      // The file is put back, so the tab gets it too. Text typed since the
+      // last copy was kept gets a newer copy first, so no typing is lost.
+      let kept = tab.doc.markdown;
+      for (let attempt = 1; ; attempt++) {
+        const replace = () => this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
+        let outcome: Awaited<ReturnType<typeof replace>> = "gone";
+        if (this.deps.store.get().activeTabId === tab.id) await this.deps.keepingPlace(async () => { outcome = await replace(); });
+        else outcome = await replace();
+        if (outcome === "stored") await this.deps.discardEditors(tab.id);
+        if (outcome !== "changed") break;
+        if (attempt === 5) {
+          this.showError(`“${fileName(path)}” is still changing, so Downpad left your changes in it. A copy of them is kept.`);
+          return;
+        }
+        this.deps.flush();
+        const latest = this.deps.store.get().tabs.find((entry) => entry.id === tab.id)?.doc.markdown ?? kept;
         try {
-          copy = await keepDiscardedCopy(path, latest.doc.markdown);
+          copy = await keepDiscardedCopy(path, latest);
         } catch (error) {
           this.showError(`Downpad could not keep a copy of your latest changes, so the document still shows them. ${errorText(error)}`);
           return;
         }
-      }
-      if (this.deps.store.get().activeTabId === tab.id) {
-        await this.deps.keepingPlace(() => this.deps.files.openPath(path, { reload: true, discardUnsaved: true }));
-      } else if (await this.deps.files.refreshFromDisk(tab.id, { discardUnsaved: true })) {
-        await this.deps.discardEditors(tab.id);
+        kept = latest;
       }
     }
     const rest = { ...result, changedOpenFiles: result.changedOpenFiles.filter((file) => !sameFilePath(file, path)) };

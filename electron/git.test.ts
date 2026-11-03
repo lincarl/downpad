@@ -153,15 +153,18 @@ describe("upload", () => {
     await writeFile(join(mine, "unrelated.txt"), "Not linked\n");
     await writeFile(join(mine, "credentials.json"), "secret");
     await writeFile(join(mine, "other.md"), "Other, not uploaded\n");
-    // A file named in the text, or in code, is no link.
-    await writeFile(notes(), `${NOTES}\nNever upload credentials.json.\n\n\`[x](unrelated.txt)\`\n\n![](attachments/a%20b.png)\n`);
+    await mkdir(join(mine, "docs"));
+    await writeFile(join(mine, "docs", "private.txt"), "Private\n");
+    // A file named in the text or in code is no link, and a link to a
+    // folder sends nothing in it.
+    await writeFile(notes(), `${NOTES}\nNever upload credentials.json.\n\n\`[x](unrelated.txt)\` [Docs](docs/)\n\n![](attachments/a%20b.png)\n`);
 
     expect(await upload(notes(), open())).toEqual({ kind: "done", uploaded: true, changedOpenFiles: [], combinedWith: null });
     run(theirs, "pull", "--quiet", "--ff-only");
     expect(await readFile(join(theirs, "notes.md"), "utf8")).toContain("a%20b.png");
     expect(await readFile(join(theirs, "attachments", "a b.png"), "utf8")).toBe("png");
     expect(run(theirs, "log", "-1", "--format=%s%n%an")).toBe("Update notes.md\nMe\n");
-    expect(run(mine, "status", "--porcelain")).toBe(" M other.md\n?? credentials.json\n?? unrelated.txt\n");
+    expect(run(mine, "status", "--porcelain")).toBe(" M other.md\n?? credentials.json\n?? docs/\n?? unrelated.txt\n");
     expect(await gitStatus(notes(), { fetch: false })).toMatchObject({ changed: false, ahead: 0, behind: 0 });
   });
 
@@ -279,9 +282,11 @@ describe("linkedPaths", () => {
       "```",
       "",
       '<img src="html.png"> <a href=\'page.html?x=1\'>x</a> <https://example.com/auto.png>',
+      "",
+      '<div title="src=../credentials.json">Text</div> <img alt="a > b" src=late.png> <!-- <img src="comment.png"> -->',
     ].join("\n");
     expect(linkedPaths(text, "/work")).toEqual(
-      ["/work/attachments/a b.png", "/work/docs/my file.pdf", "/work/notes.md", "/work/ref.png", "/work/html.png", "/work/page.html"]
+      ["/work/attachments/a b.png", "/work/docs/my file.pdf", "/work/notes.md", "/work/ref.png", "/work/html.png", "/work/page.html", "/work/late.png"]
         .map((path) => resolve(path)),
     );
   });

@@ -77,6 +77,14 @@ beforeEach(() => {
       openPath: vi.fn(async () => {}),
       openBeside: vi.fn(async () => {}),
       refreshFromDisk: vi.fn(async () => true),
+      // As FileService does: the tab takes the file only if its text is the kept one.
+      replaceFromDisk: vi.fn(async (tabId: string, path: string, kept: (markdown: string) => boolean) => {
+        const tab = store.get().tabs.find((entry) => entry.id === tabId && entry.doc.filePath === path);
+        if (!tab) return "gone" as const;
+        if (!kept(tab.doc.markdown)) return "changed" as const;
+        store.patchDocById(tabId, { markdown: "# Theirs\n", savedMarkdown: "# Theirs\n", isDirty: false });
+        return "shown" as const;
+      }),
     },
     flush: vi.fn(),
     discardEditors: vi.fn(async () => {}),
@@ -171,7 +179,8 @@ describe("GitSync conflicts", () => {
     await sync.check({ force: true });
     expect(git.keepCopy).toHaveBeenCalledWith(PATH, "# Notes\n\nMine\n");
     expect(git.discard).toHaveBeenCalledWith(PATH, []);
-    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true, discardUnsaved: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledTimes(1);
+    expect(store.get().doc.markdown).toBe("# Theirs\n");
     expect(store.get().banner).toMatchObject({ kind: "info", actions: [{ id: GIT_OPEN_COPY }] });
     sync.handleBannerAction(GIT_OPEN_COPY);
     expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md");
@@ -187,9 +196,21 @@ describe("GitSync conflicts", () => {
     });
     await sync.check({ force: true });
     expect(git.keepCopy).toHaveBeenLastCalledWith(PATH, "# Notes\n\nMine, and more\n");
-    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true, discardUnsaved: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledTimes(2);
+    expect(store.get().doc.markdown).toBe("# Theirs\n");
     sync.handleBannerAction(GIT_OPEN_COPY);
     expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/latest.md");
+  });
+
+  it("leaves a document that was saved under another name while Git ran alone", async () => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockImplementation(async () => {
+      store.patchDoc({ filePath: "/work/renamed.md", markdown: "# Renamed, with more\n" });
+      return done([PATH]);
+    });
+    await sync.check({ force: true });
+    expect(store.get().doc).toMatchObject({ filePath: "/work/renamed.md", markdown: "# Renamed, with more\n" });
   });
 
   it("leaves an overlap with another Git program's commits to that program", async () => {
