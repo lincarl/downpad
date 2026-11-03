@@ -17,10 +17,12 @@
 // right after a Markdown edit first brings that pane up to date, which ends its
 // cell selection. The cell the press landed on was then gone, so the click
 // placed no caret and the focus left both panes. This view updates a table
-// whose content is unchanged in place, unless a whole row or column is selected
-// in it. Crepe's new view opens the menu of a selected row or column, such as
-// after a click on its handle or on the button that adds it, so the table is
-// still drawn again then. After every other update this view closes a row or
+// whose content is unchanged in place, unless the selection changes to a whole
+// row or column in it. Crepe's new view opens the menu of a selected row or
+// column, such as after a click on its handle or on the button that adds it, so
+// the table is still drawn again then. Changes to highlights, such as spelling
+// underlines, keep the cells and controls while the selection stays the same.
+// After every other update this view closes a row or
 // column menu whose selection is gone, which Crepe's view did not do when the
 // content changed. Crepe fades the handles once the pointer leaves the table
 // and leaves them, with any menu open in them, where they were. A faded handle
@@ -66,10 +68,12 @@ import { tableSchema } from "@milkdown/kit/preset/gfm";
 import { $view } from "@milkdown/kit/utils";
 import { editorTakesDrag } from "./dropEdge";
 
-/** Whether the selection is a whole row, and a whole column, of a table. */
+/** Selected cell positions relative to their table and whether they span lines. */
 interface SelectedLines {
   row: boolean;
   col: boolean;
+  anchor: number | null;
+  head: number | null;
 }
 
 /** Crepe's row and column handles, each of which holds its menu. */
@@ -77,8 +81,10 @@ const lineHandles = '[data-role="col-drag-handle"], [data-role="row-drag-handle"
 
 /** Crepe's table view, without its own handling of a press in a cell or of a
  *  drag of a block or text, and keeping the cells of a table whose content
- *  has not changed while no whole row or column is selected in it. */
+ *  has not changed unless the selection changes to a whole row or column. */
 class CaretTableView extends TableNodeView {
+  /** Table-relative positions survive edits before the table in the split. */
+  private selection = this.selectedLines(this.node);
   /** Whether a press that started on a row or column handle, or in its menu,
    *  has not yet ended with its click. */
   private pressOnHandle = false;
@@ -153,17 +159,19 @@ class CaretTableView extends TableNodeView {
     return super.stopEvent(event);
   }
 
-  /** Update the table in place when its content is unchanged and no whole row
-   *  or column is selected in it, where Crepe's view returns false and so has
-   *  ProseMirror draw it again. ProseMirror then redraws only the selection and
-   *  highlights inside it. While a whole row or column is selected, Crepe's
-   *  view still has the table drawn again, because its new view opens the
-   *  menu of that row or column. After an update that keeps this view, close
+  /** Update the table in place when its content is unchanged, where Crepe's
+   *  view returns false and so has ProseMirror draw it again. ProseMirror then
+   *  redraws only the selection and highlights inside it. Changing the selection
+   *  to a whole row or column still draws the table again, because its new view
+   *  opens that line's menu. Highlight updates keep an unchanged cell selection
+   *  and its controls. After an update that keeps this view, close
    *  a menu whose selection is gone, or, during a press on a row or column
    *  handle or in its menu, once that press and its click are over. */
   override update(node: Node): boolean {
     const lines = this.selectedLines(node);
-    if (!node.eq(this.node) || lines.row || lines.col) {
+    const selectionChanged = lines.anchor !== this.selection.anchor || lines.head !== this.selection.head;
+    this.selection = lines;
+    if (!node.eq(this.node) || (selectionChanged && (lines.row || lines.col))) {
       if (!super.update(node)) return false;
     } else {
       this.node = node;
@@ -174,11 +182,19 @@ class CaretTableView extends TableNodeView {
     return true;
   }
 
-  /** Whether the selection is a whole row, and a whole column, of `table`. */
+  /** Locate selected cells inside `table`, independently of its document position. */
   private selectedLines(table: Node): SelectedLines {
     const { selection } = this.view.state;
-    const here = selection instanceof CellSelection && findTable(selection.$anchorCell)?.node === table;
-    return { row: here && selection.isRowSelection(), col: here && selection.isColSelection() };
+    const selectedTable = selection instanceof CellSelection ? findTable(selection.$anchorCell) : undefined;
+    if (!(selection instanceof CellSelection) || selectedTable?.node !== table) {
+      return { row: false, col: false, anchor: null, head: null };
+    }
+    return {
+      row: selection.isRowSelection(),
+      col: selection.isColSelection(),
+      anchor: selection.$anchorCell.pos - selectedTable.start,
+      head: selection.$headCell.pos - selectedTable.start,
+    };
   }
 
   /** Close the row or column menu once its selection is gone. Drawing the
@@ -198,8 +214,8 @@ class CaretTableView extends TableNodeView {
 
 /** Crepe's table node view with a click in a cell placing the caret, the
  *  drop of a block or text left to ProseMirror (`editorTakesDrag`), the
- *  cells kept while only the selection in the table changes, unless
- *  it becomes a whole row or column, and focus in the document after a
+ *  cells kept while highlights or the selection in the table change, unless
+ *  the selection becomes a different whole row or column, and focus after a
  *  button adds a row or column. Use it after Crepe's Table feature, whose
  *  settings the view reads, so it replaces Crepe's view. */
 export const tableCellClicks = $view(
