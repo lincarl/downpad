@@ -29,10 +29,25 @@ a click, and the next dialog can appear before the old one closes. It still
 checks every window for installer errors. `pnpm test` replays dialog sequences
 through the driver's decisions on both platforms. A second scenario builds synthetic `0.0.1` and
 `0.0.2-rc1` packages through the normal release-version and packaging steps, then
-upgrades the stable installation to the candidate. This catches incorrect
-numeric Windows executable versions even when the PR artifact uses `0.0.0`.
+upgrades the stable installation to the candidate while two copies run with
+separate profiles. Before the upgrade, each copy must show its own Markdown
+file and record that file in its profile's session. The installer must close
+both copies and their Electron helper processes before **Finish** launches
+the candidate. This also catches incorrect numeric Windows executable versions
+even when the PR artifact uses `0.0.0`.
 Fixtures use the application's release-version script from the PR head.
 Older branches must include the numeric-version fix to pass these checks.
+
+A close-refusal scenario uses small test windows named `Downpad.exe` and
+`md-easy.exe`, one at a time. Each records the installer's close request and
+refuses it. The silent upgrade must fail at the close guard before validation
+or old-product removal, leave the refusing process alive, and preserve the old
+product registration and exact executable and app payload bytes. The fixtures
+run outside the installation folder so a locked installed file cannot cause
+the expected failure. This checks the MSI's response to refusal without
+automating the editor's unsaved-changes dialog. The test then stops its own
+fixture and completes a normal wizard upgrade. Both running-app scenarios
+also inspect the compiled MSI's execution order.
 
 A recovery scenario removes only the executable from a registered `0.0.2-rc1`
 test installation, then upgrades to `0.0.2-rc2`. Both packages have the same

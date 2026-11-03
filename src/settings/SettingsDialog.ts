@@ -18,12 +18,10 @@ export class SettingsDialog {
   private host: HTMLElement | null = null;
   private restoreFocus: (() => void) | null = null;
 
-  /** `restartIfSaved` restarts Downpad to install a downloaded update if no
-   *  document has unsaved changes, and resolves false otherwise. */
+  /** Open Settings with the current preferences and a save handler. */
   constructor(
     private readonly store: Store,
     private readonly onSave: (next: Settings) => void,
-    private readonly restartIfSaved?: () => Promise<boolean>,
   ) {}
 
   isOpen(): boolean {
@@ -52,7 +50,6 @@ export class SettingsDialog {
           initial,
           onSave: this.onSave,
           onRequestClose: () => this.close(),
-          restartIfSaved: this.restartIfSaved,
         }),
       );
     });

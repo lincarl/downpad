@@ -149,6 +149,10 @@
     "msi": {
       "oneClick": false,
       "perMachine": false,
+      "additionalWixArgs": [
+        "-ext",
+        "WixUtilExtension"
+      ],
       "upgradeCode": "E35FC5B3-CF65-509C-8B7E-6FC85FF408B6"
     },
     "appx": {

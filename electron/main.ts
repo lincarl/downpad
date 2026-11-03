@@ -55,8 +55,9 @@ let startupCompleted = false;
 let quitRequested = false;
 let updater: Updater | undefined;
 let packageKind: PackageKind | null = null;
-/** Restart Now in Settings > Updates asked to quit and start again. */
+/** The user asked to quit and start again to install an update. */
 let restartForUpdate = false;
+const promptedUpdateVersions = new Set<string>();
 
 function firstFileArgument(argv: string[], cwd = process.cwd()): string | null {
   for (const argument of argv.slice(app.isPackaged ? 1 : 2)) {
@@ -407,7 +408,11 @@ function registerIpc(): void {
   });
   ipcMain.handle("downpad:cancel-window-close", (event) => { trustedSender(event); quitRequested = false; restartForUpdate = false; });
   ipcMain.on("downpad:close-listener", (event, attached: unknown) => {
-    try { trustedSender(event); closeListenerAttached = attached === true; } catch { /* Ignore untrusted listener registration. */ }
+    try {
+      trustedSender(event);
+      closeListenerAttached = attached === true;
+      void promptForUpdate();
+    } catch { /* Ignore untrusted listener registration. */ }
   });
   ipcMain.on("downpad:open-listener", (event, attached: unknown) => {
     try {
@@ -529,6 +534,46 @@ function updates(): Updater {
   return updater;
 }
 
+/** Offer a verified download once per version, after the renderer can guard
+ *  unsaved documents. Later keeps the existing installation on next start. */
+async function promptForUpdate(): Promise<void> {
+  const window = mainWindow;
+  const state = updater?.info().state;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed() || window.webContents.isCrashed() ||
+    !closeListenerAttached || quitRequested || state?.status !== "ready" || promptedUpdateVersions.has(state.version)) return;
+  promptedUpdateVersions.add(state.version);
+  try {
+    const { response } = await dialog.showMessageBox(window, {
+      type: "info",
+      title: "Downpad update",
+      message: `Downpad ${state.version} is ready to install.`,
+      detail: "Restart now to install the update, or choose Later to install it the next time Downpad starts. Unsaved documents are asked about before restarting.",
+      buttons: ["Later", "Now"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    const current = updater?.info().state;
+    if (response !== 1 || window !== mainWindow || window.isDestroyed() || window.webContents.isDestroyed() ||
+      window.webContents.isCrashed() || !closeListenerAttached || quitRequested || current?.status !== "ready" ||
+      current.version !== state.version) return;
+    try {
+      await restartToUpdate();
+    } catch (error) {
+      if (window !== mainWindow || window.isDestroyed()) return;
+      await dialog.showMessageBox(window, {
+        type: "warning",
+        title: "Downpad update",
+        message: "Downpad could not restart to install the update.",
+        detail: `${error instanceof Error ? error.message : String(error)}\nYou can try again from Settings > Updates.`,
+      });
+    }
+  } catch (error) {
+    // A prompt failure must not turn a verified download into a failed one.
+    console.error("Downpad could not offer the update restart", error);
+  }
+}
+
 /** The program that starts this copy again. An AppImage starts from its file,
  *  since the mounted image that runs now disappears when it quits. */
 function relaunchExecutable(): string {
@@ -608,7 +653,10 @@ async function start(): Promise<void> {
     fetch: (url, init) => net.fetch(url, init),
     // For tests: a release server on this computer instead of GitHub.
     apiUrl: process.env.DOWNPAD_UPDATE_API_URL || undefined,
-    onChange: (info) => emit("update-changed", info),
+    onChange: (info) => {
+      emit("update-changed", info);
+      void promptForUpdate();
+    },
   });
   const { autoUpdate } = await config.settings();
   const { pending, failure: installerFailure, installing } = await updater.start(autoUpdate).catch((error: unknown) => {

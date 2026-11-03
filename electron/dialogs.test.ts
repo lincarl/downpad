@@ -132,6 +132,7 @@ vi.mock("./storage", () => ({
 vi.mock("./updateInstall", () => ({ installedPackageKind: async () => null }));
 vi.mock("./updater", () => ({
   Updater: class {
+    info() { return { state: { status: "idle" } }; }
     async start() { return { pending: null, failure: null }; }
     async checkIfDue() {}
   },

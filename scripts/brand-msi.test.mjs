@@ -45,6 +45,39 @@ test("the install folder component keeps its GUID and the bitmaps resolve from t
   assert.match(result, /<WixVariable Id="WixUIBannerBmp" Value="\.\.\\\.\.\\\.\.\\build\\msi\\banner\.bmp"\/>\s*<WixVariable Id="WixUIDialogBmp" Value="\.\.\\\.\.\\\.\.\\build\\msi\\dialog\.bmp"\/>\s*<\/Product>/);
 });
 
+test("installation closes current and legacy apps without bypassing their unsaved-document prompts", async (t) => {
+  const { file } = await project(t, "<MajorUpgrade/>");
+  await brandMsi(file);
+  const result = await readFile(file, "utf8");
+  const applications = [...result.matchAll(/<util:CloseApplication\b([^>]*)>(.*?)<\/util:CloseApplication>/g)];
+  assert.equal(applications.length, 2);
+  for (const [index, target] of ["Downpad.exe", "md-easy.exe"].entries()) {
+    const attributes = Object.fromEntries([...applications[index][1].matchAll(/([\w:]+)="([^"]*)"/g)].map((match) => match.slice(1)));
+    assert.equal(attributes["xmlns:util"], "http://wixtoolset.org/schemas/v4/wxs/util");
+    assert.equal(attributes.Target, target);
+    assert.equal(attributes.CloseMessage, "yes");
+    assert.equal(attributes.RebootPrompt, "no");
+    assert.equal(attributes.Timeout, "60");
+    assert.equal(attributes.Property, index === 0 ? "DOWNPAD_RUNNING" : "MDEASY_RUNNING");
+    assert.equal(applications[index][2], 'NOT (REMOVE ~= "ALL")');
+    for (const unsafe of ["TerminateProcess", "EndSessionMessage", "ElevatedCloseMessage", "ElevatedEndSessionMessage", "PromptToContinue"]) {
+      assert.equal(attributes[unsafe], undefined);
+    }
+  }
+  const config = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.deepEqual(config.build.msi.additionalWixArgs, ["-ext", "WixUtilExtension"]);
+});
+
+test("a refused close stops installation before files-in-use detection and old-product removal", async (t) => {
+  const { file } = await project(t, "<MajorUpgrade/>");
+  await brandMsi(file);
+  const result = await readFile(file, "utf8");
+  assert.match(result, /<CustomAction Id="DownpadRequireClosed" Error="[^"]*Save your work[^"]*"\/>/);
+  assert.match(result, /<Custom Action="WixCloseApplications" Before="DownpadRequireClosed">NOT \(REMOVE ~= "ALL"\)<\/Custom>/);
+  assert.match(result, /<Custom Action="DownpadRequireClosed" Before="InstallValidate">NOT \(REMOVE ~= "ALL"\) AND \(DOWNPAD_RUNNING OR MDEASY_RUNNING\)<\/Custom>/);
+  assert.match(result, /<MajorUpgrade Schedule="afterInstallInitialize"\/>/);
+});
+
 test("an unexpected upgrade definition fails packaging without changing the project", async (t) => {
   for (const upgrade of ["", "<MajorUpgrade/><MajorUpgrade/>"]) {
     const { file, source } = await project(t, upgrade);
