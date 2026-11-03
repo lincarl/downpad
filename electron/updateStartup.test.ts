@@ -1,9 +1,11 @@
 import type { MessageBoxOptions } from "electron";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { UpdateInfo } from "../src/ipc/contracts";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { StagedMsi } from "./updateInstall";
-import type { StartState } from "./updater";
+import type { StartState, UpdaterOptions } from "./updater";
 import type { PackageKind } from "./updatePlan";
 
 /** What the start finds and how the install steps answer. */
@@ -22,11 +24,18 @@ const startup = vi.hoisted(() => ({
   staged: { package: "/tmp/downpad-update-x1/Downpad-1.3.0-win-x64.msi", staging: "/tmp/downpad-update-x1" },
   resultFile: "/profile/updates/msi/install-result.txt",
   helperPid: 4321,
+  updaterOptions: undefined as UpdaterOptions | undefined,
+  updateInfo: { version: "1.2.0", selfUpdate: true, lastCheckMs: null, state: { status: "idle" } } as UpdateInfo,
+  approveResult: true,
+  destroyed: false,
+  senderEvent: {} as { sender?: unknown; senderFrame?: unknown },
+  ipcListeners: new Map<string, (...args: unknown[]) => unknown>(),
+  dialogAnswer: undefined as (() => Promise<{ response: number }>) | undefined,
 }));
 
 vi.mock("electron", () => {
   const window = {
-    isDestroyed: () => false,
+    isDestroyed: () => startup.destroyed,
     webContents: {
       isDestroyed: () => false,
       isCrashed: () => false,
@@ -47,8 +56,9 @@ vi.mock("electron", () => {
     },
     on: () => {},
     once: () => {},
-    loadFile: async () => {},
+    loadFile: async (file: string) => { window.webContents.mainFrame.url = pathToFileURL(file).href; },
   };
+  startup.senderEvent = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   return {
     app: {
       isPackaged: true,
@@ -59,15 +69,22 @@ vi.mock("electron", () => {
       on: () => {},
       requestSingleInstanceLock: () => true,
       whenReady: async () => {},
+      quit: () => { startup.steps.push(["quit"]); },
       exit: (code: number) => { startup.steps.push(["exit", code]); },
       relaunch: (options: unknown) => { startup.steps.push(["relaunch", options]); },
     },
     BrowserWindow: class { constructor() { startup.steps.push(["window"]); return window; } },
     dialog: {
-      showMessageBox: async (_window: unknown, options: MessageBoxOptions) => { startup.steps.push(["showMessageBox", options]); return { response: 0 }; },
+      showMessageBox: async (_window: unknown, options: MessageBoxOptions) => {
+        startup.steps.push(["showMessageBox", options]);
+        return startup.dialogAnswer ? startup.dialogAnswer() : { response: 0 };
+      },
       showErrorBox: (title: string, detail: string) => { startup.steps.push(["showErrorBox", title, detail]); },
     },
-    ipcMain: { handle: (channel: string) => { if (channel === "downpad:invoke") startup.steps.push(["registerIpc"]); }, on: () => {} },
+    ipcMain: {
+      handle: (channel: string) => { if (channel === "downpad:invoke") startup.steps.push(["registerIpc"]); },
+      on: (channel: string, listener: (...args: unknown[]) => unknown) => { startup.ipcListeners.set(channel, listener); },
+    },
     Menu: { setApplicationMenu: () => {}, buildFromTemplate: () => ({}) },
     nativeTheme: {},
     net: {},
@@ -94,6 +111,9 @@ vi.mock("./printing", () => ({ PrintService: class {} }));
 vi.mock("./watchers", () => ({ watchPath: () => () => {} }));
 vi.mock("./updater", () => ({
   Updater: class {
+    constructor(options: UpdaterOptions) { startup.updaterOptions = options; }
+    info() { return startup.updateInfo; }
+    async approve() { startup.steps.push(["approve"]); return startup.approveResult; }
     async start() { return startup.scenario.start; }
     async handedToInstaller(version: string) { startup.steps.push(["handedToInstaller", version]); }
     installerResultFile() { return startup.resultFile; }
@@ -146,6 +166,13 @@ const launchArguments = process.argv;
 beforeEach(() => {
   vi.resetModules();
   startup.steps = [];
+  startup.scenario = { kind: null, start: { pending: null, failure: null } };
+  startup.updaterOptions = undefined;
+  startup.updateInfo = { version: "1.2.0", selfUpdate: true, lastCheckMs: null, state: { status: "idle" } };
+  startup.approveResult = true;
+  startup.destroyed = false;
+  startup.ipcListeners.clear();
+  startup.dialogAnswer = undefined;
   vi.stubEnv("DOWNPAD_USER_DATA_DIR", "");
   vi.stubEnv("APPIMAGE", APPIMAGE);
   // A packaged launch that opens one Markdown file.
@@ -155,6 +182,7 @@ beforeEach(() => {
 afterEach(() => {
   process.argv = launchArguments;
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 it.each<{ name: string; scenario: Scenario; steps: unknown[][] }>([
@@ -240,4 +268,130 @@ it.each<{ name: string; scenario: Scenario; steps: unknown[][] }>([
   // The mocked start awaits no timers or files, so one macrotask lets it settle.
   await new Promise((settled) => setImmediate(settled));
   expect(startup.steps).toEqual(steps);
+});
+
+/** Start without a pending installation and optionally attach the renderer's close guard. */
+async function startForPrompt(attachCloseListener = true): Promise<void> {
+  startup.scenario.kind = "appimage";
+  await import("./main");
+  await vi.waitFor(() => expect(startup.steps).toEqual(normalStart()), { interval: 5 });
+  expect(startup.updaterOptions?.onChange).toBeTypeOf("function");
+  if (attachCloseListener) setCloseListener(true);
+  startup.steps = [];
+}
+
+/** Register through the same trusted IPC callback as the preload's close listener. */
+function setCloseListener(attached: boolean): void {
+  const listener = startup.ipcListeners.get("downpad:close-listener");
+  expect(listener).toBeTypeOf("function");
+  listener!(startup.senderEvent, attached);
+}
+
+/** Publish a state change through the real main-process updater callback. */
+function publishUpdate(state: UpdateInfo["state"] = { status: "ready", version: "1.3.0" }): void {
+  startup.updateInfo = { ...startup.updateInfo, state };
+  startup.updaterOptions!.onChange!(startup.updateInfo);
+}
+
+/** Flush async dialog handling without introducing an arbitrary timer delay. */
+async function settlePrompt(): Promise<void> {
+  await new Promise((settled) => setImmediate(settled));
+}
+
+/** Leave the native prompt open until the test chooses a button. */
+function holdPrompt(): (response: number) => void {
+  let answer!: (response: number) => void;
+  const pending = new Promise<{ response: number }>((resolve) => {
+    answer = (response) => resolve({ response });
+  });
+  startup.dialogAnswer = () => pending;
+  return answer;
+}
+
+const readyPrompt = ["showMessageBox", expect.objectContaining({
+  message: "Downpad 1.3.0 is ready to install.",
+  buttons: ["Later", "Now"],
+  defaultId: 0,
+  cancelId: 0,
+})];
+
+it("waits for the renderer's close guard before offering a downloaded update", async () => {
+  await startForPrompt(false);
+  publishUpdate();
+  await settlePrompt();
+  expect(startup.steps).toEqual([]);
+
+  setCloseListener(true);
+  await settlePrompt();
+  expect(startup.steps).toEqual([readyPrompt]);
+});
+
+it("keeps Later pending for next start and prompts only once for the same version", async () => {
+  await startForPrompt();
+  const answer = holdPrompt();
+  publishUpdate();
+  publishUpdate();
+  expect(startup.steps).toEqual([readyPrompt]);
+
+  answer(0);
+  await settlePrompt();
+  publishUpdate();
+  setCloseListener(true);
+  await settlePrompt();
+  expect(startup.steps).toEqual([readyPrompt]);
+  expect(startup.updateInfo.state).toEqual({ status: "ready", version: "1.3.0" });
+});
+
+it("approves Now and uses the normal quit path for unsaved-document handling", async () => {
+  await startForPrompt();
+  startup.dialogAnswer = async () => ({ response: 1 });
+  publishUpdate();
+  await settlePrompt();
+  expect(startup.steps).toEqual([readyPrompt, ["approve"], ["quit"]]);
+});
+
+it.each(["removed download", "detached close guard", "destroyed window"])(
+  "does not restart for Now after a %s", async (change) => {
+    await startForPrompt();
+    const answer = holdPrompt();
+    publishUpdate();
+    expect(startup.steps).toEqual([readyPrompt]);
+
+    if (change === "removed download") publishUpdate({ status: "idle" });
+    else if (change === "detached close guard") setCloseListener(false);
+    else startup.destroyed = true;
+    answer(1);
+    await settlePrompt();
+    expect(startup.steps).toEqual([readyPrompt]);
+  },
+);
+
+it("does not offer an update when its window has been destroyed", async () => {
+  await startForPrompt();
+  startup.destroyed = true;
+  publishUpdate();
+  await settlePrompt();
+  expect(startup.steps).toEqual([]);
+});
+
+it("logs a failed native prompt without rejecting the update notification", async () => {
+  await startForPrompt();
+  const failure = new Error("The native dialog could not open.");
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  startup.dialogAnswer = async () => { throw failure; };
+  expect(() => publishUpdate()).not.toThrow();
+  await settlePrompt();
+  expect(startup.steps).toEqual([readyPrompt]);
+  expect(logged).toHaveBeenCalledWith(expect.any(String), failure);
+});
+
+it("does not quit when Now finds that the pending package is missing", async () => {
+  await startForPrompt();
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  startup.approveResult = false;
+  startup.dialogAnswer = async () => ({ response: 1 });
+  publishUpdate();
+  await settlePrompt();
+  expect(startup.steps).toEqual([readyPrompt, ["approve"]]);
+  expect(logged).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "No downloaded update is waiting." }));
 });

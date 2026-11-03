@@ -14,7 +14,6 @@ import { RecentView } from "../home/RecentView";
 import { createIpcRecentDataSource } from "../home/recentData";
 import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
-import { restartToUpdate } from "../ipc/commands";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
 import { layoutFromDefaultView, shownLayout } from "../state/types";
@@ -72,7 +71,6 @@ export class AppRuntime {
     this.settingsDialog = new SettingsDialog(
       store,
       (next) => void this.settingsModel.save(next),
-      () => this.restartToUpdateIfSaved(),
     );
 
     // The editor presenter lets FileService flush + re-show the active document
@@ -245,15 +243,6 @@ export class AppRuntime {
 
   openSettings(): void {
     this.settingsDialog.open();
-  }
-
-  /** Restart to install the downloaded update, if no document has unsaved
-   *  changes, so that closing asks nothing. False, without a restart, when
-   *  one has. */
-  private async restartToUpdateIfSaved(): Promise<boolean> {
-    if (!this.files.canCloseTabs()) return false;
-    await restartToUpdate();
-    return true;
   }
 
   /** Toggle only the document surface. UI chrome remains controlled in Settings. */

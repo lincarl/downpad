@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { addDictionaryWord, getSpellcheckInfo, listDictionaryWords } from "@/ipc/commands";
 import type { SpellcheckInfo } from "@/ipc/contracts";
 import { isElectron } from "@/ipc/env";
-import { onUpdateChanged } from "@/ipc/events";
 import type { Settings } from "@/state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsDialogView } from "./SettingsDialogView";
@@ -34,11 +33,11 @@ const nativeInfo: SpellcheckInfo = {
 };
 
 /** Open the real settings form so Save and nested modal behavior are exercised. */
-async function openSpelling(initial: Settings = DEFAULT_SETTINGS, restartIfSaved?: () => Promise<boolean>) {
+async function openSpelling(initial: Settings = DEFAULT_SETTINGS) {
   const onSave = vi.fn<(next: Settings) => void>();
   const onRequestClose = vi.fn();
   const user = userEvent.setup({ delay: null });
-  render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} restartIfSaved={restartIfSaved} />);
+  render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />);
   await user.click(screen.getByRole("tab", { name: "Spelling" }));
   return { user, onSave, onRequestClose };
 }
@@ -140,18 +139,4 @@ describe("spelling preferences", () => {
     expect(onRequestClose).toHaveBeenCalledOnce();
   });
 
-  it("does not restart for an update while the dictionary editor has an unfinished word", async () => {
-    const restartIfSaved = vi.fn(async () => true);
-    const { user } = await openSpelling(DEFAULT_SETTINGS, restartIfSaved);
-    await user.click(screen.getByRole("tab", { name: "Updates" }));
-    await user.click(screen.getByRole("button", { name: "Check for updates" }));
-    await user.click(screen.getByRole("tab", { name: "Spelling" }));
-    await user.click(await screen.findByRole("button", { name: "Manage dictionary…" }));
-    await user.type(screen.getByRole("textbox", { name: "New word" }), "unfinished");
-    act(() => vi.mocked(onUpdateChanged).mock.calls[0][0]({
-      version: "1.0.0", selfUpdate: true, lastCheckMs: null, state: { status: "ready", version: "1.1.0" },
-    }));
-    expect(restartIfSaved).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Custom dictionary" })).toBeTruthy();
-  });
 });

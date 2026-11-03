@@ -14,7 +14,6 @@ interface SpellingSettingsProps {
   initialEnabled: boolean;
   languages: string[];
   onLanguagesChange: (languages: string[]) => void;
-  onDictionaryOpenChange: (open: boolean) => void;
 }
 
 /** Resolve locale codes into readable names, keeping unfamiliar saved codes visible. */
@@ -27,7 +26,7 @@ function languageLabel(code: string): string {
 }
 
 /** Stage language preferences in Settings while managing dictionary words separately. */
-export function SpellingSettings({ active, initialEnabled, languages, onLanguagesChange, onDictionaryOpenChange }: SpellingSettingsProps) {
+export function SpellingSettings({ active, initialEnabled, languages, onLanguagesChange }: SpellingSettingsProps) {
   const [info, setInfo] = useState<SpellcheckInfo | null>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -56,12 +55,6 @@ export function SpellingSettings({ active, initialEnabled, languages, onLanguage
   const visibleChoices = choices.filter(({ code, label }) => `${label} ${code}`.toLocaleLowerCase().includes(query));
   const followSystem = languages.length === 0;
   const unavailable = languages.filter((code) => !info?.availableLanguages.includes(code));
-
-  /** Keep update restarts from interrupting dictionary edits or writes. */
-  const showDictionary = (open: boolean): void => {
-    onDictionaryOpenChange(open);
-    setDictionaryOpen(open);
-  };
 
   /** Switching modes remembers the staged custom choice without saving it. */
   const changeMode = (system: boolean): void => {
@@ -172,7 +165,7 @@ export function SpellingSettings({ active, initialEnabled, languages, onLanguage
               type="button"
               variant="outline"
               className="col-span-full mt-1 justify-self-start"
-              onClick={() => showDictionary(true)}
+              onClick={() => setDictionaryOpen(true)}
             >
               Manage dictionary…
             </Button>
@@ -180,7 +173,7 @@ export function SpellingSettings({ active, initialEnabled, languages, onLanguage
           {dictionaryOpen && (
             <DictionaryDialog
               sharedWithSystem={info.dictionarySharedWithSystem}
-              onClose={() => showDictionary(false)}
+              onClose={() => setDictionaryOpen(false)}
               onRestoreFocus={() => dictionaryButton.current?.focus()}
             />
           )}
