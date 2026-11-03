@@ -9,6 +9,8 @@ import {
 } from "react";
 import {
   ChevronDown,
+  CloudDownload,
+  CloudUpload,
   Code,
   Columns2,
   Copy,
@@ -60,6 +62,7 @@ import { dirName } from "@/home/recentFormat";
 import { showContextMenu } from "@/shell/contextMenu";
 import { EditorIsland } from "@/editor/EditorIsland";
 import { middleTruncate } from "@/editor/wysiwyg/linkView";
+import { gitStatusText } from "@/git/gitText";
 import type { EditorHost } from "@/editor/EditorHost";
 
 export interface AppProps {
@@ -180,7 +183,7 @@ function AppContent({ store }: { store: Store }) {
 
 function Toolbar() {
   const runtime = useAppRuntime();
-  const { view, activeTabId, settings, find } = useAppState((state) => state);
+  const { view, activeTabId, settings, find, git } = useAppState((state) => state);
   const editorLayout = useAppState(shownLayout);
   const inEditor = view !== "recent" && activeTabId !== null;
   const documentIsDark =
@@ -194,7 +197,12 @@ function Toolbar() {
   ];
 
   return (
-    <header className="toolbar row-start-1 flex min-w-0 items-center gap-1 border-b border-line-toolbar bg-window px-[3px]">
+    // Upload makes the toolbar wider, so with it every control that narrow
+    // windows hide goes about 50px sooner (`data-git`).
+    <header
+      className="toolbar group/toolbar row-start-1 flex min-w-0 items-center gap-1 border-b border-line-toolbar bg-window px-[3px]"
+      data-git={inEditor && git ? "" : undefined}
+    >
       <TooltipLabel text="Recent files">
         <Button
           type="button"
@@ -206,7 +214,7 @@ function Toolbar() {
           onClick={() => runtime?.showRecentView()}
         >
           <ListClock aria-hidden="true" {...TOOL_ICON} />
-          <span className="max-[975px]:hidden">Recent</span>
+          <span className="max-[975px]:hidden group-data-[git]/toolbar:max-[1050px]:hidden">Recent</span>
         </Button>
       </TooltipLabel>
       <SplitButton
@@ -235,12 +243,28 @@ function Toolbar() {
           { label: "Save as…", icon: SaveAll, run: () => runtime?.saveDocumentAs() },
         ]}
       />
-      <ToolSeparator className="max-[660px]:hidden" />
+      {/* Only a document in a Git repository with a remote branch offers Upload. */}
+      {inEditor && git && (
+        <SplitButton
+          className="toolbar-upload"
+          icon={CloudUpload}
+          label="Upload"
+          tooltip="Upload: save, commit and push"
+          menuLabel="Upload options"
+          disabled={git.activity !== null}
+          onClick={() => runtime?.uploadDocument()}
+          items={[
+            { label: "Upload", icon: CloudUpload, run: () => runtime?.uploadDocument() },
+            { label: "Get latest", icon: CloudDownload, run: () => runtime?.getLatestDocument() },
+          ]}
+        />
+      )}
+      <ToolSeparator className="max-[660px]:hidden group-data-[git]/toolbar:max-[710px]:hidden" />
       <ToggleGroup
         type="single"
         value={inEditor ? editorLayout : ""}
         disabled={!inEditor}
-        className="toolbar-view inline-flex max-[660px]:hidden"
+        className="toolbar-view inline-flex max-[660px]:hidden group-data-[git]/toolbar:max-[710px]:hidden"
         aria-label="Editor view"
         onValueChange={(value) => {
           if (value) runtime?.selectLayout(value as EditorLayout);
@@ -267,7 +291,7 @@ function Toolbar() {
         })}
       </ToggleGroup>
       <ToolbarMenu
-        className="min-[660px]:hidden"
+        className="min-[660px]:hidden group-data-[git]/toolbar:max-[710px]:inline-flex"
         label="Editor view"
         icon={editorLayout === "markdown" ? Code : editorLayout === "split" ? Columns2 : FileText}
         disabled={!inEditor}
@@ -278,18 +302,22 @@ function Toolbar() {
           run: () => runtime?.selectLayout(value),
         }))}
       />
-      <ToolSeparator className="max-[769px]:hidden" />
+      <ToolSeparator className="max-[769px]:hidden group-data-[git]/toolbar:max-[819px]:hidden" />
       <ToolButton
-        className="max-[859px]:hidden"
+        className="max-[859px]:hidden group-data-[git]/toolbar:max-[909px]:hidden"
         label="Decrease text size"
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(-0.1)}
       >
         <Minus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
-      <TextSizeControl className="max-[769px]:hidden" disabled={!inEditor} scale={settings.editorFontScale} />
+      <TextSizeControl
+        className="max-[769px]:hidden group-data-[git]/toolbar:max-[819px]:hidden"
+        disabled={!inEditor}
+        scale={settings.editorFontScale}
+      />
       <ToolButton
-        className="max-[859px]:hidden"
+        className="max-[859px]:hidden group-data-[git]/toolbar:max-[909px]:hidden"
         label="Increase text size"
         disabled={!inEditor}
         onClick={() => runtime?.zoomDocument(0.1)}
@@ -318,8 +346,10 @@ function Toolbar() {
       >
         <Search aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
-      <ToolSeparator />
+      {/* With Upload, the narrowest windows leave the document theme to Settings. */}
+      <ToolSeparator className="group-data-[git]/toolbar:max-[510px]:hidden" />
       <ToolButton
+        className="group-data-[git]/toolbar:max-[510px]:hidden"
         label={documentIsDark ? "Switch to light document theme" : "Switch to dark document theme"}
         disabled={!inEditor}
         onClick={() => runtime?.toggleDocumentTheme()}
@@ -532,6 +562,7 @@ function SplitButton({
               className={cn(
                 part,
                 "toolbar-file gap-0.5 rounded-l-control pl-2.5 text-[12px] leading-4 max-[975px]:pr-1",
+                "group-data-[git]/toolbar:max-[1050px]:pr-1",
               )}
               aria-label={label}
               disabled={disabled}
@@ -539,7 +570,7 @@ function SplitButton({
             >
               <Icon aria-hidden="true" {...TOOL_ICON} />
               {/* Narrow windows keep the icon and drop the label before anything clips. */}
-              <span className="toolbar-file-label max-[975px]:hidden">{label}</span>
+              <span className="toolbar-file-label max-[975px]:hidden group-data-[git]/toolbar:max-[1050px]:hidden">{label}</span>
             </button>
           </TooltipLabel>
           <PopoverTrigger asChild>
@@ -922,7 +953,8 @@ const STATUS_BAR_CLASS = cn(
 );
 
 function StatusBar({ recentSummary }: { recentSummary: string }) {
-  const { view, doc } = useAppState((state) => state);
+  const { view, doc, git } = useAppState((state) => state);
+  const activeTab = useAppState((state) => state.tabs.find((tab) => tab.id === state.activeTabId));
   if (view === "recent") {
     return (
       <footer className={STATUS_BAR_CLASS}>
@@ -935,6 +967,7 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
   }
   const path = doc.filePath ?? "Untitled";
   const words = countWords(doc.markdown);
+  const gitText = git && activeTab ? gitStatusText(git, hasUnsavedChanges(activeTab)) : null;
   return (
     <footer className={STATUS_BAR_CLASS}>
       {/* A path too long for the room left of the word count ends in an
@@ -946,6 +979,12 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
         {path}
       </span>
       <span className="status-right shrink-0 whitespace-nowrap">
+        {gitText && (
+          <>
+            <span className="status-git" title={gitText.detail}>{gitText.text}</span>
+            {" · "}
+          </>
+        )}
         {words.toLocaleString()} {words === 1 ? "word" : "words"} · {formatSize(byteLength(doc.markdown))}
       </span>
     </footer>

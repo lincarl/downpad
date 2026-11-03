@@ -71,6 +71,20 @@ export class Store {
     return id;
   }
 
+  /** Open a document in a new tab right after the tab `afterId`, or at the
+   *  end when there is no such tab, without making it active. Returns the new
+   *  tab id. */
+  insertTab(doc: DocumentState, afterId: string): string {
+    const id = crypto.randomUUID();
+    this.set((s) => {
+      const index = s.tabs.findIndex((t) => t.id === afterId);
+      const tabs = [...s.tabs];
+      tabs.splice(index === -1 ? tabs.length : index + 1, 0, { id, doc });
+      return { tabs };
+    });
+    return id;
+  }
+
   /** Replace the active tab's document wholesale (open/new into the current tab). */
   replaceActiveDoc(doc: DocumentState): void {
     this.set((s) => {

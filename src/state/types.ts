@@ -6,6 +6,7 @@
 // against the current string (spec §8.3).
 
 import type { MarginPreset, Orientation, PaperSize, PrintVersion } from "../print/paper";
+import type { GitFileStatus } from "../ipc/contracts";
 
 export type ViewMode = "recent" | "wysiwyg" | "raw";
 
@@ -114,7 +115,7 @@ export interface FindState {
   total: number;
 }
 
-export type BannerKind = "file-changed" | "large-file" | "info" | "error";
+export type BannerKind = "file-changed" | "remote-changed" | "large-file" | "info" | "error";
 
 export interface BannerState {
   kind: BannerKind;
@@ -144,11 +145,27 @@ export interface AppState {
   find: FindState;
   banner: BannerState | null;
   saveStatus: { lastSavedAt: number | null; autosaving: boolean };
+  /** Git's view of the active document, or null when it is not in a
+   *  repository with a remote branch. The toolbar then offers no Upload. */
+  git: GitState | null;
   /** Whether startup (`AppRuntime.bootstrap`) has finished. It has then shown
    *  the first document or the Recent view and put the keyboard shortcuts and
    *  desktop events in place. The app shell shows it as `data-started`, which
    *  the Electron tests wait for before they act. */
   started: boolean;
+}
+
+/** What Git reports about the active document, and what Downpad is doing in
+ *  its repository. */
+export interface GitState {
+  /** The document this describes. A tab switch replaces it once Git has
+   *  answered for the new document. */
+  path: string;
+  status: GitFileStatus;
+  /** An Upload or Get latest that is running. */
+  activity: "uploading" | "getting-latest" | null;
+  /** Why the last check for changes failed, or null. */
+  problem: string | null;
 }
 
 // ── Settings (mirror of settings.toml; see spec §5.9 and ipc/contracts) ──
@@ -247,6 +264,12 @@ export interface Settings {
    *  next time Downpad starts. Only copies installed from a release package
    *  update themselves. */
   autoUpdate: boolean;
+
+  /** Get the latest version of a document in a Git repository without asking,
+   *  when nothing that is not uploaded would change (Git, spec). */
+  gitAutoGetLatest: boolean;
+  /** Upload a document in a Git repository each time the user saves it. */
+  gitUploadOnSave: boolean;
 }
 
 export interface RecentEntry {

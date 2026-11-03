@@ -10,7 +10,7 @@ import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from ".
 import type { FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
-import { blankDoc, hasUnsavedChanges, type DocumentState } from "../state/types";
+import { blankDoc, hasUnsavedChanges, type DocumentState, type Tab } from "../state/types";
 import type { Store } from "../state/store";
 
 const MD_FILTERS = [
@@ -44,6 +44,13 @@ interface SaveRequest {
   snapshot: DocumentState;
   expectedPath: string | null;
   saveAs: boolean;
+  choice: SaveAsChoice;
+}
+
+/** The suggested path of a Save As, and paths it must not write. */
+interface SaveAsChoice {
+  defaultPath?: string;
+  refuse?: (path: string) => boolean;
 }
 
 /** A clean close must still pass canCloseTabs immediately before removing tabs. */
@@ -127,6 +134,59 @@ export class FileService {
     return reopened;
   }
 
+  /** Open `path` in a new tab right after the tab `afterTabId`, without
+   *  showing it. A file that is open already is left alone. */
+  async openBeside(path: string, afterTabId: string): Promise<void> {
+    if (this.store.get().tabs.some((tab) => samePath(tab.doc.filePath, path))) return;
+    const payload = await readFile(path);
+    if (this.store.get().tabs.some((tab) => samePath(tab.doc.filePath, path))) return;
+    this.store.insertTab(fileDocument(path, payload), afterTabId);
+    this.recordOpened(path);
+  }
+
+  /** Read a tab's file again into the tab, which is not the active one, so
+   *  its editors are built from the new text when it is shown. A tab with
+   *  unsaved changes keeps them. Returns whether the tab took the new text. */
+  async refreshFromDisk(tabId: string): Promise<boolean> {
+    const before = this.store.get().tabs.find((tab) => tab.id === tabId);
+    if (!before?.doc.filePath || hasUnsavedChanges(before) || this.store.get().activeTabId === tabId) return false;
+    const payload = await readFile(before.doc.filePath);
+    const tab = this.store.get().tabs.find((entry) => entry.id === tabId);
+    if (!tab || tab.doc.filePath !== before.doc.filePath || hasUnsavedChanges(tab) || this.store.get().activeTabId === tabId) return false;
+    this.store.patchDocById(tabId, fileDocument(before.doc.filePath, payload, tab.doc.frontmatterCollapsed));
+    return true;
+  }
+
+  /**
+   * Replace a tab's document, unsaved changes and all, with its file `path`
+   * as it is on disk, after the user chose to discard those changes. `kept`
+   * says whether the tab's latest text is the text that the caller kept a
+   * copy of. It is asked after the read, in the same step as the
+   * replacement, so text typed since the copy is never replaced. Returns
+   * "shown" when it replaced the active tab's document and showed it,
+   * "stored" when it replaced another tab's, whose editors the caller drops,
+   * "changed" when the text was not the kept one, and "gone" when the tab
+   * no longer holds `path`.
+   */
+  async replaceFromDisk(tabId: string, path: string, kept: (markdown: string) => boolean): Promise<"shown" | "stored" | "changed" | "gone"> {
+    const owner = (): Tab | undefined =>
+      this.store.get().tabs.find((tab) => tab.id === tabId && tab.doc.filePath === path);
+    if (!owner()) return "gone";
+    const payload = await readFile(path);
+    this.present.flush();
+    const tab = owner();
+    if (!tab) return "gone";
+    if (tab.filesPending || !kept(tab.doc.markdown)) return "changed";
+    const doc = fileDocument(path, payload, tab.doc.frontmatterCollapsed);
+    if (this.store.get().activeTabId !== tabId) {
+      this.store.patchDocById(tabId, doc);
+      return "stored";
+    }
+    this.store.replaceActiveDoc(doc);
+    await this.present.reloadActiveDoc();
+    return "shown";
+  }
+
   /** True if the active tab is a pristine untitled buffer that open can reuse.
    *  One that a dropped file is on its way into keeps its document, so the
    *  file never goes into the one opened (§5.4). */
@@ -176,8 +236,11 @@ export class FileService {
     return this.queueSave(this.store.get().activeTabId, false, options);
   }
 
-  saveAs(): Promise<boolean> {
-    return this.queueSave(this.store.get().activeTabId, true);
+  /** Save the active document under a path the user chooses. `defaultPath`
+   *  is the dialog's suggestion. A path for which `refuse` returns true is not
+   *  written, and the save reports failure. */
+  saveAs(options: { defaultPath?: string; refuse?: (path: string) => boolean } = {}): Promise<boolean> {
+    return this.queueSave(this.store.get().activeTabId, true, {}, options);
   }
 
   /** Resolve once no save that can give a tab's document a new path is under
@@ -192,13 +255,18 @@ export class FileService {
   }
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
-  private queueSave(tabId: string | null, saveAs: boolean, options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
+  private queueSave(
+    tabId: string | null,
+    saveAs: boolean,
+    options: { keepTypedMark?: boolean } = {},
+    choice: SaveAsChoice = {},
+  ): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
     this.present.flush(options);
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!tabId || !doc) return Promise.resolve(false);
-    const request = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs };
+    const request = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice };
     this.pendingSaves.add(request);
     const operation = this.saveQueue.then(() => this.saveSnapshot(request))
       .finally(() => this.pendingSaves.delete(request));
@@ -207,16 +275,16 @@ export class FileService {
     return operation;
   }
 
-  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs }: SaveRequest): Promise<boolean> {
+  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs, choice }: SaveRequest): Promise<boolean> {
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== expectedPath) return false;
     const originalPath = current.filePath;
     let path = originalPath;
     const choosePath = saveAs || !path;
     if (choosePath) {
-      path = await saveDialog({ filters: MD_FILTERS, defaultPath: originalPath ?? "Untitled.md" });
+      path = await saveDialog({ filters: MD_FILTERS, defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-      if (!path || !afterDialog || afterDialog.filePath !== originalPath) return false;
+      if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
     }
     if (!path) return false;
     // Until the write settles, the file may hold the old saved text or the new

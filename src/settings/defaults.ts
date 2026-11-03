@@ -57,4 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hasCheckedDefaultHandler: false,
 
   autoUpdate: true,
+
+  gitAutoGetLatest: true,
+  gitUploadOnSave: false,
 };

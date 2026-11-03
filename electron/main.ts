@@ -9,7 +9,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { DesktopEventPayloads, HistoryCommand, SaveChangesChoice } from "../src/ipc/bridge";
-import type { DefaultHandler } from "../src/ipc/contracts";
+import type { DefaultHandler, GitOpenFile } from "../src/ipc/contracts";
 import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
@@ -19,6 +19,7 @@ import { debInstallCommand, discardStagedMsi, installDeb, installedPackageKind, 
 import { Updater, type PendingUpdate } from "./updater";
 import type { PackageKind } from "./updatePlan";
 import { watchPath } from "./watchers";
+import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, previewCombine, upload } from "./git";
 import { Spellchecker } from "./spellcheck";
 import { WindowsSpelling } from "./systemSpellcheck";
 
@@ -181,6 +182,16 @@ function boolean(source: Record<string, unknown>, key: string): boolean {
 
 function path(source: Record<string, unknown>, key = "path"): string { return absolutePath(string(source, key)); }
 
+/** The open documents that a Git action reloads or protects. */
+function openFiles(source: Record<string, unknown>): GitOpenFile[] {
+  const value = source.openFiles;
+  if (!Array.isArray(value)) throw new Error("The openFiles argument must be a list.");
+  return value.map((entry: unknown) => {
+    const file = record(entry);
+    return { path: path(file), unsaved: boolean(file, "unsaved") };
+  });
+}
+
 async function invoke(command: unknown, value: unknown): Promise<unknown> {
   const args = record(value);
   switch (command) {
@@ -296,6 +307,12 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "update_info": return updates().info();
     case "check_for_updates": void updates().checkNow(); return;
     case "restart_to_update": return restartToUpdate();
+    case "git_status": return gitStatus(path(args), { fetch: boolean(args, "fetch") });
+    case "git_preview_combine": return previewCombine(path(args), string(args, "markdown"));
+    case "git_get_latest": return getLatest(path(args), openFiles(args), boolean(args, "interactive"));
+    case "git_upload": return upload(path(args), openFiles(args));
+    case "git_discard": return discardChanges(path(args), openFiles(args));
+    case "keep_discarded_copy": return keepDiscardedCopy(app.getPath("userData"), path(args), string(args, "content"));
     default: throw new Error("Unknown desktop command.");
   }
 }

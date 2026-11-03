@@ -36,6 +36,7 @@ function makeStore(markdown = "hello world"): Store {
     },
     banner: null,
     saveStatus: { lastSavedAt: null, autosaving: false },
+    git: null,
     started: false,
   };
   return new Store(initial);

@@ -170,3 +170,60 @@ export interface SpellingMenuContext {
 export type SpellingMenuAction =
   | { contextId: number; action: "replace"; suggestion: string }
   | { contextId: number; action: "add" | "dismiss" | "native" };
+
+/** What Git reports about an open document in a repository whose branch has
+ *  a remote branch to upload to (Git, spec). */
+export interface GitFileStatus {
+  /** The work tree's top folder. */
+  repositoryRoot: string;
+  branch: string;
+  /** Whether the saved document differs from the last commit, or is new. */
+  changed: boolean;
+  /** Local commits that change the document and are not uploaded. */
+  unuploadedCommits: number;
+  /** Local commits that the remote branch lacks. */
+  ahead: number;
+  /** Commits on the remote branch that are not here yet. */
+  behind: number;
+  /** The newest remote change to the document that is not here yet. */
+  remoteChange: { commit: string; author: string; timeMs: number } | null;
+  /** Why asking the remote for new commits failed, or null. */
+  fetchError: string | null;
+  /** Whether another Git program left a merge or rebase unfinished. */
+  unfinishedOperation: boolean;
+}
+
+/** An open document, which Get latest and Upload reload or protect. */
+export interface GitOpenFile {
+  path: string;
+  /** Whether the document has changes that are not saved. */
+  unsaved: boolean;
+}
+
+/** How Upload, Get latest or discarding changes ended, without the files
+ *  that changed. */
+export type GitOutcome =
+  | {
+      kind: "done";
+      /** Whether a commit reached the remote. */
+      uploaded: boolean;
+      /** Whose remote changes were combined into the document, or null. */
+      combinedWith: string | null;
+    }
+  /** Nothing to get, or nothing to upload. */
+  | { kind: "up-to-date" }
+  /** The document and the remote changed the same lines. The document is
+   *  unchanged. */
+  | { kind: "conflict"; author: string; timeMs: number }
+  /** These files have changes that are not saved or not uploaded, and the
+   *  latest version would replace them. They are unchanged. */
+  | { kind: "blocked"; files: string[] }
+  | { kind: "failed"; message: string };
+
+/** How Upload, Get latest or discarding changes ended. */
+export type GitSyncResult = GitOutcome & {
+  /** The open documents whose files changed, as the caller named them. An
+   *  action that stopped after it got changes lists them too, so the caller
+   *  can reload them. */
+  changedOpenFiles: string[];
+};

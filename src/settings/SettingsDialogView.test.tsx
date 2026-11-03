@@ -188,6 +188,8 @@ describe("SettingsDialogView pages", () => {
     hasSeenWelcome: true,
     hasCheckedDefaultHandler: true,
     autoUpdate: false,
+    gitAutoGetLatest: false,
+    gitUploadOnSave: true,
   };
 
   it.each([
@@ -289,6 +291,35 @@ describe("SettingsDialogView accent", () => {
     await user.type(hex, "#123456");
     await user.click(within(popover).getByRole("button", { name: "OK" }));
     expect(await save(user, onSave)).toMatchObject({ accentMode: "custom", accentColor: "#123456" });
+  });
+});
+
+describe("SettingsDialogView Git", () => {
+  afterEach(() => {
+    delete window.downpadDesktop;
+  });
+
+  it("saves the two Git switches, which start as Get latest on and Upload when saving off", async () => {
+    window.downpadDesktop = {
+      platform: "linux",
+      invoke: vi.fn(async () => null),
+      listen: () => () => {},
+    } as unknown as NonNullable<typeof window.downpadDesktop>;
+    const { user, onSave } = renderDialog();
+    const getLatest = screen.getByRole("checkbox", { name: "Get latest automatically" }) as HTMLInputElement;
+    const uploadOnSave = screen.getByRole("checkbox", { name: "Upload when saving" }) as HTMLInputElement;
+    expect([getLatest.checked, uploadOnSave.checked]).toEqual([true, false]);
+    await user.click(getLatest);
+    await user.click(uploadOnSave);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitAutoGetLatest: false, gitUploadOnSave: true });
+  });
+
+  it("keeps the saved Git switches in a browser, which shows none", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, gitAutoGetLatest: false, gitUploadOnSave: true });
+    expect(screen.queryByRole("checkbox", { name: "Upload when saving" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 });
 
