@@ -27,6 +27,7 @@ import { openTextPrompt } from "../components/TextPromptDialog";
 import { desktopBridge, invoke } from "../ipc/bridge";
 import type { SpellingMenuAction } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
+import { hasEditorSpelling, spellingAt } from "../editor/spelling";
 
 export interface DocumentMenuActions {
   /** Whether a document is open — Print / Copy as Markdown are document-scoped. */
@@ -35,6 +36,10 @@ export interface DocumentMenuActions {
   print: () => void;
   /** Copy the whole document's markdown to the clipboard (§5.10). */
   copyMarkdown: () => void;
+  /** Whether the active document can be checked with its selected dictionaries. */
+  canCheckSpelling: () => boolean;
+  /** Check the complete active document, including text outside the viewport. */
+  checkSpelling: () => Promise<void>;
   /** Wrap the current document selection in a link, or null when the document
    *  editor isn't the surface being right-clicked. */
   insertLink: (href: string) => boolean;
@@ -42,7 +47,7 @@ export interface DocumentMenuActions {
   reportError?: (message: string) => void;
 }
 
-/** Native spelling choices for the word under this menu. */
+/** Spelling choices for the word under this menu. */
 export interface SpellingChoices {
   word: string;
   suggestions: string[];
@@ -102,6 +107,35 @@ export function installDocumentContextMenu(actions: DocumentMenuActions): () => 
     // A more specific in-app menu already handled this click.
     if (e.defaultPrevented) return;
     const target = editableAt(e.target as Node | null);
+    if (target && hasEditorSpelling(target.el) && !e.shiftKey) {
+      e.preventDefault();
+      closeContextMenu();
+      clearPending();
+      const requested: Request = { target, x: e.clientX, y: e.clientY, shift: false, cancelled: false };
+      pending = requested;
+      // Check the clicked word even if its typing debounce has not finished.
+      void spellingAt(target.el, requested.x, requested.y).then((spelling) => {
+        if (requested.cancelled || !target.el.isConnected) return;
+        if (pending === requested) pending = null;
+        const perform = async (action: () => Promise<void>): Promise<void> => {
+          try { await action(); } catch {
+            actions.reportError?.("The spelling action could not be completed. Right-click the word to try again.");
+          }
+        };
+        const items = buildItems(target, actions, spelling ? {
+          ...spelling,
+          replace: (suggestion) => perform(() => spelling.replace(suggestion)),
+          add: () => perform(() => spelling.add()),
+        } : undefined);
+        showContextMenu(requested.x, requested.y, items, "Edit");
+      }).catch(() => {
+        if (requested.cancelled || !target.el.isConnected) return;
+        if (pending === requested) pending = null;
+        actions.reportError?.("Could not check this word. Try checking the document again.");
+        showContextMenu(requested.x, requested.y, buildItems(target, actions), "Edit");
+      });
+      return;
+    }
     if (native && (target || e.shiftKey)) {
       closeContextMenu();
       clearPending();
@@ -121,7 +155,7 @@ export function installDocumentContextMenu(actions: DocumentMenuActions): () => 
   window.addEventListener("keydown", clearPending, true);
   window.addEventListener("blur", clearPending);
   return () => {
-    pending = null;
+    clearPending();
     requests.length = 0;
     unlisten?.();
     window.removeEventListener("contextmenu", onContextMenu);
@@ -146,6 +180,12 @@ export function buildItems(
       disabled: !hasDoc,
       separatorBefore: target !== null,
       run: () => actions.copyMarkdown(),
+    },
+    {
+      label: "Check document spelling",
+      icon: MENU_ICONS.spelling,
+      disabled: !hasDoc || !actions.canCheckSpelling(),
+      run: () => actions.checkSpelling(),
     },
     {
       label: "Print…",

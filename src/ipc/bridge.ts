@@ -109,6 +109,7 @@ export type HistoryCommand = "undo" | "redo";
 
 export interface DesktopEventPayloads {
   "spelling-context-menu": SpellingMenuContext;
+  "spelling-changed": void;
   "settings-changed": Settings;
   "file-changed": { path: string; modifiedMs: number };
   "open-file-requested": { path: string };
@@ -149,6 +150,10 @@ export type SaveChangesChoice = "save" | "discard" | "cancel";
 
 export interface ElectronBridge {
   readonly platform: string;
+  /** Return misspelled input words from the selected native dictionaries. */
+  checkSpelling(words: string[]): Promise<string[]>;
+  /** Return up to six native corrections for one word. */
+  spellingSuggestions(word: string): Promise<string[]>;
   invoke<K extends keyof DesktopCommandArgs>(
     command: K,
     args?: DesktopCommandArgs[K],

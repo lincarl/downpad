@@ -20,6 +20,7 @@ import { codeMirrorPresses } from "../codeMirrorPresses";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
 import { sourceCodeSpellcheck } from "./spellcheck";
+import { sourceSpelling } from "./liveSpelling";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
 import { codeMirrorSpan, revealSpan } from "../wysiwyg/findReveal";
 import type { DropTarget, SourceEdit } from "../wysiwyg/fileDrop";
@@ -348,6 +349,7 @@ export class RawEditor {
   private view: EditorView | null = null;
   /** The source content's explicit preference, separate from code exclusions. */
   private readonly spellcheck = new Compartment();
+  private readonly liveSpelling = sourceSpelling();
   /** Set while `setText` replaces the doc programmatically (split-view mirror
    *  sync, §6.1) so the resulting transaction doesn't echo back through onChange
    *  and clobber the pane that authored the change. */
@@ -384,6 +386,7 @@ export class RawEditor {
           EditorView.contentAttributes.of({ "aria-label": "Markdown source editor" }),
           this.spellcheck.of(EditorView.contentAttributes.of({ spellcheck: "false" })),
           sourceCodeSpellcheck(),
+          this.liveSpelling.extension,
           // Install CodeMirror's search state without exposing its own panel.
           // The app-level capture handler owns Ctrl+F/Ctrl+H and drives this
           // state through the find card; markdownSourceStyle paints the matches.
@@ -408,8 +411,18 @@ export class RawEditor {
 
   /** Change prose spelling without rebuilding the editor or enabling code. */
   setSpellcheck(enabled: boolean): void {
+    const managed = this.liveSpelling.controller();
+    if (managed) {
+      managed.setEnabled(enabled);
+      return;
+    }
     if (!this.view || this.view.contentDOM.getAttribute("spellcheck") === String(enabled)) return;
     this.view.dispatch({ effects: this.spellcheck.reconfigure(EditorView.contentAttributes.of({ spellcheck: String(enabled) })) });
+  }
+
+  /** Recheck every prose word in the Markdown model without editing it. */
+  checkSpelling(): Promise<number> {
+    return this.liveSpelling.controller()?.scan() ?? Promise.reject(new Error("Spell check needs the installed Downpad app."));
   }
 
   /** Set the text to mirror an edit made in the other split pane (§6.1). Only

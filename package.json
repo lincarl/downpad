@@ -42,6 +42,7 @@
     "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.3",
+    "node-gyp": "^13.1.0",
     "stylelint": "^17.16.0",
     "stylelint-config-standard": "^40.0.0",
     "tailwindcss": "^4.3.3",
@@ -79,6 +80,9 @@
     "toml-eslint-parser": "^1.0.3",
     "turndown": "^7.2.4"
   },
+  "optionalDependencies": {
+    "@arcstudio-labs/electron-system-spellcheck": "0.1.0"
+  },
   "main": "electron-dist/main.js",
   "license": "MIT",
   "author": {
@@ -88,6 +92,9 @@
     "appId": "se.elysics.downpad",
     "productName": "Downpad",
     "asar": true,
+    "asarUnpack": [
+      "electron-dist/*.node"
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"

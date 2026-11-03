@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, screen, shell, systemPreferences,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, screen, session, shell, systemPreferences,
   type IpcMainEvent, type IpcMainInvokeEvent, type OpenDialogOptions, type SaveDialogOptions,
 } from "electron";
 import { execFile } from "node:child_process";
@@ -20,6 +20,7 @@ import { Updater, type PendingUpdate } from "./updater";
 import type { PackageKind } from "./updatePlan";
 import { watchPath } from "./watchers";
 import { Spellchecker } from "./spellcheck";
+import { WindowsSpelling } from "./systemSpellcheck";
 
 app.setName("Downpad");
 const isolatedData = process.env.DOWNPAD_USER_DATA_DIR;
@@ -353,6 +354,8 @@ function dialogOptions(value: unknown): Pick<OpenDialogOptions & SaveDialogOptio
 
 function registerIpc(): void {
   ipcMain.handle("downpad:invoke", (event, command: unknown, args: unknown) => { trustedSender(event); return invoke(command, args); });
+  ipcMain.handle("downpad:check-spelling", (event, words: unknown) => { trustedSender(event); return spelling().check(words); });
+  ipcMain.handle("downpad:spelling-suggestions", (event, word: unknown) => { trustedSender(event); return spelling().suggestions(word); });
   ipcMain.handle("downpad:dialog-open", async (event, value: unknown) => {
     trustedSender(event);
     const options = record(value);
@@ -465,8 +468,7 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = window;
-  spellchecker = new Spellchecker(window.webContents.session, process.platform, () => app.getPreferredSystemLanguages());
-  spellchecker.apply(await config.settings());
+  spelling().apply(await config.settings());
   printing = new PrintService(window, (result) => emit("print-completed", result));
   window.webContents.setWindowOpenHandler(({ url }) => {
     try { void shell.openExternal(externalUrl(url)).catch((error: unknown) => console.error("Downpad could not open link", error)); }
@@ -587,6 +589,8 @@ async function installPendingUpdate(pending: PendingUpdate): Promise<{ restartin
 
 async function start(): Promise<void> {
   await app.whenReady();
+  spellchecker = new Spellchecker(session.defaultSession, process.platform, () => app.getPreferredSystemLanguages(),
+    () => emit("spelling-changed", undefined), process.platform === "win32" ? new WindowsSpelling() : undefined);
   await config.initialize();
   if (adoptedLegacySettings) {
     // A default .md app chosen as md-easy's executable no longer exists after the
@@ -652,6 +656,7 @@ async function start(): Promise<void> {
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("before-quit", () => { quitRequested = true; });
 app.on("will-quit", () => {
+  spellchecker?.dispose();
   unwatchDocument?.(); unwatchSettings?.();
   // The new copy installs the downloaded update when it starts.
   if (restartForUpdate) app.relaunch({ execPath: relaunchExecutable(), args: process.argv.slice(1).filter((argument) => argument.startsWith("-")) });

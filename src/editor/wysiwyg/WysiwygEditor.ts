@@ -77,6 +77,7 @@ import { selectionToolbar } from "./selectionToolbar";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import { linkEdges } from "./linkEdges";
 import { excludeCodeBlockSpellcheck, excludeInlineCodeSpellcheck } from "./spellcheck";
+import { documentSpelling } from "./liveSpelling";
 import {
   blockEdge,
   dropPosition,
@@ -108,6 +109,7 @@ export interface WysiwygCallbacks {
 
 export class WysiwygEditor {
   private crepe: Crepe | null = null;
+  private readonly liveSpelling = documentSpelling(() => ({ root: this.root, panel: this.fmPanel }));
   /** The in-flight Crepe create, if mount has not settled yet. Destruction waits
    *  for it before calling Crepe.destroy: create/destroy concurrently is not a
    *  supported lifecycle and can leave plugin views/listeners behind. */
@@ -284,6 +286,7 @@ export class WysiwygEditor {
     this.crepe.editor.config(labelTaskBoxes);
     this.crepe.editor.config(excludeInlineCodeSpellcheck);
     this.crepe.editor.use(excludeCodeBlockSpellcheck);
+    this.crepe.editor.use(this.liveSpelling.plugin);
     // Keep standalone images' alt text, which Crepe overwrites with its resize
     // ratio. Must follow the ImageBlock feature so this node spec replaces Crepe's.
     this.crepe.editor.use(imageBlockAltSchema);
@@ -436,6 +439,7 @@ export class WysiwygEditor {
     this.pendingBody = null;
     if (mirrored !== null) this.replaceBody(mirrored);
     this.accessibilityCleanup = installEditorAccessibility(crepeRoot);
+    this.setSpellcheck(context.getSettings().spellCheckEnabled);
     // Crepe adds an empty last line below a final list, code block, quote,
     // table, rule or image in the first transaction after create. Make that an
     // empty transaction kept out of undo history. Otherwise the list view's
@@ -791,6 +795,20 @@ export class WysiwygEditor {
     }
   }
 
+  /** Configure app-owned prose checks; the host owns browser inheritance. */
+  setSpellcheck(enabled: boolean): void {
+    this.liveSpelling.controller()?.setEnabled(enabled);
+    this.liveSpelling.metadata()?.controller.setEnabled(enabled);
+  }
+
+  /** Recheck the full prose model without changing selection or undo history. */
+  async checkSpelling(): Promise<number> {
+    const body = this.liveSpelling.controller();
+    if (!body) throw new Error("Spell check needs the installed Downpad app.");
+    const counts = await Promise.all([body.scan(), this.liveSpelling.metadata()?.controller.scan() ?? Promise.resolve(0)]);
+    return counts.reduce((total, count) => total + count, 0);
+  }
+
   search(query: string, opts: FindOptions): FindCounts {
     return this.withView((v) => this.find.search(v, query, opts), NO_MATCHES);
   }
@@ -862,6 +880,8 @@ export class WysiwygEditor {
     if (this.destroyPromise) return this.destroyPromise;
 
     this.destroyed = true;
+    this.liveSpelling.controller()?.destroy();
+    this.liveSpelling.metadata()?.destroy();
     this.ignoreUpdates = true;
     this.onChange = null;
     this.accessibilityCleanup?.();

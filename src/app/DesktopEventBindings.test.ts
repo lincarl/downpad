@@ -52,6 +52,8 @@ const eventually = (assertion: () => void) => vi.waitFor(assertion, { interval: 
 function createTestBridge() {
   return {
     platform: "darwin",
+    checkSpelling: async () => [],
+    spellingSuggestions: async () => [],
     invoke: async () => { throw new Error("Unexpected native command"); },
     listen: () => () => {},
     openDialog: async () => null,

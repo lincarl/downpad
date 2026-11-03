@@ -72,6 +72,7 @@ const fakeEditors = vi.hoisted(() => ({
   /** The source change the Markdown pane last made for a file dropped on the
    *  document pane. */
   rawEdit: null as { from: number; to: number; insert: string } | null,
+  spellingChecks: [] as string[],
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -105,6 +106,13 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
     getMarkdown(): string {
       return fakeEditors.markdown;
+    }
+
+    setSpellcheck(): void {}
+
+    async checkSpelling(): Promise<number> {
+      fakeEditors.spellingChecks.push("document");
+      return 2;
     }
 
     /** Like the real editor, report held-back typing through `onChange`. */
@@ -198,6 +206,11 @@ vi.mock("./raw/RawEditor", () => ({
 
     /** The fake editor has no CodeMirror attributes to configure. */
     setSpellcheck(_enabled: boolean): void {}
+
+    async checkSpelling(): Promise<number> {
+      fakeEditors.spellingChecks.push("markdown");
+      return 3;
+    }
 
     mount(root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }): void {
       this.root = root;
@@ -346,6 +359,31 @@ beforeEach(() => {
   fakeEditors.movedCaret = null;
   fakeEditors.findsSource = true;
   fakeEditors.rawEdit = null;
+  fakeEditors.spellingChecks = [];
+});
+
+describe("EditorHost full spelling check", () => {
+  it("checks both visible split models and returns the Document count once", async () => {
+    Object.defineProperty(window, "downpadDesktop", { configurable: true, value: { checkSpelling: async () => [] } });
+    const store = makeStore();
+    store.set({ settings: { ...DEFAULT_SETTINGS, spellCheckEnabled: true } });
+    const host = new EditorHost(document.createElement("div"), store);
+    try {
+      host.initLayout("split");
+      await host.reloadActiveDoc();
+      expect(host.canCheckSpelling()).toBe(true);
+      expect(await host.checkSpelling()).toBe(2);
+      expect(fakeEditors.spellingChecks).toEqual(["document", "markdown"]);
+      expect(fakeEditors.keptTypedMarks.at(-1)).toBe(true);
+      expect(store.get().doc.isDirty).toBe(false);
+      store.set({ settings: { ...store.get().settings, spellCheckEnabled: false } });
+      expect(host.canCheckSpelling()).toBe(false);
+      await expect(host.checkSpelling()).rejects.toThrow("Enable spell check");
+    } finally {
+      await host.dispose();
+      delete window.downpadDesktop;
+    }
+  });
 });
 
 describe("EditorHost terminal disposal", () => {
