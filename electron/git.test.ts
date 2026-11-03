@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +37,12 @@ async function pushFrom(folder: string, files: Record<string, string>, message =
   run(folder, "add", "--", ...Object.keys(files));
   run(folder, "commit", "--quiet", "-m", message);
   run(folder, "push", "--quiet");
+}
+
+/** A file's text with line feeds only. Git for Windows checks files out with
+ *  CRLF line endings by default. */
+async function text(path: string): Promise<string> {
+  return (await readFile(path, "utf8")).replace(/\r\n/g, "\n");
 }
 
 const NOTES = "# Notes\n\nFirst paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n";
@@ -105,15 +111,17 @@ describe("getLatest", () => {
     await pushFrom(theirs, { "notes.md": NOTES.replace("First", "1st") });
     const result = await getLatest(notes(), open(true), false);
     expect(result).toEqual({ kind: "blocked", files: [notes()], changedOpenFiles: [] });
-    expect(await readFile(notes(), "utf8")).toBe(NOTES);
+    expect(await text(notes())).toBe(NOTES);
   });
 
   it("never replaces another file's changes that are not uploaded", async () => {
     await pushFrom(theirs, { "other.md": "Changed\n" });
     await writeFile(join(mine, "other.md"), "Mine\n");
     const result = await getLatest(notes(), open(), false);
-    expect(result).toEqual({ kind: "blocked", files: [join(mine, "other.md")], changedOpenFiles: [] });
-    expect(await readFile(join(mine, "other.md"), "utf8")).toBe("Mine\n");
+    // Git names the file by its real path, which on Windows can be the long
+    // form of a short temporary folder name.
+    expect(result).toEqual({ kind: "blocked", files: [await realpath(join(mine, "other.md"))], changedOpenFiles: [] });
+    expect(await text(join(mine, "other.md"))).toBe("Mine\n");
   });
 
   it("combines saved changes to other lines with the remote's", async () => {
@@ -137,7 +145,7 @@ describe("getLatest", () => {
     expect(await previewCombine(notes(), NOTES.replace("Third", "3rd"))).toEqual({ clean: true });
     const result = await getLatest(notes(), open(), true);
     expect(result).toMatchObject({ kind: "conflict", author: "Anna Berg" });
-    expect(await readFile(notes(), "utf8")).toBe(mineText);
+    expect(await text(notes())).toBe(mineText);
     expect(run(mine, "rev-parse", "HEAD")).toBe(head);
   });
 
@@ -162,7 +170,7 @@ describe("upload", () => {
     expect(await upload(notes(), open())).toEqual({ kind: "done", uploaded: true, changedOpenFiles: [], combinedWith: null });
     run(theirs, "pull", "--quiet", "--ff-only");
     expect(await readFile(join(theirs, "notes.md"), "utf8")).toContain("a%20b.png");
-    expect(await readFile(join(theirs, "attachments", "a b.png"), "utf8")).toBe("png");
+    expect(await text(join(theirs, "attachments", "a b.png"))).toBe("png");
     expect(run(theirs, "log", "-1", "--format=%s%n%an")).toBe("Update notes.md\nMe\n");
     expect(run(mine, "status", "--porcelain")).toBe(" M other.md\n?? credentials.json\n?? docs/\n?? unrelated.txt\n");
     expect(await gitStatus(notes(), { fetch: false })).toMatchObject({ changed: false, ahead: 0, behind: 0 });
@@ -182,7 +190,7 @@ describe("upload", () => {
     const result = await upload(notes(), open());
     expect(result).toEqual({ kind: "done", uploaded: true, changedOpenFiles: [notes()], combinedWith: "Anna Berg" });
     run(theirs, "pull", "--quiet", "--ff-only");
-    expect(await readFile(join(theirs, "notes.md"), "utf8")).toBe(NOTES.replace("First", "1st").replace("Third", "3rd"));
+    expect(await text(join(theirs, "notes.md"))).toBe(NOTES.replace("First", "1st").replace("Third", "3rd"));
   });
 
   it("reports a conflict without committing or pushing", async () => {
@@ -192,7 +200,7 @@ describe("upload", () => {
     const head = run(mine, "rev-parse", "HEAD");
     expect(await upload(notes(), open())).toMatchObject({ kind: "conflict", author: "Anna Berg" });
     expect(run(mine, "rev-parse", "HEAD")).toBe(head);
-    expect(await readFile(notes(), "utf8")).toBe(mineText);
+    expect(await text(notes())).toBe(mineText);
   });
 
   it("starts again when someone uploads between the check and the push", async () => {
@@ -215,7 +223,7 @@ describe("upload", () => {
     expect(result, JSON.stringify(result)).toMatchObject({ kind: "done", uploaded: true });
     run(mine, "fetch", "--quiet");
     expect(run(mine, "log", "--format=%s", "origin/main", "-3")).toBe("Update notes.md\nRace\nStart\n");
-    expect(await readFile(join(mine, "other.md"), "utf8")).toBe("Theirs\n");
+    expect(await text(join(mine, "other.md"))).toBe("Theirs\n");
   }, 30_000);
 
   it("takes its commit back when the push fails", async () => {
@@ -236,7 +244,7 @@ describe("upload", () => {
     const other = join(mine, "other.md");
     const result = await upload(notes(), [...open(), { path: other, unsaved: false }]);
     expect(result).toMatchObject({ kind: "failed", changedOpenFiles: [other] });
-    expect(await readFile(other, "utf8")).toBe("Theirs\n");
+    expect(await text(other)).toBe("Theirs\n");
   });
 
   it("says when there is nothing to upload", async () => {
@@ -250,7 +258,7 @@ describe("discardChanges", () => {
     await writeFile(notes(), NOTES.replace("First paragraph", "My paragraph"));
     const result = await discardChanges(notes(), open(true));
     expect(result).toMatchObject({ kind: "done" });
-    expect(await readFile(notes(), "utf8")).toBe(NOTES.replace("First paragraph", "Their paragraph"));
+    expect(await text(notes())).toBe(NOTES.replace("First paragraph", "Their paragraph"));
     expect(run(mine, "status", "--porcelain")).toBe("");
   });
 });
