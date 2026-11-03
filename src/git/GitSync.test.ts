@@ -1,0 +1,263 @@
+// @vitest-environment jsdom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
+import { createAppStore } from "../app/createAppStore";
+import type { Store } from "../state/store";
+import { DEFAULT_SETTINGS } from "../settings/defaults";
+import type { ConflictChoice, ConflictDialogOptions } from "./ConflictDialog";
+import { GIT_GET_LATEST, GIT_OPEN_COPY, GIT_RESOLVE, GitSync, type GitSyncDependencies } from "./GitSync";
+
+const git = vi.hoisted(() => ({
+  status: vi.fn<(path: string, fetch: boolean) => Promise<GitFileStatus | null>>(),
+  preview: vi.fn<(path: string, markdown: string) => Promise<{ clean: boolean }>>(),
+  getLatest: vi.fn<(path: string, openFiles: GitOpenFile[], interactive: boolean) => Promise<GitSyncResult>>(),
+  upload: vi.fn<(path: string, openFiles: GitOpenFile[]) => Promise<GitSyncResult>>(),
+  discard: vi.fn<(path: string, openFiles: GitOpenFile[]) => Promise<GitSyncResult>>(),
+  keepCopy: vi.fn<(path: string, content: string) => Promise<string>>(),
+}));
+
+vi.mock("../ipc/commands", () => ({
+  gitStatus: git.status,
+  gitPreviewCombine: git.preview,
+  gitGetLatest: git.getLatest,
+  gitUpload: git.upload,
+  gitDiscard: git.discard,
+  keepDiscardedCopy: git.keepCopy,
+}));
+
+const PATH = "/work/notes.md";
+const clean: GitFileStatus = {
+  repositoryRoot: "/work",
+  branch: "main",
+  changed: false,
+  unuploadedCommits: 0,
+  ahead: 0,
+  behind: 0,
+  remoteChange: null,
+  fetchError: null,
+  unfinishedOperation: false,
+};
+const remoteChange = { commit: "abc", author: "Anna Berg", timeMs: Date.now() - 5 * 60_000 };
+const behind: GitFileStatus = { ...clean, behind: 1, remoteChange };
+const done = (changedOpenFiles: string[] = [], extra: Partial<Extract<GitSyncResult, { kind: "done" }>> = {}): GitSyncResult =>
+  ({ kind: "done", uploaded: false, changedOpenFiles, combinedWith: null, ...extra });
+
+let store: Store;
+let deps: GitSyncDependencies & {
+  files: { [K in keyof GitSyncDependencies["files"]]: ReturnType<typeof vi.fn> };
+  askConflict: ReturnType<typeof vi.fn<(options: ConflictDialogOptions) => Promise<ConflictChoice>>>;
+};
+let sync: GitSync;
+
+/** Open `PATH` in the store's only tab, with `markdown` saved or, with `unsaved`, edited. */
+function openDocument({ unsaved = false } = {}): void {
+  const doc = {
+    ...store.get().doc,
+    filePath: PATH,
+    markdown: unsaved ? "# Notes\n\nMine\n" : "# Notes\n",
+    savedMarkdown: "# Notes\n",
+    isDirty: unsaved,
+  };
+  store.replaceActiveDoc(doc);
+}
+
+beforeEach(() => {
+  window.downpadDesktop = { platform: "linux" } as unknown as NonNullable<typeof window.downpadDesktop>;
+  for (const mock of Object.values(git)) mock.mockReset();
+  store = createAppStore();
+  deps = {
+    store,
+    files: {
+      save: vi.fn(async () => {
+        store.patchDoc({ isDirty: false, savedMarkdown: store.get().doc.markdown });
+        return true;
+      }),
+      saveAs: vi.fn(async () => true),
+      openPath: vi.fn(async () => {}),
+      openBeside: vi.fn(async () => {}),
+      refreshFromDisk: vi.fn(async () => true),
+    },
+    flush: vi.fn(),
+    discardEditors: vi.fn(async () => {}),
+    keepingPlace: vi.fn(async (reload: () => Promise<void>) => reload()),
+    askConflict: vi.fn(async () => "later" as ConflictChoice),
+  };
+  sync = new GitSync(deps);
+});
+
+afterEach(() => {
+  sync.dispose();
+  delete window.downpadDesktop;
+});
+
+describe("GitSync checks", () => {
+  it("offers nothing for a document outside a repository", async () => {
+    openDocument();
+    git.status.mockResolvedValue(null);
+    await sync.check({ force: true });
+    expect(store.get().git).toBeNull();
+    expect(git.status).toHaveBeenCalledTimes(1);
+  });
+
+  it("gets remote changes quietly when nothing that is not uploaded would change", async () => {
+    openDocument();
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done([PATH]));
+    await sync.check({ force: true });
+    expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], false);
+    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true });
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("only tells the user about remote changes when Get latest automatically is off", async () => {
+    openDocument();
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitAutoGetLatest: false } });
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    await sync.check({ force: true });
+    expect(git.getLatest).not.toHaveBeenCalled();
+    expect(store.get().banner).toMatchObject({
+      kind: "remote-changed",
+      message: "Anna Berg changed this document 5 minutes ago.",
+      actions: [{ id: GIT_GET_LATEST }],
+    });
+  });
+
+  it("offers to combine remote changes with unsaved changes to other parts", async () => {
+    openDocument({ unsaved: true });
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.preview.mockResolvedValue({ clean: true });
+    await sync.check({ force: true });
+    expect(git.preview).toHaveBeenCalledWith(PATH, "# Notes\n\nMine\n");
+    expect(git.getLatest).not.toHaveBeenCalled();
+    expect(deps.askConflict).not.toHaveBeenCalled();
+    expect(store.get().banner?.actions).toEqual([{ id: GIT_GET_LATEST, label: "Get latest" }]);
+
+    // Get latest saves the changes first, then combines them.
+    git.getLatest.mockResolvedValue(done([PATH], { combinedWith: "Anna Berg" }));
+    git.status.mockResolvedValue(clean);
+    expect(sync.handleBannerAction(GIT_GET_LATEST)).toBe(true);
+    await vi.waitFor(() => expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], true));
+    expect(deps.files.save).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(store.get().banner?.message).toBe("Downpad combined Anna Berg's changes with yours. Upload to share the result."));
+  });
+
+  it("asks once about overlapping changes, then keeps a notice", async () => {
+    openDocument({ unsaved: true });
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.preview.mockResolvedValue({ clean: false });
+    await sync.check({ force: true });
+    expect(deps.askConflict).toHaveBeenCalledWith({ fileName: "notes.md", author: "Anna Berg", timeMs: remoteChange.timeMs });
+    expect(store.get().banner).toMatchObject({ actions: [{ id: GIT_RESOLVE }] });
+
+    store.set({ banner: null });
+    await sync.check({ force: true });
+    expect(deps.askConflict).toHaveBeenCalledTimes(1);
+    expect(store.get().banner).toMatchObject({ actions: [{ id: GIT_RESOLVE }] });
+  });
+});
+
+describe("GitSync conflicts", () => {
+  beforeEach(() => {
+    openDocument({ unsaved: true });
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.preview.mockResolvedValue({ clean: false });
+  });
+
+  it("keeps a copy of discarded changes and shows the latest version", async () => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockResolvedValue(done([PATH]));
+    await sync.check({ force: true });
+    expect(git.keepCopy).toHaveBeenCalledWith(PATH, "# Notes\n\nMine\n");
+    expect(git.discard).toHaveBeenCalledWith(PATH, []);
+    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true, discardUnsaved: true });
+    expect(store.get().banner).toMatchObject({ kind: "info", actions: [{ id: GIT_OPEN_COPY }] });
+    sync.handleBannerAction(GIT_OPEN_COPY);
+    expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md");
+  });
+
+  it("discards nothing when it cannot keep a copy", async () => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockRejectedValue(new Error("Disk full"));
+    await sync.check({ force: true });
+    expect(git.discard).not.toHaveBeenCalled();
+    expect(store.get().banner?.kind).toBe("error");
+  });
+
+  it("saves the user's version as a new file and opens the latest original beside it", async () => {
+    deps.askConflict.mockResolvedValue("save-as");
+    deps.files.saveAs.mockImplementation(async () => {
+      store.patchDoc({ filePath: "/work/notes (my version).md", isDirty: false });
+      return true;
+    });
+    git.discard.mockResolvedValue(done());
+    await sync.check({ force: true });
+    expect(deps.files.saveAs).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "/work/notes (my version).md" }));
+    const { refuse } = deps.files.saveAs.mock.calls[0][0] as { refuse(path: string): boolean };
+    expect(refuse(PATH)).toBe(true);
+    expect(refuse("/work/mine.md")).toBe(false);
+    expect(git.discard).toHaveBeenCalledWith(PATH, [{ path: "/work/notes (my version).md", unsaved: false }]);
+    expect(deps.files.openBeside).toHaveBeenCalledWith(PATH, store.get().activeTabId);
+    expect(store.get().banner?.message).toBe("Your version is saved as “notes (my version).md”. The latest “notes.md” is open in the next tab.");
+  });
+});
+
+describe("GitSync upload", () => {
+  beforeEach(() => {
+    git.status.mockResolvedValue({ ...clean, changed: true });
+  });
+
+  it("saves the document first, then uploads it", async () => {
+    openDocument({ unsaved: true });
+    await sync.check();
+    git.upload.mockResolvedValue(done([], { uploaded: true }));
+    await sync.upload();
+    expect(deps.files.save).toHaveBeenCalledTimes(1);
+    expect(git.upload).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }]);
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("uploads after a save only when Upload when saving is on", async () => {
+    openDocument();
+    await sync.check();
+    git.upload.mockResolvedValue(done([], { uploaded: true }));
+    sync.afterUserSave();
+    expect(git.upload).not.toHaveBeenCalled();
+
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitUploadOnSave: true } });
+    sync.afterUserSave();
+    await vi.waitFor(() => expect(git.upload).toHaveBeenCalledTimes(1));
+    // A save never asks to save again.
+    expect(deps.files.save).not.toHaveBeenCalled();
+  });
+
+  it("explains a failed upload", async () => {
+    openDocument();
+    await sync.check();
+    git.upload.mockResolvedValue({ kind: "failed", message: "Git could not sign in to github.com." });
+    await sync.upload();
+    expect(store.get().banner).toEqual({ kind: "error", message: "Upload failed. Git could not sign in to github.com." });
+  });
+
+  it("asks about a conflict that the upload ran into", async () => {
+    openDocument();
+    await sync.check();
+    git.upload.mockResolvedValue({ kind: "conflict", author: "Anna Berg", timeMs: remoteChange.timeMs });
+    await sync.upload();
+    expect(deps.askConflict).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GitSync start", () => {
+  it("checks again when the user returns from the Recent view", async () => {
+    openDocument();
+    git.status.mockResolvedValue(clean);
+    sync.start();
+    await vi.waitFor(() => expect(store.get().git?.path).toBe(PATH));
+    store.set({ view: "recent" });
+    await vi.waitFor(() => expect(store.get().git).toBeNull());
+    store.set({ view: "wysiwyg" });
+    await vi.waitFor(() => expect(store.get().git?.path).toBe(PATH));
+  });
+});

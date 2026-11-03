@@ -7,6 +7,9 @@ import type {
   FileStat,
   FileMeta,
   FilePayload,
+  GitFileStatus,
+  GitOpenFile,
+  GitSyncResult,
   ImageBytes,
   NativePrintOptions,
   PrinterInfo,
@@ -264,4 +267,40 @@ export function printWebview(options: NativePrintOptions): Promise<void> {
 /** Write the current page to a PDF at `path` using the same page setup. */
 export function printWebviewToPdf(path: string, options: NativePrintOptions): Promise<void> {
   return invoke("print_webview_to_pdf", { path, options });
+}
+
+// ── Git (Upload and Get latest) ───────────────────────────────────────────
+
+/** What Git reports about the document at `path`, or null when Downpad offers
+ *  no Git actions for it. `fetch` first asks the remote for new commits,
+ *  without ever asking the user to sign in. */
+export function gitStatus(path: string, fetch: boolean): Promise<GitFileStatus | null> {
+  return invoke("git_status", { path, fetch });
+}
+
+/** Whether `markdown`, the document as the editor holds it, combines cleanly
+ *  with the remote's version of it. */
+export function gitPreviewCombine(path: string, markdown: string): Promise<{ clean: boolean }> {
+  return invoke("git_preview_combine", { path, markdown });
+}
+
+/** Get latest for the saved document at `path`. `interactive` lets Git ask
+ *  the user to sign in. */
+export function gitGetLatest(path: string, openFiles: GitOpenFile[], interactive: boolean): Promise<GitSyncResult> {
+  return invoke("git_get_latest", { path, openFiles, interactive });
+}
+
+/** Upload the saved document at `path` and the new files it links to. */
+export function gitUpload(path: string, openFiles: GitOpenFile[]): Promise<GitSyncResult> {
+  return invoke("git_upload", { path, openFiles });
+}
+
+/** Discard the document's changes that are not uploaded, then get latest. */
+export function gitDiscard(path: string, openFiles: GitOpenFile[]): Promise<GitSyncResult> {
+  return invoke("git_discard", { path, openFiles });
+}
+
+/** Keep a copy of changes about to be discarded. Returns the copy's path. */
+export function keepDiscardedCopy(path: string, content: string): Promise<string> {
+  return invoke("keep_discarded_copy", { path, content });
 }

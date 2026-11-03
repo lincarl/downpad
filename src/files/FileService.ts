@@ -44,6 +44,13 @@ interface SaveRequest {
   snapshot: DocumentState;
   expectedPath: string | null;
   saveAs: boolean;
+  choice: SaveAsChoice;
+}
+
+/** The suggested path of a Save As, and paths it must not write. */
+interface SaveAsChoice {
+  defaultPath?: string;
+  refuse?: (path: string) => boolean;
 }
 
 /** A clean close must still pass canCloseTabs immediately before removing tabs. */
@@ -69,10 +76,11 @@ export class FileService {
    * Open a known path (drag-drop, the Recent view, launch args). If the file is
    * already open, focuses that tab; if the active tab is an empty untitled
    * buffer, replaces it; otherwise opens a new tab. Reload rereads an existing
-   * tab from disk after confirming any unsaved changes. If that tab closes
-   * during the read, its result is discarded.
+   * tab from disk after confirming any unsaved changes, unless
+   * `discardUnsaved` says the user chose to discard them already. If that tab
+   * closes during the read, its result is discarded.
    */
-  async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
+  async openPath(path: string, options: { reload?: boolean; discardUnsaved?: boolean } = {}): Promise<void> {
     this.present.flush();
 
     const existing = this.store.get().tabs.find((t) => samePath(t.doc.filePath, path));
@@ -83,7 +91,7 @@ export class FileService {
       return;
     }
 
-    if (existing?.doc.isDirty) {
+    if (existing?.doc.isDirty && !options.discardUnsaved) {
       const label = path.split(/[\\/]/).pop() ?? path;
       const discard = await this.confirmDiscard(`"${label}" has unsaved changes. Discard them and reload?`);
       if (!discard) return;
@@ -125,6 +133,29 @@ export class FileService {
     const shown = this.store.get().tabs.find((tab) => samePath(tab.doc.filePath, active));
     if (shown) this.store.activateTab(shown.id);
     return reopened;
+  }
+
+  /** Open `path` in a new tab right after the tab `afterTabId`, without
+   *  showing it. A file that is open already is left alone. */
+  async openBeside(path: string, afterTabId: string): Promise<void> {
+    if (this.store.get().tabs.some((tab) => samePath(tab.doc.filePath, path))) return;
+    const payload = await readFile(path);
+    if (this.store.get().tabs.some((tab) => samePath(tab.doc.filePath, path))) return;
+    this.store.insertTab(fileDocument(path, payload), afterTabId);
+    this.recordOpened(path);
+  }
+
+  /** Read a tab's file again into the tab, which is not the active one, so
+   *  its editors are built from the new text when it is shown. A tab with
+   *  unsaved changes keeps them. Returns whether the tab took the new text. */
+  async refreshFromDisk(tabId: string): Promise<boolean> {
+    const before = this.store.get().tabs.find((tab) => tab.id === tabId);
+    if (!before?.doc.filePath || hasUnsavedChanges(before) || this.store.get().activeTabId === tabId) return false;
+    const payload = await readFile(before.doc.filePath);
+    const tab = this.store.get().tabs.find((entry) => entry.id === tabId);
+    if (!tab || tab.doc.filePath !== before.doc.filePath || hasUnsavedChanges(tab) || this.store.get().activeTabId === tabId) return false;
+    this.store.patchDocById(tabId, fileDocument(before.doc.filePath, payload, tab.doc.frontmatterCollapsed));
+    return true;
   }
 
   /** True if the active tab is a pristine untitled buffer that open can reuse.
@@ -176,8 +207,11 @@ export class FileService {
     return this.queueSave(this.store.get().activeTabId, false, options);
   }
 
-  saveAs(): Promise<boolean> {
-    return this.queueSave(this.store.get().activeTabId, true);
+  /** Save the active document under a path the user chooses. `defaultPath`
+   *  is the dialog's suggestion. A path for which `refuse` returns true is not
+   *  written, and the save reports failure. */
+  saveAs(options: { defaultPath?: string; refuse?: (path: string) => boolean } = {}): Promise<boolean> {
+    return this.queueSave(this.store.get().activeTabId, true, {}, options);
   }
 
   /** Resolve once no save that can give a tab's document a new path is under
@@ -192,13 +226,18 @@ export class FileService {
   }
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
-  private queueSave(tabId: string | null, saveAs: boolean, options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
+  private queueSave(
+    tabId: string | null,
+    saveAs: boolean,
+    options: { keepTypedMark?: boolean } = {},
+    choice: SaveAsChoice = {},
+  ): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
     this.present.flush(options);
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!tabId || !doc) return Promise.resolve(false);
-    const request = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs };
+    const request = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice };
     this.pendingSaves.add(request);
     const operation = this.saveQueue.then(() => this.saveSnapshot(request))
       .finally(() => this.pendingSaves.delete(request));
@@ -207,16 +246,16 @@ export class FileService {
     return operation;
   }
 
-  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs }: SaveRequest): Promise<boolean> {
+  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs, choice }: SaveRequest): Promise<boolean> {
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== expectedPath) return false;
     const originalPath = current.filePath;
     let path = originalPath;
     const choosePath = saveAs || !path;
     if (choosePath) {
-      path = await saveDialog({ filters: MD_FILTERS, defaultPath: originalPath ?? "Untitled.md" });
+      path = await saveDialog({ filters: MD_FILTERS, defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-      if (!path || !afterDialog || afterDialog.filePath !== originalPath) return false;
+      if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
     }
     if (!path) return false;
     // Until the write settles, the file may hold the old saved text or the new

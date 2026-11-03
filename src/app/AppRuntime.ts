@@ -27,6 +27,7 @@ import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
+import { GitSync } from "../git/GitSync";
 
 export interface AppRuntimeHosts {
   editorArea: HTMLElement;
@@ -53,6 +54,7 @@ export class AppRuntime {
   private readonly startup: StartupCoordinator;
   private readonly desktopEvents: DesktopEventBindings;
   private readonly fileDrops: FileDropCoordinator;
+  private readonly git: GitSync;
   /** Set while a layout switch, Try again or a tab switch of this runtime
    *  runs, also while the switch waits for EditorHost to finish another change
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
@@ -150,6 +152,14 @@ export class AppRuntime {
       handleDrop: (paths, drop) => this.fileDrops.handle(paths, drop),
     });
 
+    this.git = new GitSync({
+      store,
+      files: this.files,
+      flush: () => this.editorHost.flush(),
+      discardEditors: (tabId) => this.editorHost.discardTab(tabId),
+      keepingPlace: (reload) => keepingPlace(hosts.editorArea, reload),
+    });
+
     // Recent view (§5.8). Opening a file from it shows the editor first, then
     // loads the document into it.
     this.recentView = new RecentView(
@@ -174,6 +184,7 @@ export class AppRuntime {
     if (this.disposed) return;
     this.disposed = true;
     this.desktopEvents.dispose();
+    this.git.dispose();
     this.startup.dispose();
     this.scheduler.stop();
     this.session.dispose();
@@ -210,11 +221,21 @@ export class AppRuntime {
   }
 
   saveDocument(): void {
-    this.run(() => this.files.save());
+    this.run(() => this.saveByUser(false));
   }
 
   saveDocumentAs(): void {
-    this.run(() => this.files.saveAs());
+    this.run(() => this.saveByUser(true));
+  }
+
+  /** Upload the active document (the toolbar's Upload). */
+  uploadDocument(): void {
+    void this.git.upload();
+  }
+
+  /** Get the latest version of the active document's repository. */
+  getLatestDocument(): void {
+    void this.git.getLatest();
   }
 
   /** Open the find card, or close it when it is open (the toolbar's Find button). */
@@ -275,7 +296,7 @@ export class AppRuntime {
 
   handleBannerAction(id: string): void {
     if (id === RETRY_DOCUMENT_VIEW) void this.retryDocumentView();
-    else this.desktopEvents.handleBannerAction(id);
+    else if (!this.git.handleBannerAction(id)) this.desktopEvents.handleBannerAction(id);
   }
 
   dismissBanner(): void {
@@ -370,17 +391,26 @@ export class AppRuntime {
       findPrevious: () => this.findBar.prev(),
       showFind: (mode) => this.findBar.show(mode),
       focusRecentSearch: () => this.recentView.focusSearch(),
-      save: (saveAs) => this.run(() => (saveAs ? this.files.saveAs() : this.files.save())),
+      save: (saveAs) => this.run(() => this.saveByUser(saveAs)),
       open: () => this.run(() => this.files.openViaDialog()),
       create: () => this.run(() => this.files.newDocument()),
       print: () => void this.printActiveDocument(),
     }));
     this.desktopEvents.start();
+    this.git.start();
     // Startup has finished. The app shell shows this as `data-started`, which
     // the Electron tests wait for before they act.
     this.store.set({ started: true });
     // First desktop launch only: offer to make Downpad the default .md app.
     void this.startup.maybePromptDefaultHandler();
+  }
+
+  /** Save the active document as the user asked, then upload it when Upload
+   *  when saving is on. Autosave and the saves of a close prompt do not
+   *  upload. */
+  private async saveByUser(saveAs: boolean): Promise<void> {
+    const saved = await (saveAs ? this.files.saveAs() : this.files.save());
+    if (saved) this.git.afterUserSave();
   }
 
   /** Re-mount the WYSIWYG editor so changed serializer style (§5.16) or link
@@ -630,6 +660,26 @@ export class AppRuntime {
       console.error("Downpad: file action failed", err);
     });
   }
+}
+
+/** Run a reload of the active document and scroll its new editors to where
+ *  the old ones were, so a document that Get latest changed stays in place. */
+async function keepingPlace(editorArea: HTMLElement, reload: () => Promise<void>): Promise<void> {
+  const panes = (): HTMLElement[] => [editorArea, ...editorArea.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")];
+  const place = (element: HTMLElement): string =>
+    element === editorArea ? "area" : element.classList.contains("editor-pane-raw") ? "raw" : "wysiwyg";
+  const before = new Map(panes().map((element) => [place(element), element.scrollTop]));
+  await reload();
+  const restore = (): void => {
+    for (const element of panes()) {
+      const top = before.get(place(element));
+      if (top !== undefined) element.scrollTop = top;
+    }
+  };
+  restore();
+  // The new document view can still grow in the next frame, as its images
+  // and diagrams take their place.
+  requestAnimationFrame(restore);
 }
 
 /** Display label for a document: its file name, or "Untitled" when unsaved. */

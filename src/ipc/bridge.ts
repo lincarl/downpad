@@ -7,6 +7,9 @@ import type {
   FileMeta,
   FilePayload,
   FileStat,
+  GitFileStatus,
+  GitOpenFile,
+  GitSyncResult,
   ImageBytes,
   NativePrintOptions,
   PrintCompleted,
@@ -61,6 +64,12 @@ export interface DesktopCommandArgs {
   update_info: undefined;
   check_for_updates: undefined;
   restart_to_update: undefined;
+  git_status: { path: string; fetch: boolean };
+  git_preview_combine: { path: string; markdown: string };
+  git_get_latest: { path: string; openFiles: GitOpenFile[]; interactive: boolean };
+  git_upload: { path: string; openFiles: GitOpenFile[] };
+  git_discard: { path: string; openFiles: GitOpenFile[] };
+  keep_discarded_copy: { path: string; content: string };
 }
 
 export interface DesktopCommandResults {
@@ -102,6 +111,12 @@ export interface DesktopCommandResults {
   update_info: UpdateInfo;
   check_for_updates: void;
   restart_to_update: void;
+  git_status: GitFileStatus | null;
+  git_preview_combine: { clean: boolean };
+  git_get_latest: GitSyncResult;
+  git_upload: GitSyncResult;
+  git_discard: GitSyncResult;
+  keep_discarded_copy: string;
 }
 
 /** Undo or Redo, chosen in a native menu. */

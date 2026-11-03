@@ -11,6 +11,7 @@ const commands = new Set<keyof DesktopCommandArgs>([
   "update_info", "check_for_updates", "restart_to_update",
   "get_spellcheck_info", "list_dictionary_words", "add_dictionary_word", "remove_dictionary_word",
   "spelling_menu_action",
+  "git_status", "git_preview_combine", "git_get_latest", "git_upload", "git_discard", "keep_discarded_copy",
 ]);
 const events = new Set<keyof DesktopEventPayloads>([
   "settings-changed", "file-changed", "open-file-requested", "print-completed", "search-result", "close-requested",

@@ -216,6 +216,9 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const attachmentsFolderName = input("attachmentsFolderName");
     // Only copies that install updates themselves show this check box.
     const autoUpdate = form.elements.namedItem("autoUpdate") as HTMLInputElement | null;
+    // Only the desktop app shows the Git check boxes.
+    const gitAutoGetLatest = form.elements.namedItem("gitAutoGetLatest") as HTMLInputElement | null;
+    const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
 
     return {
       ...initial,
@@ -259,6 +262,8 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
+      gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : initial.gitAutoGetLatest,
+      gitUploadOnSave: gitUploadOnSave ? gitUploadOnSave.checked : initial.gitUploadOnSave,
     };
   };
 
@@ -391,6 +396,19 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                       <Checkbox name="recentFilesKeepRemoved" defaultChecked={initial.recentFilesKeepRemoved} />
                     </CheckRow>
                   </SettingsBox>
+                  {isElectron() && (
+                    <SettingsBox title="Git">
+                      <Hint placement="box">
+                        For documents in a Git repository, the toolbar offers Upload and Get latest.
+                      </Hint>
+                      <CheckRow label="Get latest automatically" placement="box">
+                        <Checkbox name="gitAutoGetLatest" defaultChecked={initial.gitAutoGetLatest} />
+                      </CheckRow>
+                      <CheckRow label="Upload when saving" placement="box">
+                        <Checkbox name="gitUploadOnSave" defaultChecked={initial.gitUploadOnSave} />
+                      </CheckRow>
+                    </SettingsBox>
+                  )}
                   {isElectron() && window.downpadDesktop?.platform === "win32" && (
                     <SettingsBox title="System integration">
                       <ButtonRow
