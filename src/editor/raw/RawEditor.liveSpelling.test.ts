@@ -8,7 +8,7 @@ import { RawEditor } from "./RawEditor";
 
 const editors: RawEditor[] = [];
 const native = {
-  checkSpelling: vi.fn(async (words: string[]) => words.filter((word) => word === "speling")),
+  checkSpelling: vi.fn(async (words: string[]): Promise<string[]> => words.filter((word) => word === "speling")),
   spellingSuggestions: vi.fn(async () => ["spelling"]),
   listen: vi.fn(() => () => {}),
   invoke: vi.fn(async () => {}),
@@ -78,6 +78,19 @@ describe("live Markdown spelling", () => {
     editor.setSpellcheck(false);
     expect(root.querySelector(".md-spelling-error")).toBeNull();
     await expect(editor.checkSpelling()).rejects.toThrow("turned off");
+  });
+
+  it("removes emptied formatting during a correction and restores it with undo", async () => {
+    const { editor, view } = open("hell**l**o");
+    native.checkSpelling.mockResolvedValueOnce(["helllo"]);
+    native.spellingSuggestions.mockResolvedValueOnce(["hello"]);
+    vi.spyOn(view, "posAtCoords").mockReturnValue(2);
+    const choice = await spellingAt(view.contentDOM, 0, 0);
+    expect(choice?.word).toBe("helllo");
+    await choice?.replace("hello");
+    expect(editor.getText()).toBe("hello");
+    expect(undo(view)).toBe(true);
+    expect(editor.getText()).toBe("hell**l**o");
   });
 
   it("checks metadata values and rejects corrections that would break YAML", async () => {

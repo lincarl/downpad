@@ -22,4 +22,9 @@ describe("metadata spelling values", () => {
     const block = '---\ntitle: "speling\\nword"\nstring: "false"\n---\n';
     expect(frontmatterSpellingWords(block).map(({ word }) => word)).toEqual(["speling", "word", "false"]);
   });
+
+  it("excludes comments on empty scalars while retaining quoted hashes", () => {
+    const block = '---\ntitle: # speling\nempty:    # speling\nquoted: "# speling"\n---\n';
+    expect(frontmatterSpellingWords(block).map(({ word }) => word)).toEqual(["speling"]);
+  });
 });

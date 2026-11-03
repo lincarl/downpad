@@ -1,6 +1,6 @@
-import { language } from "@codemirror/language";
+import { ensureSyntaxTree, language } from "@codemirror/language";
 import { isolateHistory } from "@codemirror/commands";
-import { StateEffect, StateField, type EditorState } from "@codemirror/state";
+import { ChangeSet, StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import { managedSpellingAvailable, proseWords, SpellingController, spellingEdits, yieldSpelling, type SpellingWord } from "../spelling";
 import { splitFrontmatter } from "../../document/frontmatter";
@@ -22,6 +22,37 @@ const decorations = StateField.define({
 
 const excludedNodes = new Set(["Frontmatter", "InlineCode", "FencedCode", "CodeBlock", "URL", "Autolink", "HTMLTag", "HTMLBlock", "CommentBlock", "LinkTitle", "LinkReference", "LinkLabel"]);
 const formattingNodes = new Set(["EmphasisMark", "StrikethroughMark", "Escape"]);
+
+/** Remove formatting delimiters whose entire contents a correction deletes. */
+export function sourceSpellingChanges(state: EditorState, word: SpellingWord, replacement: string): ChangeSet {
+  let changes = state.changes(spellingEdits(word, replacement));
+  if (!word.parts || word.parts.length < 2) return changes;
+  const tree = ensureSyntaxTree(state, word.to, 50) ?? state.facet(language)?.parser.parse(state.doc.toString());
+  const wrappers: { from: number; contentFrom: number; contentTo: number; to: number }[] = [];
+  tree?.iterate({
+    from: word.from,
+    to: word.to,
+    enter(node) {
+      if (!["Emphasis", "StrongEmphasis", "Strikethrough"].includes(node.name)) return;
+      const open = node.node.firstChild;
+      const close = node.node.lastChild;
+      if (open && close && open !== close && formattingNodes.has(open.name) && formattingNodes.has(close.name)) {
+        wrappers.push({ from: open.from, contentFrom: open.to, contentTo: close.from, to: close.to });
+      }
+    },
+  });
+  // Inner wrappers must disappear first so an emptied outer wrapper also goes.
+  for (const wrapper of wrappers.reverse()) {
+    const contentFrom = changes.mapPos(wrapper.contentFrom, -1);
+    const contentTo = changes.mapPos(wrapper.contentTo, 1);
+    if (contentFrom !== contentTo) continue;
+    changes = changes.compose(ChangeSet.of([
+      { from: changes.mapPos(wrapper.from, 1), to: contentFrom },
+      { from: contentTo, to: changes.mapPos(wrapper.to, -1) },
+    ], changes.newLength));
+  }
+  return changes;
+}
 
 /** Parse the entire Markdown model, preserving word positions across formatting. */
 export async function sourceSpellingWords(state: EditorState): Promise<SpellingWord[]> {
@@ -104,7 +135,7 @@ export function sourceSpelling() {
               throw new Error("This correction would change the metadata format. Edit the value directly.");
             }
           }
-          view.dispatch({ changes: spellingEdits(word, replacement), annotations: isolateHistory.of("full"), userEvent: "input.spelling" });
+          view.dispatch({ changes: sourceSpellingChanges(view.state, word, replacement), annotations: isolateHistory.of("full"), userEvent: "input.spelling" });
           view.focus();
         },
       });

@@ -60,24 +60,27 @@ const EDITOR_CHROME = [
   "milkdown-link-preview",
 ].join(", ");
 
-/** Classes that only mark *where the user is*, not what the document says. */
-const FOCUS_CLASSES = [
+/** Editor annotations that do not belong to document content. */
+const EDITOR_CLASSES = [
   "ProseMirror-focused",
   "ProseMirror-selectednode",
   // An inline image inside the text selection (imageView.ts).
   "md-in-selection",
   "cm-activeLine",
   "cm-activeLineGutter",
+  "md-spelling-error",
 ];
 
 /** Strip editor-only artifacts that shouldn't appear in a printout, including
  *  the empty line Crepe keeps at the end of the document. */
 export function sanitize(el: Element): Element {
   el.removeAttribute("contenteditable");
+  el.removeAttribute("data-managed-spelling");
   el.querySelectorAll("[contenteditable]").forEach((n) => n.removeAttribute("contenteditable"));
+  el.querySelectorAll("[data-managed-spelling]").forEach((n) => n.removeAttribute("data-managed-spelling"));
   el.querySelectorAll(EDITOR_CHROME).forEach((n) => n.remove());
-  el.classList.remove(...FOCUS_CLASSES);
-  for (const cls of FOCUS_CLASSES) {
+  el.classList.remove(...EDITOR_CLASSES);
+  for (const cls of EDITOR_CLASSES) {
     el.querySelectorAll(`.${cls}`).forEach((n) => n.classList.remove(cls));
   }
   // A missing inline image's hover text asks for a click, which does nothing here.

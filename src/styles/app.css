@@ -1585,7 +1585,7 @@ body {
   max-width: min(var(--editor-width), calc(100% - 72px));
 }
 
-.md-spelling-error {
+[data-managed-spelling] .md-spelling-error {
   text-decoration: underline wavy #d73232 1px;
   text-underline-offset: 3px;
 }

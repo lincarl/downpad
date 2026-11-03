@@ -266,14 +266,14 @@ for (const layout of ["Document", "Markdown"] as const) {
   });
 }
 
-test("full checks include metadata text while ignoring YAML keys and typed values", async () => {
-  await launch('---\ntitlle: "speling"\npublished: false\n---\n\nA speling example.\n');
+test("full checks include metadata text while ignoring YAML keys, comments and typed values", async () => {
+  await launch('---\ntitlle: "speling"\npublished: false\ncommented: # speling\n---\n\nA speling example.\n');
   const paragraph = page.locator(".milkdown .ProseMirror p").first();
   await expect(paragraph.locator(".md-spelling-error")).toHaveText("speling");
   let menu = await wordMenu(paragraph, "speling");
   await menu.getByRole("menuitem", { name: "Check document spelling", exact: true }).click();
   await expect(page.getByText("Spelling check complete. 2 possible misspellings marked.", { exact: true })).toBeVisible();
-  const disclosure = page.getByRole("button", { name: "Frontmatter 2 fields", exact: true });
+  const disclosure = page.getByRole("button", { name: "Frontmatter 3 fields", exact: true });
   if (await disclosure.getAttribute("aria-expanded") === "false") await disclosure.click();
   const value = page.locator('.frontmatter-value-edit[data-line="0"]');
   await expect(value).toBeVisible();
@@ -291,6 +291,18 @@ test("full checks include metadata text while ignoring YAML keys and typed value
   menu = await wordMenu(source, "speling");
   await menu.getByRole("menuitem", { name: "Check document spelling", exact: true }).click();
   await expect(page.getByText("Spelling check complete. 2 possible misspellings marked.", { exact: true })).toBeVisible();
+});
+
+test("print previews preserve misspelled text without spelling underlines", async () => {
+  await launch("A **speling** example.\n");
+  const paragraph = page.locator(".milkdown .ProseMirror p").first();
+  await expect(paragraph.locator(".md-spelling-error")).toHaveText("speling");
+  await expect(paragraph.locator(".md-spelling-error")).toHaveCSS("text-decoration-style", "wavy");
+  await page.getByRole("button", { name: "Print", exact: true }).click();
+  const preview = page.locator(".print-workspace .print-flow");
+  await expect(preview.locator("strong")).toHaveText("speling");
+  await expect(preview.locator(".md-spelling-error, [data-managed-spelling]")).toHaveCount(0);
+  await expect(preview.locator("strong")).toHaveCSS("text-decoration-line", "none");
 });
 
 test("changing documents dismisses editor spelling choices", async () => {

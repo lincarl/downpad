@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { markdownSource } from "./markdownSource";
-import { sourceSpellingWords } from "./liveSpelling";
+import { sourceSpellingChanges, sourceSpellingWords } from "./liveSpelling";
 
 /** Collect from the same configured parser used by the Markdown editor. */
 function words(markdown: string) {
@@ -9,6 +9,20 @@ function words(markdown: string) {
 }
 
 describe("full Markdown spelling model", () => {
+  it.each([
+    ["hell**l**o", "hello", "hello"],
+    ["ab***x***cd", "abcd", "abcd"],
+    ["ab~~x~~cd", "abcd", "abcd"],
+    ["ab**xy**cd", "abycd", "ab**y**cd"],
+    ["sp**el**ing", "spelling", "sp**ell**ing"],
+  ])("corrects %s without leaving empty formatting", async (source, replacement, expected) => {
+    const state = EditorState.create({ doc: source, extensions: [markdownSource()] });
+    const [word] = await sourceSpellingWords(state);
+    const corrected = state.update({ changes: sourceSpellingChanges(state, word, replacement) }).state;
+    expect(corrected.doc.toString()).toBe(expected);
+    expect((await sourceSpellingWords(corrected)).map(({ word }) => word)).toEqual([replacement]);
+  });
+
   it("excludes code and link targets, keeps link labels and combines emphasis", async () => {
     const result = await words("sp**el**ing [readable](https://typpo.invalid/path) `inlinecode`\n\n~~~js\nfencedcode\n~~~\n\n    indentedcode\n\nlastword");
     expect(result.map(({ word }) => word)).toEqual(["speling", "readable", "lastword"]);

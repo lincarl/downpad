@@ -21,7 +21,7 @@ function stringScalar(value: string): { from: number; text: string } | null {
     if (!closed || !/^\s*(?:#.*)?$/.test(value.slice(to + 1))) return null;
     from = 1;
   } else {
-    to = /\s#/.exec(value)?.index ?? value.length;
+    to = /(?:^|\s)#/.exec(value)?.index ?? value.length;
     const scalar = value.slice(0, to).trim();
     if (!scalar || /^[\[\]{}&*!|>'"%@`]/.test(scalar) || /:\s/.test(scalar)) return null;
     if (/^(?:null|~|true|false|yes|no|on|off|[-+]?\.(?:inf|nan))$/i.test(scalar)) return null;

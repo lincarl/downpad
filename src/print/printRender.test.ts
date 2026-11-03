@@ -37,6 +37,13 @@ const tableBlock = (chrome = "") =>
   `<div class="milkdown-table-block">${chrome}<table><tbody><tr><td>A</td></tr></tbody></table></div>`;
 
 describe("the printed document", () => {
+  it("prints misspelled text and formatting without editor spelling annotations", () => {
+    const root = printed('<p data-managed-spelling="true"><strong class="md-spelling-error">speling</strong> example</p>');
+    expect(root.querySelector(".print-flow p")?.textContent).toBe("speling example");
+    expect(root.querySelector("strong")?.textContent).toBe("speling");
+    expect(root.querySelector(".md-spelling-error, [data-managed-spelling]")).toBeNull();
+  });
+
   it.each([
     ["the empty line Crepe keeps after a final list", `<p>First</p><ul><li><p>Last</p></li></ul>${EMPTY_LINE}`, ["<p>First</p>", "<ul><li><p>Last</p></li></ul>"]],
     ["every empty line at the end", `<p>First</p>${EMPTY_LINE}${EMPTY_LINE}`, ["<p>First</p>"]],
