@@ -12,6 +12,10 @@ RecoverMissingExecutable requires equal product versions and removes only the
 previous test installation's executable before the upgrade, simulating damage.
 TestRollback fails a copied MSI after removing the previous product, verifies
 that rollback restores it, and launches the restored app before a normal upgrade.
+CloseRunningApps starts two isolated copies before the upgrade wizard and
+requires the installer to close both before replacing the installed version.
+TestCloseRefusal verifies that a process declining WM_CLOSE prevents an upgrade
+without changing the previous installation, for both current and legacy names.
 Diagnostics and isolated app data remain under dev-temp/msi-tests/diagnostics.
 Use run-msi-test.mjs to enforce a separate process deadline around native calls.
 .EXAMPLE
@@ -25,6 +29,8 @@ param(
     [string]$PreviousMsi,
     [switch]$RecoverMissingExecutable,
     [switch]$TestRollback,
+    [switch]$CloseRunningApps,
+    [switch]$TestCloseRefusal,
     [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
     [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+\.\d+$')][string]$ExpectedVersion,
     [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Scenario = 'fresh',
@@ -35,6 +41,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($RecoverMissingExecutable -and -not $PreviousMsi) { throw 'Recovery testing requires PreviousMsi.' }
 if ($TestRollback -and (-not $PreviousMsi -or $RecoverMissingExecutable)) { throw 'Rollback testing requires PreviousMsi and cannot remove its executable.' }
+if (($CloseRunningApps -or $TestCloseRefusal) -and (-not $PreviousMsi -or $RecoverMissingExecutable -or $TestRollback)) {
+    throw 'Running-app testing requires PreviousMsi and cannot be combined with recovery or rollback.'
+}
+if ($CloseRunningApps -and $TestCloseRefusal) { throw 'Run successful closure and close refusal in separate scenarios.' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'MSI integration tests require Windows.' }
 if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
     throw 'MSI integration tests require an interactive desktop, not a Session 0 service.'
@@ -210,6 +220,30 @@ function Get-RelatedProducts {
     Write-TestProgress 'Finished enumerating related products'
 }
 
+function Assert-CloseActionOrder {
+    # Check the compiled MSI, since WiX resolves relative action positions.
+    $database = $installer.OpenDatabase($Msi, 0)
+    try {
+        $sequences = @{}
+        $view = $database.OpenView('SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`')
+        try {
+            [void]$view.Execute()
+            while ($record = $view.Fetch()) {
+                $sequences[$record.StringData(1)] = $record.IntegerData(2)
+                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record)
+            }
+        } finally { [void]$view.Close(); [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) }
+        $last = 0
+        foreach ($action in @('WixCloseApplications', 'DownpadRequireClosed', 'InstallValidate', 'InstallInitialize', 'RemoveExistingProducts')) {
+            if (-not $sequences.ContainsKey($action) -or $sequences[$action] -le $last) {
+                throw "Expected $action after sequence $last in the upgrade execution sequence."
+            }
+            $last = $sequences[$action]
+        }
+    } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) }
+    Write-TestProgress 'The compiled MSI closes apps and rejects refusal before validation or old-product removal'
+}
+
 function Assert-Installed($Metadata, [string]$Version, [switch]$CurrentPayload) {
     # Require the updater's registry path and a single fully installed product.
     Write-TestProgress "Verify installed product $($Metadata.ProductCode)"
@@ -297,7 +331,7 @@ function Save-Diagnostics([string]$Label) {
     # Capture before dismissing any error. Screenshot failure must not hide it.
     Write-TestProgress "Capture diagnostics '$Label'"
     $text = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($process in $startedProcesses) {
+    foreach ($process in (@($startedProcesses) + @($appProcesses.Values))) {
         foreach ($window in [DownpadMsiTest.Native]::Windows($process.Id)) {
             [void]$text.Add("PID $($process.Id) $($window.ClassName) $($window.Text)")
             foreach ($child in [DownpadMsiTest.Native]::Children($window.Handle)) {
@@ -320,7 +354,7 @@ function Save-Diagnostics([string]$Label) {
     Write-TestProgress "Finished diagnostic capture '$Label'"
 }
 
-function Invoke-InstallWizard([Diagnostics.Process]$Process) {
+function Invoke-InstallWizard([Diagnostics.Process]$Process, [hashtable]$ExistingApps = @{}) {
     # WiX's English assisted UI has Welcome, scope, ready, progress, and Exit.
     # Select-WizardAction chooses at most one click from each window snapshot.
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -337,7 +371,12 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
         })
         $choice = Select-WizardAction $state $windows $isChecked (Get-Date)
         if ($choice) {
-            if ($state.ClickedFinish) { Save-Diagnostics 'before-finish' }
+            if ($state.ClickedFinish) {
+                foreach ($oldApp in $ExistingApps.Values) {
+                    if (-not $oldApp.HasExited) { throw "The installer left the previous app or its helper PID $($oldApp.Id) running at Finish." }
+                }
+                Save-Diagnostics 'before-finish'
+            }
             Write-Host "Wizard action $($choice.Action)"
             [DownpadMsiTest.Native]::Click($choice.Target.Handle)
         }
@@ -349,7 +388,11 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process) {
         $hasWindow = $false
         Write-TestProgress 'Inspect installed app processes and windows' -Quiet
         foreach ($app in @(Get-TestAppProcesses)) {
-            if (-not $state.ClickedFinish) { throw 'Downpad started before the Finish button was clicked.' }
+            if (-not $state.ClickedFinish) {
+                if (-not $ExistingApps.ContainsKey($app.Id)) { throw 'Downpad started before the Finish button was clicked.' }
+                continue
+            }
+            if ($ExistingApps.ContainsKey($app.Id)) { throw 'The previous app survived the upgrade and could be mistaken for the Finish launch.' }
             if (@([DownpadMsiTest.Native]::Windows($app.Id) | Where-Object { $_.ClassName -eq 'Chrome_WidgetWin_1' }).Count -gt 0) {
                 $hasWindow = $true
             }
@@ -508,11 +551,127 @@ function Test-UpgradeRollback {
     Write-TestProgress 'Rollback restored the old product and its working application'
 }
 
+function New-TestProfile([string]$Name) {
+    # Suppress first-run and update prompts only in this test's isolated profile.
+    $profilePath = Join-Path $diagnostics $Name
+    [void](New-Item -ItemType Directory -Path $profilePath)
+    [IO.File]::WriteAllText((Join-Path $profilePath 'settings.toml'), "autoUpdate = false`nhasSeenWelcome = true`nhasCheckedDefaultHandler = true`n", (New-Object Text.UTF8Encoding($false)))
+    return $profilePath
+}
+
+function Start-UpgradeApps {
+    # Separate profiles create independent Electron roots instead of handing
+    # the second launch to the first copy through its single-instance lock.
+    $finishProfile = $env:DOWNPAD_USER_DATA_DIR
+    $roots = New-Object 'System.Collections.Generic.List[System.Diagnostics.Process]'
+    try {
+        foreach ($number in @(1, 2)) {
+            $profilePath = New-TestProfile "running-copy-$number"
+            $document = Join-Path $diagnostics "running-copy-$number.md"
+            [IO.File]::WriteAllText($document, "# Running copy $number`n", (New-Object Text.UTF8Encoding($false)))
+            $env:DOWNPAD_USER_DATA_DIR = $profilePath
+            Write-TestProgress "Launch previous app copy $number with profile $profilePath"
+            $app = Start-Process -FilePath $installedExe -ArgumentList "`"$document`"" -PassThru
+            [void]$app.Handle
+            $appProcesses[$app.Id] = $app
+            [void]$roots.Add($app)
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            $readySince = $null
+            $sessionPath = Join-Path $profilePath 'session.json'
+            while ((Get-Date) -lt $deadline) {
+                if ($app.HasExited) { throw "Previous app copy $number exited before it was ready." }
+                [void]@(Get-TestAppProcesses)
+                $windows = @([DownpadMsiTest.Native]::Windows($app.Id) | Where-Object {
+                    $_.ClassName -eq 'Chrome_WidgetWin_1' -and $_.Text.StartsWith("running-copy-$number.md")
+                })
+                $sessionReady = $false
+                if (Test-Path -LiteralPath $sessionPath) {
+                    $session = Get-Content -LiteralPath $sessionPath -Raw | ConvertFrom-Json
+                    $sessionReady = $session.active -eq $document -and $session.files -contains $document
+                }
+                # A filename title and recorded session require the renderer to
+                # open the file and complete startup, beyond ready-to-show.
+                if ($windows.Count -gt 0 -and $sessionReady) {
+                    if (-not $readySince) { $readySince = Get-Date }
+                    if (((Get-Date) - $readySince).TotalSeconds -ge 2) { break }
+                } else { $readySince = $null }
+                Start-Sleep -Milliseconds 200
+            }
+            if (-not $readySince -or ((Get-Date) - $readySince).TotalSeconds -lt 2) {
+                throw "Previous app copy $number did not open its document and record its isolated session."
+            }
+        }
+    } finally { $env:DOWNPAD_USER_DATA_DIR = $finishProfile }
+    foreach ($app in $roots) {
+        if ($app.HasExited) { throw 'Both previous app copies must still be running when the upgrade starts.' }
+    }
+    $existing = @{}
+    foreach ($app in @(Get-TestAppProcesses)) { $existing[$app.Id] = $appProcesses[$app.Id] }
+    if ($roots.Count -ne 2 -or @($roots | Select-Object -ExpandProperty Id -Unique).Count -ne 2) {
+        throw 'The running-app upgrade requires two distinct application processes.'
+    }
+    Save-Diagnostics 'running-before-upgrade'
+    Write-TestProgress "Both previous app copies are ready. Root PIDs $($roots.Id -join ', '), all app PIDs $($existing.Keys -join ', ')"
+    return $existing
+}
+
+function Test-RefusedClose {
+    # The fixture lives outside the installed folder, so a file lock cannot
+    # cause the expected failure. Only the MSI's process-close guard can do so.
+    $folder = Join-Path $diagnostics 'close-refusal'
+    [void](New-Item -ItemType Directory -Path $folder)
+    $fixture = Join-Path $folder 'Downpad.exe'
+    Add-Type -Path (Join-Path $PSScriptRoot 'msi-close-refusal.cs') -OutputAssembly $fixture -OutputType WindowsApplication -ReferencedAssemblies System.Windows.Forms, System.Drawing
+    $legacyFixture = Join-Path $folder 'md-easy.exe'
+    Copy-Item -LiteralPath $fixture -Destination $legacyFixture
+    $oldExeHash = (Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash
+    $installedAsar = Join-Path $installFolder 'resources\app.asar'
+    $oldAsarHash = (Get-FileHash -LiteralPath $installedAsar -Algorithm SHA256).Hash
+    foreach ($name in @('Downpad', 'md-easy')) {
+        $signal = Join-Path $folder "$name-close-requested.txt"
+        $process = Start-Process -FilePath (Join-Path $folder "$name.exe") -ArgumentList "`"$signal`"" -PassThru
+        [void]$process.Handle
+        $appProcesses[$process.Id] = $process
+        $deadline = (Get-Date).AddSeconds(30)
+        while (-not $process.HasExited -and (Get-Date) -lt $deadline -and
+            @([DownpadMsiTest.Native]::Windows($process.Id) | Where-Object { $_.Text -eq 'Downpad MSI close refusal fixture' }).Count -eq 0) {
+            Start-Sleep -Milliseconds 100
+        }
+        if ($process.HasExited -or (Get-Date) -ge $deadline) { throw "The $name close-refusal fixture did not show its window." }
+        Write-TestProgress "Upgrade while $name fixture PID $($process.Id) refuses close requests"
+        $label = "refused-$name"
+        $upgrade = Start-TestMsi "/i `"$Msi`" /qn" $label
+        if (-not $upgrade.WaitForExit($TimeoutSeconds * 1000)) { throw "The $name close-refusal upgrade timed out." }
+        if ($upgrade.ExitCode -ne 1603) { throw "Expected MSI error 1603 for $name close refusal, found $($upgrade.ExitCode)." }
+        if ($process.HasExited) { throw "The installer terminated the $name fixture despite its close refusal." }
+        if (-not (Test-Path -LiteralPath $signal) -or (Get-Item -LiteralPath $signal).Length -eq 0) {
+            throw "The installer did not send a close request to the $name fixture."
+        }
+        $log = Get-Content -LiteralPath (Join-Path $diagnostics "$label.log") -Raw
+        if ($log -notmatch 'Action ended [^\r\n]*DownpadRequireClosed\. Return value 3\.' -or
+            $log -match 'Action start [^\r\n]*(InstallValidate|InstallInitialize|RemoveExistingProducts)\.') {
+            throw "The $name refusal did not stop at the close guard before validation or old-product removal."
+        }
+        Assert-Installed $previous $previousVersion
+        if ($installer.ProductState($current.ProductCode) -ne -1) { throw 'The refused upgrade registered the new product.' }
+        if ((Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash -ne $oldExeHash -or
+            (Get-FileHash -LiteralPath $installedAsar -Algorithm SHA256).Hash -ne $oldAsarHash) {
+            throw 'The refused upgrade changed the previous executable or app payload.'
+        }
+        Save-Diagnostics $label
+        # End only this retained fixture handle after verifying its refusal.
+        $process.Kill()
+        if (-not $process.WaitForExit(5000)) { throw "The $name close-refusal fixture did not stop during cleanup." }
+        Write-TestProgress "The $name close refusal preserved the previous installation and running process"
+    }
+}
+
 try {
     Write-TestProgress 'Activate Windows Installer COM'
     $installer = New-Object -ComObject WindowsInstaller.Installer
     Write-TestProgress 'Windows Installer COM activated'
     $current = Get-MsiMetadata $Msi
+    if ($CloseRunningApps -or $TestCloseRefusal) { Assert-CloseActionOrder }
     if ((ConvertTo-NumericVersion $current.ProductVersion) -ne $ExpectedVersion -or
         (ConvertTo-NumericVersion $current.ExecutableVersion) -ne $ExpectedVersion -or
         (Get-PeVersion $ExpectedExecutable) -ne $ExpectedVersion) {
@@ -541,10 +700,8 @@ try {
     if (@(Get-RelatedProducts).Count -gt 0 -or (Test-Path -LiteralPath $installFolder) -or @(Get-Process -Name Downpad, md-easy -ErrorAction SilentlyContinue).Count -gt 0) {
         throw 'Refusing to touch an existing Downpad installation, directory, or process. Use a clean Windows test account.'
     }
-    $env:DOWNPAD_USER_DATA_DIR = Join-Path $diagnostics 'user-data'
+    $env:DOWNPAD_USER_DATA_DIR = New-TestProfile 'user-data'
     $env:DOWNPAD_UPDATE_API_URL = 'http://127.0.0.1:1/no-updates'
-    [void](New-Item -ItemType Directory -Path $env:DOWNPAD_USER_DATA_DIR)
-    [IO.File]::WriteAllText((Join-Path $env:DOWNPAD_USER_DATA_DIR 'settings.toml'), "autoUpdate = false`nhasSeenWelcome = true`nhasCheckedDefaultHandler = true`n", (New-Object Text.UTF8Encoding($false)))
     @{
         scenario = $Scenario; msi = $Msi; previousMsi = $PreviousMsi
         expectedVersion = $ExpectedVersion; expectedExecutable = $ExpectedExecutable
@@ -552,6 +709,8 @@ try {
         productCode = $current.ProductCode; upgradeCode = $current.UpgradeCode
         recoverMissingExecutable = [bool]$RecoverMissingExecutable
         testRollback = [bool]$TestRollback
+        closeRunningApps = [bool]$CloseRunningApps
+        testCloseRefusal = [bool]$TestCloseRefusal
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $diagnostics 'inputs.json') -Encoding UTF8
     if ($previous) {
         [void]$attemptedProducts.Add($previous.ProductCode)
@@ -581,7 +740,10 @@ try {
     }
     if (-not $attemptedProducts.Contains($current.ProductCode)) { [void]$attemptedProducts.Add($current.ProductCode) }
     if ($TestRollback) { Test-UpgradeRollback }
-    Invoke-InstallWizard (Start-TestMsi "/i `"$Msi`" /qf" 'wizard')
+    if ($TestCloseRefusal) { Test-RefusedClose }
+    $existingApps = @{}
+    if ($CloseRunningApps) { $existingApps = Start-UpgradeApps }
+    Invoke-InstallWizard (Start-TestMsi "/i `"$Msi`" /qf" 'wizard') $existingApps
     Assert-Installed $current $ExpectedVersion -CurrentPayload
     if ($previous -and $installer.ProductState($previous.ProductCode) -ne -1) { throw 'The previous MSI product is still registered after upgrade.' }
 } catch {

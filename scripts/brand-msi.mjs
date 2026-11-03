@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 // gives the file types the ProgIds of md-easy, the app's earlier name, and
 // records the installation folder for the updater. Major upgrades remove the
 // old product inside the transaction so a failed installation restores it.
+// Installation first asks running copies to close and stops if they stay open.
 
 const bitmaps = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "build", "msi");
 const xml = (value) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -51,12 +52,34 @@ function recordInstallFolder(project, projectFile) {
   return project.replace(group, (_match, start, end) => `${start}  ${component}${end}`);
 }
 
+/** Requests normal window closure before MSI's files-in-use check and upgrade
+ *  removal. A refused close must stop installation before Restart Manager can
+ *  try another shutdown. Keep this action immediate, without forced termination
+ *  or end-session messages, so Downpad can save documents or cancel closing. */
+function closeRunningApps(project) {
+  const condition = 'NOT (REMOVE ~= "ALL")';
+  const applications = [
+    ["Downpad", "Downpad.exe", "DOWNPAD_RUNNING"],
+    ["MdEasy", "md-easy.exe", "MDEASY_RUNNING"],
+  ].map(([id, target, property]) =>
+    `    <util:CloseApplication xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util" Id="Close${id}" Target="${target}" CloseMessage="yes" RebootPrompt="no" Timeout="60" Property="${property}">${condition}</util:CloseApplication>`);
+  const actions = `${applications.join("\n")}
+    <CustomAction Id="DownpadRequireClosed" Error="Downpad or md-easy is still open. Save your work and close all copies, then run the installer again."/>
+    <InstallExecuteSequence>
+      <Custom Action="WixCloseApplications" Before="DownpadRequireClosed">${condition}</Custom>
+      <Custom Action="DownpadRequireClosed" Before="InstallValidate">${condition} AND (DOWNPAD_RUNNING OR MDEASY_RUNNING)</Custom>
+    </InstallExecuteSequence>
+`;
+  return project.replace("</Product>", () => `${actions}  </Product>`);
+}
+
 /** Adds the banner and welcome bitmaps to the WiX project at `projectFile`,
- *  keeps md-easy's ProgIds, records the installation folder and enables upgrade rollback. */
+ *  keeps md-easy's ProgIds, records the installation folder, closes running
+ *  copies safely and enables upgrade rollback. */
 export default async function brandMsi(projectFile) {
   const original = await readFile(projectFile, "utf8");
   if (!original.includes("</Product>")) throw new Error(`Cannot brand ${projectFile}: no WiX Product element.`);
-  const project = recordInstallFolder(keepLegacyProgIds(transactionalMajorUpgrade(original, projectFile), projectFile), projectFile);
+  const project = closeRunningApps(recordInstallFolder(keepLegacyProgIds(transactionalMajorUpgrade(original, projectFile), projectFile), projectFile));
   // light.exe runs in the project's folder. A relative path also resolves under Wine.
   const source = (name) => xml(path.relative(path.dirname(projectFile), path.join(bitmaps, name)).split(path.sep).join("\\"));
   const variables = `<WixVariable Id="WixUIBannerBmp" Value="${source("banner.bmp")}"/>\n`
