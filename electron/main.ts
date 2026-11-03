@@ -557,7 +557,17 @@ async function promptForUpdate(): Promise<void> {
     if (response !== 1 || window !== mainWindow || window.isDestroyed() || window.webContents.isDestroyed() ||
       window.webContents.isCrashed() || !closeListenerAttached || quitRequested || current?.status !== "ready" ||
       current.version !== state.version) return;
-    await restartToUpdate();
+    try {
+      await restartToUpdate();
+    } catch (error) {
+      if (window !== mainWindow || window.isDestroyed()) return;
+      await dialog.showMessageBox(window, {
+        type: "warning",
+        title: "Downpad update",
+        message: "Downpad could not restart to install the update.",
+        detail: `${error instanceof Error ? error.message : String(error)}\nYou can try again from Settings > Updates.`,
+      });
+    }
   } catch (error) {
     // A prompt failure must not turn a verified download into a failed one.
     console.error("Downpad could not offer the update restart", error);

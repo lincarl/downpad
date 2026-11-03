@@ -27,6 +27,7 @@ const startup = vi.hoisted(() => ({
   updaterOptions: undefined as UpdaterOptions | undefined,
   updateInfo: { version: "1.2.0", selfUpdate: true, lastCheckMs: null, state: { status: "idle" } } as UpdateInfo,
   approveResult: true,
+  approveFailure: undefined as Error | undefined,
   destroyed: false,
   senderEvent: {} as { sender?: unknown; senderFrame?: unknown },
   ipcListeners: new Map<string, (...args: unknown[]) => unknown>(),
@@ -113,7 +114,11 @@ vi.mock("./updater", () => ({
   Updater: class {
     constructor(options: UpdaterOptions) { startup.updaterOptions = options; }
     info() { return startup.updateInfo; }
-    async approve() { startup.steps.push(["approve"]); return startup.approveResult; }
+    async approve() {
+      startup.steps.push(["approve"]);
+      if (startup.approveFailure) throw startup.approveFailure;
+      return startup.approveResult;
+    }
     async start() { return startup.scenario.start; }
     async handedToInstaller(version: string) { startup.steps.push(["handedToInstaller", version]); }
     installerResultFile() { return startup.resultFile; }
@@ -170,6 +175,7 @@ beforeEach(() => {
   startup.updaterOptions = undefined;
   startup.updateInfo = { version: "1.2.0", selfUpdate: true, lastCheckMs: null, state: { status: "idle" } };
   startup.approveResult = true;
+  startup.approveFailure = undefined;
   startup.destroyed = false;
   startup.ipcListeners.clear();
   startup.dialogAnswer = undefined;
@@ -385,13 +391,18 @@ it("logs a failed native prompt without rejecting the update notification", asyn
   expect(logged).toHaveBeenCalledWith(expect.any(String), failure);
 });
 
-it("does not quit when Now finds that the pending package is missing", async () => {
+it.each(["missing package", "approval write failure"])("reports a %s when Now cannot restart", async (failure) => {
   await startForPrompt();
-  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-  startup.approveResult = false;
+  const message = failure === "missing package" ? "No downloaded update is waiting." : "Could not write update approval.";
+  if (failure === "missing package") startup.approveResult = false;
+  else startup.approveFailure = new Error(message);
   startup.dialogAnswer = async () => ({ response: 1 });
   publishUpdate();
   await settlePrompt();
-  expect(startup.steps).toEqual([readyPrompt, ["approve"]]);
-  expect(logged).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: "No downloaded update is waiting." }));
+  expect(startup.steps).toEqual([readyPrompt, ["approve"], ["showMessageBox", expect.objectContaining({
+    type: "warning",
+    message: "Downpad could not restart to install the update.",
+    detail: `${message}\nYou can try again from Settings > Updates.`,
+  })]]);
+  expect(startup.updateInfo.state).toEqual({ status: "ready", version: "1.3.0" });
 });
