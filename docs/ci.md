@@ -77,6 +77,18 @@ logs, progress records, and screenshots after success, failure, or cancellation.
 The diagnostic artifact cannot be guaranteed if the runner itself stops
 responding or the whole job is terminated.
 
+If Windows reaches the job deadline despite those safeguards, a recovery workflow can
+retry the build once on a fresh runner. This applies only to the first attempt
+of a `main` push, when GitHub records that the Windows job exceeded its maximum
+execution time and all other jobs succeeded or were skipped. Ordinary test
+failures, manual cancellations without that timeout annotation, pull requests,
+tag builds, and second attempts do not qualify. The helper rechecks the current
+attempt before retrying, including whether a maintainer already restarted it.
+Successful jobs keep their results and the original candidate tag. Release
+publication still requires all build and installer checks to pass. A second
+timeout needs investigation and a manual retry. This recovers from a transient
+runner stall but cannot prevent a runner from becoming unresponsive.
+
 Builds use Ubuntu 26.04 and Windows Server 2025, the Node version in
 `.node-version`, and the pnpm version in `package.json`. Jobs that use GitHub
 CLI install the pinned release with checksum verification through

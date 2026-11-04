@@ -55,6 +55,11 @@ function fixture() {
   return data;
 }
 
+test("GitHub accepts an empty 201 response to a rerun request", async () => {
+  const request = createGitHubClient({ GH_TOKEN: "test-token" }, async () => new Response(null, { status: 201 }));
+  assert.equal(await request("/repos/example/app/actions/runs/123/rerun-failed-jobs", { method: "POST" }), undefined);
+});
+
 test("pull_request selects the exact event head and fork source without any API calls", async () => {
   const data = fixture();
   data.env.GITHUB_EVENT_NAME = "pull_request";
