@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readdir, realpath, rm, stat, unlink, writeFile } from "
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { GFM, parser as markdownParser } from "@lezer/markdown";
+import { formatGitError } from "../src/git/gitErrors";
 import type { GitFileStatus, GitOpenFile, GitOutcome, GitSyncResult } from "../src/ipc/contracts";
 import { readMarkdown, writeAtomic, writeMarkdown } from "./io";
 
@@ -46,11 +47,15 @@ interface RunOptions {
   /** Read paths as plain paths, never as patterns. Off only for commands that
    *  take no pathspecs and reject the setting, such as `check-ignore`. */
   literalPaths?: boolean;
+  /** Pathspecs or other data to pass through stdin without command line limits. */
+  input?: string;
   timeoutMs?: number;
 }
 
 /** Git output is small except for a document's text, which Downpad caps far lower. */
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+/** Leave room for Git's configuration and Windows command line quoting. */
+const MAX_PATH_ARGUMENT_BYTES = 8 * 1024;
 /** Uploads that the remote rejects because someone uploaded first are retried this often. */
 const UPLOAD_ATTEMPTS = 3;
 /** Copies of discarded changes are kept this long. */
@@ -97,7 +102,7 @@ async function git(args: string[], options: RunOptions): Promise<RunResult> {
     const child = spawn("git", [...config, ...args], {
       cwd: options.cwd,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       detached: process.platform !== "win32",
     });
@@ -135,19 +140,37 @@ async function git(args: string[], options: RunOptions): Promise<RunResult> {
       clearTimeout(timer);
       const message = Buffer.concat(stderr).toString("utf8");
       if (timedOut) {
-        reject(new GitError("Git did not finish in time.", message));
+        reject(new GitError(formatGitError("Git did not finish in time."), message));
         return;
       }
       resolvePromise({ code: code ?? -1, stdout: Buffer.concat(stdout), stderr: message });
     });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      // Git can reject the command before reading stdin. Its exit status
+      // and stderr explain that failure more accurately than a broken pipe.
+      if (error.code !== "EPIPE") {
+        stop();
+        reject(error);
+      }
+    });
+    child.stdin.end(options.input);
   });
 }
 
 /** Run `git` and return its output as text, or throw a GitError when it fails. */
 async function gitText(args: string[], options: RunOptions): Promise<string> {
   const result = await git(args, options);
-  if (result.code !== 0) throw new GitError(explainGitError(result.stderr), result.stderr);
+  if (result.code !== 0) throw new GitError(formatGitError(result.stderr), result.stderr);
   return result.stdout.toString("utf8");
+}
+
+/** Pass literal, NUL-delimited paths without growing the process command line. */
+function gitWithPaths(args: string[], paths: readonly string[], options: RunOptions): Promise<RunResult> {
+  const literalPaths = options.hooks ? paths.map((path) => `:(literal)${path}`) : paths;
+  return git([...args, "--pathspec-from-file=-", "--pathspec-file-nul"], {
+    ...options,
+    input: `${literalPaths.join("\0")}\0`,
+  });
 }
 
 /** Raised when no `git` program can be started. */
@@ -162,35 +185,6 @@ class GitError extends Error {
   constructor(message: string, readonly detail: string) {
     super(message);
   }
-}
-
-/** Turn Git's error output into a sentence for someone who does not use Git. */
-export function explainGitError(stderr: string): string {
-  const text = stderr.trim();
-  const host = /(?:https?:\/\/(?:[^@/\s]+@)?|@)([a-z0-9.-]+\.[a-z]{2,})/i.exec(text)?.[1];
-  const server = host ?? "the server";
-  if (/please tell me who you are|unable to auto-detect email address|empty ident name/i.test(text)) {
-    return 'Git does not know your name and email yet. Run git config --global user.name "Your Name" and git config --global user.email "you@example.com" in a terminal, then try again.';
-  }
-  if (/protected branch|GH006|pre-receive hook declined|not allowed to push|permission to .* denied to/i.test(text)) {
-    return `${server} does not let you upload to this branch. Ask the repository's owner for access.`;
-  }
-  if (/authentication failed|could not read (username|password)|terminal prompts disabled|permission denied \(publickey|invalid username or password|HTTP Basic: Access denied|returned error: 40[13]/i.test(text)) {
-    return `Git could not sign in to ${server}. Sign in with your Git tool, then try again.`;
-  }
-  if (/could not resolve host|unable to access|failed to connect|connection timed out|network is unreachable|could not read from remote repository|connection refused|operation timed out|host key verification failed/i.test(text)) {
-    return `Downpad cannot reach ${server}. Check the internet connection, then try again.`;
-  }
-  if (/index\.lock|unable to create .*\.lock/i.test(text)) {
-    return "Another Git program is using this repository. Try again in a moment.";
-  }
-  // Prefer Git's own error lines, then a rejected branch's reason from
-  // `push --porcelain`, over progress lines such as "To <remote>".
-  const lines = text.split("\n").map((entry) => entry.trim()).filter(Boolean);
-  const error = lines.find((entry) => /^(fatal|error):/.test(entry))?.replace(/^(fatal|error):\s*/, "");
-  const rejected = lines.find((entry) => entry.startsWith("!"))?.match(/\(([^)]*)\)\s*$/)?.[1];
-  const line = error ?? (rejected ? `the upload was rejected (${rejected})` : lines[0]);
-  return line ? `Git reported: ${line}` : "Git failed without saying why.";
 }
 
 /** Run `operation` after the earlier operations on the same repository. */
@@ -250,13 +244,17 @@ async function contextOf(path: string): Promise<GitContext | null> {
 async function fetchRemote(context: GitContext, interactive: boolean): Promise<string | null> {
   // An SSH command that the user configured stays in charge of signing in.
   const sshCommand = interactive ? null : await git(["config", "--get", "core.sshCommand"], { cwd: context.root });
-  const result = await git(["fetch", "--quiet", "--no-tags", context.remote], {
-    cwd: context.root,
-    interactive,
-    batchSsh: sshCommand?.code !== 0,
-    timeoutMs: interactive ? 300_000 : 45_000,
-  }).catch((error: unknown) => ({ code: -1, stdout: Buffer.alloc(0), stderr: error instanceof Error ? error.message : String(error) }));
-  return result.code === 0 ? null : explainGitError(result.stderr);
+  try {
+    await gitText(["fetch", "--quiet", "--no-tags", context.remote], {
+      cwd: context.root,
+      interactive,
+      batchSsh: sshCommand?.code !== 0,
+      timeoutMs: interactive ? 300_000 : 45_000,
+    });
+    return null;
+  } catch (error) {
+    return failure(error).message;
+  }
 }
 
 /** Commits that are here and not on the remote branch, and the reverse. */
@@ -287,17 +285,40 @@ async function remoteChangeAuthor(context: GitContext): Promise<{ commit: string
  *  `paths` is null: changed, staged or new files, as absolute paths. */
 async function changedFiles(context: GitContext, paths: string[] | null): Promise<string[]> {
   if (paths?.length === 0) return [];
-  const output = await gitText(
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", ...(paths ? ["--", ...paths] : [])],
-    { cwd: context.root },
-  );
-  const entries = output.split("\0");
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry.length < 4) continue;
-    files.push(join(context.root, ...entry.slice(3).split("/")));
+  // Unlike add and commit, status cannot read pathspecs from stdin. Check all
+  // batches before the caller changes any files, with the same literal paths.
+  const batches: Array<string[] | null> = paths ? pathBatches(paths) : [null];
+  const files = new Set<string>();
+  for (const batch of batches) {
+    const output = await gitText(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", ...(batch ? ["--", ...batch] : [])],
+      { cwd: context.root },
+    );
+    for (const entry of output.split("\0")) {
+      if (entry.length < 4) continue;
+      files.add(join(context.root, ...entry.slice(3).split("/")));
+    }
   }
-  return files;
+  return [...files];
+}
+
+/** Bound path arguments, allowing for quotes and escaped characters on Windows. */
+function pathBatches(paths: readonly string[]): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let bytes = 0;
+  for (const path of paths) {
+    const size = 2 * Buffer.byteLength(path, "utf8") + 3;
+    if (batch.length > 0 && bytes + size > MAX_PATH_ARGUMENT_BYTES) {
+      batches.push(batch);
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(path);
+    bytes += size;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
 }
 
 /** A root-relative Git path for an absolute path in the work tree. */
@@ -348,7 +369,7 @@ export async function mergeText(base: string, ours: string, theirs: string): Pro
     const result = await git(["merge-file", "-p", "-q", oursFile, baseFile, theirsFile], { cwd: folder });
     if (result.code === 0) return result.stdout.toString("utf8");
     if (result.code > 0 && result.code < 128) return null;
-    throw new GitError(explainGitError(result.stderr), result.stderr);
+    throw new GitError(formatGitError(result.stderr), result.stderr);
   } finally {
     await rm(folder, { recursive: true, force: true }).catch(() => {});
   }
@@ -458,7 +479,7 @@ async function integrate(context: GitContext, ahead: number, openFiles: readonly
   const forward = await git(["merge", "--ff-only", "--quiet", "@{upstream}"], { cwd: context.root });
   if (forward.code !== 0) {
     await writeMarkdown(context.file, ours.content, ours.eol);
-    throw new GitError(explainGitError(forward.stderr), forward.stderr);
+    throw new GitError(formatGitError(forward.stderr), forward.stderr);
   }
   await writeMarkdown(context.file, merged, ours.eol);
   return { kind: "integrated", changedOpenFiles, combinedWith: merged === ours.content ? null : change?.author ?? "Someone" };
@@ -477,9 +498,9 @@ async function readyForChanges(context: GitContext): Promise<GitOutcome | null> 
 }
 
 /** Report an unexpected error as a failed result. */
-function failure(error: unknown): GitOutcome {
-  if (error instanceof GitUnavailable) return { kind: "failed", message: "Git is not installed." };
-  return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+function failure(error: unknown): Extract<GitOutcome, { kind: "failed" }> {
+  console.error("Downpad Git action failed", error);
+  return { kind: "failed", message: error instanceof GitError ? error.message : formatGitError(error) };
 }
 
 /** Run a Git action on the document at `path` in its repository's queue.
@@ -679,18 +700,20 @@ export function upload(path: string, openFiles: readonly GitOpenFile[]): Promise
       const committed = toCommit.map((file) => gitPath(context, file));
       if (committed.length > 0) {
         const isNew = !(await hasFile(context, "HEAD"));
-        await gitText(["add", "--", ...committed], { cwd: context.root });
+        const added = await gitWithPaths(["add"], committed, { cwd: context.root });
+        if (added.code !== 0) throw new GitError(formatGitError(added.stderr), added.stderr);
         const message = `${isNew ? "Add" : "Update"} ${context.rel}`;
-        const result = await git(
-          ["commit", "--quiet", "--only", "-m", message, "--", ...committed.map((file) => `:(literal)${file}`)],
+        const result = await gitWithPaths(
+          ["commit", "--quiet", "--only", "-m", message],
+          committed,
           { cwd: context.root, hooks: true, interactive: true },
         ).catch(async (error: unknown) => {
-          await git(["reset", "--quiet", "HEAD", "--", ...committed], { cwd: context.root }).catch(() => {});
+          await gitWithPaths(["reset", "--quiet", "HEAD"], committed, { cwd: context.root }).catch(() => {});
           throw error;
         });
         if (result.code !== 0) {
-          await git(["reset", "--quiet", "HEAD", "--", ...committed], { cwd: context.root });
-          return { kind: "failed", message: explainGitError(result.stderr) };
+          await gitWithPaths(["reset", "--quiet", "HEAD"], committed, { cwd: context.root });
+          return failure(new GitError(formatGitError(result.stderr), result.stderr));
         }
         commit = (await gitText(["rev-parse", "HEAD"], { cwd: context.root })).trim();
       }
@@ -712,7 +735,7 @@ export function upload(path: string, openFiles: readonly GitOpenFile[]): Promise
       if (pushed.code === 0) return { kind: "done", uploaded: true, combinedWith };
       if (commit) await takeBack(context, commit, committed);
       const output = `${pushed.stdout.toString("utf8")}\n${pushed.stderr}`;
-      if (!pushWasOutrun(output)) return { kind: "failed", message: explainGitError(output) };
+      if (!pushWasOutrun(output)) return failure(new GitError(formatGitError(output), output));
     }
     return { kind: "failed", message: "Others uploaded changes at the same time. Try again." };
   });
@@ -724,7 +747,7 @@ async function takeBack(context: GitContext, commit: string, paths: string[]): P
   const head = (await gitText(["rev-parse", "HEAD"], { cwd: context.root })).trim();
   if (head !== commit) return;
   await gitText(["reset", "--quiet", "--soft", "HEAD~1"], { cwd: context.root });
-  await git(["reset", "--quiet", "HEAD", "--", ...paths], { cwd: context.root });
+  if (paths.length > 0) await gitWithPaths(["reset", "--quiet", "HEAD"], paths, { cwd: context.root });
 }
 
 /**

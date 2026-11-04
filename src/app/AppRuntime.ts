@@ -72,7 +72,14 @@ export class AppRuntime {
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
-      (next) => void this.settingsModel.save(next),
+      (next) => {
+        const enablingGit = next.gitEnabled && !store.get().settings.gitEnabled;
+        void this.settingsModel.save(next).then(() => {
+          // Settings apply locally before they reach the main process. Check
+          // again once its Git guard can see the saved enabled setting.
+          if (enablingGit) void this.git.check({ force: true });
+        });
+      },
     );
 
     // The editor presenter lets FileService flush + re-show the active document

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import {
+  GitBranch,
   Hash,
   Image,
   Info,
@@ -68,6 +69,7 @@ type PageId =
   | "spelling"
   | "images"
   | "markdown"
+  | "git"
   | "shortcuts"
   | "updates"
   | "about";
@@ -133,6 +135,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   const [systemAccent, setSystemAccent] = useState<string | null>(null);
   // Fields that only apply while their check box is on are disabled with it.
   const [autosaveOn, setAutosaveOn] = useState(initial.autosaveEnabled);
+  const [gitOn, setGitOn] = useState(initial.gitEnabled);
   const [hardWrapOn, setHardWrapOn] = useState(initial.mdHardWrap !== false);
   const [spellCheckLanguages, setSpellCheckLanguages] = useState(initial.spellCheckLanguages ?? []);
 
@@ -169,6 +172,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     { id: "spelling", title: "Spelling", icon: SpellCheck },
     { id: "images", title: "Images", icon: Image },
     { id: "markdown", title: "Markdown", icon: Hash },
+    ...(isElectron() ? [{ id: "git", title: "Git", icon: GitBranch } as const] : []),
     { id: "shortcuts", title: "Keyboard shortcuts", icon: Keyboard, divider: true },
     ...(isElectron() ? [{ id: "updates", title: "Updates", icon: RotateCw } as const] : []),
     { id: "about", title: "About", icon: Info },
@@ -217,6 +221,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     // Only copies that install updates themselves show this check box.
     const autoUpdate = form.elements.namedItem("autoUpdate") as HTMLInputElement | null;
     // Only the desktop app shows the Git check boxes.
+    const gitEnabled = form.elements.namedItem("gitEnabled") as HTMLInputElement | null;
     const gitAutoGetLatest = form.elements.namedItem("gitAutoGetLatest") as HTMLInputElement | null;
     const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
 
@@ -262,6 +267,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
+      gitEnabled: gitEnabled ? gitEnabled.checked : initial.gitEnabled,
       gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : initial.gitAutoGetLatest,
       gitUploadOnSave: gitUploadOnSave ? gitUploadOnSave.checked : initial.gitUploadOnSave,
     };
@@ -290,7 +296,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
           )}
         >
           <DialogDescription className="sr-only">
-            Configure the editor appearance, editing behavior, files, autosave, and updates.
+            Configure the editor appearance, editing behavior, files, autosave, Git, and updates.
           </DialogDescription>
           {/* No native validation: it cannot point at a field on a hidden page, so
               it would cancel Save silently. Save clamps every number instead. */}
@@ -396,19 +402,6 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                       <Checkbox name="recentFilesKeepRemoved" defaultChecked={initial.recentFilesKeepRemoved} />
                     </CheckRow>
                   </SettingsBox>
-                  {isElectron() && (
-                    <SettingsBox title="Git">
-                      <Hint placement="box">
-                        For documents in a Git repository, the toolbar offers Upload and Get latest.
-                      </Hint>
-                      <CheckRow label="Get latest automatically" placement="box">
-                        <Checkbox name="gitAutoGetLatest" defaultChecked={initial.gitAutoGetLatest} />
-                      </CheckRow>
-                      <CheckRow label="Upload when saving" placement="box">
-                        <Checkbox name="gitUploadOnSave" defaultChecked={initial.gitUploadOnSave} />
-                      </CheckRow>
-                    </SettingsBox>
-                  )}
                   {isElectron() && window.downpadDesktop?.platform === "win32" && (
                     <SettingsBox title="System integration">
                       <ButtonRow
@@ -424,6 +417,37 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                     </SettingsBox>
                   )}
                 </SettingsPage>
+
+                {isElectron() && (
+                  <SettingsPage {...pageProps("git")}>
+                    <SettingsBox title="Git integration">
+                      <CheckRow label="Enable Git" placement="box">
+                        <Checkbox
+                          name="gitEnabled"
+                          checked={gitOn}
+                          onChange={(event) => setGitOn(event.target.checked)}
+                          aria-describedby={`${baseId}-git-help`}
+                        />
+                      </CheckRow>
+                      <p id={`${baseId}-git-help`} className="col-span-full m-0 text-ink-soft">
+                        Upload and get the latest changes for documents in a Git repository.
+                        When off, Git controls and background checks are disabled.
+                        You can still edit and save files.
+                      </p>
+                    </SettingsBox>
+                    <SettingsBox title="Automatic actions">
+                      <CheckRow label="Get latest automatically" placement="box">
+                        <Checkbox name="gitAutoGetLatest" defaultChecked={initial.gitAutoGetLatest} disabled={!gitOn} />
+                      </CheckRow>
+                      <Hint placement="box">Get remote changes when they can be applied without replacing your changes.</Hint>
+                      <CheckRow label="Upload when saving" placement="box">
+                        <Checkbox name="gitUploadOnSave" defaultChecked={initial.gitUploadOnSave} disabled={!gitOn} />
+                      </CheckRow>
+                      <Hint placement="box">Upload when you choose Save or Save as. Autosave does not upload.</Hint>
+                      {!gitOn && <Hint placement="box">Enable Git to use these options. Your choices are kept while Git is off.</Hint>}
+                    </SettingsBox>
+                  </SettingsPage>
+                )}
 
                 <SettingsPage {...pageProps("appearance")}>
                   <SettingsBox title="Application">

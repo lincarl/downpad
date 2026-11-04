@@ -306,6 +306,17 @@ describe("Existing settings and history compatibility", () => {
     });
   });
 
+  it("defaults Git to enabled for older settings and persists an explicit opt-out", async () => {
+    expect(normalizeSettings({})).toMatchObject({ gitEnabled: true });
+    expect(normalizeSettings({ gitEnabled: "false" })).toMatchObject({ gitEnabled: true });
+    const path = join(await fixtureDirectory(), "settings.toml");
+    await writeFile(path, "gitAutoGetLatest = false\ngitUploadOnSave = true\n");
+    const settings = await loadSettingsFile(path);
+    expect(settings.gitEnabled).toBe(true);
+    await saveSettingsFile(path, { ...settings, gitEnabled: false });
+    expect(await loadSettingsFile(path)).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
+  });
+
   it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])("uses the defaults for numeric settings of %s", (value) => {
     expect(normalizeSettings({ editorFontScale: value, editorWidthPx: value, maxEmbedSizeKB: value, printCopies: value })).toMatchObject({
       editorFontScale: DEFAULT_SETTINGS.editorFontScale, editorWidthPx: DEFAULT_SETTINGS.editorWidthPx,

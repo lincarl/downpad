@@ -15,6 +15,7 @@ import { isElectron } from "../ipc/env";
 import { sameFilePath } from "../files/pathIdentity";
 import { openConflictDialog, type ConflictDialogOptions, type ConflictChoice } from "./ConflictDialog";
 import { fileName, listFiles, myVersionPath, timeAgo } from "./gitText";
+import { formatGitError } from "./gitErrors";
 
 /** Notice bar actions. */
 export const GIT_GET_LATEST = "git-get-latest";
@@ -45,6 +46,9 @@ export class GitSync {
   private started = false;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
+  /** Disable invalidates unfinished checks, actions and queued requests. */
+  private generation = 0;
+  private timer: ReturnType<typeof setInterval> | null = null;
   /** The Upload, Get latest or conflict choice that is running. One at a time. */
   private running: Promise<void> | null = null;
   /** Work that waits for the running action to end, such as the conflict
@@ -76,6 +80,7 @@ export class GitSync {
     if (this.started || this.disposed || !isElectron()) return;
     this.started = true;
     const { store } = this.deps;
+    this.cleanups.push(store.select((state) => state.settings.gitEnabled, () => this.configure()));
     // The Recent view shows no document, so returning from it checks again.
     this.cleanups.push(store.select(
       (state) => (state.view === "recent" || !state.activeTabId ? null : state.doc.filePath),
@@ -86,21 +91,42 @@ export class GitSync {
     const onFocus = (): void => void this.check();
     window.addEventListener("focus", onFocus);
     this.cleanups.push(() => window.removeEventListener("focus", onFocus));
-    const timer = setInterval(() => void this.check(), CHECK_INTERVAL_MS);
-    this.cleanups.push(() => clearInterval(timer));
-    void this.check();
+    this.configure();
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.generation++;
+    if (this.timer !== null) clearInterval(this.timer);
     for (const cleanup of this.cleanups.splice(0)) cleanup();
+  }
+
+  /** Restart checks when Git is enabled and discard work from the old setting. */
+  private configure(): void {
+    this.generation++;
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
+    this.fetching = false;
+    this.followUp = null;
+    this.pendingUploads.clear();
+    this.lastFetch.clear();
+    this.conflictsShown.clear();
+    this.conflict = null;
+    this.discardedCopy = null;
+    this.activity = null;
+    this.activityPath = null;
+    this.clearNotice();
+    if (this.deps.store.get().git) this.deps.store.set({ git: null });
+    if (!this.enabled()) return;
+    this.timer = setInterval(() => void this.check(), CHECK_INTERVAL_MS);
+    void this.check();
   }
 
   /** Upload the active document: save it, then commit and push it. */
   upload(): Promise<void> {
     const path = this.activePath();
-    return this.exclusive(() => this.runUpload(path, false), { wait: true });
+    return this.exclusive((generation) => this.runUpload(path, false, generation), { wait: true });
   }
 
   /** Upload the document at `path`, which the user just saved, when Upload
@@ -108,24 +134,26 @@ export class GitSync {
    *  running Git action, and still uploads that document if another tab is
    *  active by then. */
   afterUserSave(path: string | null): void {
-    if (!path || !this.deps.store.get().settings.gitUploadOnSave || this.disposed) return;
+    if (!path || !this.deps.store.get().settings.gitUploadOnSave || !this.enabled()) return;
     if (this.pendingUploads.has(path)) return;
     this.pendingUploads.add(path);
-    void this.exclusive(async () => {
+    void this.exclusive(async (generation) => {
       // A save during this Upload asks for another.
       this.pendingUploads.delete(path);
-      await this.runUpload(path, true);
+      await this.runUpload(path, true, generation);
     }, { wait: true });
   }
 
   /** Get latest for the active document's repository. */
   getLatest(): Promise<void> {
     const path = this.activePath();
-    return this.exclusive(() => this.runGetLatest(path), { wait: true });
+    return this.exclusive((generation) => this.runGetLatest(path, generation), { wait: true });
   }
 
   /** Handle a notice bar action. Returns false for actions of other notices. */
   handleBannerAction(id: string): boolean {
+    if (!this.enabled()) return [GIT_GET_LATEST, GIT_RESOLVE, GIT_OPEN_COPY].includes(id);
+    const generation = this.generation;
     if (id === GIT_GET_LATEST) {
       this.clearNotice();
       void this.getLatest();
@@ -136,7 +164,9 @@ export class GitSync {
     } else if (id === GIT_OPEN_COPY) {
       const copy = this.discardedCopy;
       this.clearNotice();
-      if (copy) void this.deps.files.openPath(copy).catch((error: unknown) => this.showError(errorText(error)));
+      if (copy) void this.deps.files.openPath(copy).catch((error: unknown) => {
+        if (this.isCurrent(generation)) this.showError(errorText(error));
+      });
     } else return false;
     return true;
   }
@@ -146,13 +176,14 @@ export class GitSync {
   /** Show the active document's Git state at once, then ask the remote for
    *  changes when it is due, and act on them. */
   async check({ force = false }: { force?: boolean } = {}): Promise<void> {
+    const generation = this.generation;
     const path = this.activePath();
     if (!path) {
       if (this.deps.store.get().git) this.deps.store.set({ git: null });
       return;
     }
-    const local = await this.refresh();
-    if (!local || this.activePath() !== path || this.fetching || this.running || this.dialogOpen) return;
+    const local = await this.refresh(generation);
+    if (!local || !this.isCurrent(generation) || this.activePath() !== path || this.fetching || this.running || this.dialogOpen) return;
     const last = this.lastFetch.get(local.repositoryRoot) ?? 0;
     if (!force && Date.now() - last < MIN_FETCH_INTERVAL_MS) return;
     this.lastFetch.set(local.repositoryRoot, Date.now());
@@ -161,21 +192,21 @@ export class GitSync {
     try {
       status = await gitStatus(path, true);
     } catch (error) {
-      this.publish(path, local, errorText(error));
+      if (this.isCurrent(generation) && this.activePath() === path) this.publish(path, local, formatGitError(error));
       return;
     } finally {
-      this.fetching = false;
+      if (this.isCurrent(generation)) this.fetching = false;
     }
-    if (this.disposed || this.activePath() !== path) return;
+    if (!this.isCurrent(generation) || this.activePath() !== path) return;
     this.publish(path, status, status?.fetchError ?? null);
-    if (status && !status.fetchError) await this.react(path, status);
+    if (status && !status.fetchError) await this.react(path, status, generation);
   }
 
   /** Read the active document's local Git state, without asking the remote.
    *  Returns it, or null when the document is not in a usable repository. */
-  private async refresh(): Promise<GitFileStatus | null> {
+  private async refresh(generation = this.generation): Promise<GitFileStatus | null> {
     const path = this.activePath();
-    if (!path || this.disposed) return null;
+    if (!path || !this.isCurrent(generation)) return null;
     let status: GitFileStatus | null;
     try {
       status = await gitStatus(path, false);
@@ -183,14 +214,15 @@ export class GitSync {
       console.error("Downpad: Git status failed", error);
       return null;
     }
-    if (this.disposed || this.activePath() !== path) return null;
+    if (!this.isCurrent(generation) || this.activePath() !== path) return null;
     const previous = this.deps.store.get().git;
     this.publish(path, status, previous && sameFilePath(previous.path, path) ? previous.problem : null);
     return status;
   }
 
   /** Act on remote changes that a check found. */
-  private async react(path: string, status: GitFileStatus): Promise<void> {
+  private async react(path: string, status: GitFileStatus, generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return;
     if (status.behind === 0) {
       this.clearNotice(GIT_GET_LATEST);
       return;
@@ -203,7 +235,7 @@ export class GitSync {
       this.deps.flush();
       const markdown = this.activeTab()?.doc.markdown ?? tab.doc.markdown;
       const preview = await gitPreviewCombine(path, markdown).catch(() => ({ clean: false }));
-      if (this.disposed || this.activePath() !== path || this.running || this.dialogOpen) return;
+      if (!this.isCurrent(generation) || this.activePath() !== path || this.running || this.dialogOpen) return;
       if (!preview.clean && status.unuploadedCommits > 0) {
         // Discarding or saving the user's version cannot take back commits
         // that another Git program made, so leave the overlap to it.
@@ -241,13 +273,14 @@ export class GitSync {
     await this.exclusive(async () => {
       const result = await gitGetLatest(path, this.openFiles(), false).catch((error: unknown) => failed(error));
       await this.reloadChanged(result.changedOpenFiles);
+      if (!this.isCurrent(generation)) return;
       if (result.kind === "done") {
         this.clearNotice(GIT_GET_LATEST);
       } else if (result.kind === "failed") {
         const git = this.deps.store.get().git;
         if (git && sameFilePath(git.path, path)) this.deps.store.set({ git: { ...git, problem: result.message } });
       }
-      await this.refresh();
+      await this.refresh(generation);
     });
   }
 
@@ -256,48 +289,52 @@ export class GitSync {
   /** Upload the document at `path`. The toolbar's Upload saves the active
    *  document first. An Upload after a save uploads what was saved, also
    *  for a document that is no longer active. */
-  private async runUpload(path: string | null, fromSave: boolean): Promise<void> {
-    if (!path || !(await this.ready(path))) return;
-    if (!fromSave && (!(await this.saveIfUnsaved(path)) || this.activePath() !== path)) return;
-    const result = await this.during(path, "uploading", () => gitUpload(path, this.openFiles()));
-    await this.finish(path, result, "upload", fromSave);
+  private async runUpload(path: string | null, fromSave: boolean, generation: number): Promise<void> {
+    if (!path || !(await this.ready(path, generation))) return;
+    if (!fromSave && (!(await this.saveIfUnsaved(path, generation)) || this.activePath() !== path)) return;
+    const result = await this.during(path, "uploading", () => gitUpload(path, this.openFiles()), generation);
+    if (result) await this.finish(path, result, "upload", fromSave, generation);
   }
 
-  private async runGetLatest(path: string | null): Promise<void> {
-    if (!path || !(await this.ready(path))) return;
+  private async runGetLatest(path: string | null, generation: number): Promise<void> {
+    if (!path || !(await this.ready(path, generation))) return;
     // The latest version may change the document, so its changes are saved first.
-    if (!(await this.saveIfUnsaved(path))) return;
+    if (!(await this.saveIfUnsaved(path, generation))) return;
     if (this.activePath() !== path) return;
-    const result = await this.during(path, "getting-latest", () => gitGetLatest(path, this.openFiles(), true));
-    await this.finish(path, result, "get-latest", false);
+    const result = await this.during(path, "getting-latest", () => gitGetLatest(path, this.openFiles(), true), generation);
+    if (result) await this.finish(path, result, "get-latest", false, generation);
   }
 
   /** Whether the document at `path` is in a usable repository. */
-  private async ready(path: string): Promise<boolean> {
+  private async ready(path: string, generation: number): Promise<boolean> {
+    if (!this.isCurrent(generation)) return false;
     const git = this.deps.store.get().git;
     if (git && sameFilePath(git.path, path)) return true;
-    if (path === this.activePath()) return (await this.refresh()) !== null;
-    return (await gitStatus(path, false).catch(() => null)) !== null;
+    if (path === this.activePath()) return (await this.refresh(generation)) !== null;
+    const status = await gitStatus(path, false).catch(() => null);
+    return this.isCurrent(generation) && status !== null;
   }
 
   /** Save the active document if it has unsaved changes. Returns false when
    *  that save was cancelled or failed. */
-  private async saveIfUnsaved(path: string): Promise<boolean> {
+  private async saveIfUnsaved(path: string, generation: number): Promise<boolean> {
+    if (!this.isCurrent(generation)) return false;
     this.deps.flush();
     const tab = this.activeTab();
     if (!tab || tab.doc.filePath !== path) return false;
     if (!hasUnsavedChanges(tab)) return true;
     return this.deps.files.save().catch((error: unknown) => {
-      this.showError(`Downpad could not save the document. ${errorText(error)}`);
+      if (this.isCurrent(generation)) this.showError(`Downpad could not save the document. ${errorText(error)}`);
       return false;
     });
   }
 
   /** Report the outcome of an Upload or Get latest, after reloading the open
    *  documents it changed, however it ended. */
-  private async finish(path: string, result: GitSyncResult, action: Action, fromSave: boolean): Promise<void> {
+  private async finish(path: string, result: GitSyncResult, action: Action, fromSave: boolean, generation: number): Promise<void> {
     const name = fileName(path);
     await this.reloadChanged(result.changedOpenFiles);
+    if (!this.isCurrent(generation)) return;
     const active = path === this.activePath();
     switch (result.kind) {
       case "done":
@@ -338,14 +375,15 @@ export class GitSync {
         this.showError(`${action === "upload" ? "Upload failed" : "Get latest failed"}. ${result.message}`);
         break;
     }
-    await this.refresh();
+    await this.refresh(generation);
   }
 
   // ── Conflicts ────────────────────────────────────────────────────────────
 
   /** Ask what to do about changes that overlap someone else's, then do it. */
   private async resolveConflict(path: string, change: { author: string; timeMs: number }): Promise<void> {
-    if (this.dialogOpen || this.disposed) return;
+    const generation = this.generation;
+    if (this.dialogOpen || !this.isCurrent(generation)) return;
     this.conflict = { path, author: change.author, timeMs: change.timeMs };
     this.dialogOpen = true;
     let choice: ConflictChoice;
@@ -354,12 +392,15 @@ export class GitSync {
     } finally {
       this.dialogOpen = false;
     }
-    if (this.disposed) return;
+    if (!this.isCurrent(generation)) {
+      if (this.enabled()) void this.check();
+      return;
+    }
     if (choice === "later" || this.activePath() !== path) {
       this.showConflictNotice(path, change);
       return;
     }
-    await this.exclusive(() => (choice === "discard" ? this.discardMine(path) : this.saveMineAs(path)));
+    await this.exclusive((generation) => (choice === "discard" ? this.discardMine(path, generation) : this.saveMineAs(path, generation)));
   }
 
   private showConflictNotice(path: string, change: { author: string; timeMs: number }): void {
@@ -373,7 +414,7 @@ export class GitSync {
 
   /** Keep a copy of the user's changes, then replace the document with the
    *  latest version. */
-  private async discardMine(path: string): Promise<void> {
+  private async discardMine(path: string, generation: number): Promise<void> {
     this.deps.flush();
     const tab = this.activeTab();
     if (!tab || tab.doc.filePath !== path) return;
@@ -381,11 +422,12 @@ export class GitSync {
     try {
       copy = await keepDiscardedCopy(path, tab.doc.markdown);
     } catch (error) {
-      this.showError(`Downpad could not keep a copy of your changes, so it did not discard them. ${errorText(error)}`);
+      if (this.isCurrent(generation)) this.showError(`Downpad could not keep a copy of your changes, so it did not discard them. ${errorText(error)}`);
       return;
     }
     const others = this.openFiles().filter((file) => !sameFilePath(file.path, path));
-    const result = await this.during(path, "getting-latest", () => gitDiscard(path, others));
+    const result = await this.during(path, "getting-latest", () => gitDiscard(path, others), generation);
+    if (!result) return;
     if (result.changedOpenFiles.some((file) => sameFilePath(file, path))) {
       // The file is put back, so the tab gets it too. Text typed since the
       // last copy was kept gets a newer copy first, so no typing is lost.
@@ -398,7 +440,7 @@ export class GitSync {
         if (outcome === "stored") await this.deps.discardEditors(tab.id);
         if (outcome !== "changed") break;
         if (attempt === 5) {
-          this.showError(`“${fileName(path)}” is still changing, so Downpad left your changes in it. A copy of them is kept.`);
+          if (this.isCurrent(generation)) this.showError(`“${fileName(path)}” is still changing, so Downpad left your changes in it. A copy of them is kept.`);
           return;
         }
         this.deps.flush();
@@ -406,7 +448,7 @@ export class GitSync {
         try {
           copy = await keepDiscardedCopy(path, latest);
         } catch (error) {
-          this.showError(`Downpad could not keep a copy of your latest changes, so the document still shows them. ${errorText(error)}`);
+          if (this.isCurrent(generation)) this.showError(`Downpad could not keep a copy of your latest changes, so the document still shows them. ${errorText(error)}`);
           return;
         }
         kept = latest;
@@ -414,10 +456,11 @@ export class GitSync {
     }
     const rest = { ...result, changedOpenFiles: result.changedOpenFiles.filter((file) => !sameFilePath(file, path)) };
     if (rest.kind !== "done") {
-      await this.finish(path, rest, "get-latest", false);
+      await this.finish(path, rest, "get-latest", false, generation);
       return;
     }
     await this.reloadChanged(rest.changedOpenFiles);
+    if (!this.isCurrent(generation)) return;
     this.conflict = null;
     this.discardedCopy = copy;
     this.showNotice({
@@ -425,12 +468,12 @@ export class GitSync {
       message: `Your changes to “${fileName(path)}” are discarded, and the latest version is shown. Downpad kept a copy of them.`,
       actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }],
     });
-    await this.refresh();
+    await this.refresh(generation);
   }
 
   /** Save the user's version as a new file in this tab, then put the latest
    *  version of the original in the next tab. */
-  private async saveMineAs(path: string): Promise<void> {
+  private async saveMineAs(path: string, generation: number): Promise<void> {
     const tab = this.activeTab();
     if (!tab || tab.doc.filePath !== path) return;
     let refused = false;
@@ -438,29 +481,33 @@ export class GitSync {
       defaultPath: myVersionPath(path),
       refuse: (chosen) => (refused = sameFilePath(chosen, path)),
     }).catch((error: unknown) => {
-      this.showError(`Downpad could not save your version. ${errorText(error)}`);
+      if (this.isCurrent(generation)) this.showError(`Downpad could not save your version. ${errorText(error)}`);
       return null;
     });
-    if (saved === null) return;
+    if (saved === null || !this.isCurrent(generation)) return;
     if (!saved) {
       if (refused) this.showError(`Choose another name than “${fileName(path)}” for your version.`);
       else this.showConflictNotice(path, this.conflict ?? { author: "Someone", timeMs: Date.now() });
       return;
     }
     const newPath = this.deps.store.get().tabs.find((entry) => entry.id === tab.id)?.doc.filePath ?? path;
-    const result = await this.during(path, "getting-latest", () => gitDiscard(path, this.openFiles()));
+    const result = await this.during(path, "getting-latest", () => gitDiscard(path, this.openFiles()), generation);
+    if (!result) return;
     if (result.kind !== "done") {
-      await this.finish(path, result, "get-latest", false);
+      await this.finish(path, result, "get-latest", false, generation);
       return;
     }
-    await this.deps.files.openBeside(path, tab.id).catch((error: unknown) => this.showError(errorText(error)));
+    await this.deps.files.openBeside(path, tab.id).catch((error: unknown) => {
+      if (this.isCurrent(generation)) this.showError(errorText(error));
+    });
     await this.reloadChanged(result.changedOpenFiles);
+    if (!this.isCurrent(generation)) return;
     this.conflict = null;
     this.showNotice({
       kind: "info",
       message: `Your version is saved as “${fileName(newPath)}”. The latest “${fileName(path)}” is open in the next tab.`,
     });
-    await this.refresh();
+    await this.refresh(generation);
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -468,14 +515,18 @@ export class GitSync {
   /** Run one Git action at a time. An action asked for while another runs
    *  waits for it with `wait`, as the user's own actions do, and is dropped
    *  otherwise, as background work is. */
-  private async exclusive(action: () => Promise<void>, { wait = false }: { wait?: boolean } = {}): Promise<void> {
-    if (this.disposed) return;
+  private async exclusive(action: (generation: number) => Promise<void>, { wait = false }: { wait?: boolean } = {}): Promise<void> {
+    const generation = this.generation;
+    if (!this.isCurrent(generation)) return;
     if (this.running && !wait) return;
-    while (this.running) await this.running;
-    if (this.disposed) return;
-    const run = action().catch((error: unknown) => {
+    while (this.running) {
+      await this.running;
+      if (!this.isCurrent(generation)) return;
+    }
+    if (!this.isCurrent(generation)) return;
+    const run = action(generation).catch((error: unknown) => {
       console.error("Downpad: Git action failed", error);
-      this.showError(errorText(error));
+      if (this.isCurrent(generation)) this.showError(formatGitError(error));
     });
     this.running = run;
     try {
@@ -483,18 +534,25 @@ export class GitSync {
     } finally {
       this.running = null;
     }
+    if (!this.isCurrent(generation)) {
+      // A reenabled service can fetch once the old file operation finishes.
+      if (this.enabled()) void this.check();
+      return;
+    }
     const followUp = this.followUp;
     this.followUp = null;
     if (followUp) await followUp();
   }
 
   /** Show `activity` for the document at `path` while `operation` runs. */
-  private async during(path: string, activity: NonNullable<GitState["activity"]>, operation: () => Promise<GitSyncResult>): Promise<GitSyncResult> {
+  private async during(path: string, activity: NonNullable<GitState["activity"]>, operation: () => Promise<GitSyncResult>, generation: number): Promise<GitSyncResult | null> {
+    if (!this.isCurrent(generation)) return null;
     this.setActivity(path, activity);
     try {
+      if (!this.isCurrent(generation)) return null;
       return await operation().catch((error: unknown) => failed(error));
     } finally {
-      this.setActivity(path, null);
+      if (this.isCurrent(generation)) this.setActivity(path, null);
     }
   }
 
@@ -545,12 +603,13 @@ export class GitSync {
   /** The active document's file, or null on the Recent view or for an untitled document. */
   private activePath(): string | null {
     const { view, activeTabId, doc } = this.deps.store.get();
-    if (this.disposed || view === "recent" || !activeTabId) return null;
+    if (!this.enabled() || view === "recent" || !activeTabId) return null;
     return doc.filePath;
   }
 
   /** Show a notice, unless another part of the app shows one of its own. */
   private showNotice(banner: BannerState): void {
+    if (!this.enabled()) return;
     const current = this.deps.store.get().banner;
     if (current && current !== this.notice && current.kind !== "info") return;
     this.notice = banner;
@@ -558,6 +617,7 @@ export class GitSync {
   }
 
   private showError(message: string): void {
+    if (!this.enabled()) return;
     this.notice = { kind: "error", message };
     this.deps.store.set({ banner: this.notice });
   }
@@ -570,6 +630,16 @@ export class GitSync {
     this.notice = null;
     this.deps.store.set({ banner: null });
   }
+
+  /** Whether new Git work is allowed by the current setting and lifecycle. */
+  private enabled(): boolean {
+    return !this.disposed && this.deps.store.get().settings.gitEnabled;
+  }
+
+  /** Whether async work still belongs to the current enabled session. */
+  private isCurrent(generation: number): boolean {
+    return generation === this.generation && this.enabled();
+  }
 }
 
 function errorText(error: unknown): string {
@@ -577,5 +647,5 @@ function errorText(error: unknown): string {
 }
 
 function failed(error: unknown): GitSyncResult {
-  return { kind: "failed", message: errorText(error), changedOpenFiles: [] };
+  return { kind: "failed", message: formatGitError(error), changedOpenFiles: [] };
 }

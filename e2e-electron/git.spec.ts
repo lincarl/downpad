@@ -174,3 +174,75 @@ test("uploads on each save when Upload when saving is on", async () => {
   await expect.poll(() => git(remote, "show", "main:notes.md")).toContain("First paragraph. Saved.");
   await expect(status()).toHaveText("Up to date");
 });
+
+test("turns Git off from its settings page and keeps file saving and preferences", async () => {
+  await launch(path.join(mine, "notes.md"));
+  await expect(status()).toHaveText("Up to date");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  let settings = page.getByRole("dialog", { name: "Settings" });
+  await expect(settings.getByRole("checkbox", { name: "Enable Git" })).toBeHidden();
+  await settings.getByRole("tab", { name: "Git", exact: true }).click();
+  await expect(settings.getByRole("checkbox", { name: "Enable Git" })).toBeChecked();
+  await settings.getByRole("checkbox", { name: "Upload when saving" }).check();
+  await settings.getByRole("checkbox", { name: "Enable Git" }).uncheck();
+  await expect(settings.getByRole("checkbox", { name: "Get latest automatically" })).toBeDisabled();
+  await expect(settings.getByRole("checkbox", { name: "Upload when saving" })).toBeDisabled();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator(".toolbar-upload")).toHaveCount(0);
+  await expect(status()).toHaveCount(0);
+
+  await shownDocument().locator("p", { hasText: "Third paragraph." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Saved locally.");
+  await page.keyboard.press("ControlOrMeta+S");
+  await expect.poll(() => readFile(path.join(mine, "notes.md"), "utf8")).toContain("Saved locally.");
+  expect(git(remote, "show", "main:notes.md")).toBe(NOTES);
+
+  await app!.close();
+  app = undefined;
+  await launch(path.join(mine, "notes.md"));
+  settings = page.getByRole("dialog", { name: "Settings" });
+  await expect(page.locator(".toolbar-upload")).toHaveCount(0);
+  await expect(status()).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await settings.getByRole("tab", { name: "Git", exact: true }).click();
+  await expect(settings.getByRole("checkbox", { name: "Enable Git" })).not.toBeChecked();
+  await expect(settings.getByRole("checkbox", { name: "Upload when saving" })).toBeChecked();
+  await settings.getByRole("checkbox", { name: "Enable Git" }).check();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(uploadButton()).toBeVisible();
+  await expect(status()).toHaveText("Not uploaded");
+  expect(git(remote, "show", "main:notes.md")).toBe(NOTES);
+});
+
+test("blocks Git requests while disabled and resumes checks when enabled", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ngitEnabled = false\n");
+  await pushTheirs(NOTES.replace("First paragraph.", "Their first paragraph."));
+  const file = path.join(mine, "notes.md");
+  const original = await readFile(file);
+  await launch(file);
+  await expect(shownDocument()).toContainText("First paragraph.");
+  await expect(page.locator(".toolbar-upload")).toHaveCount(0);
+  expect(await page.evaluate((path) => window.downpadDesktop!.invoke("git_status", { path, fetch: true }), file)).toBeNull();
+  const errors = await page.evaluate(async (path) => {
+    const bridge = window.downpadDesktop!;
+    const requests = [
+      bridge.invoke("git_get_latest", { path, openFiles: [], interactive: true }),
+      bridge.invoke("git_upload", { path, openFiles: [] }),
+      bridge.invoke("git_discard", { path, openFiles: [] }),
+      bridge.invoke("git_preview_combine", { path, markdown: "" }),
+    ];
+    return Promise.all(requests.map((request) => request.then(() => "unexpected success", (error: unknown) => String(error))));
+  }, file);
+  for (const error of errors) expect(error).toContain("Git is turned off. Enable it in Settings > Git");
+  await expect(readFile(path.join(mine, ".git", "FETCH_HEAD"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(file)).toEqual(original);
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("tab", { name: "Git", exact: true }).click();
+  await settings.getByRole("checkbox", { name: "Enable Git" }).check();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(shownDocument()).toContainText("Their first paragraph.");
+  await expect(status()).toHaveText("Up to date");
+});

@@ -62,6 +62,19 @@ function openDocument({ unsaved = false } = {}): void {
   store.replaceActiveDoc(doc);
 }
 
+/** Hold an operation until a test changes the setting or document. */
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void } {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+/** Change the master switch without changing the saved Git preferences. */
+function enableGit(gitEnabled: boolean): void {
+  store.set({ settings: { ...store.get().settings, gitEnabled } });
+}
+
 beforeEach(() => {
   window.downpadDesktop = { platform: "linux" } as unknown as NonNullable<typeof window.downpadDesktop>;
   for (const mock of Object.values(git)) mock.mockReset();
@@ -96,7 +109,222 @@ beforeEach(() => {
 
 afterEach(() => {
   sync.dispose();
+  vi.useRealTimers();
   delete window.downpadDesktop;
+});
+
+describe("GitSync enable setting", () => {
+  it("does no Git work while disabled and resumes checks with the saved preferences", async () => {
+    vi.useFakeTimers();
+    openDocument({ unsaved: true });
+    const document = store.get().doc;
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true } });
+    git.status.mockResolvedValue(behind);
+    sync.start();
+    await sync.check({ force: true });
+    await sync.upload();
+    await sync.getLatest();
+    sync.afterUserSave(PATH);
+    sync.handleBannerAction(GIT_GET_LATEST);
+    window.dispatchEvent(new Event("focus"));
+    store.patchDoc({ modifiedMs: 123 });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(git.status).not.toHaveBeenCalled();
+    expect(git.upload).not.toHaveBeenCalled();
+    expect(git.getLatest).not.toHaveBeenCalled();
+    expect(deps.files.save).not.toHaveBeenCalled();
+    expect(store.get().doc.markdown).toBe(document.markdown);
+    expect(store.get().doc.isDirty).toBe(true);
+
+    enableGit(true);
+    git.preview.mockResolvedValue({ clean: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(git.status).toHaveBeenCalledWith(PATH, true);
+    expect(store.get().git?.path).toBe(PATH);
+    expect(store.get().settings).toMatchObject({ gitAutoGetLatest: false, gitUploadOnSave: true });
+    enableGit(false);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(store.get().git).toBeNull();
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("clears only its own notice when disabled", async () => {
+    openDocument();
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitAutoGetLatest: false } });
+    git.status.mockResolvedValue(behind);
+    sync.start();
+    await vi.waitFor(() => expect(store.get().banner?.actions?.[0].id).toBe(GIT_GET_LATEST));
+    enableGit(false);
+    expect(store.get().banner).toBeNull();
+
+    enableGit(true);
+    await vi.waitFor(() => expect(store.get().banner?.actions?.[0].id).toBe(GIT_GET_LATEST));
+    const unrelated = { kind: "error" as const, message: "The document could not be saved." };
+    store.set({ banner: unrelated });
+    enableGit(false);
+    expect(store.get().banner).toBe(unrelated);
+    expect(store.get().git).toBeNull();
+  });
+
+  it("ignores an old local status after Git is turned off and back on", async () => {
+    openDocument();
+    const status = deferred<GitFileStatus | null>();
+    git.status.mockReturnValueOnce(status.promise).mockResolvedValue(clean);
+    sync.start();
+    enableGit(false);
+    enableGit(true);
+    await vi.waitFor(() => expect(store.get().git?.status).toEqual(clean));
+    status.resolve(behind);
+    await vi.waitFor(() => expect(git.status).toHaveBeenCalledTimes(3));
+    expect(store.get().git?.status).toEqual(clean);
+    expect(store.get().banner).toBeNull();
+    expect(git.getLatest).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolved", "rejected"])("ignores a %s old fetch after Git is turned off and back on", async (outcome) => {
+    openDocument();
+    const status = deferred<GitFileStatus | null>();
+    git.status.mockResolvedValueOnce(clean).mockReturnValueOnce(status.promise).mockResolvedValue(clean);
+    sync.start();
+    await vi.waitFor(() => expect(git.status).toHaveBeenCalledWith(PATH, true));
+    enableGit(false);
+    enableGit(true);
+    await vi.waitFor(() => expect(git.status).toHaveBeenCalledTimes(4));
+    if (outcome === "resolved") status.resolve(behind);
+    else status.reject(new Error("Command failed with private Git details"));
+    await Promise.resolve();
+    expect(store.get().git).toMatchObject({ status: clean, problem: null });
+    expect(store.get().banner).toBeNull();
+    expect(git.getLatest).not.toHaveBeenCalled();
+  });
+
+  it("ignores a conflict preview from before Git was disabled", async () => {
+    openDocument({ unsaved: true });
+    const preview = deferred<{ clean: boolean }>();
+    git.status.mockResolvedValue(behind);
+    git.preview.mockReturnValueOnce(preview.promise);
+    sync.start();
+    await vi.waitFor(() => expect(git.preview).toHaveBeenCalledTimes(1));
+    enableGit(false);
+    git.status.mockResolvedValue(clean);
+    enableGit(true);
+    preview.resolve({ clean: false });
+    await vi.waitFor(() => expect(store.get().git?.status).toEqual(clean));
+    expect(deps.askConflict).not.toHaveBeenCalled();
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("drops queued requests and late action notices but reloads changed files without losing typing", async () => {
+    openDocument();
+    const original = store.get().activeTabId!;
+    const background = store.addTab({ ...store.get().doc, filePath: "/work/other.md" });
+    store.activateTab(original);
+    store.set({ settings: { ...DEFAULT_SETTINGS, gitUploadOnSave: true } });
+    git.status.mockResolvedValue(clean);
+    sync.start();
+    await vi.waitFor(() => expect(store.get().git).not.toBeNull());
+    const upload = deferred<GitSyncResult>();
+    git.upload.mockReturnValueOnce(upload.promise).mockResolvedValue(done());
+    const first = sync.upload();
+    await vi.waitFor(() => expect(git.upload).toHaveBeenCalledTimes(1));
+    sync.afterUserSave(PATH);
+    const queued = sync.getLatest();
+    enableGit(false);
+    enableGit(true);
+    store.patchDoc({ markdown: "# Typing during upload\n", isDirty: true });
+    upload.resolve(done([PATH, "/work/other.md"], { combinedWith: "Anna Berg" }));
+    await Promise.all([first, queued]);
+    expect(git.upload).toHaveBeenCalledTimes(1);
+    expect(git.getLatest).not.toHaveBeenCalled();
+    expect(deps.files.refreshFromDisk).toHaveBeenCalledWith(background);
+    expect(deps.discardEditors).toHaveBeenCalledWith(background);
+    expect(deps.files.openPath).not.toHaveBeenCalled();
+    expect(store.get().doc.markdown).toBe("# Typing during upload\n");
+    expect(store.get().banner).toBeNull();
+    expect(store.get().git?.activity).toBeNull();
+    sync.afterUserSave(PATH);
+    await vi.waitFor(() => expect(git.upload).toHaveBeenCalledTimes(2));
+  });
+
+  it("lets an already started save finish without uploading after Git is disabled", async () => {
+    openDocument({ unsaved: true });
+    git.status.mockResolvedValue(clean);
+    sync.start();
+    await vi.waitFor(() => expect(store.get().git).not.toBeNull());
+    const save = deferred<boolean>();
+    deps.files.save.mockImplementation(async () => {
+      await save.promise;
+      store.patchDoc({ savedMarkdown: store.get().doc.markdown, isDirty: false });
+      return true;
+    });
+    const upload = sync.upload();
+    await vi.waitFor(() => expect(deps.files.save).toHaveBeenCalledTimes(1));
+    enableGit(false);
+    save.resolve(true);
+    await upload;
+    expect(git.upload).not.toHaveBeenCalled();
+    expect(store.get().doc).toMatchObject({ markdown: "# Notes\n\nMine\n", savedMarkdown: "# Notes\n\nMine\n", isDirty: false });
+    expect(store.get().git).toBeNull();
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("does not act on a conflict choice from before Git was disabled", async () => {
+    openDocument({ unsaved: true });
+    git.status.mockResolvedValue(behind);
+    git.preview.mockResolvedValue({ clean: false });
+    const choice = deferred<ConflictChoice>();
+    deps.askConflict.mockReturnValueOnce(choice.promise);
+    sync.start();
+    await vi.waitFor(() => expect(deps.askConflict).toHaveBeenCalledTimes(1));
+    enableGit(false);
+    git.status.mockResolvedValue(clean);
+    enableGit(true);
+    choice.resolve("discard");
+    await vi.waitFor(() => expect(store.get().git?.status).toEqual(clean));
+    expect(git.keepCopy).not.toHaveBeenCalled();
+    expect(git.discard).not.toHaveBeenCalled();
+    expect(store.get().doc.isDirty).toBe(true);
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("does not begin discarding after Git is disabled while a safety copy is saved", async () => {
+    openDocument({ unsaved: true });
+    git.status.mockResolvedValue(behind);
+    git.preview.mockResolvedValue({ clean: false });
+    deps.askConflict.mockResolvedValue("discard");
+    const copy = deferred<string>();
+    git.keepCopy.mockReturnValueOnce(copy.promise);
+    sync.start();
+    await vi.waitFor(() => expect(git.keepCopy).toHaveBeenCalledTimes(1));
+    enableGit(false);
+    copy.resolve("/profile/discarded-changes/notes.md");
+    await Promise.resolve();
+    expect(git.discard).not.toHaveBeenCalled();
+    expect(deps.files.replaceFromDisk).not.toHaveBeenCalled();
+    expect(store.get().doc.markdown).toBe("# Notes\n\nMine\n");
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("keeps newer typing before completing a discard that started before Git was disabled", async () => {
+    openDocument({ unsaved: true });
+    git.status.mockResolvedValue(behind);
+    git.preview.mockResolvedValue({ clean: false });
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    const discard = deferred<GitSyncResult>();
+    git.discard.mockReturnValueOnce(discard.promise);
+    sync.start();
+    await vi.waitFor(() => expect(git.discard).toHaveBeenCalledTimes(1));
+    enableGit(false);
+    store.patchDoc({ markdown: "# More typing\n" });
+    discard.resolve(done([PATH]));
+    await vi.waitFor(() => expect(deps.files.replaceFromDisk).toHaveBeenCalledTimes(2));
+    expect(git.keepCopy).toHaveBeenLastCalledWith(PATH, "# More typing\n");
+    expect(store.get().doc.markdown).toBe("# Theirs\n");
+    expect(store.get().git).toBeNull();
+    expect(store.get().banner).toBeNull();
+  });
 });
 
 describe("GitSync checks", () => {
@@ -106,6 +334,14 @@ describe("GitSync checks", () => {
     await sync.check({ force: true });
     expect(store.get().git).toBeNull();
     expect(git.status).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains unexpected fetch failures without displaying raw process errors", async () => {
+    openDocument();
+    git.status.mockResolvedValueOnce(clean).mockRejectedValueOnce(new Error("spawn git ENAMETOOLONG"));
+    await sync.check({ force: true });
+    expect(store.get().git?.problem).toContain("a file path or command was too long");
+    expect(store.get().git?.problem).not.toContain("ENAMETOOLONG");
   });
 
   it("gets remote changes quietly when nothing that is not uploaded would change", async () => {
@@ -282,6 +518,15 @@ describe("GitSync upload", () => {
     git.upload.mockResolvedValue({ kind: "failed", message: "Git could not sign in to github.com.", changedOpenFiles: [] });
     await sync.upload();
     expect(store.get().banner).toEqual({ kind: "error", message: "Upload failed. Git could not sign in to github.com." });
+  });
+
+  it("explains unexpected upload errors without displaying raw process errors", async () => {
+    openDocument();
+    await sync.check();
+    git.upload.mockRejectedValue(new Error("spawn git ENAMETOOLONG"));
+    await sync.upload();
+    expect(store.get().banner?.message).toContain("Upload failed. Git could not complete this action because a file path or command was too long.");
+    expect(store.get().banner?.message).not.toContain("ENAMETOOLONG");
   });
 
   it("uploads after the first save into a repository, before Downpad knew the repository", async () => {
