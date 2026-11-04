@@ -218,10 +218,11 @@ test("turns Git off from its settings page and keeps file saving and preferences
 test("blocks Git requests while disabled and resumes checks when enabled", async () => {
   await writeFile(path.join(directory, "profile", "settings.toml"), "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ngitEnabled = false\n");
   await pushTheirs(NOTES.replace("First paragraph.", "Their first paragraph."));
-  await launch(path.join(mine, "notes.md"));
+  const file = path.join(mine, "notes.md");
+  const original = await readFile(file);
+  await launch(file);
   await expect(shownDocument()).toContainText("First paragraph.");
   await expect(page.locator(".toolbar-upload")).toHaveCount(0);
-  const file = path.join(mine, "notes.md");
   expect(await page.evaluate((path) => window.downpadDesktop!.invoke("git_status", { path, fetch: true }), file)).toBeNull();
   const errors = await page.evaluate(async (path) => {
     const bridge = window.downpadDesktop!;
@@ -235,7 +236,7 @@ test("blocks Git requests while disabled and resumes checks when enabled", async
   }, file);
   for (const error of errors) expect(error).toContain("Git is turned off. Enable it in Settings > Git");
   await expect(readFile(path.join(mine, ".git", "FETCH_HEAD"))).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await readFile(file, "utf8")).toBe(NOTES);
+  expect(await readFile(file)).toEqual(original);
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog", { name: "Settings" });
