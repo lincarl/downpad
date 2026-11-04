@@ -2,7 +2,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Create a GitHub API client that preserves HTTP status codes for the migration probe. */
+/** Create a GitHub API client that preserves HTTP status codes for callers. */
 export function createGitHubClient(env = process.env, fetcher = fetch) {
   return async (route, { method = "GET", body } = {}) => {
     if (!env.GH_TOKEN) throw new Error("GH_TOKEN is required for GitHub API requests.");
@@ -21,7 +21,9 @@ export function createGitHubClient(env = process.env, fetcher = fetch) {
       error.status = response.status;
       throw error;
     }
-    return response.status === 204 ? undefined : response.json();
+    // Rerun requests return 201 with no body, and deletions return 204.
+    const text = await response.text();
+    return text ? JSON.parse(text) : undefined;
   };
 }
 

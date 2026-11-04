@@ -1,0 +1,41 @@
+name: Recover a Windows build timeout
+
+on:
+  workflow_run:
+    workflows: [Build installers]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: write
+  checks: read
+
+# Serialize duplicate notifications. The helper rechecks the attempt before
+# requesting a retry, so a completed recovery cannot start another one.
+concurrency:
+  group: recover-windows-build-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.run_attempt == 1 && (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'timed_out')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      # A workflow_run gets the default branch's controls, never source or
+      # artifacts from the triggering build. No dependencies are installed.
+      - name: Check out trusted workflow controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Retry a confirmed Windows job timeout once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/recover-windows-build.mjs
