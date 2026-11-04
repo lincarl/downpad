@@ -58,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
   autoUpdate: true,
 
+  gitEnabled: true,
   gitAutoGetLatest: true,
   gitUploadOnSave: false,
 };

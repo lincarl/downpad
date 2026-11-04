@@ -265,6 +265,8 @@ export interface Settings {
    *  update themselves. */
   autoUpdate: boolean;
 
+  /** Show Git controls and allow background checks and sync actions. */
+  gitEnabled: boolean;
   /** Get the latest version of a document in a Git repository without asking,
    *  when nothing that is not uploaded would change (Git, spec). */
   gitAutoGetLatest: boolean;

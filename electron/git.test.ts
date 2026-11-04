@@ -1,9 +1,17 @@
 import { execFileSync } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discardChanges, explainGitError, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, spawn: vi.fn(original.spawn) };
+});
+
+const originalChildProcess = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
 let root: string;
 /** The remote that both clones upload to. */
@@ -34,7 +42,11 @@ async function pushFrom(folder: string, files: Record<string, string>, message =
     await mkdir(join(folder, name, ".."), { recursive: true });
     await writeFile(join(folder, name), text);
   }
-  run(folder, "add", "--", ...Object.keys(files));
+  execFileSync("git", ["add", "--pathspec-from-file=-", "--pathspec-file-nul"], {
+    cwd: folder,
+    input: `${Object.keys(files).join("\0")}\0`,
+    env: { ...process.env, GIT_LITERAL_PATHSPECS: "1" },
+  });
   run(folder, "commit", "--quiet", "-m", message);
   run(folder, "push", "--quiet");
 }
@@ -63,8 +75,25 @@ beforeEach(async () => {
 }, 30_000);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.mocked(childProcess.spawn).mockReset();
   await rm(root, { recursive: true, force: true });
 });
+
+/** Enforce Windows' command size limit while running actual Git commands. */
+function limitGitCommandLength(): void {
+  vi.mocked(childProcess.spawn).mockImplementation((command, args, options) => {
+    if (command === "git" && args && args.join(" ").length > 30_000) {
+      throw Object.assign(new Error("spawn ENAMETOOLONG"), { code: "ENAMETOOLONG" });
+    }
+    return originalChildProcess.spawn(command, args, options);
+  });
+}
+
+/** Enough real file paths to exceed Windows' command size limit in one call. */
+function manyPaths(): string[] {
+  return Array.from({ length: 400 }, (_, index) => `attachments/${index.toString().padStart(4, "0")}-${"a".repeat(90)}.png`);
+}
 
 const notes = () => join(mine, "notes.md");
 const open = (unsaved = false) => [{ path: notes(), unsaved }];
@@ -100,6 +129,42 @@ describe("gitStatus", () => {
 });
 
 describe("getLatest", () => {
+  it("checks every path before getting a large remote update", async () => {
+    const paths = manyPaths();
+    await pushFrom(theirs, Object.fromEntries(paths.map((path) => [path, "Remote\n"])));
+    const blocked = paths.at(-1)!;
+    await mkdir(join(mine, "attachments"));
+    await writeFile(join(mine, blocked), "Mine\n");
+    const head = run(mine, "rev-parse", "HEAD");
+    limitGitCommandLength();
+
+    expect(await getLatest(notes(), open(), false)).toEqual({
+      kind: "blocked",
+      files: [await realpath(join(mine, blocked))],
+      changedOpenFiles: [],
+    });
+    expect(run(mine, "rev-parse", "HEAD")).toBe(head);
+    expect(await text(join(mine, blocked))).toBe("Mine\n");
+
+    await rm(join(mine, blocked));
+    expect(await getLatest(notes(), open(), false)).toMatchObject({ kind: "done" });
+    expect(await text(join(mine, paths[0]!))).toBe("Remote\n");
+    expect(await text(join(mine, blocked))).toBe("Remote\n");
+  }, 30_000);
+
+  it("explains an operating system failure and retains its diagnostics", async () => {
+    await pushFrom(theirs, { "other.md": "Theirs\n" });
+    vi.mocked(childProcess.spawn).mockImplementation((command, args, options) => {
+      if (args?.includes("status")) throw Object.assign(new Error("spawn ENAMETOOLONG"), { code: "ENAMETOOLONG" });
+      return originalChildProcess.spawn(command, args, options);
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await getLatest(notes(), open(), false);
+    expect(result).toMatchObject({ kind: "failed", message: expect.stringContaining("file path or command was too long") });
+    expect(logged).toHaveBeenCalledWith("Downpad Git action failed", expect.objectContaining({ code: "ENAMETOOLONG" }));
+    expect(await text(join(mine, "other.md"))).toBe("Other\n");
+  });
+
   it("fast-forwards and names the open documents that changed", async () => {
     await pushFrom(theirs, { "notes.md": NOTES.replace("First", "1st") });
     const result = await getLatest(notes(), open(), false);
@@ -155,6 +220,32 @@ describe("getLatest", () => {
 });
 
 describe("upload", () => {
+  it("uploads many linked files in one commit and preserves unrelated staged changes", async () => {
+    const paths = [...manyPaths(), "attachments/[literal].png"];
+    await mkdir(join(mine, "attachments"));
+    for (const path of paths) await writeFile(join(mine, path), "png");
+    await writeFile(join(mine, "attachments", "l.png"), "Not linked\n");
+    await writeFile(join(mine, "other.md"), "Staged change\n");
+    run(mine, "add", "--", "other.md");
+    await writeFile(notes(), `${NOTES}\n${paths.map((path) => `![](${path})`).join("\n")}\n`);
+    const head = run(mine, "rev-parse", "HEAD");
+    run(mine, "config", "remote.origin.pushurl", join(root, "missing.git"));
+    limitGitCommandLength();
+
+    expect(await upload(notes(), open())).toMatchObject({ kind: "failed" });
+    expect(run(mine, "rev-parse", "HEAD")).toBe(head);
+    expect(run(mine, "diff", "--cached", "--name-only")).toBe("other.md\n");
+    expect(await text(join(mine, paths.at(-1)!))).toBe("png");
+
+    run(mine, "config", "--unset", "remote.origin.pushurl");
+    expect(await upload(notes(), open())).toMatchObject({ kind: "done", uploaded: true });
+    expect(run(remote, "rev-list", "--count", "main").trim()).toBe("2");
+    expect(run(mine, "diff", "--cached", "--name-only")).toBe("other.md\n");
+    run(theirs, "pull", "--quiet", "--ff-only");
+    expect(await text(join(theirs, paths.at(-1)!))).toBe("png");
+    expect(run(theirs, "ls-files", "attachments").trim().split("\n")).toHaveLength(paths.length);
+  }, 30_000);
+
   it("commits and pushes only the document and the new files it links to", async () => {
     await mkdir(join(mine, "attachments"));
     await writeFile(join(mine, "attachments", "a b.png"), "png");
@@ -316,18 +407,6 @@ describe("pushWasOutrun", () => {
     expect(pushWasOutrun("!\tHEAD:refs/heads/main\t[remote rejected] (incorrect old value provided)\n")).toBe(true);
     expect(pushWasOutrun("!\tHEAD:refs/heads/main\t[remote rejected] (protected branch hook declined)\n")).toBe(false);
     expect(pushWasOutrun("fatal: Authentication failed for 'https://github.com/a/b.git/'\n")).toBe(false);
-  });
-});
-
-describe("explainGitError", () => {
-  it("explains common failures in plain words", () => {
-    expect(explainGitError("fatal: could not read Username for 'https://github.com': terminal prompts disabled"))
-      .toBe("Git could not sign in to github.com. Sign in with your Git tool, then try again.");
-    expect(explainGitError("ssh: Could not resolve hostname gitlab.example.org\nfatal: Could not read from remote repository."))
-      .toMatch(/^Downpad cannot reach/);
-    expect(explainGitError("remote: error: GH006: Protected branch update failed for refs/heads/main."))
-      .toMatch(/does not let you upload to this branch/);
-    expect(explainGitError("fatal: something else entirely")).toBe("Git reported: something else entirely");
   });
 });
 

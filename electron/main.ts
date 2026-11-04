@@ -194,6 +194,12 @@ function openFiles(source: Record<string, unknown>): GitOpenFile[] {
 
 async function invoke(command: unknown, value: unknown): Promise<unknown> {
   const args = record(value);
+  // Refuse stale renderer requests after Git is disabled. Operations already
+  // running finish normally so their file changes can still be reloaded.
+  if (typeof command === "string" && command.startsWith("git_") && !(await config.settings()).gitEnabled) {
+    if (command === "git_status") return null;
+    throw new Error("Git is turned off. Enable it in Settings > Git to use this action.");
+  }
   switch (command) {
     case "read_file": {
       const target = path(args);

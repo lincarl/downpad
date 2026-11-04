@@ -188,6 +188,7 @@ describe("SettingsDialogView pages", () => {
     hasSeenWelcome: true,
     hasCheckedDefaultHandler: true,
     autoUpdate: false,
+    gitEnabled: false,
     gitAutoGetLatest: false,
     gitUploadOnSave: true,
   };
@@ -299,27 +300,42 @@ describe("SettingsDialogView Git", () => {
     delete window.downpadDesktop;
   });
 
-  it("saves the two Git switches, which start as Get latest on and Upload when saving off", async () => {
+  it("keeps Git on its own page and preserves automatic choices when disabled", async () => {
     window.downpadDesktop = {
       platform: "linux",
       invoke: vi.fn(async () => null),
       listen: () => () => {},
     } as unknown as NonNullable<typeof window.downpadDesktop>;
     const { user, onSave } = renderDialog();
+    expect(screen.queryByRole("checkbox", { name: "Get latest automatically" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Git" }));
+    await user.keyboard("{Enter}");
+    const enabled = screen.getByRole("checkbox", { name: "Enable Git" }) as HTMLInputElement;
+    expect(document.activeElement).toBe(enabled);
     const getLatest = screen.getByRole("checkbox", { name: "Get latest automatically" }) as HTMLInputElement;
     const uploadOnSave = screen.getByRole("checkbox", { name: "Upload when saving" }) as HTMLInputElement;
-    expect([getLatest.checked, uploadOnSave.checked]).toEqual([true, false]);
+    expect([enabled.checked, getLatest.checked, uploadOnSave.checked]).toEqual([true, true, false]);
     await user.click(getLatest);
     await user.click(uploadOnSave);
+    await user.click(enabled);
+    expect(getLatest.disabled).toBe(true);
+    expect(uploadOnSave.disabled).toBe(true);
+    await user.click(enabled);
+    expect(getLatest.disabled).toBe(false);
+    expect(uploadOnSave.disabled).toBe(false);
+    expect([getLatest.checked, uploadOnSave.checked]).toEqual([false, true]);
+    await user.click(enabled);
+    await user.click(screen.getByRole("tab", { name: "General" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitAutoGetLatest: false, gitUploadOnSave: true });
+    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 
   it("keeps the saved Git switches in a browser, which shows none", async () => {
-    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, gitAutoGetLatest: false, gitUploadOnSave: true });
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
+    expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
     expect(screen.queryByRole("checkbox", { name: "Upload when saving" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitAutoGetLatest: false, gitUploadOnSave: true });
+    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 });
 
