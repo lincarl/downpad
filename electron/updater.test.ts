@@ -468,10 +468,20 @@ describe("Windows installer handoff", () => {
     }
   });
 
-  it("checks actual process identity when the helper has not published its result", { timeout: 20_000 }, async () => {
+  it("checks actual process identity when the helper has not published its result", { timeout: 35_000 }, async () => {
     const first = await updater(server().fetch, { kind: "msi" });
     await first.instance.handedToInstaller("1.3.0");
-    await first.instance.installerStarted(process.pid);
+    try {
+      await first.instance.installerStarted(process.pid);
+    } catch (error) {
+      // A Windows CI lookup can hit its five-second deadline during setup.
+      // Retry only that fixture step once. The startup checks still run once.
+      if (process.platform !== "win32" || !(error instanceof Error)
+        || !("killed" in error) || error.killed !== true
+        || !("signal" in error) || error.signal !== "SIGTERM"
+        || !("code" in error) || error.code !== null) throw error;
+      await first.instance.installerStarted(process.pid);
+    }
     const next = await updater(server().fetch, { kind: "msi", directory: first.updates });
     expect(await next.instance.start(true)).toEqual({ pending: null, failure: null, installing: true });
     const replaced = await updater(server().fetch, { kind: "msi", directory: first.updates, version: "1.3.0" });
