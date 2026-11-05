@@ -164,8 +164,16 @@ function Restore-TestAccess {
     $restoredAcl = New-Object Security.AccessControl.RegistrySecurity
     $restoredAcl.SetSecurityDescriptorBinaryForm($originalAcl, $accessSection)
     $control.SetAccessControl($restoredAcl)
-    $readback = $control.GetAccessControl($accessSection).GetSecurityDescriptorSddlForm($accessSection)
-    Assert-Policy ($readback -ceq $restoredAcl.GetSecurityDescriptorSddlForm($accessSection)) 'The original test-key access rules were not restored.'
+    # Windows can update inheritance flags when persisting a DACL. A fresh
+    # handle verifies restored write access without comparing SDDL formatting.
+    $probe = $base.OpenSubKey($subKey, $true)
+    try {
+        Assert-Policy ($null -ne $probe) 'Could not reopen the test key after restoring access.'
+        $probe.SetValue('WriteAccessProbe', 'restored', [Microsoft.Win32.RegistryValueKind]::String)
+        Assert-Policy ($probe.GetValue('WriteAccessProbe') -ceq 'restored') 'The restored key did not accept a write.'
+        $probe.DeleteValue('WriteAccessProbe')
+        Assert-Policy ($probe.GetValueNames() -notcontains 'WriteAccessProbe') 'The restored key did not accept a deletion.'
+    } finally { if ($probe) { $probe.Dispose() } }
 }
 try {
     $key.SetValue($name, 2, [Microsoft.Win32.RegistryValueKind]::DWord)
