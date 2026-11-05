@@ -3,13 +3,13 @@ name: Recover a Windows build timeout
 on:
   workflow_run:
     workflows: [Build installers]
-    branches: [main]
     types: [completed]
 
 permissions:
   contents: read
   actions: write
   checks: read
+  pull-requests: read
 
 # Serialize duplicate notifications. The helper rechecks the attempt before
 # requesting a retry, so a completed recovery cannot start another one.
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   recover:
-    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.run_attempt == 1 && (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'timed_out')
+    if: (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'pull_request') && github.event.workflow_run.run_attempt == 1 && (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'timed_out' || github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:

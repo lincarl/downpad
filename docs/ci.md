@@ -74,18 +74,31 @@ and stops its process tree without terminating the shared Windows Installer
 service. Forced termination can leave a test installation behind on the
 disposable runner, so later installer scenarios do not run after a failure.
 
-CI gives each scenario a twelve-minute outer limit and attempts to retain MSI
-logs, progress records, and screenshots after success, failure, or cancellation.
-The diagnostic artifact cannot be guaranteed if the runner itself stops
-responding or the whole job is terminated.
+CI gives each scenario a twelve-minute outer limit and uploads a diagnostic
+checkpoint after each scenario. Each checkpoint contains the logs, progress
+records, screenshots, and test profiles produced so far. Artifact names include
+the commit, run attempt, and checkpoint, so a retry keeps the previous attempt's
+evidence. The disposable MSI used to force rollback is excluded from these
+uploads. A final checkpoint also captures failures outside a scenario.
+
+If the runner stops responding or the whole job is terminated, the active
+scenario's diagnostics may be lost. Checkpoints already uploaded remain
+available even when a later scenario stalls.
 
 If Windows reaches the job deadline despite those safeguards, a recovery workflow can
-retry the build once on a fresh runner. This applies only to the first attempt
-of a `main` push, when GitHub records that the Windows job exceeded its maximum
-execution time and all other jobs succeeded or were skipped. Ordinary test
-failures, manual cancellations without that timeout annotation, pull requests,
-tag builds, and second attempts do not qualify. The helper rechecks the current
-attempt before retrying, including whether a maintainer already restarted it.
+retry Windows and its dependent jobs once on a fresh runner. This applies to
+the first attempt of a `main` push, a release-tag push, or a pull request from
+this repository whose head is still current. Tags must still point to the
+tested commit on `main`. Forks, closed or outdated pull requests, arbitrary
+branch pushes, and manual workflow dispatches do not qualify.
+
+GitHub must confirm that Windows exceeded its job deadline, with no failed
+Windows test step and no unrelated job failure. A pull request's `reviewed-ci`
+failure caused by the cancelled Windows job does not prevent recovery. Actual
+test failures, manual cancellations without the timeout annotation, and second
+attempts remain failures. The helper rechecks the source and current attempt
+before retrying, including whether a maintainer already restarted it.
+
 Successful jobs keep their results and the original candidate tag. Release
 publication still requires all build and installer checks to pass. A second
 timeout needs investigation and a manual retry. This recovers from a transient

@@ -1,0 +1,19 @@
+name: Preserve MSI diagnostics
+description: Save completed MSI test evidence before another scenario starts.
+inputs:
+  name:
+    description: Unique artifact name for this run attempt and checkpoint.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.name }}
+        retention-days: 14
+        if-no-files-found: ignore
+        # The disposable failure MSI can be recreated from the fixture. Keep
+        # logs, screenshots and profiles without uploading another installer.
+        path: |
+          dev-temp/msi-tests/diagnostics/
+          !dev-temp/msi-tests/diagnostics/**/*.msi
