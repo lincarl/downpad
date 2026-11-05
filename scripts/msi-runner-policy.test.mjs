@@ -156,11 +156,21 @@ ${registryCleanup}`);
 test("an Enable write failure retains the original snapshot for Restore", native, async () => {
   const { stdout } = await runPowerShell(`${registryFixture}
 $control = $base.OpenSubKey($subKey, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Security.AccessControl.RegistryRights]::FullControl)
-$originalAcl = $control.GetAccessControl()
+$accessSection = [Security.AccessControl.AccessControlSections]::Access
+$originalAcl = $control.GetAccessControl($accessSection).GetSecurityDescriptorBinaryForm()
+function Restore-TestAccess {
+    # SetAccessControl persists only modified sections. Reusing the unmodified
+    # GetAccessControl result would leave the injected deny rule in place.
+    $restoredAcl = New-Object Security.AccessControl.RegistrySecurity
+    $restoredAcl.SetSecurityDescriptorBinaryForm($originalAcl, $accessSection)
+    $control.SetAccessControl($restoredAcl)
+    $readback = $control.GetAccessControl($accessSection).GetSecurityDescriptorSddlForm($accessSection)
+    Assert-Policy ($readback -ceq $restoredAcl.GetSecurityDescriptorSddlForm($accessSection)) 'The original test-key access rules were not restored.'
+}
 try {
     $key.SetValue($name, 2, [Microsoft.Win32.RegistryValueKind]::DWord)
     $blockedAcl = New-Object Security.AccessControl.RegistrySecurity
-    $blockedAcl.SetSecurityDescriptorBinaryForm($originalAcl.GetSecurityDescriptorBinaryForm())
+    $blockedAcl.SetSecurityDescriptorBinaryForm($originalAcl, $accessSection)
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
     $deny = New-Object Security.AccessControl.RegistryAccessRule($user, [Security.AccessControl.RegistryRights]::SetValue, [Security.AccessControl.AccessControlType]::Deny)
     $blockedAcl.AddAccessRule($deny)
@@ -170,11 +180,11 @@ try {
         Assert-PolicyFailure { Invoke-Policy Enable $state }
         Assert-Policy ([IO.File]::Exists($state)) 'Enable did not save the snapshot before its failed write.'
         Assert-Policy ($key.GetValue($name) -eq 2) 'The rejected write changed the original value.'
-    } finally { $control.SetAccessControl($originalAcl) }
+    } finally { Restore-TestAccess }
     Invoke-Policy Restore $state
     Assert-Policy ($key.GetValue($name) -eq 2) 'Restore lost the value saved before the failed Enable.'
 } finally {
-    $control.SetAccessControl($originalAcl)
+    Restore-TestAccess
     $control.Dispose()
     $key.Dispose()
     $base.DeleteSubKeyTree($subKey, $false)
