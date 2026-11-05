@@ -282,7 +282,15 @@ jobs:
         if: steps.existing.outputs.reused != 'true'
         run: pnpm exec electron-builder --publish never
 
+      - name: Protect the hosted runner during MSI tests
+        id: msi_runner_policy
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: powershell
+        run: .\dev-temp\workflow-controls\scripts\msi-runner-policy.ps1 -Operation Enable -StatePath .\dev-temp\msi-tests\diagnostics\runner-policy.json
+
       - name: Test the MSI wizard and installed app
+        id: msi_fresh
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
         timeout-minutes: 12
         shell: powershell
@@ -292,6 +300,13 @@ jobs:
           if ($msi.Count -ne 1) { throw "Expected one MSI, found $($msi.Count)" }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version -replace '-rc\d+$', ''
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -Msi $msi[0].FullName -ExpectedExecutable release/win-unpacked/Downpad.exe -ExpectedVersion "$version.0" -Scenario fresh
+
+      - name: Preserve fresh MSI diagnostics
+        if: always() && runner.os == 'Windows' && (steps.msi_fresh.outcome == 'success' || steps.msi_fresh.outcome == 'failure')
+        timeout-minutes: 3
+        uses: ./dev-temp/workflow-controls/.github/actions/upload-msi-diagnostics
+        with:
+          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}-fresh
 
       # PR artifacts use 0.0.0, which cannot expose RC file-version truncation.
       # Package the fixtures normally so they pass through PE resource editing.
@@ -319,25 +334,49 @@ jobs:
           }
 
       - name: Test MSI upgrade with two running app copies
+        id: msi_upgrade
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
         timeout-minutes: 12
         shell: powershell
         run: |
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario upgrade -CloseRunningApps
 
+      - name: Preserve upgrade MSI diagnostics
+        if: always() && runner.os == 'Windows' && (steps.msi_upgrade.outcome == 'success' || steps.msi_upgrade.outcome == 'failure')
+        timeout-minutes: 3
+        uses: ./dev-temp/workflow-controls/.github/actions/upload-msi-diagnostics
+        with:
+          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}-upgrade
+
       - name: Test MSI upgrade refusal when an app stays open
+        id: msi_refusal
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
         timeout-minutes: 12
         shell: powershell
         run: |
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario close-refusal -TestCloseRefusal
 
+      - name: Preserve close-refusal MSI diagnostics
+        if: always() && runner.os == 'Windows' && (steps.msi_refusal.outcome == 'success' || steps.msi_refusal.outcome == 'failure')
+        timeout-minutes: 3
+        uses: ./dev-temp/workflow-controls/.github/actions/upload-msi-diagnostics
+        with:
+          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}-close-refusal
+
       - name: Test MSI recovery from a missing executable
+        id: msi_recovery
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
         timeout-minutes: 12
         shell: powershell
         run: |
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -Msi dev-temp/msi-tests/recovery/Downpad-0.0.2-rc2-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/recovery/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario recovery -RecoverMissingExecutable
+
+      - name: Preserve recovery MSI diagnostics
+        if: always() && runner.os == 'Windows' && (steps.msi_recovery.outcome == 'success' || steps.msi_recovery.outcome == 'failure')
+        timeout-minutes: 3
+        uses: ./dev-temp/workflow-controls/.github/actions/upload-msi-diagnostics
+        with:
+          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}-recovery
 
       - name: Test MSI rollback after a failed upgrade
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
@@ -346,18 +385,21 @@ jobs:
         run: |
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario rollback -TestRollback
 
+      - name: Restore the Windows Installer policy
+        if: always() && runner.os == 'Windows' && (steps.msi_runner_policy.outcome == 'success' || steps.msi_runner_policy.outcome == 'failure' || steps.msi_runner_policy.outcome == 'cancelled')
+        timeout-minutes: 2
+        shell: powershell
+        run: .\dev-temp\workflow-controls\scripts\msi-runner-policy.ps1 -Operation Restore -StatePath .\dev-temp\msi-tests\diagnostics\runner-policy.json
+
       - name: Upload MSI test diagnostics
         if: always() && runner.os == 'Windows' && steps.existing.outputs.reused != 'true'
         timeout-minutes: 3
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./dev-temp/workflow-controls/.github/actions/upload-msi-diagnostics
         with:
-          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}
-          overwrite: true
-          retention-days: 14
-          if-no-files-found: ignore
-          path: dev-temp/msi-tests/diagnostics/
+          name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}-final
 
       - name: Upload installers
+        # A policy restoration failure must also block publication.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-${{ steps.version.outputs.version }}-${{ needs.prepare.outputs.head_sha }}
