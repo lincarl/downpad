@@ -371,6 +371,10 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process, [hashtable]$Existin
         })
         $choice = Select-WizardAction $state $windows $isChecked (Get-Date)
         if ($choice) {
+            $dialog = @($windows | Where-Object { $_.Handle -eq $choice.Dialog })[0]
+            if ($choice.Closes -and @($dialog.Children | Where-Object { $_.Text -eq 'Installation Scope' }).Count -gt 0) {
+                Save-Diagnostics 'installation-scope'
+            }
             if ($state.ClickedFinish) {
                 foreach ($oldApp in $ExistingApps.Values) {
                     if (-not $oldApp.HasExited) { throw "The installer left the previous app or its helper PID $($oldApp.Id) running at Finish." }
@@ -382,7 +386,7 @@ function Invoke-InstallWizard([Diagnostics.Process]$Process, [hashtable]$Existin
         }
         Write-TestProgress 'Read wizard log' -Quiet
         if (Test-Path -LiteralPath $log) {
-            $errors = @(Select-String -LiteralPath $log -Pattern 'Error 2753', 'not marked for installation', 'Return value 3\.' | Select-Object -Last 8)
+            $errors = @(Select-String -LiteralPath $log -Pattern 'Error 2753', 'not marked for installation', 'Return value 3\.', 'Error 2888:.*TextStyle' | Select-Object -Last 8)
             if ($errors.Count -gt 0) { throw "MSI log reports failure.`n$($errors -join "`n")" }
         }
         $hasWindow = $false
