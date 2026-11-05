@@ -282,6 +282,13 @@ jobs:
         if: steps.existing.outputs.reused != 'true'
         run: pnpm exec electron-builder --publish never
 
+      - name: Protect the hosted runner during MSI tests
+        id: msi_runner_policy
+        if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: powershell
+        run: .\dev-temp\workflow-controls\scripts\msi-runner-policy.ps1 -Operation Enable -StatePath .\dev-temp\msi-tests\diagnostics\runner-policy.json
+
       - name: Test the MSI wizard and installed app
         id: msi_fresh
         if: steps.existing.outputs.reused != 'true' && runner.os == 'Windows'
@@ -378,6 +385,12 @@ jobs:
         run: |
           node dev-temp/workflow-controls/scripts/run-msi-test.mjs -PreviousMsi dev-temp/msi-tests/stable/Downpad-0.0.1-win-x64.msi -Msi dev-temp/msi-tests/candidate/Downpad-0.0.2-rc1-win-x64.msi -ExpectedExecutable dev-temp/msi-tests/candidate/win-unpacked/Downpad.exe -ExpectedVersion 0.0.2.0 -Scenario rollback -TestRollback
 
+      - name: Restore the Windows Installer policy
+        if: always() && runner.os == 'Windows' && (steps.msi_runner_policy.outcome == 'success' || steps.msi_runner_policy.outcome == 'failure' || steps.msi_runner_policy.outcome == 'cancelled')
+        timeout-minutes: 2
+        shell: powershell
+        run: .\dev-temp\workflow-controls\scripts\msi-runner-policy.ps1 -Operation Restore -StatePath .\dev-temp\msi-tests\diagnostics\runner-policy.json
+
       - name: Upload MSI test diagnostics
         if: always() && runner.os == 'Windows' && steps.existing.outputs.reused != 'true'
         timeout-minutes: 3
@@ -386,6 +399,7 @@ jobs:
           name: msi-test-diagnostics-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}-final
 
       - name: Upload installers
+        # A policy restoration failure must also block publication.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-${{ steps.version.outputs.version }}-${{ needs.prepare.outputs.head_sha }}

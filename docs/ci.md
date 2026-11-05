@@ -74,6 +74,24 @@ and stops its process tree without terminating the shared Windows Installer
 service. Forced termination can leave a test installation behind on the
 disposable runner, so later installer scenarios do not run after a failure.
 
+On disposable GitHub-hosted Windows runners, CI temporarily sets the Windows
+Installer [`DisableAutomaticApplicationShutdown` policy](https://learn.microsoft.com/en-us/windows/win32/msi/disableautomaticapplicationshutdown)
+to `1`. The runner's provisioning process can hold installed files open.
+Restart Manager can then try to close that process during a silent MSI operation,
+which may disconnect the entire runner. An observed Files in Use dialog named
+`provjobd.exe`; [another project's investigation](https://github.com/circle-platforms/circle/issues/45#issuecomment-6182217165)
+also connects Restart Manager to this runner-loss pattern.
+
+Machine policy disables Restart Manager for every test operation, including
+removal through an older cached MSI during an upgrade. A command-line override
+does not cover that nested removal. CI records the original policy, verifies the
+temporary value, and restores it in an unconditional cleanup step. Restoration
+failure fails the build. The change stays on the disposable runner and does not
+modify any MSI package. These tests therefore do not exercise production
+Restart Manager behavior. The Downpad close action, refusal guard, exact payload
+checks, and removal checks remain active. Persistent locks, reboot-required
+exit codes, and unexpected dialogs still fail.
+
 CI gives each scenario a twelve-minute outer limit and uploads a diagnostic
 checkpoint after each scenario. Each checkpoint contains the logs, progress
 records, screenshots, and test profiles produced so far. Artifact names include
