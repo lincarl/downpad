@@ -26,7 +26,9 @@ checks the installed files and registration, waits for the application window,
 and uninstalls the test copy. After Next or Install, the driver clicks nothing
 until that dialog closes, because its controls can disappear between a read and
 a click, and the next dialog can appear before the old one closes. It still
-checks every window for installer errors. `pnpm test` replays dialog sequences
+checks every window for installer errors, rejects font-style lookup failures
+in the MSI log, and captures the installation-scope page for visual review.
+`pnpm test` replays dialog sequences
 through the driver's decisions on both platforms. A second scenario builds synthetic `0.0.1` and
 `0.0.2-rc1` packages through the normal release-version and packaging steps, then
 upgrades the stable installation to the candidate while two copies run with

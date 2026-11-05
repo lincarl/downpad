@@ -74,8 +74,8 @@ function closeRunningApps(project) {
 }
 
 /** Adds the banner and welcome bitmaps to the WiX project at `projectFile`,
- *  keeps md-easy's ProgIds, records the installation folder, closes running
- *  copies safely and enables upgrade rollback. */
+ *  supplies the scope-choice font, keeps md-easy's ProgIds, records the
+ *  installation folder, closes running copies safely and enables upgrade rollback. */
 export default async function brandMsi(projectFile) {
   const original = await readFile(projectFile, "utf8");
   if (!original.includes("</Product>")) throw new Error(`Cannot brand ${projectFile}: no WiX Product element.`);
@@ -84,5 +84,8 @@ export default async function brandMsi(projectFile) {
   const source = (name) => xml(path.relative(path.dirname(projectFile), path.join(bitmaps, name)).split(path.sep).join("\\"));
   const variables = `<WixVariable Id="WixUIBannerBmp" Value="${source("banner.bmp")}"/>\n`
     + `    <WixVariable Id="WixUIDialogBmp" Value="${source("dialog.bmp")}"/>\n`;
-  await writeFile(projectFile, project.replace("</Product>", () => `  ${variables}  </Product>`));
+  // electron-builder adds InstallScopeDlg to WixUI_InstallDir without the
+  // emphasized style its radio labels need. Match WiX's English scope font.
+  const scopeFont = '<UI><TextStyle Id="WixUI_Font_Emphasized" FaceName="Tahoma" Size="8" Bold="yes"/></UI>\n';
+  await writeFile(projectFile, project.replace("</Product>", () => `  ${scopeFont}    ${variables}  </Product>`));
 }
