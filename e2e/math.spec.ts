@@ -152,16 +152,23 @@ test("keyboard editing in a table keeps literal pipes inside the original cell",
   await page.keyboard.press("Escape");
 });
 
-test("the symbols keyboard inserts a symbol into the visual equation", async ({ page }) => {
+test("the symbols keyboard opens by default and inserts a symbol into the visual equation", async ({ page }) => {
   await setSource(page, "Let $x$ be given.\n");
   await page.locator(inlineMath).click();
   const dialog = page.getByRole("dialog", { name: "Edit equation", exact: true });
-  await dialog.getByRole("button", { name: "Show symbols", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Hide symbols", exact: true })).toHaveAttribute("aria-expanded", "true");
   const exists = dialog.locator(String.raw`.MLK__layer.is-visible [data-keycap-value="\\exists"]`);
+  await expect(exists).toBeVisible();
+  await dialog.getByRole("button", { name: "Hide symbols", exact: true }).click();
+  await expect(exists).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Show symbols", exact: true }).click();
   await expect(exists).toBeVisible();
   await exists.click();
   await expect(dialog.getByRole("textbox", { name: "LaTeX source", exact: true })).toHaveValue(/\\exists/);
   await dialog.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => markdown(page)).toContain("\\exists");
-  await expect(page.locator(".MLK__keyboard.is-visible")).toHaveCount(0);
+  await expect(page.locator(".ML__keyboard.is-visible")).toHaveCount(0);
+  await page.locator(inlineMath).click();
+  await expect(exists).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
 });

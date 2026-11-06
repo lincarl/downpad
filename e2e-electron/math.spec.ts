@@ -76,6 +76,8 @@ test("the built equation editor works offline and saves inline and display LaTeX
   const dialog = page.getByRole("dialog", { name: "Edit equation", exact: true });
   const source = dialog.getByRole("textbox", { name: "LaTeX source", exact: true });
   await display.getByRole("button", { name: "Edit equation", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Hide symbols", exact: true })).toHaveAttribute("aria-expanded", "true");
+  await expect(dialog.locator(".ML__keyboard.is-visible")).toBeVisible();
   await expect(source).toHaveValue(unusual);
   await dialog.getByRole("button", { name: "Apply", exact: true }).click();
   await page.keyboard.press("ControlOrMeta+s");
