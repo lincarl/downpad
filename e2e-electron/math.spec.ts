@@ -120,3 +120,54 @@ test("the built equation editor works offline and saves inline and display LaTeX
   await reopenedDialog.getByRole("button", { name: "Cancel", exact: true }).click();
   expect(await readFile(file, "utf8")).toBe(saved);
 });
+
+test("native Undo and Redo edit the visual equation draft without changing the document", async () => {
+  const file = path.join(directory, "equation-history.md");
+  const original = "Inline $a$ stays inline.\n";
+  await writeFile(file, original);
+  await launch(file);
+  await app!.evaluate(({ Menu }) => {
+    Menu.prototype.popup = function () {
+      Reflect.set(globalThis, "shownMenu", this);
+    };
+  });
+
+  const formula = page.locator('.editor-pane-wysiwyg [data-type="math_inline"]');
+  await formula.click();
+  const dialog = page.getByRole("dialog", { name: "Edit equation", exact: true });
+  const field = dialog.locator("math-field");
+  const source = dialog.getByRole("textbox", { name: "LaTeX source", exact: true });
+  await field.click();
+  await expect(field).toBeFocused();
+  await page.keyboard.press("End");
+  await page.keyboard.type("b");
+  await expect(source).toHaveValue("ab");
+
+  /** Choose an actual native menu item while keeping the equation focused. */
+  const choose = async (label: string): Promise<void> => {
+    await app!.evaluate(() => Reflect.set(globalThis, "shownMenu", null));
+    await field.click({ button: "right", modifiers: ["Shift"] });
+    await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "shownMenu") !== null)).toBe(true);
+    const enabled = await app!.evaluate(({ BrowserWindow }, wanted) => {
+      const menu: Electron.Menu = Reflect.get(globalThis, "shownMenu");
+      const item = menu.items.find((entry) => entry.label === wanted);
+      if (!item?.enabled) return false;
+      const window = BrowserWindow.getAllWindows()[0]!;
+      item.click(undefined, window, window.webContents);
+      return true;
+    }, label);
+    expect(enabled).toBe(true);
+  };
+
+  await choose("Undo");
+  await expect(source).toHaveValue("a");
+  await choose("Redo");
+  await expect(source).toHaveValue("ab");
+  await expect(formula).toHaveAttribute("data-value", "a");
+  expect(await readFile(file, "utf8")).toBe(original);
+
+  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(formula).toHaveAttribute("data-value", "ab");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(formula).toHaveAttribute("data-value", "a");
+});

@@ -15,8 +15,10 @@
 // images / HTML / markdown exactly as it does for a real Ctrl+V.
 //
 // Undo and Redo from a native menu (`undoOrRedo`) reach the editors the same
-// way, as the beforeinput event each editor's history handles.
+// way, as the beforeinput event each editor's history handles. MathLive uses
+// its command API for the equation draft's history.
 
+import type { MathfieldElement } from "mathlive";
 import type { HistoryCommand } from "../ipc/bridge";
 
 /** The kinds of editable surface the menu can act on. */
@@ -146,13 +148,19 @@ function dispatchPaste(el: HTMLElement, transfer: DataTransfer): boolean {
  * Run Undo or Redo, chosen in a native menu, in what has the focus. Chromium's
  * own undo knows nothing of the editors' histories, so the document, its
  * frontmatter table and the Markdown source get their editor's undo or redo,
- * through the beforeinput event their histories handle. A plain text field,
- * such as the find card's, keeps Chromium's own.
+ * through the beforeinput event their histories handle. MathLive uses its
+ * command API. A plain text field, such as the find card's, keeps Chromium's own.
  */
 export function undoOrRedo(command: HistoryCommand): void {
   // The command comes from the main process.
   if (command !== "undo" && command !== "redo") return;
   const focused = document.activeElement;
+  // Focus inside MathLive's shadow root appears here as the math-field host.
+  const mathfield = focused?.closest<MathfieldElement>("math-field");
+  if (mathfield) {
+    mathfield.executeCommand(command);
+    return;
+  }
   // The frontmatter table passes the event on to the document's history. The
   // document gets it at its root, as a code block's editor stops events
   // inside it from reaching ProseMirror.
