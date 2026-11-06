@@ -3770,8 +3770,8 @@ test("the document view names every image and control it shows, hides none that 
    *  "image svg < span.milkdown-icon < button.copy-button". Also record any
    *  element a Tab can reach inside an aria-hidden container, which a screen
    *  reader would focus without announcing. */
-  const check = async (state: string) => {
-    const { result } = await session.send("Runtime.evaluate", { expression: "document.querySelector('.crepe-root')" });
+  const check = async (state: string, scope = ".crepe-root") => {
+    const { result } = await session.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(scope)})` });
     const { nodes } = await session.send("Accessibility.queryAXTree", { objectId: result.objectId });
     for (const node of nodes) {
       const role = String(node.role?.value ?? "");
@@ -3784,7 +3784,7 @@ test("the document view names every image and control it shows, hides none that 
       });
       failures.add(`${state}: unnamed ${role} ${String(described.result.value)}`);
     }
-    const hidden = '.crepe-root [aria-hidden="true"]';
+    const hidden = `${scope} [aria-hidden="true"]`;
     const focusable = await session.send("Runtime.evaluate", {
       returnByValue: true,
       expression: `[...document.querySelectorAll('${hidden}, ${hidden} *')]
@@ -3864,8 +3864,15 @@ test("the document view names every image and control it shows, hides none that 
   await expect(page.locator(".milkdown-image-block .link-input-area")).toBeVisible();
   await check("empty image");
   await editor.locator(".katex").click();
-  await expect(page.locator(".milkdown-latex-inline-edit")).toHaveAttribute("data-show", "true");
-  await check("math field");
+  await expect(page.getByRole("dialog", { name: "Edit equation" })).toBeVisible();
+  // The modal hides the document from assistive technology and traps focus.
+  // Audit its controls while it is open, then the document again after Cancel.
+  await check("math field", ".math-editor-dialog");
+  await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => !!document.activeElement?.closest(".math-editor-dialog"))).toBe(true);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Edit equation" })).toHaveCount(0);
+  await check("after math field");
   expect([...failures]).toEqual([]);
 });
 

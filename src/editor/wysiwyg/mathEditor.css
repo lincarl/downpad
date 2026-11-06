@@ -1,0 +1,166 @@
+.math-editor-dialog {
+  width: min(680px, 92vw);
+}
+
+.math-editor-description {
+  margin: 0;
+  padding: 0 22px 14px;
+  color: var(--ink-soft);
+}
+
+.math-editor-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.math-editor-body {
+  min-height: 0;
+}
+
+.math-editor-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.math-editor-visual math-field {
+  --caret-color: var(--accent);
+  --selection-background-color: var(--accent-wash);
+  --selection-color: var(--ink);
+  --contains-highlight-background-color: var(--accent-wash);
+  --smart-fence-color: var(--accent);
+  --placeholder-color: var(--ink-soft);
+  --text-font-family: var(--font-ui);
+
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  padding: 14px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--line-popover-control);
+  border-radius: var(--control-radius);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 23px;
+}
+
+.math-editor-visual math-field:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.math-editor-visual math-field::part(virtual-keyboard-toggle),
+.math-editor-visual math-field::part(menu-toggle) {
+  display: none;
+}
+
+.math-editor-source-label {
+  display: block;
+  margin: 16px 0 6px;
+}
+
+.math-editor-source {
+  display: block;
+  width: 100%;
+  min-height: 76px;
+  padding: 8px 10px;
+  resize: vertical;
+  border: 1px solid var(--line-popover-control);
+  border-radius: var(--control-radius);
+  background: var(--fill);
+  color: var(--ink);
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.math-editor-source:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.math-editor-help {
+  margin: 7px 0 0;
+  color: var(--ink-soft);
+}
+
+.math-editor-warning {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line-notice);
+  border-radius: var(--control-radius);
+  background: var(--notice);
+}
+
+.math-editor-error {
+  margin: 10px 0 0;
+  color: var(--ink-danger);
+}
+
+/* The keyboard and its variants stay inside Radix's focus and pointer boundary. */
+.math-editor-keyboard {
+  /* MathLive lowers pressed keys by 5, so keep them above the keyboard row. */
+  --keyboard-zindex: 10;
+  --keyboard-background: var(--bar);
+  --keyboard-border: var(--line);
+  --keyboard-accent-color: var(--accent);
+  --keyboard-toolbar-text: var(--ink);
+  --keyboard-toolbar-text-active: var(--accent);
+  --keyboard-toolbar-background-hover: var(--hover);
+  --keyboard-toolbar-background-selected: var(--pressed);
+  --keyboard-horizontal-rule: 1px solid var(--line);
+  --keycap-background: var(--fill);
+  --keycap-background-hover: var(--hover);
+  --keycap-background-active: var(--accent);
+  --keycap-background-pressed: var(--accent);
+  --keycap-border: var(--line);
+  --keycap-border-bottom: var(--line-strong);
+  --keycap-text: var(--ink);
+  --keycap-text-active: var(--accent-fg);
+  --keycap-text-pressed: var(--accent-fg);
+  --keycap-primary-background: var(--accent);
+  --keycap-primary-background-hover: var(--accent-hover);
+  --keycap-primary-text: var(--accent-fg);
+  --keycap-secondary-background: var(--push-bg);
+  --keycap-secondary-background-hover: var(--hover);
+  --keycap-secondary-text: var(--ink);
+  --keycap-secondary-border: var(--line);
+  --keycap-secondary-border-bottom: var(--line-strong);
+  --keycap-height: 38px;
+  --keycap-gap: 5px;
+  --keycap-font-size: 19px;
+  --variant-panel-background: var(--popover);
+  --variant-keycap-text: var(--ink);
+  --variant-keycap-length: 48px;
+  --variant-keycap-font-size: 23px;
+
+  margin-top: 10px;
+  border-radius: var(--control-radius);
+}
+
+.math-editor-keyboard:empty {
+  display: none;
+}
+
+@media (width <= 480px) {
+  .math-editor-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .math-editor-description,
+  .math-editor-body {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .math-editor-keyboard {
+    --keycap-height: 44px;
+    --keycap-gap: 2px;
+    --keycap-font-size: 16px;
+  }
+}

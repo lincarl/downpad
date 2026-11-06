@@ -20,7 +20,7 @@ import { blockConfig } from "@milkdown/kit/plugin/block";
 import { indentPlugin } from "@milkdown/kit/plugin/indent";
 import { ParserState } from "@milkdown/kit/transformer";
 import { $prose } from "@milkdown/kit/utils";
-import { Plugin, Selection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { Plugin, Selection, type EditorState, type PluginSpec, type Transaction } from "@milkdown/kit/prose/state";
 import { closeHistory } from "@milkdown/kit/prose/history";
 import { dropIndicatorPlugin } from "@milkdown/kit/plugin/cursor";
 import type { EditorView } from "@milkdown/kit/prose/view";
@@ -49,6 +49,7 @@ import { endPastAtoms } from "./lineEnd";
 import { tightListItemJoin, tightListItemSchema } from "./tightListItems";
 import { imageContextMenuPlugin } from "./imageContextMenu";
 import { codeBlockMetaSchema } from "./codeBlockMeta";
+import { mathEditor } from "./mathEditor";
 import { tableCellClicks } from "./tableCellClicks";
 import { codeBlockDrops, dropAtEdge, dropLine } from "./dropEdge";
 import { preloadImages } from "./preloadImages";
@@ -109,6 +110,7 @@ export interface WysiwygCallbacks {
 
 export class WysiwygEditor {
   private crepe: Crepe | null = null;
+  private readonly equations = mathEditor();
   private readonly liveSpelling = documentSpelling(() => ({ root: this.root, panel: this.fmPanel }));
   /** The in-flight Crepe create, if mount has not settled yet. Destruction waits
    *  for it before calling Crepe.destroy: create/destroy concurrently is not a
@@ -327,6 +329,12 @@ export class WysiwygEditor {
     // Keep fence info after the language, such as title="server.js". Must follow
     // the LaTeX feature so this node spec replaces Crepe's.
     this.crepe.editor.use(codeBlockMetaSchema);
+    // Replace Crepe's source-only inline tooltip with the shared MathLive draft.
+    // Crepe exposes this tooltip spec through its context, but not its module.
+    this.crepe.editor.config((ctx) => {
+      ctx.set<PluginSpec<unknown>, "INLINE_LATEX_TOOLTIP_SPEC">("INLINE_LATEX_TOOLTIP_SPEC", {});
+    });
+    this.crepe.editor.use(this.equations.plugin);
     // A click in a table cell places the caret instead of selecting the cell.
     // Must follow the Table feature so this view replaces Crepe's.
     this.crepe.editor.use(tableCellClicks);
@@ -836,6 +844,11 @@ export class WysiwygEditor {
 
   clearSearch(): void {
     this.withView((v) => this.find.clear(v), undefined);
+  }
+
+  /** Close drafts before a retained document pane is hidden. */
+  onHide(): void {
+    this.equations.close();
   }
 
   /** Focus the document. While the find card's current match is in an editable

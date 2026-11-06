@@ -1121,7 +1121,9 @@ export class EditorHost implements FindController {
     if (this.disposed || this.store.get().activeTabId !== id || (showRaw && !rawPane)) return record();
 
     for (const pane of this.panes.values()) {
-      pane.el.hidden = pane !== wysiwygPane && pane !== rawPane;
+      const hidden = pane !== wysiwygPane && pane !== rawPane;
+      if (hidden && !pane.el.hidden) pane.wysiwyg?.onHide();
+      pane.el.hidden = hidden;
     }
 
     this.activeTabId = id;

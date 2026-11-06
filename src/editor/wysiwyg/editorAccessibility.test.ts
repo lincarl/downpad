@@ -44,7 +44,6 @@ describe("installEditorAccessibility", () => {
         </div>
         <div class="milkdown-block-handle"><div class="operation-item">${icon}</div></div>
         <div class="milkdown-slash-menu"><nav class="tab-group"><ul><li>Text</li></ul></nav></div>
-        <div class="milkdown-latex-inline-edit"><div class="container"><button class="confirm">${icon}</button></div></div>
       </div>
     `);
 
@@ -54,11 +53,10 @@ describe("installEditorAccessibility", () => {
       ".milkdown-image-block .operation",
       ".milkdown-block-handle",
       ".milkdown-slash-menu .tab-group",
-      ".milkdown-latex-inline-edit button",
     ]) {
       expect(attr(root, hidden, "aria-hidden"), hidden).toBe("true");
     }
-    for (const button of ["button.align", "button.add-button", "button.confirm"]) {
+    for (const button of ["button.align", "button.add-button"]) {
       expect(root.querySelector<HTMLButtonElement>(button)?.tabIndex, button).toBe(-1);
     }
     // The add buttons have no name to get wrong. The x-line one adds a row.
@@ -71,20 +69,17 @@ describe("installEditorAccessibility", () => {
     expect(attr(root, ".label svg", "aria-hidden")).toBeNull();
   });
 
-  it("labels only the main editor, the math field and the image link field", async () => {
+  it("labels the main editor and the image link field", async () => {
     const root = install(`
       <div class="milkdown">
         <div class="ProseMirror">
           <div class="milkdown-image-block"><input class="link-input-area"></div>
           <p><span class="milkdown-image-inline"><input class="link-input-area"></span></p>
         </div>
-        <div class="milkdown-latex-inline-edit"><div class="container"><div><div class="ProseMirror"></div></div></div></div>
       </div>
     `);
 
     expect(attr(root, ".milkdown > .ProseMirror", "aria-label")).toBe("Document editor");
-    expect(attr(root, ".milkdown-latex-inline-edit .ProseMirror", "aria-label")).toBe("Math formula");
-    expect(attr(root, ".milkdown-latex-inline-edit .ProseMirror", "role")).toBe("textbox");
     for (const field of root.querySelectorAll(".link-input-area")) expect(field.getAttribute("aria-label")).toBe("Image link");
 
     // Code blocks and icons added later are handled too.

@@ -774,6 +774,26 @@ body {
   text-transform: none;
 }
 
+.editor-host .math-edit-inline,
+.editor-host .math-edit-block .preview {
+  cursor: pointer;
+}
+
+.editor-host .math-edit-inline:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--doc-accent);
+  outline-offset: 3px;
+}
+
+.editor-host .milkdown .milkdown-code-block .math-edit-button {
+  width: auto;
+  padding: 4px 8px;
+  color: var(--editor-surface-fg);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* Crepe shows a code block's tools only while the pointer is over the block,
    and removes every focus outline. Show a tool that has keyboard focus too, as
    it looks on hover, with the app's focus ring in the page's accent, as the
