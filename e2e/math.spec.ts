@@ -40,6 +40,8 @@ test("typing a visual fraction applies to both views as one document undo step",
   const source = dialog.getByRole("textbox", { name: "LaTeX source", exact: true });
   await expect(field).toBeVisible();
   await field.click();
+  // MathLive delays focus after a click, so wait for its actual keyboard input.
+  await expect(field.locator('[part="keyboard-sink"]')).toBeFocused();
   await page.keyboard.press("ControlOrMeta+A");
   // Real keystrokes exercise MathLive's structured editing, not its setValue API.
   await page.keyboard.type("x/y");

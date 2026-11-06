@@ -83,7 +83,10 @@ test("the built equation editor works offline and saves inline and display LaTeX
 
   const formula = page.locator('.editor-pane-wysiwyg [data-type="math_inline"]');
   await formula.click();
-  await dialog.locator("math-field").click();
+  const field = dialog.locator("math-field");
+  await field.click();
+  // MathLive delays focus after a click, so wait for its actual keyboard input.
+  await expect(field.locator('[part="keyboard-sink"]')).toBeFocused();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type("x/y");
   await expect(source).toHaveValue("\\frac{x}{y}");
@@ -138,7 +141,7 @@ test("native Undo and Redo edit the visual equation draft without changing the d
   const field = dialog.locator("math-field");
   const source = dialog.getByRole("textbox", { name: "LaTeX source", exact: true });
   await field.click();
-  await expect(field).toBeFocused();
+  await expect(field.locator('[part="keyboard-sink"]')).toBeFocused();
   await page.keyboard.press("End");
   await page.keyboard.type("b");
   await expect(source).toHaveValue("ab");
