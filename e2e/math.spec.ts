@@ -94,8 +94,16 @@ test("a display equation edits a matrix while a fenced latex example stays code"
   const blocks = page.locator(".editor-pane-wysiwyg .milkdown-code-block");
   await expect(blocks).toHaveCount(2);
   await expect(blocks.nth(1).getByRole("button", { name: "Edit equation", exact: true })).toHaveCount(0);
-  await blocks.first().getByRole("button", { name: "Edit equation", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Edit equation", exact: true });
+  await blocks.first().getByRole("textbox", { name: "Code block editor" }).click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.keyboard.type("+c");
+  await expect.poll(() => markdown(page)).toContain("$$\na+b+c\n$$");
+
+  await blocks.first().getByRole("button", { name: "Edit equation", exact: true }).click();
   const matrix = "\\begin{pmatrix}a & b \\\\ c & d\\end{pmatrix}";
   const source = dialog.getByRole("textbox", { name: "LaTeX source", exact: true });
   await source.fill(matrix);

@@ -1,6 +1,6 @@
 import type { Node as ProseNode } from "@milkdown/kit/prose/model";
 import { closeHistory } from "@milkdown/kit/prose/history";
-import { NodeSelection, Plugin, PluginKey, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
+import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import { $prose } from "@milkdown/kit/utils";
 import type { MathEditorHandle } from "./MathEditorDialog";
@@ -121,7 +121,15 @@ export function mathEditor() {
         if (opening || dialog || !view.editable) return;
         opening = true;
         const session = ++generation;
-        view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, target.pos)).setMeta(equationKey, target));
+        const { state } = view;
+        // A display equation remains a text editor. Selecting the entire block
+        // made typing after Cancel replace it instead of returning to its code.
+        const inside = state.selection instanceof TextSelection &&
+          state.selection.from > target.pos && state.selection.to < target.pos + target.node.nodeSize;
+        const selection = target.node.type.name === "math_inline"
+          ? NodeSelection.create(state.doc, target.pos)
+          : inside ? state.selection : TextSelection.create(state.doc, target.pos + target.node.nodeSize - 1);
+        view.dispatch(state.tr.setSelection(selection).setMeta(equationKey, target));
         try {
           const { openMathEditor } = await import("./MathEditorDialog");
           if (destroyed || session !== generation) return;
