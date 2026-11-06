@@ -110,6 +110,8 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
     setSpellcheck(): void {}
 
+    onHide(): void {}
+
     async checkSpelling(): Promise<number> {
       fakeEditors.spellingChecks.push("document");
       return 2;

@@ -106,6 +106,23 @@ describe("Undo and Redo from a native menu", () => {
     expect(execCommand.mock.calls).toEqual([["undo"], ["redo"]]);
     expect(seen).toEqual([]);
   });
+
+  it("run MathLive's history when its shadow input has focus", () => {
+    const execCommand = nativeUndo();
+    const field = Object.assign(document.createElement("math-field"), {
+      executeCommand: vi.fn(() => false),
+    });
+    const input = document.createElement("textarea");
+    field.attachShadow({ mode: "open" }).append(input);
+    document.body.append(field);
+    input.focus();
+    expect(document.activeElement).toBe(field);
+
+    undoOrRedo("undo");
+    undoOrRedo("redo");
+    expect(field.executeCommand.mock.calls).toEqual([["undo"], ["redo"]]);
+    expect(execCommand).not.toHaveBeenCalled();
+  });
 });
 
 /** jsdom has no DataTransfer. This one keeps the flavors and files a paste carries. */

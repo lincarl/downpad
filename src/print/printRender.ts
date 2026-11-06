@@ -85,6 +85,13 @@ export function sanitize(el: Element): Element {
   }
   // A missing inline image's hover text asks for a click, which does nothing here.
   el.querySelectorAll(".md-image-missing").forEach((n) => n.removeAttribute("title"));
+  // Math remains readable on paper and in formatted copies, without the
+  // document editor's button semantics or hover instruction.
+  el.querySelectorAll(".math-edit-inline").forEach((n) => {
+    n.classList.remove("math-edit-inline");
+    for (const attribute of ["role", "tabindex", "aria-label", "aria-description", "aria-haspopup", "title"]) n.removeAttribute(attribute);
+  });
+  el.querySelectorAll(".math-edit-block").forEach((n) => n.classList.remove("math-edit-block"));
   printLinkUrls(el);
   dropTrailingEmptyLines(el);
   return el;

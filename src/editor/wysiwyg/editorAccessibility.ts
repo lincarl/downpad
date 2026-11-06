@@ -4,7 +4,7 @@ import { installSlashMenuAccessibility } from "./slashMenuAccessibility";
 
 /** Crepe controls that only a pointer can use. Each has a keyboard route or
  *  none. "/" opens the block menu that the handle's + opens, the arrow keys
- *  switch slash menu groups, Enter confirms inline math, and the image context
+ *  switch slash menu groups, Enter opens selected inline math, and the image context
  *  menu edits alt text. The table buttons act on the cell or line under the
  *  pointer and do nothing from the keyboard. */
 const POINTER_ONLY = [
@@ -12,14 +12,12 @@ const POINTER_ONLY = [
   ".milkdown-image-block .operation",
   ".milkdown-table-block .handle",
   ".milkdown-slash-menu .tab-group",
-  ".milkdown-latex-inline-edit button",
 ].join(", ");
 
 /** Attributes for the elements each selector matches. */
 const RULES: ReadonlyArray<readonly [selector: string, attributes: Readonly<Record<string, string>>]> = [
-  // Only the main editor. Crepe's inline math field is a ProseMirror too.
+  // Only the main editor.
   [".milkdown > .ProseMirror", { "aria-label": "Document editor" }],
-  [".milkdown-latex-inline-edit .ProseMirror", { role: "textbox", "aria-label": "Math formula" }],
   [".cm-content", { "aria-label": "Code block editor" }],
   // The link field of an image that has no source yet.
   [":is(.milkdown-image-block, .milkdown-image-inline) .link-input-area", { "aria-label": "Image link" }],
