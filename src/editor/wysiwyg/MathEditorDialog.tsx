@@ -83,6 +83,37 @@ function syntaxWarning(latex: string): string | null {
   }
 }
 
+const keyboardIconNames: Record<string, string> = {
+  "#svg-shift": "Shift",
+  "#svg-arrow-left": "Move left",
+  "#svg-arrow-right": "Move right",
+  "#svg-angle-double-left": "Extend selection left",
+  "#svg-angle-double-right": "Extend selection right",
+  "#svg-delete-backward": "Backspace",
+  "#svg-trash": "Delete all",
+  "#svg-commit": "Return",
+  "#circle-plus": "Add row",
+  "#svg-keyboard-down": "Hide keyboard",
+};
+
+/** Name MathLive's action icons without announcing drawings inside named keys. */
+function labelKeyboardImages(host: HTMLElement): void {
+  for (const svg of host.querySelectorAll("svg")) {
+    if (svg.hasAttribute("aria-label") || svg.hasAttribute("aria-labelledby") || svg.hasAttribute("aria-hidden")) continue;
+    const key = svg.closest(".MLK__keycap, .action, .shift");
+    if (key?.getAttribute("aria-label")) {
+      svg.setAttribute("aria-hidden", "true");
+      continue;
+    }
+    const label = key?.getAttribute("data-tooltip") ||
+      keyboardIconNames[svg.querySelector("use")?.getAttribute("xlink:href") ?? ""];
+    if (label) {
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", label);
+    }
+  }
+}
+
 /** Keep the raw draft until a visual input event explicitly replaces it. */
 function MathEditorContent({ options, close }: { options: MathEditorOptions; close(): void }) {
   const [draft, setDraft] = useState(options.latex);
@@ -138,6 +169,9 @@ function MathEditorContent({ options, close }: { options: MathEditorOptions; clo
     field.addEventListener("input", onVisualInput);
     keyboard.addEventListener("geometrychange", onKeyboardGeometry);
     keyboard.addEventListener("virtual-keyboard-toggle", onKeyboardGeometry);
+    // MathLive rebuilds its keyboard and editing toolbar as the draft changes.
+    const keyboardObserver = new MutationObserver(() => labelKeyboardImages(keyboardHost));
+    keyboardObserver.observe(keyboardHost, { childList: true, subtree: true });
 
     try {
       field.setValue(draftRef.current, { silenceNotifications: true });
@@ -149,7 +183,10 @@ function MathEditorContent({ options, close }: { options: MathEditorOptions; clo
     // Radix autofocus can run before the custom element mounts in this effect.
     const focusFrame = requestAnimationFrame(() => {
       if (field.readOnly) sourceRef.current?.focus();
-      else field.focus();
+      else {
+        field.focus();
+        keyboard.show({ animate: false });
+      }
     });
 
     return () => {
@@ -157,6 +194,7 @@ function MathEditorContent({ options, close }: { options: MathEditorOptions; clo
       field.removeEventListener("input", onVisualInput);
       keyboard.removeEventListener("geometrychange", onKeyboardGeometry);
       keyboard.removeEventListener("virtual-keyboard-toggle", onKeyboardGeometry);
+      keyboardObserver.disconnect();
       keyboard.hide({ animate: false });
       field.remove();
       mathfieldRef.current = null;
