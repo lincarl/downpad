@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 /** Start both timers with one document and real file-service behavior. */
-function scheduledDocument(doc: Partial<DocumentState> = {}, settings: Partial<Settings> = {}) {
+function scheduledDocument(doc: Partial<DocumentState> = {}, settings: Partial<Settings> = {}, holdAutosave?: () => boolean) {
   const store = createAppStore();
   store.set((state) => ({ settings: {
     ...state.settings,
@@ -49,7 +49,7 @@ function scheduledDocument(doc: Partial<DocumentState> = {}, settings: Partial<S
   store.replaceActiveDoc({ ...blankDoc(), markdown: "# Draft\n", filePath: "/docs/notes.md", isDirty: true, ...doc });
   const presenter = { flush: vi.fn(), showActiveDoc: vi.fn(async () => {}), reloadActiveDoc: vi.fn(async () => {}) };
   const files = new FileService(store, presenter);
-  const scheduler = new SnapshotScheduler(store, files);
+  const scheduler = new SnapshotScheduler(store, files, holdAutosave);
   schedulers.push(scheduler);
   scheduler.start();
   return { store, presenter, files, scheduler };
@@ -327,6 +327,20 @@ it.each([
   await vi.advanceTimersByTimeAsync(1);
   expect(saving.mock.calls).toEqual(saves ? [[{ keepTypedMark: true }]] : []);
   expect(native.writeFile.mock.calls).toEqual(saves ? [["/docs/notes.md", "# Draft\n", "lf"]] : []);
+});
+
+it("waits with autosave while a change on disk is unresolved", async () => {
+  let held = true;
+  const { files } = scheduledDocument({}, { autosaveEnabled: true }, () => held);
+  const saving = vi.spyOn(files, "save");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(saving).not.toHaveBeenCalled();
+  expect(native.writeFile).not.toHaveBeenCalled();
+
+  // Reload or Keep mine resolved it.
+  held = false;
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(saving).toHaveBeenCalledOnce();
 });
 
 it("follows changed intervals without a restart or an extra save", async () => {

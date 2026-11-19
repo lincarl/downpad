@@ -28,9 +28,13 @@ export class SnapshotScheduler {
   private clearing: Promise<void> | null = null;
   private stopVersion = 0;
 
+  /** `holdAutosave` tells whether autosave must wait, such as while a change
+   *  on disk to the active document is not resolved with Reload or Keep
+   *  mine, since its save would replace the other version without asking. */
   constructor(
     private readonly store: Store,
     private readonly files: FileService,
+    private readonly holdAutosave: () => boolean = () => false,
   ) {}
 
   /** Start both timers. A changed interval restarts that timer, which counts
@@ -129,13 +133,13 @@ export class SnapshotScheduler {
     if (failed?.status === "rejected") throw failed.reason;
   }
 
-  /** Save the active document if autosave is on. A typed closing `$` or `~`
-   *  that still waits for the next character is saved as Save would write it,
-   *  but keeps waiting in the editor, so a pause in typing never decides it
-   *  there. */
+  /** Save the active document if autosave is on and nothing holds it. A
+   *  typed closing `$` or `~` that still waits for the next character is
+   *  saved as Save would write it, but keeps waiting in the editor, so a pause
+   *  in typing never decides it there. */
   private async tickAutosave(): Promise<void> {
     const { doc, settings } = this.store.get();
-    if (settings.autosaveEnabled && doc.filePath && doc.isDirty) {
+    if (settings.autosaveEnabled && doc.filePath && doc.isDirty && !this.holdAutosave()) {
       await this.files.save({ keepTypedMark: true }).catch(() => {});
     }
   }

@@ -238,6 +238,39 @@ test("Recent offers no document actions for the document it hides", async () => 
   await page.keyboard.press("Escape");
 });
 
+test("a change on disk stays unresolved while another tab is in front, and one made meanwhile shows when its tab does", async () => {
+  const first = path.join(directory, "conflict-first.md");
+  const second = path.join(directory, "conflict-second.md");
+  await writeFile(first, "# First\n\nMine.\n");
+  await writeFile(second, "# Second\n");
+  await launch(first);
+  await page.locator(".ProseMirror p", { hasText: "Mine." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Unsaved.");
+  await writeFile(first, "# First\n\nTheirs.\n");
+  const notice = page.getByText("This file changed on disk.");
+  await expect(notice).toBeVisible();
+  await chooseOpen(second);
+  await expect(page.locator(heading)).toHaveText("Second");
+  await expect(notice).toBeHidden();
+
+  await page.getByRole("tab", { name: /conflict-first\.md/ }).click();
+  await expect(notice).toBeVisible();
+  await page.locator(heading).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  expect(await readFile(first, "utf8")).toBe("# First\n\nTheirs.\n");
+
+  // The second file changes while its tab is not watched.
+  await writeFile(second, "# Second, changed\n");
+  await page.getByRole("tab", { name: /conflict-second\.md/ }).click();
+  await expect(page.locator(heading)).toHaveText("Second");
+  await expect(notice).toBeVisible();
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.locator(heading)).toHaveText("Second, changed");
+  await expect(notice).toBeHidden();
+});
+
 test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {
   const file = path.join(directory, "paste-code-boundary.md");
   const original = "Before.\n\n```js\nconst original = 1;\nconst keep = 2;\n```\n\nAfter.\n";

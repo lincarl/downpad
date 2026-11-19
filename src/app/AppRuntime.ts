@@ -91,7 +91,7 @@ export class AppRuntime {
     // Double-clicking a `.md` link opens that file in a tab (§5.6); openPath
     // focuses it if already open, else opens a new tab (consistent with §5.19).
     this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
-    this.scheduler = new SnapshotScheduler(store, this.files);
+    this.scheduler = new SnapshotScheduler(store, this.files, () => this.desktopEvents.hasPendingChange());
     this.session = new SessionKeeper(store);
     // The find card floats over the document and searches the formatted
     // document or raw Markdown according to the active layout. Its open state
@@ -590,11 +590,13 @@ export class AppRuntime {
   }
 
   /** Re-point the file watcher at the active document and clear a stale banner
-   *  left over from the previously active file (§5.1, §5.19). */
+   *  left over from the previously active file (§5.1, §5.19). The notice for
+   *  an unresolved change on disk to this document shows again, and a change
+   *  made while another tab was in front shows it too. */
   private afterActiveDocChanged(): void {
     this.store.set({ banner: null });
-    this.desktopEvents.resetPendingChange();
     this.files.watchActive();
+    this.desktopEvents.activeDocChanged();
   }
 
   /** Adjust the document text size (spec §5.20), persisting via settings. */
