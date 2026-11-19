@@ -268,12 +268,29 @@ describe("SettingsDialogView pages", () => {
       accentColor: "#FF8800",
       editorFontScale: 1.125,
     });
-    // A hand-edited interval above the field's range shows as OK would save it.
-    expect(document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!.value).toBe("3600");
+    // A hand-edited interval above the field's range shows as it is saved.
+    expect(document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!.value).toBe("7200");
     expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave).not.toHaveBeenCalled();
     expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("saves the field's largest value over a saved value above its range", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, autosaveEnabled: true, autosaveIntervalSeconds: 7200 });
+    const interval = document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!;
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    await user.clear(interval);
+    await user.type(interval, "3600");
+    expect(apply.disabled).toBe(false);
+    await user.click(apply);
+    expect(onSave.mock.calls[0][0]).toEqual({ autosaveIntervalSeconds: 3600 });
+
+    // Typed back to the saved value, the field reads as no change.
+    await waitFor(() => expect(apply.disabled).toBe(true));
+    await user.clear(interval);
+    await user.type(interval, "3600");
+    expect(apply.disabled).toBe(true);
   });
 
   it("shows the saved values in the fields after Apply", async () => {

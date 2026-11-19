@@ -222,7 +222,8 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
 
   /** The settings that OK or Apply would save, read from the form. Settings
    *  the form does not show, and numbers left empty, keep their values from
-   *  `applied`. */
+   *  `applied`. A number field that still shows its saved value keeps that
+   *  value, also one outside the field's range, such as a hand-edited one. */
   const readForm = (): Settings | null => {
     if (!form) return null;
 
@@ -248,6 +249,10 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const gitEnabled = form.elements.namedItem("gitEnabled") as HTMLInputElement | null;
     const gitAutoGetLatest = form.elements.namedItem("gitAutoGetLatest") as HTMLInputElement | null;
     const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
+    const number = (field: HTMLInputElement, saved: number): number =>
+      field.value === String(saved) ? saved : numVal(field, saved);
+    const scalePct = Math.round(applied.editorFontScale * 100);
+    const wrapCol = typeof applied.mdHardWrap === "number" ? applied.mdHardWrap : 80;
 
     return {
       ...applied,
@@ -256,32 +261,31 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       accentColor,
       editorTheme: radio("editorTheme").value as Settings["editorTheme"],
       editorWidthMode: select("editorWidthMode").value as Settings["editorWidthMode"],
-      editorWidthPx: numVal(editorWidthPx, applied.editorWidthPx),
+      editorWidthPx: number(editorWidthPx, applied.editorWidthPx),
       fontFamily: fontFamily.value || applied.fontFamily,
+      // The field shows a whole percentage, so an unedited one keeps the
+      // saved scale, such as 1.125 from the toolbar.
       editorFontScale:
-        numVal(editorFontScalePct, Math.round(applied.editorFontScale * 100)) / 100,
+        editorFontScalePct.value === String(scalePct) ? applied.editorFontScale : numVal(editorFontScalePct, scalePct) / 100,
       linkDisplay: select("linkDisplay").value as Settings["linkDisplay"],
       embedImagesAsBase64: input("embedImagesAsBase64").checked,
-      maxEmbedSizeKB: numVal(maxEmbedSizeKB, applied.maxEmbedSizeKB),
+      maxEmbedSizeKB: number(maxEmbedSizeKB, applied.maxEmbedSizeKB),
       attachmentsFolderName: attachmentsFolderName.value || applied.attachmentsFolderName,
       defaultView: select("defaultView").value as Settings["defaultView"],
       collapseBase64InRawView: input("collapseBase64InRawView").checked,
       spellCheckEnabled: input("spellCheckEnabled").checked,
       spellCheckLanguages,
       showFrontmatterPanel: input("showFrontmatterPanel").checked,
-      maxRetainedTabEditors: numVal(maxRetainedTabEditors, applied.maxRetainedTabEditors),
+      maxRetainedTabEditors: number(maxRetainedTabEditors, applied.maxRetainedTabEditors),
       mdBulletChar: select("mdBulletChar").value as Settings["mdBulletChar"],
       mdEmphasisChar: select("mdEmphasisChar").value as Settings["mdEmphasisChar"],
       mdStrongChar: select("mdStrongChar").value as Settings["mdStrongChar"],
       mdHeadingStyle: select("mdHeadingStyle").value as Settings["mdHeadingStyle"],
-      mdHardWrap: input("hardWrapOn").checked ? numVal(hardWrapCol, 80) : false,
+      mdHardWrap: input("hardWrapOn").checked ? number(hardWrapCol, wrapCol) : false,
       autosaveEnabled: input("autosaveEnabled").checked,
-      autosaveIntervalSeconds: numVal(
-        autosaveIntervalSeconds,
-        applied.autosaveIntervalSeconds,
-      ),
-      recentFilesMaxRetained: numVal(recentFilesMaxRetained, applied.recentFilesMaxRetained),
-      recentFilesVisibleCount: numVal(recentFilesVisibleCount, applied.recentFilesVisibleCount),
+      autosaveIntervalSeconds: number(autosaveIntervalSeconds, applied.autosaveIntervalSeconds),
+      recentFilesMaxRetained: number(recentFilesMaxRetained, applied.recentFilesMaxRetained),
+      recentFilesVisibleCount: number(recentFilesVisibleCount, applied.recentFilesVisibleCount),
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : applied.autoUpdate,
@@ -296,9 +300,8 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const next = readForm();
     if (!next) return;
     if (!settled.current) {
-      // A saved value the form cannot show, such as a number outside its
-      // field's range or a colour in capitals, reads as the form shows it,
-      // so it is no change. The fields show it so too.
+      // A saved value the form cannot show, such as a colour in capitals,
+      // reads as the form shows it, so it is no change.
       settled.current = true;
       showSaved(form, next);
       if (!sameSettings(next, applied)) setApplied(next);
