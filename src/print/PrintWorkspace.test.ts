@@ -304,7 +304,7 @@ describe("PrintWorkspace React view", () => {
     expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ printCopies: 2 }));
   });
 
-  it("keeps native PDF options and default-printer persistence semantics", async () => {
+  it("keeps native PDF options and saves only the options the user changed", async () => {
     enableElectron();
     let complete!: (result: { ok: boolean }) => void;
     const unlisten = vi.fn();
@@ -367,12 +367,38 @@ describe("PrintWorkspace React view", () => {
     await flush();
 
     expect(workspace!.isOpen()).toBe(false);
-    expect(saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ printerName: "Office", printCopies: 3 }),
-    );
+    // A PDF does not use the detected printer, so it is not saved as chosen.
+    expect(saveSettings).toHaveBeenCalledExactlyOnceWith({ printCopies: 3, printPaperSize: "letter", printOrientation: "landscape" });
     expect(document.documentElement.classList.contains("printing")).toBe(false);
     expect(document.querySelector("body > .print-root")).toBeNull();
     expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("saves the detected default printer once the user prints with it, and not before", async () => {
+    enableElectron();
+    let complete!: (result: { ok: boolean }) => void;
+    nativeMocks.onPrintCompleted.mockImplementationOnce((handler) => {
+      complete = handler;
+      return Promise.resolve(vi.fn());
+    });
+    nativeMocks.listPrinters
+      .mockResolvedValueOnce([{ name: "Office", isDefault: true }])
+      .mockResolvedValueOnce([{ name: "Office", isDefault: true }]);
+
+    act(() => workspace!.open(JOB));
+    await flush();
+    editInput("Scale", "120");
+    act(() => workspace!.close());
+    expect(saveSettings).toHaveBeenCalledExactlyOnceWith({ printScalePercent: 120 });
+
+    act(() => workspace!.open(JOB));
+    await flush();
+    act(() => button("Print").click());
+    await flush();
+    act(() => complete({ ok: true }));
+    await flush();
+    expect(workspace!.isOpen()).toBe(false);
+    expect(saveSettings).toHaveBeenLastCalledWith({ printerName: "Office" });
   });
 
   it("keeps the workspace open and ready to print again when the printer fails", async () => {

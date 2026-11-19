@@ -93,10 +93,10 @@ export class PrintWorkspace {
   /** Sheets in the current layout; 0 until the first layout. */
   private pages = 0;
   private busy = false;
-  /** Set once the user changes an option, so closing an untouched workspace
-   *  doesn't rewrite settings.toml (and the auto-detected default printer isn't
-   *  persisted as if it had been chosen). */
-  private dirty = false;
+  /** The options the user changed, which closing saves, so a setting changed
+   *  elsewhere meanwhile stays. The detected default printer counts once the
+   *  user prints with it, and is not saved as if chosen before. */
+  private edited = new Set<keyof Settings>();
 
   private scaler: HTMLElement | null = null;
   private canvas: HTMLElement | null = null;
@@ -125,7 +125,7 @@ export class PrintWorkspace {
     this.settings = { ...this.opened };
     this.pageMode = "all";
     this.pageRange = "";
-    this.dirty = false;
+    this.edited = new Set();
     this.summaryText = "";
     this.statusText = "";
     this.publish();
@@ -152,7 +152,7 @@ export class PrintWorkspace {
     const reactRoot = this.reactRoot;
     const detachedPrintRoot =
       this.printRoot && !host.contains(this.printRoot) ? this.printRoot : null;
-    const changedSettings = this.settings && this.opened && this.dirty ? changesFrom(this.opened, this.settings) : null;
+    const changedSettings = this.settings && this.opened ? this.editedChanges(this.opened, this.settings) : null;
     this.host = null;
     this.reactRoot = null;
     if (reactRoot) disposeReactRoot(reactRoot, host);
@@ -167,7 +167,7 @@ export class PrintWorkspace {
     this.settings = null;
     this.opened = null;
     this.snapshot = null;
-    this.dirty = false;
+    this.edited = new Set();
     this.busy = false;
     this.listeners.clear();
     const restoreFocus = this.previouslyFocused;
@@ -342,11 +342,17 @@ export class PrintWorkspace {
 
   // ── Rendering ───────────────────────────────────────────────────────────
 
+  /** The options the user changed that differ from `opened`. */
+  private editedChanges(opened: Settings, settings: Settings): Partial<Settings> {
+    const changes = changesFrom(opened, settings);
+    return Object.fromEntries(Object.entries(changes).filter(([key]) => this.edited.has(key as keyof Settings)));
+  }
+
   /** Apply a settings change; `repaginate` is false for options that don't
    *  affect the sheets (printer, copies). */
   private update(patch: Partial<Settings>, repaginate = true): void {
     this.settings = { ...this.settings!, ...patch };
-    this.dirty = true;
+    for (const key of Object.keys(patch) as (keyof Settings)[]) this.edited.add(key);
     if (repaginate) this.render();
     else this.updateSummary();
   }
@@ -450,6 +456,8 @@ export class PrintWorkspace {
         await this.runBrowserPrint();
         return;
       }
+      // Printing with the detected default printer chooses it.
+      this.edited.add("printerName");
       try {
         await this.runNative(() => printWebview(this.nativeOptions()), "Printing…");
       } catch (err) {
