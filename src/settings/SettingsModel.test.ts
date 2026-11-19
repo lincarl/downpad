@@ -160,6 +160,31 @@ describe("SettingsModel saves", () => {
     expect(store.get().settings.editorWidthPx).toBe(900);
     expect(cssVar("--editor-width")).toBe("900px");
   });
+
+  it("puts the settings from before back when a save that asks for it is not written", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const saved = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 }, { undoIfUnwritten: true });
+    // The page shows the change while the write runs.
+    expect(cssVar("--editor-width")).toBe("800px");
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await saved).toBe(false);
+    expect(store.get().settings).toEqual(DEFAULT_SETTINGS);
+    expect(cssVar("--editor-width")).toBe(`${DEFAULT_SETTINGS.editorWidthPx}px`);
+
+    // A change that came while the write ran stays.
+    const first = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const second = model.save({ ...store.get().settings, theme: "light" });
+    await flush();
+    disk.writes[1].fail(new Error("invalid TOML"));
+    expect(await first).toBe(false);
+    expect(store.get().settings).toMatchObject({ editorWidthPx: 800, theme: "light" });
+    await flush();
+    disk.writes[2].finish();
+    await second;
+  });
 });
 
 describe("SettingsModel document view re-mount", () => {

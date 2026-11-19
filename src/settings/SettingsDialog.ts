@@ -49,8 +49,13 @@ export class SettingsDialog {
       root.render(
         createElement(SettingsDialogView, {
           initial,
-          onSave: this.onSave,
-          onRequestClose: () => this.close(),
+          // The changes go onto the settings as they are when saved, so a
+          // change made meanwhile, such as in settings.toml, stays.
+          onSave: (changes) => this.onSave({ ...DEFAULT_SETTINGS, ...this.store.get().settings, ...changes }),
+          // A save that ends after this dialog closed leaves the next one open.
+          onRequestClose: () => {
+            if (this.root === root) this.close();
+          },
         }),
       );
     });

@@ -58,10 +58,10 @@ import { UI_PALETTES, resolveScheme, type Scheme } from "./themePalettes";
 
 export interface SettingsDialogViewProps {
   initial: Settings;
-  /** Save changed settings, for OK and Apply. Called only when something
-   *  differs from the settings saved last. Resolves false when they could
-   *  not be written. */
-  onSave: (next: Settings) => Promise<boolean>;
+  /** Save the settings that changed in the dialog since it opened or since
+   *  Apply, for OK and Apply. Called only when something changed. Resolves
+   *  false when they could not be written. */
+  onSave: (changes: Partial<Settings>) => Promise<boolean>;
   onRequestClose: () => void;
 }
 
@@ -157,6 +157,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   // A save under way, which OK and Apply wait for.
   const saving = useRef(false);
   const okRef = useRef<HTMLButtonElement>(null);
+  const applyRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!isElectron()) return;
@@ -244,6 +245,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const gitEnabled = form.elements.namedItem("gitEnabled") as HTMLInputElement | null;
     const gitAutoGetLatest = form.elements.namedItem("gitAutoGetLatest") as HTMLInputElement | null;
     const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
+    const retained = numVal(recentFilesMaxRetained, applied.recentFilesMaxRetained);
 
     return {
       ...applied,
@@ -276,13 +278,11 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
         autosaveIntervalSeconds,
         applied.autosaveIntervalSeconds,
       ),
-      recentFilesMaxRetained: numVal(
-        recentFilesMaxRetained,
-        applied.recentFilesMaxRetained,
-      ),
-      recentFilesVisibleCount: numVal(
-        recentFilesVisibleCount,
-        applied.recentFilesVisibleCount,
+      recentFilesMaxRetained: retained,
+      // The app shows no more recent files than it keeps.
+      recentFilesVisibleCount: Math.min(
+        numVal(recentFilesVisibleCount, applied.recentFilesVisibleCount),
+        retained,
       ),
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
@@ -311,14 +311,21 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   // Some fields keep their value in state, such as the accent colour and the
   // spelling languages, so check again after each render too.
   useEffect(refreshChanged);
+  // The form as the latest render reads it, for a save that ends later.
+  const latestForm = useRef(readForm);
+  useEffect(() => {
+    latestForm.current = readForm;
+  });
 
-  /** Save `next`. Returns whether it was written, and otherwise says so in
-   *  the dialog. */
+  /** Save the settings in `next` that differ from `applied`, and mark them
+   *  saved once written. Returns whether they were written, and otherwise
+   *  says so in the dialog. */
   const save = async (next: Settings): Promise<boolean> => {
     saving.current = true;
     try {
-      const saved = await onSave(next);
+      const saved = await onSave(changesFrom(applied, next));
       setSaveFailed(!saved);
+      if (saved) setApplied(next);
       return saved;
     } finally {
       saving.current = false;
@@ -326,12 +333,17 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   };
 
   /** OK: save what changed, if anything, and close. Enter in a field does
-   *  the same. A save that fails keeps the dialog open. */
+   *  the same. A save that fails keeps the dialog open, and so does an edit
+   *  made while the save ran, which is then left to save. */
   const accept = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     if (saving.current) return;
     const next = readForm();
-    if (next && !sameSettings(next, applied) && !(await save(next))) return;
+    if (next && !sameSettings(next, applied)) {
+      if (!(await save(next))) return;
+      const now = latestForm.current();
+      if (now && !sameSettings(now, next)) return;
+    }
     onRequestClose();
   };
 
@@ -341,12 +353,13 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     if (saving.current) return;
     const next = readForm();
     if (!next || sameSettings(next, applied) || !(await save(next))) return;
-    setApplied(next);
     // The fields show what was saved, such as a number brought into its
-    // field's range, or the value an emptied field kept.
-    showSaved(form, next);
+    // field's range, or the value an emptied field kept. A field edited while
+    // the save ran keeps the edit.
+    const now = latestForm.current();
+    showSaved(form, next, now);
     // Apply turns disabled, so its focus moves on to OK.
-    okRef.current?.focus();
+    if (document.activeElement === applyRef.current && now && sameSettings(now, next)) okRef.current?.focus();
   };
 
   const pageProps = (id: PageId) => ({ id: panelId(id), tabId: tabId(id), active: page === id });
@@ -828,6 +841,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 Cancel
               </Button>
               <Button
+                ref={applyRef}
                 type="button"
                 variant="outline"
                 className={cn("dialog-btn", dialogButtonClassName)}
@@ -1031,23 +1045,32 @@ function sameSettings(a: Settings, b: Settings): boolean {
   return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
 }
 
+/** The settings in `next` that differ from `base`. */
+function changesFrom(base: Settings, next: Settings): Partial<Settings> {
+  const keys = (Object.keys(next) as (keyof Settings)[]).filter((key) => JSON.stringify(next[key]) !== JSON.stringify(base[key]));
+  return Object.fromEntries(keys.map((key) => [key, next[key]]));
+}
+
 /** Put `settings` into the form's typed fields, which keep what the user
- *  typed until then, such as a number outside the field's range. */
-function showSaved(form: HTMLFormElement | null, settings: Settings): void {
+ *  typed until then, such as a number outside the field's range. With
+ *  `current`, the form's reading now, a field whose setting reads otherwise
+ *  there, as after an edit since `settings` were read, keeps its text. */
+function showSaved(form: HTMLFormElement | null, settings: Settings, current?: Settings | null): void {
   if (!form) return;
-  const values: Record<string, string | number> = {
-    editorWidthPx: settings.editorWidthPx,
-    editorFontScalePct: Math.round(settings.editorFontScale * 100),
-    fontFamily: settings.fontFamily,
-    maxEmbedSizeKB: settings.maxEmbedSizeKB,
-    attachmentsFolderName: settings.attachmentsFolderName,
-    maxRetainedTabEditors: settings.maxRetainedTabEditors,
-    autosaveIntervalSeconds: settings.autosaveIntervalSeconds,
-    recentFilesMaxRetained: settings.recentFilesMaxRetained,
-    recentFilesVisibleCount: settings.recentFilesVisibleCount,
-  };
-  if (typeof settings.mdHardWrap === "number") values.hardWrapCol = settings.mdHardWrap;
-  for (const [name, value] of Object.entries(values)) {
+  const fields: [name: string, key: keyof Settings, value: string | number][] = [
+    ["editorWidthPx", "editorWidthPx", settings.editorWidthPx],
+    ["editorFontScalePct", "editorFontScale", Math.round(settings.editorFontScale * 100)],
+    ["fontFamily", "fontFamily", settings.fontFamily],
+    ["maxEmbedSizeKB", "maxEmbedSizeKB", settings.maxEmbedSizeKB],
+    ["attachmentsFolderName", "attachmentsFolderName", settings.attachmentsFolderName],
+    ["maxRetainedTabEditors", "maxRetainedTabEditors", settings.maxRetainedTabEditors],
+    ["autosaveIntervalSeconds", "autosaveIntervalSeconds", settings.autosaveIntervalSeconds],
+    ["recentFilesMaxRetained", "recentFilesMaxRetained", settings.recentFilesMaxRetained],
+    ["recentFilesVisibleCount", "recentFilesVisibleCount", settings.recentFilesVisibleCount],
+  ];
+  if (typeof settings.mdHardWrap === "number") fields.push(["hardWrapCol", "mdHardWrap", settings.mdHardWrap]);
+  for (const [name, key, value] of fields) {
+    if (current && JSON.stringify(current[key]) !== JSON.stringify(settings[key])) continue;
     const field = form.elements.namedItem(name);
     if (field instanceof HTMLInputElement) field.value = String(value);
   }

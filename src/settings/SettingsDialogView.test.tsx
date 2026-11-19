@@ -5,11 +5,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateInfo } from "@/ipc/contracts";
 import type { Settings } from "@/state/types";
+import { createAppStore } from "@/app/createAppStore";
 import { DEFAULT_SETTINGS } from "./defaults";
+import { SettingsDialog } from "./SettingsDialog";
 import { SettingsDialogView } from "./SettingsDialogView";
 
 function renderDialog(initial: Settings = DEFAULT_SETTINGS) {
-  const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
+  const onSave = vi.fn<(changes: Partial<Settings>) => Promise<boolean>>(async () => true);
   const onRequestClose = vi.fn();
   render(
     <SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />,
@@ -129,9 +131,9 @@ describe("SettingsDialogView pages", () => {
 
     await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave).toHaveBeenCalledTimes(1);
-    // Untouched fields on every page keep their values.
+    // Only the changed fields go to the save, so untouched fields on every
+    // page keep their values.
     expect(onSave.mock.calls[0][0]).toEqual({
-      ...DEFAULT_SETTINGS,
       theme: "light",
       editorTheme: "follow-ui",
       editorWidthPx: 800,
@@ -224,16 +226,16 @@ describe("SettingsDialogView pages", () => {
     expect(apply.disabled).toBe(false);
     await user.click(apply);
     expect(onSave).toHaveBeenCalledOnce();
-    expect(onSave.mock.calls[0][0]).toEqual({ ...DEFAULT_SETTINGS, recentFilesVisibleCount: 12 });
+    expect(onSave.mock.calls[0][0]).toEqual({ recentFilesVisibleCount: 12 });
     expect(onRequestClose).not.toHaveBeenCalled();
     expect(apply.disabled).toBe(true);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "OK" }));
 
-    // A later change goes in with OK, over the applied settings.
+    // A later change goes in with OK, as the change since Apply.
     await user.click(keepRemoved);
     await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave).toHaveBeenCalledTimes(2);
-    expect(onSave.mock.calls[1][0]).toEqual({ ...DEFAULT_SETTINGS, recentFilesVisibleCount: 12, recentFilesKeepRemoved: true });
+    expect(onSave.mock.calls[1][0]).toEqual({ recentFilesKeepRemoved: true });
     expect(onRequestClose).toHaveBeenCalledOnce();
   });
 
@@ -252,7 +254,7 @@ describe("SettingsDialogView pages", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Default search:" }), "all");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onSave).toHaveBeenCalledOnce();
-    expect(onSave.mock.calls[0][0]).toMatchObject({ recentFilesKeepRemoved: true, recentFilesDefaultSearch: "names" });
+    expect(onSave.mock.calls[0][0]).toEqual({ recentFilesKeepRemoved: true });
     expect(onRequestClose).toHaveBeenCalledOnce();
   });
 
@@ -281,14 +283,56 @@ describe("SettingsDialogView pages", () => {
     await user.type(interval, "2");
     await user.clear(visible);
     await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(onSave.mock.calls[0][0]).toMatchObject({
-      autosaveIntervalSeconds: 5,
-      recentFilesVisibleCount: DEFAULT_SETTINGS.recentFilesVisibleCount,
-    });
+    // The emptied field kept its value, so only the interval changed.
+    expect(onSave.mock.calls[0][0]).toEqual({ autosaveIntervalSeconds: 5 });
     // The number brought into range, and the value the emptied field kept.
     await waitFor(() => expect(interval.value).toBe("5"));
     expect(visible.value).toBe(String(DEFAULT_SETTINGS.recentFilesVisibleCount));
     expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("saves no more recent files shown than kept, as the app keeps them", async () => {
+    const { user, onSave } = renderDialog();
+    const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
+    const retained = document.querySelector<HTMLInputElement>('input[name="recentFilesMaxRetained"]')!;
+    await user.clear(retained);
+    await user.type(retained, "10");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(onSave.mock.calls[0][0]).toEqual({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 });
+    await waitFor(() => expect(visible.value).toBe("10"));
+  });
+
+  it("keeps an edit made while OK saves, and stays open for it", async () => {
+    const { user, onSave, onRequestClose } = renderDialog();
+    let finish!: (written: boolean) => void;
+    onSave.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
+    await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    await user.clear(visible);
+    await user.type(visible, "40");
+    await act(async () => finish(true));
+    expect(onRequestClose).not.toHaveBeenCalled();
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    await waitFor(() => expect(apply.disabled).toBe(false));
+    await user.click(apply);
+    expect(onSave.mock.calls[1][0]).toEqual({ recentFilesVisibleCount: 40 });
+  });
+
+  it("leaves a field edited while Apply saves as the user typed it", async () => {
+    const { user, onSave } = renderDialog();
+    let finish!: (written: boolean) => void;
+    onSave.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
+    await user.clear(visible);
+    await user.type(visible, "12");
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    await user.click(apply);
+    await user.clear(visible);
+    await user.type(visible, "40");
+    await act(async () => finish(true));
+    expect(visible.value).toBe("40");
+    await waitFor(() => expect(apply.disabled).toBe(false));
   });
 
   it("says so and keeps Apply on when the settings cannot be written, and OK keeps the dialog open", async () => {
@@ -445,7 +489,7 @@ describe("SettingsDialogView Git", () => {
     expect(screen.queryByRole("checkbox", { name: "Upload when saving" })).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
     await user.click(screen.getByRole("button", { name: "OK" }));
-    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
+    expect(onSave.mock.calls.at(-1)?.[0]).toEqual({ recentFilesKeepRemoved: true });
   });
 });
 
@@ -532,6 +576,33 @@ describe("SettingsDialogView updates", () => {
     await user.click(screen.getByRole("tab", { name: "General" }));
     await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
     await user.click(screen.getByRole("button", { name: "OK" }));
-    expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ autoUpdate: false });
+    expect(onSave.mock.calls.at(-1)?.[0]).toEqual({ recentFilesKeepRemoved: true });
+  });
+});
+
+describe("SettingsDialog", () => {
+  it("saves the dialog's changes onto the settings as they are then, and a late OK leaves a newer dialog open", async () => {
+    const store = createAppStore();
+    let finish!: (written: boolean) => void;
+    const onSave = vi.fn((_next: Settings) => new Promise<boolean>((resolve) => (finish = resolve)));
+    const dialog = new SettingsDialog(store, onSave);
+    // Radix lets presses reach the dialog once its effects have run.
+    act(() => dialog.open());
+    try {
+      const user = userEvent.setup({ delay: null });
+      // A hand edit of settings.toml arrives while the dialog is open.
+      act(() => store.set((state) => ({ settings: { ...state.settings, editorWidthPx: 900 } })));
+      await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
+      await user.click(screen.getByRole("button", { name: "OK" }));
+      expect(onSave).toHaveBeenCalledExactlyOnceWith({ ...DEFAULT_SETTINGS, ...store.get().settings, editorWidthPx: 900, recentFilesKeepRemoved: true });
+
+      // Closed and opened again before that save ends.
+      act(() => dialog.close());
+      act(() => dialog.open());
+      await act(async () => finish(true));
+      expect(dialog.isOpen()).toBe(true);
+    } finally {
+      act(() => dialog.close());
+    }
   });
 });

@@ -4753,10 +4753,16 @@ test("Settings says when settings.toml cannot be written, and Apply tries again 
   const apply = dialog.getByRole("button", { name: "Apply", exact: true });
   await expect(apply).toBeDisabled();
   await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
+  // Each failed attempt ends with the renderer's report of the failed write.
+  const failedWrite = () => page.waitForEvent("console", (message) => message.text().includes("failed to save settings"));
+  let failed = failedWrite();
   await apply.click();
+  await failed;
   await expect(dialog.getByRole("alert")).toHaveText("Could not save the settings file. Try again with OK or Apply.");
   await expect(apply).toBeEnabled();
+  failed = failedWrite();
   await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await failed;
   await expect(dialog.getByRole("alert")).toBeVisible();
   await expect(dialog).toBeVisible();
 

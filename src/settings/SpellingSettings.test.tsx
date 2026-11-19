@@ -34,7 +34,7 @@ const nativeInfo: SpellcheckInfo = {
 
 /** Open the real settings form so Save and nested modal behavior are exercised. */
 async function openSpelling(initial: Settings = DEFAULT_SETTINGS) {
-  const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
+  const onSave = vi.fn<(changes: Partial<Settings>) => Promise<boolean>>(async () => true);
   const onRequestClose = vi.fn();
   const user = userEvent.setup({ delay: null });
   render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />);
@@ -118,7 +118,8 @@ describe("spelling preferences", () => {
     expect(screen.queryByRole("button", { name: "Manage dictionary…" })).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "Spell check" }));
     await user.click(screen.getByRole("button", { name: "OK" }));
-    expect(onSave.mock.calls[0][0]).toMatchObject({ spellCheckEnabled: false, spellCheckLanguages: ["de-DE"] });
+    // The saved languages are no change, so they stay as saved.
+    expect(onSave.mock.calls[0][0]).toEqual({ spellCheckEnabled: false });
     expect(getSpellcheckInfo).not.toHaveBeenCalled();
   });
 

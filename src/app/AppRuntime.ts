@@ -75,10 +75,10 @@ export class AppRuntime {
       store,
       async (next) => {
         const enablingGit = next.gitEnabled && !store.get().settings.gitEnabled;
-        const written = await this.settingsModel.save(next);
+        const written = await this.settingsModel.save(next, { undoIfUnwritten: true });
         // Settings apply locally before they reach the main process. Check
         // again once its Git guard can see the saved enabled setting.
-        if (enablingGit) void this.git.check({ force: true });
+        if (enablingGit && written) void this.git.check({ force: true });
         return written;
       },
     );

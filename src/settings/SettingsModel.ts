@@ -75,6 +75,11 @@ export class SettingsModel {
 
   /** Apply settings arriving from the watcher (hand edits to settings.toml). */
   private applyIncoming(settings: Settings): void {
+    this.use(settings);
+  }
+
+  /** Make `settings` the app's settings and apply them to the page. */
+  private use(settings: Settings): void {
     const before = wysiwygConfigSignature(this.store.get().settings);
     this.store.set({ settings });
     this.applySideEffects();
@@ -90,13 +95,13 @@ export class SettingsModel {
    *  handler forever). Each save writes the full settings captured at call time;
    *  the synchronous store.set above keeps later callers' snapshots current.
    *  Resolves false when the write failed, such as for a settings.toml with
-   *  broken syntax, and true otherwise. */
-  async save(next: Settings): Promise<boolean> {
+   *  broken syntax, and true otherwise. `undoIfUnwritten` then puts back the
+   *  settings from before, unless another change came since, as the Settings
+   *  dialog asks, which says the change was not saved. */
+  async save(next: Settings, { undoIfUnwritten = false }: { undoIfUnwritten?: boolean } = {}): Promise<boolean> {
     if (this.disposed) return false;
-    const before = wysiwygConfigSignature(this.store.get().settings);
-    this.store.set({ settings: next });
-    this.applySideEffects();
-    if (wysiwygConfigSignature(next) !== before) this.onWysiwygConfigChange();
+    const previous = this.store.get().settings;
+    this.use(next);
     if (!isElectron()) return true;
     let written = true;
     this.writeChain = this.writeChain.then(() =>
@@ -106,6 +111,7 @@ export class SettingsModel {
       }),
     );
     await this.writeChain;
+    if (!written && undoIfUnwritten && !this.disposed && this.store.get().settings === next) this.use(previous);
     return written;
   }
 
