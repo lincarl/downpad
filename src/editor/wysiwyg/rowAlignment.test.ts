@@ -91,4 +91,25 @@ describe("docOutline", () => {
       "  row@58 12 text",
     ]);
   });
+
+  it("lines a block up by its top when its first line holds no text, though text follows", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("table_header_row", null, [cell("table_header", ""), cell("table_header", "")]),
+        schema.node("table_row", null, [cell("table_cell", "A"), cell("table_cell", "B")]),
+      ]),
+      schema.node("bullet_list", null, [
+        schema.node("list_item", null, [schema.node("code_block", null, [schema.text("code")]), p("After")]),
+      ]),
+    ]);
+    expect(outline(doc)).toEqual([
+      "table@0 ab space",
+      "  row@1 ",
+      "  row@11 ab text",
+      "list@24 codeafter space",
+      "  item@25 codeafter",
+      "    code@26 code",
+      "    paragraph@32 after space text",
+    ]);
+  });
 });

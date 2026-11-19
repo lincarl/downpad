@@ -376,8 +376,9 @@ export interface AlignedPane {
    *  space, in pixels from the top of the pane's scrolled content. Null while
    *  the pane cannot be measured, such as while it is hidden. */
   measure(blocks: readonly MeasuredBlock[]): { tops: number[]; starts: number[]; end: number } | null;
-  /** Put space above blocks and below the end. Returns false when the pane
-   *  cannot change now, such as during an input method composition. */
+  /** Put space above blocks and below the end. A pane that holds that space
+   *  already changes nothing. Returns false when the pane cannot change now,
+   *  such as during an input method composition. */
   setSpacers(spacers: readonly Spacer[], end: number): boolean;
   /** Take all added space out. */
   clearSpacers(): void;
@@ -529,7 +530,13 @@ export class SplitAlignment {
       }
     });
     next.key = JSON.stringify([sourceSpacers, docSpacers, plan.sourceEnd, plan.docEnd]);
-    if (this.applied?.key === next.key) return;
+    if (this.applied?.key === next.key) {
+      // An edit can take space out with the block it was on, such as an
+      // image that a change of its alt text replaces, and leave the plan as
+      // it was. The panes put back what is missing and change nothing else.
+      if (doc.setSpacers(docSpacers, plan.docEnd)) source.setSpacers(sourceSpacers, plan.sourceEnd);
+      return;
+    }
 
     // Keep the content at the top of the reference pane in place. Find its
     // natural height under the old space, then where it is under the new.

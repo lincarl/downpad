@@ -276,17 +276,25 @@ describe("SplitAlignment", () => {
     alignment.disconnect();
   });
 
-  it("changes nothing when the plan is the same", () => {
+  it("gives the panes the same space again and scrolls nothing when the plan is the same", () => {
     const docEl = scroller();
     const sourceEl = scroller();
     const doc = fakePane(docOutline, new Map([[0, 100], [7, 200]]), 400, docEl);
     const source = fakePane(sourceOutline, new Map([[0, 10], [20, 120]]), 300, sourceEl);
-    const alignment = new SplitAlignment();
+    const scroll = vi.fn((el: HTMLElement, top: number) => {
+      el.scrollTop = top;
+    });
+    const alignment = new SplitAlignment(scroll);
     alignment.connect(doc.pane, source.pane, docEl, sourceEl);
+    docEl.scrollTop = 50;
     alignment.align();
+    scroll.mockClear();
     alignment.align();
-    expect(doc.spacers).toHaveLength(1);
-    expect(source.spacers).toHaveLength(1);
+    // A pane that lost space with an edited block, such as an image whose
+    // alt text changed, gets it back. One that holds it changes nothing.
+    expect(doc.spacers).toEqual([doc.spacers[0], doc.spacers[0]]);
+    expect(source.spacers).toEqual([source.spacers[0], source.spacers[0]]);
+    expect(scroll).not.toHaveBeenCalled();
     alignment.disconnect();
   });
 });

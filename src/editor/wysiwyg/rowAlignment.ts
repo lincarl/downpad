@@ -47,23 +47,33 @@ const TEXT_KINDS: ReadonlySet<BlockKind> = new Set(["paragraph", "heading", "lis
 /** How much of a block's text its key is read from. */
 const KEY_SOURCE = 300;
 
-/** The position of the first character of text in the node at `at`, or -1
- *  when it holds none. */
-function firstText(doc: ProseNode, at: number): number {
-  const node = doc.nodeAt(at);
-  let found = -1;
-  node?.descendants((child, pos) => {
-    if (found >= 0) return false;
-    if (child.isText && child.text) found = at + 1 + pos;
-    return found < 0;
-  });
-  return found;
-}
-
 /** The kind of `node`, or null for a node that pairs with nothing. */
 function kindOf(node: ProseNode): BlockKind | null {
   if (node.type.name === "code_block" && node.attrs.language === "LaTeX") return "math";
   return KINDS[node.type.name] ?? null;
+}
+
+/** The position of the first character of text on the first line of the
+ *  block `node` at `at`, which lines up with its first Markdown line, or -1
+ *  when that line holds none. The line is that of the paragraph or heading
+ *  the block starts with, through its first children, such as a table's
+ *  header row. A table whose header row is empty, or a list item that starts
+ *  with code, has none, though text follows further down. */
+function leadText(node: ProseNode | null, at: number): number {
+  let pos = at;
+  let block = node;
+  while (block && !block.isTextblock) {
+    const first: ProseNode | null = block.firstChild;
+    const kind = first && kindOf(first);
+    if (kind && !TEXT_KINDS.has(kind)) return -1;
+    block = first;
+    pos += 1;
+  }
+  let found = -1;
+  block?.forEach((child, offset) => {
+    if (found < 0 && child.isText && child.text) found = pos + 1 + offset;
+  });
+  return found;
 }
 
 /** The blocks among the children of `parent`, whose content starts at
@@ -82,7 +92,7 @@ function blocksIn(parent: ProseNode, start: number, parentKind: BlockKind | null
       // A standalone image has no text, so it goes by its alt text.
       key: textKey(kind === "image" ? String(node.attrs.alt ?? "") : node.textBetween(0, Math.min(node.content.size, KEY_SOURCE), " ", " ")),
       spaceable: parentKind !== "table" && (index > 0 || parentKind === null),
-      text: TEXT_KINDS.has(kind) && node.textContent.length > 0,
+      text: TEXT_KINDS.has(kind) && leadText(node, at) >= 0,
       children: CONTAINERS.has(kind) ? blocksIn(node, at + 1, kind) : undefined,
     });
   });
@@ -247,7 +257,7 @@ export function docAlignedPane(parts: DocPaneParts): AlignedPane {
             if (previous instanceof HTMLElement) gaps.set(at, top - (previous.getBoundingClientRect().bottom - origin));
           }
           if (!text) return top;
-          const line = at < 0 ? firstTextLine(element) : textLine(view, firstText(doc, at));
+          const line = at < 0 ? firstTextLine(element) : textLine(view, leadText(doc.nodeAt(at), at));
           return line ? (line.top + line.bottom) / 2 - origin : top;
         });
         const end = body.getBoundingClientRect().bottom - origin + (parseFloat(getComputedStyle(root).paddingBottom) || 0);
