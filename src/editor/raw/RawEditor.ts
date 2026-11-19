@@ -4,6 +4,7 @@
 import { EditorView, basicSetup } from "codemirror";
 import { isolateHistory } from "@codemirror/commands";
 import { ChangeSet, Compartment, EditorSelection, EditorState, type Text } from "@codemirror/state";
+import { syntaxTree } from "@codemirror/language";
 import {
   SearchQuery,
   findNext as findNextMatch,
@@ -19,6 +20,8 @@ import { differingRuns, type Run } from "../differingRuns";
 import { codeMirrorPresses } from "../codeMirrorPresses";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, markdownSourceStyle } from "./markdownSource";
+import { rawAlignedPane, rowSpacers } from "./rowAlignment";
+import type { AlignedPane } from "../splitAlign";
 import { sourceCodeSpellcheck } from "./spellcheck";
 import { sourceSpelling } from "./liveSpelling";
 import type { FindCounts, FindOptions } from "../wysiwyg/findEngine";
@@ -364,10 +367,21 @@ export class RawEditor {
    *  change maps their positions, so each stays where its files were dropped,
    *  after the files of its drop already inserted. */
   private readonly dropTargets = new Set<DropTarget>();
+  /** Told of each update while the split aligns this pane (`alignedPane`). */
+  private readonly layoutListeners = new Set<(update: { heightChanged: boolean; geometryChanged: boolean; treeChanged: boolean }) => void>();
+  /** The pane's own scroll container, once mounted. */
+  private root: HTMLElement | null = null;
+  /** This pane for the split's row alignment, made on first use. */
+  private aligned: AlignedPane | null = null;
 
   mount(root: HTMLElement, initial: string, cb: RawCallbacks, opts: RawOptions = {}): void {
+    this.root = root;
     const updateListener = EditorView.updateListener.of((u) => {
       if (u.docChanged) for (const target of this.dropTargets) target.pos = u.changes.mapPos(target.pos, 1);
+      if (this.layoutListeners.size) {
+        const change = { heightChanged: u.heightChanged, geometryChanged: u.geometryChanged, treeChanged: syntaxTree(u.state) !== syntaxTree(u.startState) };
+        for (const listener of this.layoutListeners) listener(change);
+      }
       if (u.docChanged && !this.applying) cb.onChange(u.state.doc.toString());
       // The current match is the selected one, so a caret move changes it too.
       if ((u.docChanged || u.selectionSet) && cb.onFindChange && getSearchQuery(u.state).search) {
@@ -399,6 +413,9 @@ export class RawEditor {
           // start of the line on a press on a line number, and at the end of
           // the text on a press on a gutter below the last line (§5.6).
           codeMirrorPresses({ endBelowText: true }),
+          // Blank space above lines that lines them up with the document
+          // pane in the split (splitAlign.ts).
+          rowSpacers(),
           updateListener,
         ],
       }),
@@ -407,6 +424,16 @@ export class RawEditor {
 
   getText(): string {
     return this.view ? this.view.state.doc.toString() : "";
+  }
+
+  /** This pane as the split's row alignment measures and spaces it. */
+  alignedPane(): AlignedPane | null {
+    if (!this.root) return null;
+    this.aligned ??= rawAlignedPane(() => this.view, this.root, (listener) => {
+      this.layoutListeners.add(listener);
+      return () => this.layoutListeners.delete(listener);
+    });
+    return this.aligned;
   }
 
   /** Change prose spelling without rebuilding the editor or enabling code. */
@@ -685,6 +712,7 @@ export class RawEditor {
     this.findChangeTimer = null;
     this.counted = null;
     this.dropTargets.clear();
+    this.layoutListeners.clear();
     this.view?.destroy();
     this.view = null;
   }

@@ -73,6 +73,24 @@ const fakeEditors = vi.hoisted(() => ({
    *  document pane. */
   rawEdit: null as { from: number; to: number; insert: string } | null,
   spellingChecks: [] as string[],
+  /** Which panes the split's row alignment connected and cleared, in order. */
+  alignment: [] as string[],
+  /** A pane for the split's row alignment that has nothing to align and
+   *  records what is done with it. */
+  alignedPane(view: string) {
+    return {
+      outline: () => null,
+      measure: () => null,
+      setSpacers: () => true,
+      clearSpacers: () => {
+        fakeEditors.alignment.push(`clear ${view}`);
+      },
+      onLayoutChange: () => {
+        fakeEditors.alignment.push(`listen ${view}`);
+        return () => {};
+      },
+    };
+  },
 }));
 
 /** The counts each fake pane reports, so a test can tell which pane answered. */
@@ -106,6 +124,10 @@ vi.mock("./wysiwyg/WysiwygEditor", () => ({
 
     getMarkdown(): string {
       return fakeEditors.markdown;
+    }
+
+    alignedPane() {
+      return fakeEditors.alignedPane("document");
     }
 
     setSpellcheck(): void {}
@@ -224,6 +246,10 @@ vi.mock("./raw/RawEditor", () => ({
 
     getText(): string {
       return fakeEditors.rawText ?? "";
+    }
+
+    alignedPane() {
+      return fakeEditors.alignedPane("markdown");
     }
 
     setText(text: string): void {
@@ -363,6 +389,7 @@ beforeEach(() => {
   fakeEditors.findsSource = true;
   fakeEditors.rawEdit = null;
   fakeEditors.spellingChecks = [];
+  fakeEditors.alignment = [];
 });
 
 describe("EditorHost full spelling check", () => {
@@ -708,6 +735,17 @@ describe("EditorHost build", () => {
     // The document pane writes the text its own way, but nothing was edited.
     expect(store.get().doc).toMatchObject({ markdown: "original markdown", isDirty: false });
     expect(fakeEditors.rawText).toBe("original markdown");
+    await host.dispose();
+  });
+
+  it("aligns the split's panes while it shows, and takes the space out for the other layouts", async () => {
+    const host = new EditorHost(document.createElement("div"), makeStore());
+    await host.reloadActiveDoc();
+    expect(fakeEditors.alignment).toEqual([]);
+    await host.setLayout("split");
+    expect(fakeEditors.alignment).toEqual(["listen document", "listen markdown"]);
+    await host.setLayout("document");
+    expect(fakeEditors.alignment).toEqual(["listen document", "listen markdown", "clear document", "clear markdown"]);
     await host.dispose();
   });
 

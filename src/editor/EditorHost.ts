@@ -32,6 +32,7 @@ import { forgetImageAnswers } from "./wysiwyg/imageView";
 import type { DropTarget } from "./wysiwyg/fileDrop";
 import { RawEditor } from "./raw/RawEditor";
 import { ScrollSync } from "./scrollSync";
+import { SplitAlignment } from "./splitAlign";
 import { applySpellcheck } from "./wysiwyg/spellcheck";
 import { managedSpellingAvailable } from "./spelling";
 import type { WysiwygContext } from "./wysiwyg/context";
@@ -190,6 +191,13 @@ export class EditorHost implements FindController {
    *  (§5.3): scrolling one pane keeps the other at the same %. Connected to the
    *  visible pair while the split is open; disconnected otherwise. */
   private readonly scrollSync = new ScrollSync();
+  /** Lines the split's panes up row for row (splitAlign.ts), so scrolling
+   *  both to the same position shows the same blocks side by side. Connected
+   *  with the scroll sync. */
+  private readonly splitAlignment = new SplitAlignment(
+    (el, top) => this.scrollSync.scrollQuietly(el, top),
+    () => this.scrollSync.driving(),
+  );
   /** Fraction of the host width given to the document (left) pane in split view. */
   private leftRatio = 0.5;
   private dragCleanup: (() => void) | null = null;
@@ -858,7 +866,7 @@ export class EditorHost implements FindController {
     if (this.disposed) return;
     if (this.activeTabId === tabId) {
       this.cancelSync();
-      this.scrollSync.disconnect();
+      this.disconnectSplit();
     }
     for (const view of ["wysiwyg", "raw"] as View[]) {
       if (this.disposed) return;
@@ -878,7 +886,7 @@ export class EditorHost implements FindController {
     if (this.disposed || this.changing) return;
     await this.runPaneChange(async () => {
       this.cancelSync();
-      this.scrollSync.disconnect();
+      this.disconnectSplit();
       this.endDrag();
       await this.destroyAllPanes();
       // A terminal React cleanup can pre-empt this reusable unmount while Crepe
@@ -928,7 +936,7 @@ export class EditorHost implements FindController {
     this.drops.clear();
     this.wake();
     this.cancelSync();
-    this.scrollSync.disconnect();
+    this.disconnectSplit();
     this.endDrag();
     this.applyingSync = false;
     this.currentView = null;
@@ -1120,6 +1128,11 @@ export class EditorHost implements FindController {
     const rawPane = showRaw ? await this.ensurePane(id, "raw", rebuild) : null;
     if (this.disposed || this.store.get().activeTabId !== id || (showRaw && !rawPane)) return record();
 
+    // The split's row alignment takes its space out of panes that leave the
+    // split while they still show, so each keeps the content in view.
+    if (layout !== "split" || !wysiwygPane || !rawPane || !this.splitAlignment.isConnectedTo(wysiwygPane.el, rawPane.el)) {
+      this.disconnectSplit();
+    }
     for (const pane of this.panes.values()) {
       const hidden = pane !== wysiwygPane && pane !== rawPane;
       if (hidden && !pane.el.hidden) pane.wysiwyg?.onHide();
@@ -1154,11 +1167,23 @@ export class EditorHost implements FindController {
    *  on every reveal so it always tracks the current pane elements (a pane rebuild
    *  or tab switch swaps the DOM nodes). */
   private syncScroll(wysiwygPane: Pane | null, rawPane: Pane | null): void {
-    if (this.layout === "split" && wysiwygPane && rawPane) {
+    const doc = wysiwygPane?.wysiwyg?.alignedPane();
+    const source = rawPane?.raw?.alignedPane();
+    if (this.layout === "split" && wysiwygPane && rawPane && doc && source) {
       this.scrollSync.connect(wysiwygPane.el, rawPane.el);
+      this.splitAlignment.connect(doc, source, wysiwygPane.el, rawPane.el);
     } else {
-      this.scrollSync.disconnect();
+      this.disconnectSplit();
     }
+  }
+
+  /** Stop the split's scroll sync and row alignment, and take the
+   *  alignment's space out of the panes. */
+  private disconnectSplit(): void {
+    // The alignment scrolls the panes as it takes its space out, which the
+    // scroll sync should not mirror, so it stops first.
+    this.splitAlignment.disconnect();
+    this.scrollSync.disconnect();
   }
 
   /** Return the live `(tab, view)` pane, rebuilding it when forced or stale.
@@ -1376,6 +1401,8 @@ export class EditorHost implements FindController {
     } finally {
       this.applyingSync = false;
     }
+    // Both panes hold the same text again, so pair their blocks anew.
+    if (this.layout === "split") this.splitAlignment.schedule();
   }
 
   // ── split-view layout / divider (§6.1) ───────────────────────────────────────

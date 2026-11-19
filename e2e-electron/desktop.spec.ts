@@ -2065,6 +2065,125 @@ test("a narrow Split pane keeps a readable text column and room for the block ha
   }).toBe(true);
 });
 
+test("the Split view lines the Markdown up with the document row for row", async () => {
+  const file = path.join(directory, "aligned-split.md");
+  const markdown = [
+    "---\ntitle: Aligned\n---",
+    "# Aligned split",
+    "A paragraph long enough to wrap onto several lines in both panes, so that the monospace Markdown and the proportional document give it different heights in each pane.",
+    "- First item\n- Second item\n  - Nested item\n- Third item",
+    "[ref]: https://example.com/a-definition-only-the-markdown-shows",
+    "| Name | Value |\n| --- | --- |\n| One | 1 |\n| Two | 2 |",
+    "> A quote.",
+    "Last paragraph.",
+  ].join("\n\n") + "\n";
+  await writeFile(file, markdown);
+  await launch(file);
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(1100, 760));
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentPane = page.locator(".editor-pane-wysiwyg");
+  const sourcePane = page.locator(".editor-pane-raw");
+  await expect(documentPane).toHaveClass(/md-row-aligned/);
+  /** How far apart each document row and its Markdown line are, by the
+   *  middle of their first lines of text. */
+  const offsets = () => page.evaluate(() => {
+    const middleOfFirstLine = (element: Element): number => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP) });
+      const range = document.createRange();
+      range.selectNodeContents(walker.nextNode()!);
+      const box = range.getClientRects()[0]!;
+      return (box.top + box.bottom) / 2;
+    };
+    const lines = [...document.querySelectorAll(".editor-pane-raw .cm-line")];
+    const lineHeight = parseFloat(getComputedStyle(document.querySelector(".editor-pane-raw .cm-content")!).lineHeight);
+    const sourceMiddle = (text: string): number => {
+      const line = lines.find((candidate) => candidate.textContent!.includes(text))!;
+      return line.getBoundingClientRect().top + lineHeight / 2;
+    };
+    // Each document row, by its element and text, and its Markdown line.
+    const rows: Array<[string, string, string]> = [
+      [".frontmatter-toggle", "Frontmatter", "---"],
+      [".ProseMirror h1", "Aligned split", "# Aligned split"],
+      [".ProseMirror > p", "A paragraph long enough", "A paragraph long enough"],
+      [".ProseMirror li", "Second item", "- Second item"],
+      [".ProseMirror li li", "Nested item", "- Nested item"],
+      [".ProseMirror tr", "Two", "| Two | 2 |"],
+      [".ProseMirror blockquote", "A quote.", "> A quote."],
+      [".ProseMirror > p", "Last paragraph.", "Last paragraph."],
+    ];
+    return rows.map(([selector, text, line]) => {
+      const row = [...document.querySelectorAll(selector)].find((element) => element.textContent!.includes(text))!;
+      return Math.abs(sourceMiddle(line) - middleOfFirstLine(row));
+    });
+  });
+  /** The largest distance between a row and its line, which spaces rounded
+   *  to whole pixels keep within a pixel. */
+  const misalignment = async () => Math.max(...(await offsets()));
+  await expect.poll(misalignment).toBeLessThanOrEqual(1);
+  // Both panes end at the same height, so they scroll as one.
+  const heights = async () => [await documentPane.evaluate((element) => element.scrollHeight), await sourcePane.evaluate((element) => element.scrollHeight)];
+  await expect.poll(async () => { const [a, b] = await heights(); return Math.abs(a! - b!) <= 1; }).toBe(true);
+
+  // An edit in the Markdown pane keeps the rows lined up.
+  const source = sourcePane.locator(".cm-content");
+  await sourcePane.locator(".cm-line", { hasText: "# Aligned split" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("\n\nA new paragraph typed into the Markdown pane, long enough to wrap there.");
+  await expect(page.locator(".ProseMirror p", { hasText: "A new paragraph typed" })).toBeVisible();
+  await expect.poll(misalignment).toBeLessThanOrEqual(1);
+  await expect(source).toContainText("A new paragraph typed");
+
+  // The Document and Markdown views show no added space.
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(documentPane).not.toHaveClass(/md-row-aligned/);
+  await expect(documentPane.locator('.ProseMirror [style*="--md-row-gap"]')).toHaveCount(0);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(sourcePane.locator(".cm-row-spacer")).toHaveCount(0);
+  // Back in the split, the rows line up again.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await expect.poll(misalignment).toBeLessThanOrEqual(1);
+});
+
+test("the aligned Split view keeps its place after a switch to another tab and back", async () => {
+  const file = path.join(directory, "aligned-tabs.md");
+  // Link reference definitions show only in the Markdown, so the document
+  // pane takes space above every section.
+  const definitions = (index: number) => ["a", "b", "c", "d", "e"].map((name) => `[s${index}${name}]: https://example.com/${index}/${name}`).join("\n");
+  const sections = Array.from({ length: 40 }, (_, index) => `## Section ${index + 1}\n\nParagraph ${index + 1} with [a link][s${index}a].\n\n${definitions(index)}`);
+  await writeFile(file, ["# Aligned tabs", ...sections].join("\n\n") + "\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentPane = page.locator(".editor-pane-wysiwyg:not([hidden])");
+  await expect(documentPane).toHaveClass(/md-row-aligned/);
+  // Scroll a heading to the top, past the space above it.
+  await documentPane.locator("h2", { hasText: /^Section 8$/ }).evaluate((element) => element.scrollIntoView({ block: "start" }));
+  /** The document block at the top of the view, how far it sits below the
+   *  pane's top, and whether both panes scroll together. The space above it
+   *  can change by a few pixels as CodeMirror measures lines it had only
+   *  estimated, so the scroll position itself can too. */
+  const place = () => page.evaluate(() => {
+    const pane = document.querySelector(".editor-pane-wysiwyg:not([hidden])")!;
+    const top = pane.getBoundingClientRect().top;
+    const first = [...pane.querySelectorAll(".ProseMirror > *")].find((block) => block.getBoundingClientRect().bottom > top + 1)!;
+    const markdown = document.querySelector(".editor-pane-raw:not([hidden])")!;
+    return { first: first.textContent, offset: Math.round(first.getBoundingClientRect().top - top), together: Math.abs(pane.scrollTop - markdown.scrollTop) <= 1 };
+  });
+  await expect.poll(async () => (await place()).together).toBe(true);
+  await expect(documentPane.locator('.ProseMirror [style*="--md-row-gap"]').first()).toBeAttached();
+  const before = await place();
+  // Each round trip took the space out of the hidden panes and added it again
+  // above where they had been scrolled, so the view moved down each time.
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.locator(".tab-label")).toHaveCount(2);
+  for (let round = 0; round < 2; round++) {
+    if (round > 0) await page.locator(".tab-label", { hasText: "Untitled" }).click();
+    await expect(page.locator(".tab.active")).toContainText("Untitled");
+    await page.locator(".tab-label", { hasText: "aligned-tabs.md" }).click();
+    await expect(page.locator(".tab.active")).toContainText("aligned-tabs.md");
+    await expect.poll(place).toEqual(before);
+  }
+});
+
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
   const file = path.join(directory, "block-handle-add-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
@@ -2151,7 +2270,10 @@ test("after a press or drag on the block handle from anywhere, the next key repl
 
 test("the block handle hides when the document changes width, so a click on a bullet or a task's box right after a switch of view reaches it", async () => {
   const file = path.join(directory, "block-handle-resize.md");
-  await writeFile(file, ["First line.", "- one\n- two\n- three", "Middle line.", "- [ ] task a\n- [ ] task b", "Last line."].join("\n\n") + "\n");
+  // Headings around the lists are taller in the document than their Markdown
+  // lines, so the split's row alignment puts space only into the Markdown
+  // pane there, and each bullet stays where the handle was.
+  await writeFile(file, ["# First line", "- one\n- two\n- three", "## Middle line", "- [ ] task a\n- [ ] task b", "Last line."].join("\n\n") + "\n");
   await launch(file);
   const documentView = page.locator(".milkdown .ProseMirror");
   const handle = page.locator(".milkdown-block-handle");
@@ -2199,7 +2321,7 @@ test("the block handle hides when the document changes width, so a click on a bu
   await expect(documentView).toBeFocused();
   await page.keyboard.type("b");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["First line.", "- one\n- abtwo\n- three", "Middle line.", "- [ ] task a\n- [x] task b", "Last line."].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["# First line", "- one\n- abtwo\n- three", "## Middle line", "- [ ] task a\n- [x] task b", "Last line."].join("\n\n") + "\n");
 });
 
 test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {

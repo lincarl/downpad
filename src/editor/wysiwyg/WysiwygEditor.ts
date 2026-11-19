@@ -78,6 +78,8 @@ import { selectionToolbar } from "./selectionToolbar";
 import { decidedDoc, decideTypedMark, mathDelimiters } from "./mathDelimiters";
 import { linkEdges } from "./linkEdges";
 import { excludeCodeBlockSpellcheck, excludeInlineCodeSpellcheck } from "./spellcheck";
+import { docAlignedPane, rowSpacing } from "./rowAlignment";
+import type { AlignedPane } from "../splitAlign";
 import { documentSpelling } from "./liveSpelling";
 import {
   blockEdge,
@@ -207,6 +209,14 @@ export class WysiwygEditor {
   private readonly dropTargets = new Set<DropTarget>();
   /** Counts split drops, for the id of each one's undo step. */
   private dropRuns = 0;
+  /** Told when the document's content may have changed height, while the
+   *  split aligns this pane (`alignedPane`). */
+  private readonly layoutListeners = new Set<() => void>();
+  /** Watches the size of the document and the frontmatter disclosure while
+   *  anyone listens for layout changes. */
+  private layoutObserver: ResizeObserver | null = null;
+  /** This pane for the split's row alignment, made on first use. */
+  private aligned: AlignedPane | null = null;
 
   async mount(
     root: HTMLElement,
@@ -240,6 +250,8 @@ export class WysiwygEditor {
     crepeRoot.className = "crepe-root";
     root.appendChild(crepeRoot);
     this.crepeRoot = crepeRoot;
+    // The split aligns again once a composition ends, which it waits for.
+    crepeRoot.addEventListener("compositionend", () => this.layoutChanged());
 
     // Shared holder so the missing-image handler (a Crepe feature config) can
     // reach the live EditorView captured by the image context-menu plugin.
@@ -373,6 +385,9 @@ export class WysiwygEditor {
     this.crepe.editor.use(baselineState(this.opened));
     // Text put in at either end of a link starts plain text (§5.6).
     this.crepe.editor.use(linkEdges);
+    // Blank space above blocks that lines them up with the Markdown pane in
+    // the split (splitAlign.ts).
+    this.crepe.editor.use(rowSpacing);
     // Report document edits once typing pauses. Downpad keeps its own timer
     // rather than Milkdown's listener plugin, which compares against the
     // document it last reported itself. After `reportPendingChange`, an undo back
@@ -773,15 +788,53 @@ export class WysiwygEditor {
         });
         this.fmPanel = panel;
         this.fmPanelRoot = createRoot(panel);
+        this.layoutObserver?.observe(panel);
+        this.layoutChanged();
       }
       this.renderFrontmatter();
     } else if (this.fmPanel) {
+      this.layoutObserver?.unobserve(this.fmPanel);
       this.fmPanelRoot?.unmount();
       this.fmPanelRoot = null;
       this.fmPanel.remove();
       this.fmPanel = null;
       this.fmExpanded = false;
+      this.layoutChanged();
     }
+  }
+
+  /** This pane as the split's row alignment measures and spaces it. */
+  alignedPane(): AlignedPane {
+    this.aligned ??= docAlignedPane({
+      view: () => this.withView((view) => view, null),
+      root: () => this.root,
+      body: () => this.crepeRoot,
+      frontmatter: () => this.fmPanel,
+      listen: (listener) => {
+        this.layoutListeners.add(listener);
+        this.observeLayout();
+        return () => {
+          this.layoutListeners.delete(listener);
+          if (this.layoutListeners.size > 0) return;
+          this.layoutObserver?.disconnect();
+          this.layoutObserver = null;
+        };
+      },
+    });
+    return this.aligned;
+  }
+
+  /** Watch the document and the disclosure for changes of height. */
+  private observeLayout(): void {
+    if (this.layoutObserver || typeof ResizeObserver === "undefined") return;
+    this.layoutObserver = new ResizeObserver(() => this.layoutChanged());
+    if (this.crepeRoot) this.layoutObserver.observe(this.crepeRoot);
+    if (this.fmPanel) this.layoutObserver.observe(this.fmPanel);
+  }
+
+  /** Tell the layout listeners that the content may have changed height. */
+  private layoutChanged(): void {
+    for (const listener of this.layoutListeners) listener();
   }
 
   /** Reveal or hide metadata without changing the document or undo history. */
@@ -908,6 +961,9 @@ export class WysiwygEditor {
       this.changeTimer = null;
     }
     this.find.dispose();
+    this.layoutObserver?.disconnect();
+    this.layoutObserver = null;
+    this.layoutListeners.clear();
     this.fmPanelRoot?.unmount();
     this.fmPanelRoot = null;
     this.fmPanel = null;

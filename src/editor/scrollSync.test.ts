@@ -115,6 +115,22 @@ describe("ScrollSync", () => {
     expect(a.scrollTop).toBe(250); // 25% of 1000
   });
 
+  it("does not mirror a quiet scroll, but mirrors the user's next scroll at once", () => {
+    const a = fakePane(2000, 1000); // max 1000
+    const b = fakePane(2000, 1000);
+    sync.connect(a, b);
+
+    sync.scrollQuietly(a, 300);
+    fireScroll(a);
+    expect(b.scrollTop).toBe(0);
+    expect(sync.driving()).toBeNull();
+
+    // The user's scroll a moment later still syncs, with no wait.
+    a.scrollTop = 600;
+    fireScroll(a);
+    expect(b.scrollTop).toBe(600);
+  });
+
   it("ignores the mirrored pane's echo so the panes don't fight", () => {
     const a = fakePane(2000, 1000); // max 1000
     const b = fakePane(1400, 1000); // max 400
