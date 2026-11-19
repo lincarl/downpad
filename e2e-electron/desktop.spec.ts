@@ -249,14 +249,16 @@ test("a change on disk stays unresolved while another tab is in front, and one m
   await page.keyboard.type(" Unsaved.");
   await writeFile(first, "# First\n\nTheirs.\n");
   const notice = page.getByText("This file changed on disk.");
+  // The tab in back keeps its editor in the page, hidden.
+  const shownHeading = page.locator(".editor-pane:not([hidden]) .ProseMirror h1");
   await expect(notice).toBeVisible();
   await chooseOpen(second);
-  await expect(page.locator(heading)).toHaveText("Second");
+  await expect(shownHeading).toHaveText("Second");
   await expect(notice).toBeHidden();
 
   await page.getByRole("tab", { name: /conflict-first\.md/ }).click();
   await expect(notice).toBeVisible();
-  await page.locator(heading).click({ button: "right" });
+  await shownHeading.click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
   await page.keyboard.press("Escape");
   expect(await readFile(first, "utf8")).toBe("# First\n\nTheirs.\n");
@@ -264,10 +266,10 @@ test("a change on disk stays unresolved while another tab is in front, and one m
   // The second file changes while its tab is not watched.
   await writeFile(second, "# Second, changed\n");
   await page.getByRole("tab", { name: /conflict-second\.md/ }).click();
-  await expect(page.locator(heading)).toHaveText("Second");
+  await expect(shownHeading).toHaveText("Second");
   await expect(notice).toBeVisible();
   await page.getByRole("button", { name: "Reload", exact: true }).click();
-  await expect(page.locator(heading)).toHaveText("Second, changed");
+  await expect(shownHeading).toHaveText("Second, changed");
   await expect(notice).toBeHidden();
 });
 
