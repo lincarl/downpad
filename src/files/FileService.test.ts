@@ -175,6 +175,31 @@ describe("saving document snapshots", () => {
     expect(store.get().doc).toMatchObject({ savedMarkdown: "# Typed later\n", modifiedMs: 300, isDirty: false });
   });
 
+  it("skips a queued save whose check holds it when its write would start, and tells its own write", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "# First\n");
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const first = files.save();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    // The file holds the old saved text or the new one while the write runs.
+    expect(files.isOwnWrite(tabId, "# First\n")).toBe(true);
+    expect(files.isOwnWrite(tabId, "# Original content\n")).toBe(true);
+    expect(files.isOwnWrite(tabId, "# Theirs\n")).toBe(false);
+
+    // An autosave waits behind it, and a change on disk shows meanwhile.
+    applyEditorMarkdownForTab(store, tabId, "# Second\n");
+    let held = false;
+    const autosave = files.save({ keepTypedMark: true, unless: () => held });
+    held = true;
+    write.resolve({ modifiedMs: 200 });
+    expect(await first).toBe(true);
+    expect(await autosave).toBe(false);
+    expect(native.writeFile).toHaveBeenCalledOnce();
+    expect(files.isOwnWrite(tabId, "# First\n")).toBe(false);
+  });
+
   it("restores the saved text when the write fails", async () => {
     const { store, files } = setup();
     const tabId = store.get().activeTabId!;

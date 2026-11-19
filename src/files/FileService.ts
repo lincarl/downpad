@@ -45,6 +45,10 @@ interface SaveRequest {
   expectedPath: string | null;
   saveAs: boolean;
   choice: SaveAsChoice;
+  /** Skips the write when it answers true just before the write starts. */
+  unless?: () => boolean;
+  /** The saved text the write replaces, once the write starts. */
+  replaced?: string | null;
 }
 
 /** The suggested path of a Save As, and paths it must not write. */
@@ -231,9 +235,19 @@ export class FileService {
    *  writes a typed closing `$` or `~` that still waits for the next character
    *  as Save would, but leaves it waiting in the editor, so the save never
    *  changes the document while the user types, and a digit typed next still
-   *  keeps it text. */
-  save(options: { keepTypedMark?: boolean } = {}): Promise<boolean> {
+   *  keeps it text. `unless` runs just before the write starts, after the
+   *  saves queued before it, and a true answer skips the write, which the
+   *  save reports as failed. */
+  save(options: { keepTypedMark?: boolean; unless?: () => boolean } = {}): Promise<boolean> {
     return this.queueSave(this.store.get().activeTabId, false, options);
+  }
+
+  /** Whether a save of the tab under way writes `markdown` or replaces it, so
+   *  a file that holds it is the app's own doing, not a change on disk. */
+  isOwnWrite(tabId: string, markdown: string): boolean {
+    return [...this.pendingSaves].some(
+      (request) => request.tabId === tabId && (request.snapshot.markdown === markdown || request.replaced === markdown),
+    );
   }
 
   /** Save the active document under a path the user chooses. `defaultPath`
@@ -258,15 +272,16 @@ export class FileService {
   private queueSave(
     tabId: string | null,
     saveAs: boolean,
-    options: { keepTypedMark?: boolean } = {},
+    options: { keepTypedMark?: boolean; unless?: () => boolean } = {},
     choice: SaveAsChoice = {},
   ): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
-    this.present.flush(options);
+    const { unless, ...flushOptions } = options;
+    this.present.flush(flushOptions);
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!tabId || !doc) return Promise.resolve(false);
-    const request = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice };
+    const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, unless };
     this.pendingSaves.add(request);
     const operation = this.saveQueue.then(() => this.saveSnapshot(request))
       .finally(() => this.pendingSaves.delete(request));
@@ -275,7 +290,8 @@ export class FileService {
     return operation;
   }
 
-  private async saveSnapshot({ tabId, snapshot, expectedPath, saveAs, choice }: SaveRequest): Promise<boolean> {
+  private async saveSnapshot(request: SaveRequest): Promise<boolean> {
+    const { tabId, snapshot, expectedPath, saveAs, choice } = request;
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== expectedPath) return false;
     const originalPath = current.filePath;
@@ -286,10 +302,11 @@ export class FileService {
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
     }
-    if (!path) return false;
+    if (!path || request.unless?.()) return false;
     // Until the write settles, the file may hold the old saved text or the new
     // one, so an edit back to either still counts as unsaved.
     const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
+    request.replaced = previous;
     this.store.patchDocById(tabId, { savedMarkdown: null });
     const meta = await writeFile(path, snapshot.markdown, snapshot.eol).catch((error: unknown) => {
       this.restoreSavedMarkdown(tabId, originalPath, previous);

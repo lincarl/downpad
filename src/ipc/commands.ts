@@ -39,6 +39,11 @@ export function pathExists(path: string): Promise<boolean> {
   return invoke("path_exists", { path });
 }
 
+/** The file's modification time, which tells whether it changed without reading it. */
+export function fileModifiedTime(path: string): Promise<number> {
+  return invoke("file_modified_time", { path });
+}
+
 /** Watch the open file for external changes (emits `file-changed`, §5.1). */
 export function watchFile(path: string): Promise<void> {
   return invoke("watch_file", { path });

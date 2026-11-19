@@ -6,7 +6,7 @@
 import type { DropPoint, EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
 import { sameFilePath } from "../files/pathIdentity";
-import { readFile } from "../ipc/commands";
+import { fileModifiedTime, readFile } from "../ipc/commands";
 import type { FilePayload } from "../ipc/contracts";
 import {
   onCloseRequested,
@@ -36,17 +36,26 @@ export interface DesktopEventDependencies {
 }
 
 /** A change on disk that the user has not resolved with Reload or Keep mine:
- *  the file's path, its changed text and its mtime. */
+ *  the file's path, its changed text and its mtime, and the document's mtime
+ *  when the change was found. */
 interface PendingChange {
   path: string;
   markdown: string;
   modifiedMs: number;
+  seenModifiedMs: number;
 }
 
 export class DesktopEventBindings {
   /** Unresolved changes on disk by tab, which stay while another tab is in
    *  front. */
   private readonly pendingChanges = new Map<string, PendingChange>();
+  /** The comparisons of a tab's document with its file under way, by tab.
+   *  Automatic saves wait for them. */
+  private readonly checks = new Map<string, number>();
+  /** The comparisons started so far, and by tab the latest one whose read
+   *  was used. Reads can finish out of order. */
+  private comparisons = 0;
+  private readonly lastUsed = new Map<string, number>();
   private started = false;
   private disposed = false;
   private closing = false;
@@ -67,6 +76,7 @@ export class DesktopEventBindings {
     this.captureCleanup(onHistoryRequested(undoOrRedo));
     this.captureCleanup(this.registerDragDrop());
     this.captureCleanup(this.registerCloseGuard());
+    this.cleanups.push(this.followRecordedFile());
   }
 
   dispose(): void {
@@ -76,17 +86,22 @@ export class DesktopEventBindings {
   }
 
   /** After another document came to the front: show the bar again for its
-   *  unresolved change on disk, or else compare it with its file, which was
-   *  not watched while another tab was in front. */
+   *  unresolved change on disk, and compare it with its file, which was not
+   *  watched while another tab was in front. */
   activeDocChanged(): void {
     if (!this.started || this.disposed) return;
-    if (!this.showPendingChange()) void this.compareWithDisk(null);
+    this.showPendingChange();
+    void this.compareWithDisk(null);
   }
 
-  /** Whether the active document has a change on disk that the user has not
-   *  resolved with Reload or Keep mine. */
-  hasPendingChange(): boolean {
-    return this.activeChange() !== null;
+  /** Whether a save the user did not ask for as such, such as autosave or the
+   *  save before Copy file, must wait for the active document: while its file
+   *  is being compared with it, or while a change on disk is unresolved, whose
+   *  bar then shows again. */
+  holdSave(): boolean {
+    const tabId = this.dependencies.store.get().activeTabId;
+    if (tabId && this.checks.has(tabId)) return true;
+    return this.showPendingChange();
   }
 
   /** Show the bar for a change on disk that the user has not resolved with
@@ -99,10 +114,10 @@ export class DesktopEventBindings {
     return true;
   }
 
-  /** The active document's unresolved change on disk. A save since the
-   *  change replaced it, as Keep mine treats a newer save, and Save As gives
-   *  the document another file, so the change is forgotten then, and so are
-   *  the changes of closed tabs. */
+  /** The active document's unresolved change on disk. Save As gives the
+   *  document another file, and a save with a later time than the change
+   *  replaced it, as Keep mine treats one, so the change is forgotten then,
+   *  and so are the changes of closed tabs. */
   private activeChange(): PendingChange | null {
     const { activeTabId, doc, tabs } = this.dependencies.store.get();
     for (const id of this.pendingChanges.keys()) {
@@ -110,31 +125,59 @@ export class DesktopEventBindings {
     }
     const change = activeTabId ? this.pendingChanges.get(activeTabId) : undefined;
     if (!activeTabId || !change) return null;
-    if (!doc.filePath || !sameFilePath(change.path, doc.filePath) || change.modifiedMs <= doc.modifiedMs) {
+    const savedSince = doc.modifiedMs !== change.seenModifiedMs && doc.modifiedMs >= change.modifiedMs;
+    if (!doc.filePath || !sameFilePath(change.path, doc.filePath) || savedSince) {
       this.pendingChanges.delete(activeTabId);
       return null;
     }
     return change;
   }
 
+  /** Forget the tab's change on disk and take its bar down. */
+  private resolve(tabId: string): void {
+    this.pendingChanges.delete(tabId);
+    const { activeTabId, banner } = this.dependencies.store.get();
+    if (activeTabId === tabId && banner?.kind === "file-changed") this.dependencies.store.set({ banner: null });
+  }
+
+  /** When a save, Save As or Keep mine gives the active document another file
+   *  or file time, check its unresolved change on disk again: a change that
+   *  no longer applies goes, and otherwise the file's text tells whether the
+   *  save replaced it. Returns the unsubscribe function. */
+  private followRecordedFile(): () => void {
+    const { store } = this.dependencies;
+    let last = store.get();
+    return store.subscribe((state) => {
+      const before = last;
+      last = state;
+      if (state.activeTabId === null || state.activeTabId !== before.activeTabId) return;
+      if (state.doc.filePath === before.doc.filePath && state.doc.modifiedMs === before.doc.modifiedMs) return;
+      if (!this.pendingChanges.has(state.activeTabId)) return;
+      if (!this.activeChange()) this.resolve(state.activeTabId);
+      else void this.compareWithDisk(null);
+    });
+  }
+
   /** Apply the action exposed by React's external-change banner. */
   handleBannerAction(id: string): void {
     const { files, run, store } = this.dependencies;
-    const path = store.get().doc.filePath;
-    if (id === "reload" && path) {
+    const { activeTabId, doc } = store.get();
+    if (id === "reload" && doc.filePath) {
+      // The reload takes the file as it is, whatever its time says.
+      if (activeTabId) this.pendingChanges.delete(activeTabId);
+      const path = doc.filePath;
       run(() => files.openPath(path, { reload: true }));
     } else if (id === "keep") {
       // The file holds the changed text, so the open text is unsaved unless it
-      // matches it. A Save or a later change on disk since then is newer, and
-      // already recorded what the file holds.
+      // matches it. A save since then is newer, and already recorded what the
+      // file holds, so there is no change left to keep then.
       const change = this.activeChange();
-      const activeTabId = store.get().activeTabId;
       if (activeTabId) this.pendingChanges.delete(activeTabId);
-      if (change && change.modifiedMs > store.get().doc.modifiedMs) {
+      if (change) {
         store.patchDoc({
           modifiedMs: change.modifiedMs,
           savedMarkdown: change.markdown,
-          isDirty: store.get().doc.markdown !== change.markdown,
+          isDirty: doc.markdown !== change.markdown,
         });
       }
       store.set({ banner: null });
@@ -148,49 +191,70 @@ export class DesktopEventBindings {
     const document = this.dependencies.store.get().doc;
     if (!document.filePath) return;
     if (!sameFilePath(payload.path, document.filePath)) return;
-    if (payload.modifiedMs <= document.modifiedMs) return;
+    // The file time the document recorded is the version it knows, such as
+    // its own save. Any other time, also an older one, can be a change.
+    if (payload.modifiedMs === document.modifiedMs) return;
     await this.compareWithDisk(payload.modifiedMs);
   }
 
-  /** Read the active document's file, and offer to reload it when it changed
-   *  since the document last recorded it, at `reported` as the watcher saw
-   *  it, or else at the time the read gives. A recovered document has no time
-   *  of its own to compare with, so only the watcher reports its changes. */
+  /** Read the active document's file, and offer to reload it when its text
+   *  differs from what the document last read or wrote and from the open
+   *  text. `reported` is the time the watcher saw. Without it, as when a tab
+   *  comes to the front, the file's time alone tells first whether it can
+   *  have changed. A recovered document has no file time or text of its own
+   *  to compare with, so only the watcher reports its changes. */
   private async compareWithDisk(reported: number | null): Promise<void> {
-    const { store } = this.dependencies;
-    const document = store.get().doc;
-    if (!document.filePath || (reported === null && document.modifiedMs === 0)) return;
-    const path = document.filePath;
-
-    let onDisk: FilePayload;
+    const { files, store } = this.dependencies;
+    const { activeTabId: tabId, doc } = store.get();
+    if (!tabId || !doc.filePath || (reported === null && doc.modifiedMs === 0)) return;
+    const path = doc.filePath;
+    const comparison = ++this.comparisons;
+    this.checks.set(tabId, (this.checks.get(tabId) ?? 0) + 1);
     try {
-      onDisk = await readFile(path);
-    } catch {
-      // Files can briefly be unreadable while another process is replacing them.
-      return;
-    }
-    if (this.disposed) return;
+      if (reported === null) {
+        const time = await fileModifiedTime(path).catch(() => null);
+        if (time === null || this.disposed) return;
+        const pending = this.pendingChanges.get(tabId);
+        if (pending ? time === pending.modifiedMs : time === store.get().doc.modifiedMs) return;
+      }
 
-    // The read crossed an async boundary; validate against current state again.
-    const { activeTabId, doc: current } = store.get();
-    if (!activeTabId || !current.filePath || !sameFilePath(path, current.filePath)) return;
-    const modifiedMs = reported ?? onDisk.modifiedMs;
-    if (modifiedMs <= current.modifiedMs) return;
-    // Reads can finish out of order. A newer change read while this one waited
-    // is what the file holds now.
-    const pending = this.pendingChanges.get(activeTabId);
-    if (pending && pending.modifiedMs >= modifiedMs) return;
-    if (onDisk.content === current.markdown) {
-      // The file holds the open text, so an earlier change has nothing left to
-      // reload or keep.
-      store.patchDoc({ modifiedMs, savedMarkdown: onDisk.content, isDirty: false });
-      this.pendingChanges.delete(activeTabId);
-      if (store.get().banner?.kind === "file-changed") store.set({ banner: null });
-      return;
-    }
+      let onDisk: FilePayload;
+      try {
+        onDisk = await readFile(path);
+      } catch {
+        // Files can briefly be unreadable while another process is replacing them.
+        return;
+      }
+      if (this.disposed) return;
 
-    this.pendingChanges.set(activeTabId, { path: current.filePath, markdown: onDisk.content, modifiedMs });
-    this.showChangeBanner();
+      // The read crossed an async boundary; validate against current state again.
+      const state = store.get();
+      if (state.activeTabId !== tabId || !state.doc.filePath || !sameFilePath(path, state.doc.filePath)) return;
+      // A later comparison already told what the file holds.
+      if ((this.lastUsed.get(tabId) ?? 0) > comparison) return;
+      this.lastUsed.set(tabId, comparison);
+      const current = state.doc;
+      if (files.isOwnWrite(tabId, onDisk.content)) return;
+      if (onDisk.content === current.savedMarkdown || onDisk.content === current.markdown) {
+        // The file holds what the document last read or wrote, whatever its
+        // time says, or the open text, so nothing is left to reload or keep.
+        this.resolve(tabId);
+        store.patchDoc({ modifiedMs: onDisk.modifiedMs, savedMarkdown: onDisk.content, isDirty: current.markdown !== onDisk.content });
+        return;
+      }
+
+      this.pendingChanges.set(tabId, {
+        path,
+        markdown: onDisk.content,
+        modifiedMs: onDisk.modifiedMs,
+        seenModifiedMs: current.modifiedMs,
+      });
+      this.showChangeBanner();
+    } finally {
+      const left = (this.checks.get(tabId) ?? 1) - 1;
+      if (left > 0) this.checks.set(tabId, left);
+      else this.checks.delete(tabId);
+    }
   }
 
   /** The bar that asks whether to reload a file that changed on disk. */

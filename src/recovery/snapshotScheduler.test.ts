@@ -325,7 +325,7 @@ it.each([
   await vi.advanceTimersByTimeAsync(4_999);
   expect(saving).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
-  expect(saving.mock.calls).toEqual(saves ? [[{ keepTypedMark: true }]] : []);
+  expect(saving.mock.calls).toEqual(saves ? [[{ keepTypedMark: true, unless: expect.any(Function) }]] : []);
   expect(native.writeFile.mock.calls).toEqual(saves ? [["/docs/notes.md", "# Draft\n", "lf"]] : []);
 });
 

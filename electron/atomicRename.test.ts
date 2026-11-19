@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import filesystem, { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
-import { writeAtomic, writeMarkdown } from "./io";
+import { readMarkdown, writeAtomic, writeMarkdown } from "./io";
 
 const nativePlatform = process.platform;
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -62,6 +62,31 @@ it("reports the time of the file it wrote, not of one another program put there 
 
   const { modifiedMs } = await writeMarkdown(destination, "Mine\n", "lf");
   expect(modifiedMs).toBeLessThan(Math.floor((await stat(destination)).mtimeMs) - 30_000);
+});
+
+it("reads a file's text and time from one open file, so a replacement right after the read does not mix them", async () => {
+  const { directory, destination } = await fixture();
+  await utimes(destination, new Date(), new Date(Date.now() - 60_000));
+  const original = Math.floor((await stat(destination)).mtimeMs);
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementationOnce(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      // Another program replaces the file right after the read.
+      const replacement = join(directory, "replacement.md");
+      await writeFile(replacement, "Theirs\n");
+      await rename(replacement, destination);
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  const read = await readMarkdown(destination);
+  expect(read).toMatchObject({ content: "Original text\n", modifiedMs: original });
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
 });
 
 it.each(["linux", "darwin"] as const)("fails immediately on %s and keeps the old file and removes staging", async (platform) => {

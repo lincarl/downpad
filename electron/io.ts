@@ -77,7 +77,17 @@ export async function writeAtomic(
 
 export async function readMarkdown(path: string): Promise<FilePayload> {
   const target = absolutePath(path);
-  const bytes = await readFile(target);
+  // The text and its time come from one open file, so a replacement of the file in
+  // between cannot pair the old text with the new time.
+  const handle = await open(target, "r");
+  let bytes: Buffer;
+  let modifiedMs: number;
+  try {
+    bytes = await handle.readFile();
+    modifiedMs = Math.floor((await handle.stat()).mtimeMs);
+  } finally {
+    await handle.close();
+  }
   const hadBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   let raw: string;
   try {
@@ -92,8 +102,13 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
     eol: crlf > 0 && crlf >= lf ? "crlf" : "lf",
     hadBom,
     sizeBytes: bytes.length,
-    modifiedMs: Math.floor((await stat(target)).mtimeMs),
+    modifiedMs,
   };
+}
+
+/** The file's modification time, which tells whether it changed without reading it. */
+export async function modifiedTime(path: string): Promise<number> {
+  return Math.floor((await stat(absolutePath(path))).mtimeMs);
 }
 
 let pendingMarkdownWrite: Promise<void> = Promise.resolve();

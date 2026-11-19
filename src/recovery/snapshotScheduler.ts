@@ -30,7 +30,8 @@ export class SnapshotScheduler {
 
   /** `holdAutosave` tells whether autosave must wait, such as while a change
    *  on disk to the active document is not resolved with Reload or Keep
-   *  mine, since its save would replace the other version without asking. */
+   *  mine, since its save would replace the other version without asking. It
+   *  runs again just before the write, after the saves queued before it. */
   constructor(
     private readonly store: Store,
     private readonly files: FileService,
@@ -140,7 +141,7 @@ export class SnapshotScheduler {
   private async tickAutosave(): Promise<void> {
     const { doc, settings } = this.store.get();
     if (settings.autosaveEnabled && doc.filePath && doc.isDirty && !this.holdAutosave()) {
-      await this.files.save({ keepTypedMark: true }).catch(() => {});
+      await this.files.save({ keepTypedMark: true, unless: this.holdAutosave }).catch(() => {});
     }
   }
 }

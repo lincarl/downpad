@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -4837,6 +4837,21 @@ test("an open Settings dialog shows a hand edit of settings.toml in the fields t
     const text = await readFile(settingsFile, "utf8");
     return ["recentFilesVisibleCount = 30", "recentFilesMaxRetained = 50", "recentFilesKeepRemoved = true"].every((line) => text.includes(line));
   }).toBe(true);
+});
+
+test("a file restored with an older time shows the notice that it changed on disk", async () => {
+  const file = path.join(directory, "restored.md");
+  await writeFile(file, "# Restored\n\nCurrent text.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Restored");
+  // A backup with its original, older time replaces the file.
+  await writeFile(file, "# Restored\n\nBackup text.\n");
+  const older = new Date(Date.now() - 3_600_000);
+  await utimes(file, older, older);
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.locator(".milkdown .ProseMirror p")).toHaveText("Backup text.");
+  await expect(page.getByText("This file changed on disk.")).toBeHidden();
 });
 
 test("Settings says when settings.toml cannot be written, and Apply tries again once it can", async () => {
