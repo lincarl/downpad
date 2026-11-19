@@ -456,10 +456,10 @@ export class PrintWorkspace {
         await this.runBrowserPrint();
         return;
       }
-      // Printing with the detected default printer chooses it.
-      this.edited.add("printerName");
       try {
-        await this.runNative(() => printWebview(this.nativeOptions()), "Printing…");
+        // A print that ends well chooses the printer it used, also the
+        // detected default.
+        await this.runNative(() => printWebview(this.nativeOptions()), "Printing…", () => this.edited.add("printerName"));
       } catch (err) {
         // The backend print command failed to start. Printing through the browser
         // dialog still produces the right pages — it just shows one more dialog.
@@ -526,8 +526,9 @@ export class PrintWorkspace {
    *  listener has to be in place before the job starts. Electron events aren't
    *  buffered, so it is torn down explicitly if the job never starts. `label`
    *  shows while the job runs and is cleared after it, unless a failure message
-   *  has replaced it. */
-  private async runNative(start: () => Promise<void>, label: string): Promise<void> {
+   *  has replaced it. `succeeded` runs when the job ends well, before the
+   *  workspace closes. */
+  private async runNative(start: () => Promise<void>, label: string, succeeded?: () => void): Promise<void> {
     this.setStatus(label);
     const waiter = waitForPrintCompleted();
     this.activePrintCancel = waiter.cancel;
@@ -540,7 +541,10 @@ export class PrintWorkspace {
       }
       const result = await waiter.promise;
       if (!this.host) return;
-      if (result.ok) this.close();
+      if (result.ok) {
+        succeeded?.();
+        this.close();
+      }
       else this.flash(result.message || "Printing was cancelled.");
     } finally {
       if (this.activePrintCancel === waiter.cancel) this.activePrintCancel = null;

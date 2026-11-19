@@ -401,6 +401,24 @@ describe("PrintWorkspace React view", () => {
     expect(saveSettings).toHaveBeenLastCalledWith({ printerName: "Office" });
   });
 
+  it("saves no detected printer after a print that the printer rejects", async () => {
+    enableElectron();
+    let complete!: (result: { ok: boolean; message?: string }) => void;
+    nativeMocks.onPrintCompleted.mockImplementationOnce((handler) => {
+      complete = handler;
+      return Promise.resolve(vi.fn());
+    });
+    nativeMocks.listPrinters.mockResolvedValueOnce([{ name: "Office", isDefault: true }]);
+    act(() => workspace!.open(JOB));
+    await flush();
+    act(() => button("Print").click());
+    await flush();
+    act(() => complete({ ok: false, message: "The printer rejected the job." }));
+    await flush();
+    act(() => workspace!.close());
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
   it("keeps the workspace open and ready to print again when the printer fails", async () => {
     enableElectron();
     let complete!: (result: { ok: boolean; message?: string }) => void;
