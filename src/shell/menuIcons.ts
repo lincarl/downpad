@@ -6,6 +6,7 @@ import {
   ClipboardType,
   Copy,
   FileCode2,
+  Files,
   ImageUp,
   Link,
   PencilLine,
@@ -25,6 +26,8 @@ export const MENU_ICONS = {
   selectAll: TextSelect,
   link: Link,
   markdown: FileCode2,
+  /** The document's file as the file manager copies it (Copy file). */
+  copyFile: Files,
   print: Printer,
   spelling: SpellCheck,
   /** Mervin's badged "copy path" glyph: a file with a copy badge. */

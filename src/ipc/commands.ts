@@ -73,6 +73,12 @@ export function readImageBytes(path: string): Promise<ImageBytes> {
   return invoke("read_image_bytes", { path });
 }
 
+/** Put the file at `path` on the clipboard as the file manager copies it, to
+ *  paste as a file or an attachment. */
+export function copyFileToClipboard(path: string): Promise<void> {
+  return invoke("copy_file_to_clipboard", { path });
+}
+
 // ── Recent files (§5.8) ──
 
 export function getRecentFiles(limit?: number): Promise<RecentEntry[]> {

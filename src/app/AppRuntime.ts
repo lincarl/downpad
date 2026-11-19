@@ -27,6 +27,7 @@ import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
+import { copyFileToClipboard } from "../ipc/commands";
 import { GitSync } from "../git/GitSync";
 
 export interface AppRuntimeHosts {
@@ -108,13 +109,15 @@ export class AppRuntime {
 
     // Replace the native WebView right-click menu with Downpad's own (§6.1). It
     // offers the editing commands over editable text and the document actions
-    // (Copy as Markdown, Print) everywhere, instead of the browser-level entries
-    // the native menu carries. Electron supplies spelling choices for the
+    // (Copy as Markdown, Copy file, Print) everywhere, instead of the
+    // browser-level entries the native menu carries. Electron supplies spelling choices for the
     // ordinary menu; Shift+right-click keeps the native editing menu (§5.14).
     this.cleanups.push(installDocumentContextMenu({
       hasDocument: () => this.store.get().activeTabId !== null,
       print: () => void this.printActiveDocument(),
       copyMarkdown: () => void this.copyMarkdown(),
+      canCopyFile: () => isElectron() && this.store.get().activeTabId !== null,
+      copyFile: () => void this.copyFile(),
       canCheckSpelling: () => this.editorHost.canCheckSpelling(),
       checkSpelling: () => this.checkDocumentSpelling(),
       insertLink: (href) => this.editorHost.insertLink(href),
@@ -617,6 +620,27 @@ export class AppRuntime {
       await navigator.clipboard.writeText(this.store.get().doc.markdown);
     } catch {
       // Clipboard may be unavailable outside the app shell; ignore.
+    }
+  }
+
+  /** Put the active document's file on the clipboard, as the file manager
+   *  copies it, to paste into a folder or as an attachment. Unsaved changes
+   *  are saved first, and an untitled document asks where to save it, so the
+   *  file holds what the editor shows. Cancelling that Save As copies
+   *  nothing. */
+  private async copyFile(): Promise<void> {
+    if (!isElectron()) return;
+    this.editorHost.flush();
+    const tabId = this.store.get().activeTabId;
+    const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!tabId || !doc) return;
+    try {
+      if ((doc.isDirty || !doc.filePath) && !(await this.files.save())) return;
+      const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
+      if (path) await copyFileToClipboard(path);
+    } catch (error) {
+      console.error("Downpad: copying the file failed", error);
+      if (!this.disposed) this.store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });
     }
   }
 

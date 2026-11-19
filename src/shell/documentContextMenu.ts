@@ -1,8 +1,9 @@
 // The custom right-click menu that replaced the native WebView one (spec §5.14,
 // §6.1). One window-level listener serves the whole app: over editable text it
 // offers the editing commands (Cut / Copy / Paste / Paste as plain text / Insert
-// link / Select all) plus the document actions, and everywhere else in the app
-// chrome just the document actions.
+// link / Select all) plus the document actions (Copy as Markdown / Copy file /
+// Check document spelling / Print), and everywhere else in the app chrome just
+// the document actions.
 //
 // Electron supplies native spelling results before the custom menu opens.
 // Two things deliberately still reach their own menus:
@@ -36,6 +37,12 @@ export interface DocumentMenuActions {
   print: () => void;
   /** Copy the whole document's markdown to the clipboard (§5.10). */
   copyMarkdown: () => void;
+  /** Whether the active document's file can go on the clipboard, which takes
+   *  the installed app. */
+  canCopyFile: () => boolean;
+  /** Put the active document's file on the clipboard as the file manager
+   *  copies it, saving it first when needed. */
+  copyFile: () => void;
   /** Whether the active document can be checked with its selected dictionaries. */
   canCheckSpelling: () => boolean;
   /** Check the complete active document, including text outside the viewport. */
@@ -180,6 +187,12 @@ export function buildItems(
       disabled: !hasDoc,
       separatorBefore: target !== null,
       run: () => actions.copyMarkdown(),
+    },
+    {
+      label: "Copy file",
+      icon: MENU_ICONS.copyFile,
+      disabled: !hasDoc || !actions.canCopyFile(),
+      run: () => actions.copyFile(),
     },
     {
       label: "Check document spelling",

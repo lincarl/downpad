@@ -154,6 +154,30 @@ test("the toolbar copies the whole document as Markdown or formatted text to the
   await expect(source).toContainText("A **bold** paragraph.");
 });
 
+test("the document menu's Copy file saves the document and copies its file as the file manager does", async () => {
+  const file = path.join(directory, "attach me #1.md");
+  await writeFile(file, "# Attach me\n\nFirst text.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Attach me");
+  // An edit that is not saved yet goes into the file before it is copied.
+  await page.locator(".ProseMirror p", { hasText: "First text." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Latest edit.");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit.\n");
+  // Electron reads `text/uri-list` back from the system's list of copied
+  // files, CF_HDROP on Windows.
+  const copied = (format: string) => app!.evaluate(async ({ clipboard }, type) => {
+    const [item] = await clipboard.read();
+    return item?.types.includes(type) ? (await item.getType(type)).text() : null;
+  }, format);
+  await expect.poll(async () => (await copied("text/uri-list"))?.trim()).toBe(pathToFileURL(file).href);
+  if (process.platform === "linux") {
+    expect(await copied('electron application/osclipboard;format="x-special/gnome-copied-files"')).toBe(`copy\n${pathToFileURL(file).href}`);
+  }
+});
+
 test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {
   const file = path.join(directory, "paste-code-boundary.md");
   const original = "Before.\n\n```js\nconst original = 1;\nconst keep = 2;\n```\n\nAfter.\n";

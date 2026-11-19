@@ -34,6 +34,7 @@ export interface DesktopCommandArgs {
   ensure_attachments_dir: { docPath: string; folderName: string };
   write_attachment: { docPath: string; folderName: string; fileName: string; bytes: Uint8Array };
   read_image_bytes: { path: string };
+  copy_file_to_clipboard: { path: string };
   get_recent_files: { limit: number | null };
   record_file_opened: { path: string; openedAtMs: number };
   remove_recent: { path: string };
@@ -81,6 +82,7 @@ export interface DesktopCommandResults {
   ensure_attachments_dir: string;
   write_attachment: string;
   read_image_bytes: ImageBytes;
+  copy_file_to_clipboard: void;
   get_recent_files: RecentEntry[];
   record_file_opened: RecentEntry;
   remove_recent: void;

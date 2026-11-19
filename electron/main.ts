@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { DesktopEventPayloads, HistoryCommand, SaveChangesChoice } from "../src/ipc/bridge";
 import type { DefaultHandler, GitOpenFile } from "../src/ipc/contracts";
+import { copyFileToClipboard } from "./fileClipboard";
 import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
@@ -228,6 +229,7 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
       return writeAttachment(path(args, "docPath"), string(args, "folderName"), string(args, "fileName"), bytes);
     }
     case "read_image_bytes": return readImage(path(args));
+    case "copy_file_to_clipboard": return copyFileToClipboard(path(args));
     case "load_settings": return config.settings();
     case "save_settings": {
       await config.saveSettings(args.settings);
