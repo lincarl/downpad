@@ -1692,7 +1692,11 @@ test("Shift+click from the find card or the Markdown pane beside or below a tabl
    *  button that adds a row or column under the pointer, so the presses stay
    *  11 pixels in, which is still in the cell's 16-pixel padding. */
   const shiftClickCell = async (text: string, inset: number, y: number, typed: string) => {
-    const box = (await documentView.locator("td, th").filter({ hasText: new RegExp(`^${text}$`) }).boundingBox())!;
+    const cell = documentView.locator("td, th").filter({ hasText: new RegExp(`^${text}$`) });
+    // The split's panes scroll together, so in a short window a click in the
+    // Markdown pane can scroll the cell out of view, under the toolbar.
+    await cell.scrollIntoViewIfNeeded();
+    const box = (await cell.boundingBox())!;
     await page.keyboard.down("Shift");
     await page.mouse.click(inset >= 0 ? box.x + inset : box.x + box.width + inset, box.y + box.height * y);
     await page.keyboard.up("Shift");
