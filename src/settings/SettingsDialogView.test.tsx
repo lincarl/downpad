@@ -11,7 +11,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { SettingsDialogView } from "./SettingsDialogView";
 
 function renderDialog(initial: Settings = DEFAULT_SETTINGS) {
-  const onSave = vi.fn<(changes: Partial<Settings>) => Promise<boolean>>(async () => true);
+  const onSave = vi.fn<(changes: Partial<Settings>) => Promise<Partial<Settings> | null>>(async (changes) => changes);
   const onRequestClose = vi.fn();
   render(
     <SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />,
@@ -291,27 +291,31 @@ describe("SettingsDialogView pages", () => {
     expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("saves no more recent files shown than kept, as the app keeps them", async () => {
+  it("shows a setting as saved where the save changed it, such as fewer recent files shown", async () => {
     const { user, onSave } = renderDialog();
+    // The app shows no more recent files than it keeps.
+    onSave.mockImplementationOnce(async (changes) => ({ ...changes, recentFilesVisibleCount: 10 }));
     const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
     const retained = document.querySelector<HTMLInputElement>('input[name="recentFilesMaxRetained"]')!;
     await user.clear(retained);
     await user.type(retained, "10");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(onSave.mock.calls[0][0]).toEqual({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 });
-    await waitFor(() => expect(visible.value).toBe("10"));
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    await user.click(apply);
+    expect(onSave.mock.calls[0][0]).toEqual({ recentFilesMaxRetained: 10 });
+    await waitFor(() => expect(apply.disabled).toBe(true));
+    expect(visible.value).toBe("10");
   });
 
   it("keeps an edit made while OK saves, and stays open for it", async () => {
     const { user, onSave, onRequestClose } = renderDialog();
-    let finish!: (written: boolean) => void;
-    onSave.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    let finish!: () => void;
+    onSave.mockImplementationOnce((changes) => new Promise((resolve) => (finish = () => resolve(changes))));
     const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
     await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
     await user.click(screen.getByRole("button", { name: "OK" }));
     await user.clear(visible);
     await user.type(visible, "40");
-    await act(async () => finish(true));
+    await act(async () => finish());
     expect(onRequestClose).not.toHaveBeenCalled();
     const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
     await waitFor(() => expect(apply.disabled).toBe(false));
@@ -321,8 +325,8 @@ describe("SettingsDialogView pages", () => {
 
   it("leaves a field edited while Apply saves as the user typed it", async () => {
     const { user, onSave } = renderDialog();
-    let finish!: (written: boolean) => void;
-    onSave.mockImplementationOnce(() => new Promise<boolean>((resolve) => (finish = resolve)));
+    let finish!: () => void;
+    onSave.mockImplementationOnce((changes) => new Promise((resolve) => (finish = () => resolve(changes))));
     const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
     await user.clear(visible);
     await user.type(visible, "12");
@@ -330,14 +334,14 @@ describe("SettingsDialogView pages", () => {
     await user.click(apply);
     await user.clear(visible);
     await user.type(visible, "40");
-    await act(async () => finish(true));
+    await act(async () => finish());
     expect(visible.value).toBe("40");
     await waitFor(() => expect(apply.disabled).toBe(false));
   });
 
   it("says so and keeps Apply on when the settings cannot be written, and OK keeps the dialog open", async () => {
     const { user, onSave, onRequestClose } = renderDialog();
-    onSave.mockResolvedValue(false);
+    onSave.mockResolvedValue(null);
     await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
     await user.click(screen.getByRole("button", { name: "Apply" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Could not save the settings file.");
@@ -348,7 +352,7 @@ describe("SettingsDialogView pages", () => {
     expect(onRequestClose).not.toHaveBeenCalled();
 
     // Once the file can be written, Apply saves the same change.
-    onSave.mockResolvedValue(true);
+    onSave.mockImplementation(async (changes) => changes);
     await user.click(apply);
     await waitFor(() => expect(apply.disabled).toBe(true));
     expect(onSave).toHaveBeenCalledTimes(3);
@@ -601,6 +605,42 @@ describe("SettingsDialog", () => {
       act(() => dialog.open());
       await act(async () => finish(true));
       expect(dialog.isOpen()).toBe(true);
+    } finally {
+      act(() => dialog.close());
+    }
+  });
+
+  it("limits the recent files shown to those the settings keep then, and shows the result", async () => {
+    const store = createAppStore();
+    store.set((state) => ({ settings: { ...state.settings, recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 } }));
+    // The app's save puts the settings into the store, as SettingsModel does.
+    const onSave = vi.fn(async (next: Settings) => {
+      store.set({ settings: next });
+      return true;
+    });
+    const dialog = new SettingsDialog(store, onSave);
+    act(() => dialog.open());
+    try {
+      const user = userEvent.setup({ delay: null });
+      const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
+      const retained = document.querySelector<HTMLInputElement>('input[name="recentFilesMaxRetained"]')!;
+      const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+      // settings.toml keeps more history now, which the dialog still shows as 10.
+      act(() => store.set((state) => ({ settings: { ...state.settings, recentFilesMaxRetained: 50 } })));
+      await user.clear(visible);
+      await user.type(visible, "20");
+      await user.click(apply);
+      expect(onSave.mock.calls[0][0]).toMatchObject({ recentFilesMaxRetained: 50, recentFilesVisibleCount: 20 });
+      await waitFor(() => expect(apply.disabled).toBe(true));
+      expect(visible.value).toBe("20");
+
+      // Keeping fewer than are shown shows fewer too.
+      await user.clear(retained);
+      await user.type(retained, "15");
+      await user.click(apply);
+      expect(onSave.mock.calls[1][0]).toMatchObject({ recentFilesMaxRetained: 15, recentFilesVisibleCount: 15 });
+      await waitFor(() => expect(apply.disabled).toBe(true));
+      expect(visible.value).toBe("15");
     } finally {
       act(() => dialog.close());
     }

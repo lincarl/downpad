@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { Store } from "../state/store";
 import type { Settings } from "../state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
+import { changesFrom, withRecentLimit } from "./settingsChanges";
 import { SettingsDialogView } from "./SettingsDialogView";
 import { disposeReactRoot } from "../app/disposeReactRoot";
 import { captureFocus } from "../app/restoreFocus";
@@ -50,8 +51,14 @@ export class SettingsDialog {
         createElement(SettingsDialogView, {
           initial,
           // The changes go onto the settings as they are when saved, so a
-          // change made meanwhile, such as in settings.toml, stays.
-          onSave: (changes) => this.onSave({ ...DEFAULT_SETTINGS, ...this.store.get().settings, ...changes }),
+          // change made meanwhile, such as in settings.toml, stays. The limit
+          // on recent files shown applies to the result.
+          onSave: async (changes) => {
+            const merged = { ...DEFAULT_SETTINGS, ...this.store.get().settings, ...changes };
+            const next = withRecentLimit(merged);
+            if (!(await this.onSave(next))) return null;
+            return { ...changes, ...changesFrom(merged, next) };
+          },
           // A save that ends after this dialog closed leaves the next one open.
           onRequestClose: () => {
             if (this.root === root) this.close();

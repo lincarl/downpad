@@ -25,3 +25,9 @@ export function heldChanges(settings: Settings, changes: Partial<Settings>): (ke
   return (Object.keys(changes) as (keyof Settings)[]).filter((key) => sameValue(settings[key], changes[key]));
 }
 
+/** `settings` showing no more recent files than they keep, as the desktop
+ *  app's settings file stores them. */
+export function withRecentLimit(settings: Settings): Settings {
+  if (settings.recentFilesVisibleCount <= settings.recentFilesMaxRetained) return settings;
+  return { ...settings, recentFilesVisibleCount: settings.recentFilesMaxRetained };
+}
