@@ -624,9 +624,9 @@ export class AppRuntime {
   }
 
   /** Whether Copy file can run. It needs the desktop app and a document that
-   *  shows, so not the Recent view. It also waits while the file changed on
-   *  disk and the user has chosen neither Reload nor Keep mine, since its
-   *  save would replace the other version without asking. */
+   *  shows, so not the Recent view. It also waits while the bar for a change
+   *  on disk asks for Reload or Keep mine, since its save would replace the
+   *  other version without asking. */
   private canCopyFile(): boolean {
     const { activeTabId, view, banner } = this.store.get();
     return isElectron() && activeTabId !== null && view !== "recent" && banner?.kind !== "file-changed";
@@ -640,6 +640,9 @@ export class AppRuntime {
   private async copyFile(): Promise<void> {
     // The menu can stay open while the file changes on disk.
     if (!this.canCopyFile()) return;
+    // A change on disk whose bar was dismissed or replaced is still
+    // unresolved, so the bar asks again and nothing is saved or copied.
+    if (this.desktopEvents.showPendingChange()) return;
     this.editorHost.flush();
     const tabId = this.store.get().activeTabId;
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;

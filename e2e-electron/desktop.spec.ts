@@ -186,6 +186,14 @@ test("the document menu's Copy file saves the document and copies its file as th
   await page.locator(heading).click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
   await page.keyboard.press("Escape");
+  // Dismissed, the change is still unresolved, so Copy file asks again and
+  // leaves the other version alone.
+  await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  await expect(page.getByText("This file changed on disk.")).toBeHidden();
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  expect(await readFile(file, "utf8")).toBe("# Attach me\n\nTheirs.\n");
   await page.getByRole("button", { name: "Keep mine", exact: true }).click();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();

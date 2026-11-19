@@ -70,6 +70,15 @@ export class DesktopEventBindings {
     this.pendingChange = null;
   }
 
+  /** Show the bar for a change on disk that the user has not resolved with
+   *  Reload or Keep mine, such as after they dismissed it or another notice
+   *  replaced it. Returns whether there is such a change. */
+  showPendingChange(): boolean {
+    if (!this.pendingChange) return false;
+    this.showChangeBanner();
+    return true;
+  }
+
   /** Apply the action exposed by React's external-change banner. */
   handleBannerAction(id: string): void {
     const { files, run, store } = this.dependencies;
@@ -129,7 +138,12 @@ export class DesktopEventBindings {
     }
 
     this.pendingChange = { markdown: onDisk, modifiedMs: payload.modifiedMs };
-    store.set({
+    this.showChangeBanner();
+  }
+
+  /** The bar that asks whether to reload a file that changed on disk. */
+  private showChangeBanner(): void {
+    this.dependencies.store.set({
       banner: {
         kind: "file-changed",
         message: "This file changed on disk.",
