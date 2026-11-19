@@ -35,8 +35,9 @@ export interface DesktopEventDependencies {
 }
 
 export class DesktopEventBindings {
-  /** The file's changed text and mtime while the banner offers to reload it. */
-  private pendingChange: { markdown: string; modifiedMs: number } | null = null;
+  /** The file's path, changed text and mtime while the banner offers to
+   *  reload it. */
+  private pendingChange: { path: string; markdown: string; modifiedMs: number } | null = null;
   private started = false;
   private disposed = false;
   private closing = false;
@@ -73,12 +74,13 @@ export class DesktopEventBindings {
   /** Show the bar for a change on disk that the user has not resolved with
    *  Reload or Keep mine, such as after they dismissed it or another notice
    *  replaced it. Returns whether there is such a change. A save since the
-   *  change, also Save As to another file, replaced it, as Keep mine treats
-   *  a newer save, so it is forgotten then. */
+   *  change replaced it, as Keep mine treats a newer save, and Save As gives
+   *  the document another file, so the change is forgotten then. */
   showPendingChange(): boolean {
     const change = this.pendingChange;
     if (!change) return false;
-    if (change.modifiedMs <= this.dependencies.store.get().doc.modifiedMs) {
+    const doc = this.dependencies.store.get().doc;
+    if (!doc.filePath || !sameFilePath(change.path, doc.filePath) || change.modifiedMs <= doc.modifiedMs) {
       this.pendingChange = null;
       return false;
     }
@@ -144,7 +146,7 @@ export class DesktopEventBindings {
       return;
     }
 
-    this.pendingChange = { markdown: onDisk, modifiedMs: payload.modifiedMs };
+    this.pendingChange = { path: current.filePath, markdown: onDisk, modifiedMs: payload.modifiedMs };
     this.showChangeBanner();
   }
 

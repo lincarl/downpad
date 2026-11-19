@@ -353,6 +353,19 @@ describe("a file that changed on disk", () => {
     expect(store.get().banner).toBeNull();
   });
 
+  it("forgets a dismissed change once Save As gives the document another file, also one dated earlier", async () => {
+    // The other program's clock runs ahead.
+    await changeOnDisk("# Theirs\n", 10_000);
+    store.set({ banner: null });
+    window.downpadDesktop!.saveDialog = async () => "/docs/copy.md";
+    disk.writeFile.mockResolvedValueOnce({ modifiedMs: 300 });
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/copy.md");
+
+    expect(bindings.showPendingChange()).toBe(false);
+    expect(store.get().banner).toBeNull();
+  });
+
   it("keeps a newer change when an older read finishes after it", async () => {
     // The read for the change at 200 waits until the change at 300 is read.
     let finishOlderRead!: (payload: FilePayload) => void;

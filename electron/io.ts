@@ -28,8 +28,10 @@ async function renameAtomic(source: string, destination: string): Promise<void> 
 }
 
 /** Replace the real target after its complete replacement reaches disk, preserving symlinks
- *  and an existing target's permissions. A new file gets the default mode for the umask. */
-export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<void> {
+ *  and an existing target's permissions. A new file gets the default mode for the umask.
+ *  Resolves with the modification time of the file written, which the rename keeps, so a
+ *  write by another program right after it is not taken for this one. */
+export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<number> {
   const requested = absolutePath(destination);
   const path = await realpath(requested).catch(async (error: unknown) => {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
@@ -49,7 +51,9 @@ export async function writeAtomic(destination: string, bytes: Uint8Array | strin
     await file.writeFile(bytes);
     await file.sync();
     await file.close();
+    const { mtimeMs } = await stat(temporary);
     await renameAtomic(temporary, path);
+    return mtimeMs;
   } catch (error) {
     await file.close().catch(() => {});
     await unlink(temporary).catch(() => {});
@@ -85,8 +89,8 @@ export function writeMarkdown(path: string, content: string, eol: Eol): Promise<
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
-    await writeAtomic(path, eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized);
-    return { modifiedMs: Math.floor((await stat(path)).mtimeMs) };
+    const modifiedMs = await writeAtomic(path, eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized);
+    return { modifiedMs: Math.floor(modifiedMs) };
   });
   pendingMarkdownWrite = result.then(() => {}, () => {});
   return result;

@@ -213,7 +213,7 @@ export class ConfigStore {
 
   async saveSession(value: unknown): Promise<void> {
     const session = validateSession(value);
-    return this.mutate(() => writeAtomic(join(this.directory, "session.json"), JSON.stringify(session)));
+    await this.mutate(() => writeAtomic(join(this.directory, "session.json"), JSON.stringify(session)));
   }
 
   private async recoveryDirectory(): Promise<string> {

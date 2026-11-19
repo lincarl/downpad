@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
 import { writeAtomic, writeMarkdown } from "./io";
@@ -47,6 +47,21 @@ it.each(["EPERM", "EACCES", "EBUSY"])("retries a transient Windows %s rename fai
   expect(renaming.mock.calls[0]).toEqual(renaming.mock.calls[1]);
   expect(await readFile(destination, "utf8")).toBe("Replacement text\n");
   expect(await readdir(directory)).toEqual(["note.md"]);
+});
+
+it("reports the time of the file it wrote, not of one another program put there right after", async () => {
+  const { destination } = await fixture();
+  const originalRename = filesystem.rename;
+  vi.spyOn(filesystem, "rename").mockImplementationOnce(async (source, target) => {
+    await originalRename(source, target);
+    // Another program replaces the file before Downpad could read its time.
+    await writeFile(target, "Theirs\n");
+    await utimes(target, new Date(), new Date(Date.now() + 60_000));
+  });
+  syncBuiltinESMExports();
+
+  const { modifiedMs } = await writeMarkdown(destination, "Mine\n", "lf");
+  expect(modifiedMs).toBeLessThan(Math.floor((await stat(destination)).mtimeMs) - 30_000);
 });
 
 it.each(["linux", "darwin"] as const)("fails immediately on %s and keeps the old file and removes staging", async (platform) => {
