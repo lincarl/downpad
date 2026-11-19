@@ -127,6 +127,26 @@ it("retries a Windows sharing lock that the check before the rename meets", asyn
   expect(await readFile(destination, "utf8")).toBe("Replacement text\n");
 });
 
+it("fails a read of a file that keeps changing while it is read", async () => {
+  const { destination } = await fixture();
+  const originalOpen = filesystem.open;
+  let rewrites = 0;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      rewrites += 1;
+      await writeFile(destination, `Rewrite ${rewrites}, which is longer each time\n`.repeat(rewrites));
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+  await expect(readMarkdown(destination)).rejects.toThrow("The file kept changing while it was read.");
+  expect(rewrites).toBe(3);
+});
+
 it("reads a file again that another program rewrites in place while it is read", async () => {
   const { destination } = await fixture();
   const originalOpen = filesystem.open;
@@ -148,19 +168,18 @@ it("reads a file again that another program rewrites in place while it is read",
   expect(read).toMatchObject({ content: "Rewritten in place\n", modifiedMs: Math.floor((await stat(destination)).mtimeMs) });
 });
 
-it("writes a document only over the version it expects, and stamps a file with its time and size", async () => {
+it("writes a document only while the file holds the text it expects, and stamps a file with its time and size", async () => {
   const { destination } = await fixture();
-  const recorded = await fileStamp(destination);
-  expect(recorded).toEqual({ modifiedMs: Math.floor((await stat(destination)).mtimeMs), sizeBytes: 14 });
+  expect(await fileStamp(destination)).toEqual({ modifiedMs: Math.floor((await stat(destination)).mtimeMs), sizeBytes: 14 });
 
-  const written = await writeMarkdown(destination, "Mine\n", "lf", recorded.modifiedMs);
+  const written = await writeMarkdown(destination, "Mine\n", "lf", "Original text\n");
   expect(written).toEqual({ modifiedMs: expect.any(Number), sizeBytes: 5 });
   expect(await readFile(destination, "utf8")).toBe("Mine\n");
 
-  // Another program changes the file after the document recorded it.
+  // Another program replaces the file and keeps its time.
   await writeFile(destination, "Theirs\n");
-  await utimes(destination, new Date(), new Date(written.modifiedMs + 60_000));
-  await expect(writeMarkdown(destination, "Mine again\n", "lf", written.modifiedMs)).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  await utimes(destination, new Date(), new Date(written.modifiedMs));
+  await expect(writeMarkdown(destination, "Mine again\n", "lf", "Mine\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
 });
 

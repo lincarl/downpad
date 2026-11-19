@@ -98,7 +98,8 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
     } finally {
       await handle.close();
     }
-    if (settled || attempt >= READ_ATTEMPTS) break;
+    if (settled) break;
+    if (attempt >= READ_ATTEMPTS) throw new Error("The file kept changing while it was read.");
   }
   const hadBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   let raw: string;
@@ -137,22 +138,24 @@ export async function fileStamp(path: string): Promise<FileStamp> {
 let pendingMarkdownWrite: Promise<void> = Promise.resolve();
 
 /** Serialize document saves before path resolution so aliases cannot reorder writes.
- *  With `expectedModifiedMs`, the write replaces the file only while it still has that
- *  modification time, or is gone, and otherwise throws FILE_CHANGED_ON_DISK and leaves
- *  the file as it is. */
-export function writeMarkdown(path: string, content: string, eol: Eol, expectedModifiedMs?: number): Promise<FileMeta> {
+ *  With `expectedContent`, the write replaces the file only while it still holds that
+ *  text, as its LF form without a BOM, or is gone, and otherwise throws
+ *  FILE_CHANGED_ON_DISK and leaves the file as it is. The text tells also a replacement
+ *  that kept the file's time, and reading it revalidates a network file system's
+ *  cached attributes. */
+export function writeMarkdown(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
-    const beforeReplace = expectedModifiedMs === undefined
+    const beforeReplace = expectedContent === undefined
       ? undefined
       : async () => {
-        const info = await stat(absolutePath(path)).catch((error: unknown) => {
+        const current = await readMarkdown(path).catch((error: unknown) => {
           if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
           throw error;
         });
-        return !info || Math.floor(info.mtimeMs) === expectedModifiedMs;
+        return !current || current.content === expectedContent;
       };
     try {
       const modifiedMs = await writeAtomic(path, text, { beforeReplace });

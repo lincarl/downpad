@@ -205,7 +205,7 @@ describe("saving document snapshots", () => {
     const tabId = store.get().activeTabId!;
     applyEditorMarkdownForTab(store, tabId, "# Typed\n");
     expect(await files.save({ automatic: () => false })).toBe(true);
-    expect(native.writeFile).toHaveBeenLastCalledWith(filePath, "# Typed\n", "lf", 100);
+    expect(native.writeFile).toHaveBeenLastCalledWith(filePath, "# Typed\n", "lf", "# Original content\n");
 
     // Nothing is unsaved, as after a reload, so it writes nothing.
     expect(await files.save({ automatic: () => false })).toBe(true);
@@ -216,6 +216,27 @@ describe("saving document snapshots", () => {
     native.writeFile.mockRejectedValueOnce(new Error(`Error invoking remote method: Error: ${FILE_CHANGED_ON_DISK}`));
     expect(await files.save({ automatic: () => false })).toBe(false);
     expect(store.get().doc).toMatchObject({ savedMarkdown: "# Typed\n", isDirty: true, modifiedMs: 200 });
+  });
+
+  it("asks an automatic save's check first, waits for it, and leaves a recovered document alone", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    // Held, also for a document that has nothing unsaved by now.
+    expect(await files.save({ automatic: () => true })).toBe(false);
+    applyEditorMarkdownForTab(store, tabId, "# Typed\n");
+    let answer!: (held: boolean) => void;
+    const waiting = files.save({ automatic: () => new Promise<boolean>((resolve) => (answer = resolve)) });
+    await eventually(() => expect(answer).toBeDefined());
+    expect(native.writeFile).not.toHaveBeenCalled();
+    answer(false);
+    expect(await waiting).toBe(true);
+    expect(native.writeFile).toHaveBeenCalledOnce();
+
+    // A recovered document's saved text is unknown.
+    applyEditorMarkdownForTab(store, tabId, "# Recovered\n");
+    store.patchDocById(tabId, { savedMarkdown: null, isDirty: true });
+    expect(await files.save({ automatic: () => false })).toBe(false);
+    expect(native.writeFile).toHaveBeenCalledOnce();
   });
 
   it("restores the saved text when the write fails", async () => {

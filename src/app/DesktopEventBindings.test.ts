@@ -571,6 +571,41 @@ describe("a file that changed on disk", () => {
     await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
   });
 
+  it("lets a reload resolve a change that kept the file's time", async () => {
+    await changeOnDisk("# Theirs\n", 100);
+    expect(store.get().banner?.kind).toBe("file-changed");
+    // The reload shows the file, as the app does, with the same time.
+    store.patchDoc({ markdown: "# Theirs\n", savedMarkdown: "# Theirs\n", modifiedMs: 100, isDirty: false });
+    expect(store.get().banner).toBeNull();
+    expect(bindings.holdSave()).toBe(false);
+  });
+
+  it("reads the file again when Keep mine makes a read out of date, and keeps the read of a real edit after a touch", async () => {
+    await changeOnDisk("# Theirs\n", 200);
+    let finishRead!: (payload: FilePayload) => void;
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    events.fileChanged!({ path: filePath, modifiedMs: 300 });
+    await eventually(() => expect(disk.readFile).toHaveBeenCalledTimes(2));
+    // The user keeps their text before that read ends.
+    bindings.handleBannerAction("keep");
+    const later = { content: "# Theirs, later\n", eol: "lf" as const, hadBom: false, modifiedMs: 300, sizeBytes: 16 };
+    disk.readFile.mockResolvedValueOnce(later);
+    finishRead(later);
+    await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
+    bindings.handleBannerAction("keep");
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Theirs, later\n", modifiedMs: 300 });
+
+    // A touch that keeps the text finishes while the read of a real edit runs.
+    let finishEdit!: (payload: FilePayload) => void;
+    disk.readFile.mockResolvedValueOnce({ content: "# Theirs, later\n", eol: "lf", hadBom: false, modifiedMs: 350, sizeBytes: 16 });
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishEdit = resolve)));
+    events.fileChanged!({ path: filePath, modifiedMs: 350 });
+    events.fileChanged!({ path: filePath, modifiedMs: 400 });
+    await eventually(() => expect(store.get().doc.modifiedMs).toBe(350));
+    finishEdit({ content: "# Edited elsewhere\n", eol: "lf", hadBom: false, modifiedMs: 400, sizeBytes: 19 });
+    await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
+  });
+
   it("keeps a newer change when an older read finishes after it", async () => {
     // The read for the change at 200 waits until the change at 300 is read.
     let finishOlderRead!: (payload: FilePayload) => void;

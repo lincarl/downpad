@@ -60,6 +60,12 @@ export class DesktopEventBindings {
    *  was used. Reads can finish out of order. */
   private comparisons = 0;
   private readonly lastUsed = new Map<string, number>();
+  /** By tab, how often a save, reload or Keep mine recorded another version
+   *  of its file. A read started before such a record is out of date. */
+  private readonly revisions = new Map<string, number>();
+  /** Set while this class records a file version itself, which makes no read
+   *  out of date. */
+  private recording = false;
   private started = false;
   private disposed = false;
   private closing = false;
@@ -99,7 +105,20 @@ export class DesktopEventBindings {
     if (!this.started || this.disposed) return;
     this.showPendingChange();
     const tabId = this.dependencies.store.get().activeTabId;
-    if (tabId && !this.checks.has(tabId)) void this.compareWithDisk(null);
+    if (tabId && !this.checks.has(tabId)) void this.compareWithDisk(false);
+  }
+
+  /** Read the active document's file now and compare it, as when a save that
+   *  only writes over the version the document recorded was refused. */
+  recheck(): Promise<void> {
+    if (!this.started || this.disposed) return Promise.resolve();
+    return this.compareWithDisk(true);
+  }
+
+  /** As holdSave, once the comparisons of the tab that run have ended. */
+  async holdSaveAfterChecks(tabId: string): Promise<boolean> {
+    await this.settled(tabId);
+    return this.holdSave(tabId);
   }
 
   /** Whether a save nobody asked for as such, such as autosave or the save
@@ -134,9 +153,11 @@ export class DesktopEventBindings {
   }
 
   /** The unresolved change on disk of the tab's document. Save As gives the
-   *  document another file, and a save or reload that recorded a file time
-   *  at least as late as the change's replaced it, as Keep mine treats one,
-   *  so the change is forgotten then, and so are the changes of closed tabs. */
+   *  document another file, a save or reload that recorded a file time at
+   *  least as late as the change's replaced it, as Keep mine treats one, and
+   *  a reload that recorded the changed text took it, also one with the same
+   *  time, so the change is forgotten then, and so are the changes of closed
+   *  tabs. */
   private changeOf(tabId: string): PendingChange | null {
     const { tabs } = this.dependencies.store.get();
     for (const id of this.pendingChanges.keys()) {
@@ -146,7 +167,7 @@ export class DesktopEventBindings {
     const doc = tabs.find((tab) => tab.id === tabId)?.doc;
     if (!change || !doc) return null;
     const recordedSince = doc.modifiedMs !== change.seenModifiedMs && doc.modifiedMs >= change.modifiedMs;
-    if (!doc.filePath || !sameFilePath(change.path, doc.filePath) || recordedSince) {
+    if (!doc.filePath || !sameFilePath(change.path, doc.filePath) || recordedSince || doc.savedMarkdown === change.markdown) {
       this.pendingChanges.delete(tabId);
       return null;
     }
@@ -175,13 +196,16 @@ export class DesktopEventBindings {
       const tabId = state.activeTabId;
       if (tabId === null) return;
       if (tabId !== before.activeTabId) {
-        void this.compareWithDisk(null);
+        void this.compareWithDisk(false);
         return;
       }
-      if (state.doc.filePath === before.doc.filePath && state.doc.modifiedMs === before.doc.modifiedMs) return;
+      const recorded = state.doc.filePath !== before.doc.filePath || state.doc.modifiedMs !== before.doc.modifiedMs
+        || (state.doc.savedMarkdown !== before.doc.savedMarkdown && state.doc.savedMarkdown !== null);
+      if (!recorded) return;
+      if (!this.recording) this.revisions.set(tabId, (this.revisions.get(tabId) ?? 0) + 1);
       if (!this.pendingChanges.has(tabId)) return;
       if (!this.changeOf(tabId)) this.resolve(tabId);
-      else void this.compareWithDisk(null);
+      else void this.compareWithDisk(false);
     });
   }
 
@@ -201,6 +225,8 @@ export class DesktopEventBindings {
       const change = activeTabId ? this.changeOf(activeTabId) : null;
       if (activeTabId) this.pendingChanges.delete(activeTabId);
       if (change) {
+        // A record of the file's version, which makes reads started before
+        // it out of date.
         store.patchDoc({
           modifiedMs: change.modifiedMs,
           fileSize: change.sizeBytes,
@@ -221,27 +247,28 @@ export class DesktopEventBindings {
     const document = this.dependencies.store.get().doc;
     if (!document.filePath) return;
     if (!sameFilePath(payload.path, document.filePath)) return;
-    await this.compareWithDisk(payload.modifiedMs);
+    await this.compareWithDisk(true);
   }
 
   /** Read the active document's file, and offer to reload it when its text
    *  differs from what the document last read or wrote and from the open
-   *  text. `reported` is the time the watcher saw. Without it, as when a tab
-   *  comes to the front, the file's time and size tell first whether it can
-   *  have changed. A recovered document has no file time or text of its own
-   *  to compare with, so only the watcher reports its changes. */
-  private async compareWithDisk(reported: number | null): Promise<void> {
+   *  text. Without `read`, as when a tab comes to the front, the file's time
+   *  and size tell first whether it can have changed. A recovered document
+   *  has no file time or text of its own to compare with, so only a report
+   *  of the watcher or a refused save makes it read. */
+  private async compareWithDisk(read: boolean): Promise<void> {
     const { files, store } = this.dependencies;
     const { activeTabId: tabId, doc } = store.get();
-    if (!tabId || !doc.filePath || (reported === null && doc.modifiedMs === 0)) return;
+    if (!tabId || !doc.filePath || (!read && doc.modifiedMs === 0)) return;
     const path = doc.filePath;
-    // A save or reload that records another file version meanwhile makes this
-    // read out of date, and the app compares again after it.
-    const recorded = doc.modifiedMs;
+    // A save, reload or Keep mine that records another file version
+    // meanwhile makes this read out of date, and the app compares again then.
+    const revision = this.revisions.get(tabId) ?? 0;
+    let outOfDate = false;
     const comparison = ++this.comparisons;
     this.checks.set(tabId, (this.checks.get(tabId) ?? 0) + 1);
     try {
-      if (reported === null) {
+      if (!read) {
         const stamp = await fileStamp(path).catch(() => null);
         if (stamp === null || this.disposed) return;
         const pending = this.pendingChanges.get(tabId);
@@ -261,7 +288,10 @@ export class DesktopEventBindings {
       // The read crossed an async boundary; validate against current state again.
       const state = store.get();
       if (state.activeTabId !== tabId || !state.doc.filePath || !sameFilePath(path, state.doc.filePath)) return;
-      if (state.doc.modifiedMs !== recorded) return;
+      if ((this.revisions.get(tabId) ?? 0) !== revision) {
+        outOfDate = true;
+        return;
+      }
       // A later comparison already told what the file holds.
       if ((this.lastUsed.get(tabId) ?? 0) > comparison) return;
       this.lastUsed.set(tabId, comparison);
@@ -278,7 +308,14 @@ export class DesktopEventBindings {
           patch.savedMarkdown = onDisk.content;
           patch.isDirty = current.markdown !== onDisk.content;
         }
-        if (Object.keys(patch).length > 0) store.patchDoc(patch);
+        // The file holds a version the document knows, so reads that run
+        // stay up to date.
+        this.recording = true;
+        try {
+          if (Object.keys(patch).length > 0) store.patchDoc(patch);
+        } finally {
+          this.recording = false;
+        }
         return;
       }
 
@@ -298,6 +335,9 @@ export class DesktopEventBindings {
         for (const resolve of this.settledWaiters.get(tabId) ?? []) resolve();
         this.settledWaiters.delete(tabId);
       }
+      // The file may hold a change that the out-of-date read found, so read
+      // it again against the version recorded now.
+      if (outOfDate && !this.disposed && store.get().activeTabId === tabId) void this.compareWithDisk(true);
     }
   }
 

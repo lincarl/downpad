@@ -211,10 +211,8 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
       const eol = string(args, "eol");
       if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
       const target = path(args);
-      const expected = args.expectedModifiedMs;
-      if (expected !== undefined && (typeof expected !== "number" || !Number.isFinite(expected))) {
-        throw new Error("The expected modification time must be a number.");
-      }
+      const expected = args.expectedContent;
+      if (expected !== undefined && typeof expected !== "string") throw new Error("The expected file text must be a string.");
       const meta = await writeMarkdown(target, string(args, "content"), eol, expected);
       return meta;
     }

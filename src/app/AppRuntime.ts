@@ -655,14 +655,19 @@ export class AppRuntime {
     if (!doc) return;
     try {
       // A change on disk found while the save waited in the queue stops it
-      // too, and so does one the app has not seen yet.
+      // too, and so does one the app has not seen yet. A recovered document's
+      // saved text is unknown, so it is saved as Save would.
+      const recovered = doc.filePath !== null && doc.savedMarkdown === null;
       const saved = !doc.isDirty && doc.filePath
         ? true
-        : await this.files.save({ automatic: (id) => this.desktopEvents.holdSave(id) });
+        : await this.files.save(recovered ? {} : { automatic: (id) => this.desktopEvents.holdSaveAfterChecks(id) });
       if (!saved) {
-        // A held or refused save leaves the bar for the change on disk, which
-        // shows now or once the watcher reports it.
-        this.desktopEvents.showPendingChange();
+        // An untitled document whose Save As the user cancelled copies nothing.
+        if (!doc.filePath) return;
+        // The file changed on disk, which the bar then asks about.
+        await this.desktopEvents.recheck();
+        if (this.disposed || this.desktopEvents.showPendingChange()) return;
+        this.store.set({ banner: { kind: "error", message: "Could not save the file before copying it. Please try again." } });
         return;
       }
       const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;

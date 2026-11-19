@@ -46,7 +46,7 @@ interface SaveRequest {
   saveAs: boolean;
   choice: SaveAsChoice;
   /** Marks a save nobody asked for as such, with the check that holds it. */
-  automatic?: (tabId: string) => boolean;
+  automatic?: (tabId: string) => boolean | Promise<boolean>;
   /** The saved text the write replaces, once the write starts. */
   replaced?: string | null;
 }
@@ -239,13 +239,15 @@ export class FileService {
    *
    *  `automatic` marks a save nobody asked for as such, such as autosave or
    *  the save before Copy file, with a check that holds it, given the tab. It
-   *  runs just before the write starts, after the saves queued before it. The
-   *  save then writes the document as it is, does nothing when nothing is
-   *  unsaved any more, as after a reload, and skips the write when the check
-   *  holds it. It writes only over the file version the document recorded,
-   *  so a change on disk the app has not seen yet stays, and the save reports
-   *  failure then, as for a held one. */
-  save(options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean } = {}): Promise<boolean> {
+   *  runs first when the save's turn comes, after the saves queued before it,
+   *  and the save waits for its answer. A held save writes nothing. Otherwise
+   *  the save writes the document as it is then, and does nothing when nothing
+   *  is unsaved any more, as after a reload. It writes only while the file
+   *  still holds the text the document last saved, so a change on disk the app
+   *  has not seen yet stays, and the save reports failure then, as for a held
+   *  one. A document whose saved text is unknown, such as a recovered one, is
+   *  left to a save the user asks for. */
+  save(options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean | Promise<boolean> } = {}): Promise<boolean> {
     return this.queueSave(this.store.get().activeTabId, false, options);
   }
 
@@ -279,7 +281,7 @@ export class FileService {
   private queueSave(
     tabId: string | null,
     saveAs: boolean,
-    options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean } = {},
+    options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean | Promise<boolean> } = {},
     choice: SaveAsChoice = {},
   ): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
@@ -310,14 +312,19 @@ export class FileService {
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
     }
     if (!path) return false;
-    let expectedModifiedMs: number | undefined;
+    let expectedContent: string | undefined;
     if (automatic) {
+      // Before the check for unsaved text, so a change on disk found while the
+      // save waited stops it also for a document that is saved by now.
+      if (await automatic(tabId)) return false;
       const now = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-      if (!now) return false;
-      if (!now.isDirty && !choosePath) return true;
-      if (automatic(tabId)) return false;
+      if (!now || now.filePath !== originalPath) return false;
+      if (!choosePath) {
+        if (!now.isDirty) return true;
+        if (now.savedMarkdown === null) return false;
+        expectedContent = now.savedMarkdown;
+      }
       request.snapshot = now;
-      if (!choosePath && now.modifiedMs > 0) expectedModifiedMs = now.modifiedMs;
     }
     const { snapshot } = request;
     // Until the write settles, the file may hold the old saved text or the new
@@ -327,13 +334,13 @@ export class FileService {
     this.store.patchDocById(tabId, { savedMarkdown: null });
     let meta: FileMeta;
     try {
-      meta = await (expectedModifiedMs === undefined
+      meta = await (expectedContent === undefined
         ? writeFile(path, snapshot.markdown, snapshot.eol)
-        : writeFile(path, snapshot.markdown, snapshot.eol, expectedModifiedMs));
+        : writeFile(path, snapshot.markdown, snapshot.eol, expectedContent));
     } catch (error) {
       this.restoreSavedMarkdown(tabId, originalPath, previous);
       // Another program changed the file, which the watcher reports.
-      if (expectedModifiedMs !== undefined && error instanceof Error && error.message.includes(FILE_CHANGED_ON_DISK)) return false;
+      if (expectedContent !== undefined && error instanceof Error && error.message.includes(FILE_CHANGED_ON_DISK)) return false;
       throw error;
     }
     this.markSaved(tabId, snapshot, originalPath, path, meta);

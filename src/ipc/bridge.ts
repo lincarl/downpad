@@ -28,7 +28,7 @@ import type {
 
 export interface DesktopCommandArgs {
   read_file: { path: string };
-  write_file: { path: string; content: string; eol: Eol; expectedModifiedMs?: number };
+  write_file: { path: string; content: string; eol: Eol; expectedContent?: string };
   path_exists: { path: string };
   file_stamp: { path: string };
   watch_file: { path: string };

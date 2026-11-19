@@ -32,11 +32,11 @@ export function readFile(path: string): Promise<FilePayload> {
   return invoke("read_file", { path });
 }
 
-/** Write a document's file. With `expectedModifiedMs`, the write replaces
- *  the file only while it still has that modification time, and otherwise
- *  fails with FILE_CHANGED_ON_DISK and leaves the file as it is. */
-export function writeFile(path: string, content: string, eol: Eol, expectedModifiedMs?: number): Promise<FileMeta> {
-  return invoke("write_file", expectedModifiedMs === undefined ? { path, content, eol } : { path, content, eol, expectedModifiedMs });
+/** Write a document's file. With `expectedContent`, the write replaces the
+ *  file only while it still holds that text, and otherwise fails with
+ *  FILE_CHANGED_ON_DISK and leaves the file as it is. */
+export function writeFile(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
+  return invoke("write_file", expectedContent === undefined ? { path, content, eol } : { path, content, eol, expectedContent });
 }
 
 export function pathExists(path: string): Promise<boolean> {
