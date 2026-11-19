@@ -193,16 +193,24 @@ export class DesktopEventBindings {
     return store.subscribe((state) => {
       const before = last;
       last = state;
+      // Every tab's records count, also those of a tab in back, such as a
+      // save that ends after the user switched tabs.
+      if (state.tabs !== before.tabs && !this.recording) {
+        const earlier = new Map(before.tabs.map((tab) => [tab.id, tab.doc]));
+        for (const tab of state.tabs) {
+          const previous = earlier.get(tab.id);
+          if (previous && previous !== tab.doc && recordsVersion(previous, tab.doc)) {
+            this.revisions.set(tab.id, (this.revisions.get(tab.id) ?? 0) + 1);
+          }
+        }
+      }
       const tabId = state.activeTabId;
       if (tabId === null) return;
       if (tabId !== before.activeTabId) {
         void this.compareWithDisk(false);
         return;
       }
-      const recorded = state.doc.filePath !== before.doc.filePath || state.doc.modifiedMs !== before.doc.modifiedMs
-        || (state.doc.savedMarkdown !== before.doc.savedMarkdown && state.doc.savedMarkdown !== null);
-      if (!recorded) return;
-      if (!this.recording) this.revisions.set(tabId, (this.revisions.get(tabId) ?? 0) + 1);
+      if (!recordsVersion(before.doc, state.doc)) return;
       if (!this.pendingChanges.has(tabId)) return;
       if (!this.changeOf(tabId)) this.resolve(tabId);
       else void this.compareWithDisk(false);
@@ -328,6 +336,10 @@ export class DesktopEventBindings {
       });
       this.showChangeBanner();
     } finally {
+      // The file may hold a change that the out-of-date read found, so read
+      // it again against the version recorded now. That read starts before
+      // this one ends, so callers waiting for the tab wait for it too.
+      if (outOfDate && !this.disposed && store.get().activeTabId === tabId) void this.compareWithDisk(true);
       const left = (this.checks.get(tabId) ?? 1) - 1;
       if (left > 0) this.checks.set(tabId, left);
       else {
@@ -335,9 +347,6 @@ export class DesktopEventBindings {
         for (const resolve of this.settledWaiters.get(tabId) ?? []) resolve();
         this.settledWaiters.delete(tabId);
       }
-      // The file may hold a change that the out-of-date read found, so read
-      // it again against the version recorded now.
-      if (outOfDate && !this.disposed && store.get().activeTabId === tabId) void this.compareWithDisk(true);
     }
   }
 
@@ -430,3 +439,11 @@ export class DesktopEventBindings {
   }
 }
 
+/** Whether `next` records another version of the document's file than
+ *  `previous`: another file, file time, or saved text, as a save, a reload or
+ *  Keep mine records. A save under way, which makes the saved text unknown,
+ *  records nothing yet. */
+function recordsVersion(previous: DocumentState, next: DocumentState): boolean {
+  return next.filePath !== previous.filePath || next.modifiedMs !== previous.modifiedMs
+    || (next.savedMarkdown !== previous.savedMarkdown && next.savedMarkdown !== null);
+}

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload, type FileStamp, type ImageBytes } from "../src/ipc/contracts";
 import type { Eol } from "../src/state/types";
@@ -79,28 +80,38 @@ export async function writeAtomic(
   }
 }
 
-export async function readMarkdown(path: string): Promise<FilePayload> {
-  const target = absolutePath(path);
-  // The text and its time come from one open file, so a replacement of the file in
-  // between cannot pair the old text with the new time. A program that rewrites the
-  // file in place while it is read changes its time or size, and the read starts again.
-  let bytes!: Buffer;
-  let modifiedMs!: number;
+/** A file's bytes with the metadata of the very file they came from. */
+interface FileVersion {
+  bytes: Buffer;
+  info: Stats;
+}
+
+/** Read the bytes and the metadata of one open file, so a replacement of the file in
+ *  between cannot pair the old bytes with the new metadata. A program that rewrites the
+ *  file in place while it is read changes its time or size, and the read starts again,
+ *  up to READ_ATTEMPTS times, and then fails. */
+async function readVersion(target: string): Promise<FileVersion> {
   for (let attempt = 1; ; attempt++) {
     const handle = await open(target, "r");
+    let version: FileVersion;
     let settled: boolean;
     try {
       const before = await handle.stat();
-      bytes = await handle.readFile();
-      const after = await handle.stat();
-      modifiedMs = Math.floor(after.mtimeMs);
-      settled = before.mtimeMs === after.mtimeMs && before.size === after.size && bytes.length === after.size;
+      const bytes = await handle.readFile();
+      const info = await handle.stat();
+      version = { bytes, info };
+      settled = before.mtimeMs === info.mtimeMs && before.size === info.size && bytes.length === info.size;
     } finally {
       await handle.close();
     }
-    if (settled) break;
+    if (settled) return version;
     if (attempt >= READ_ATTEMPTS) throw new Error("The file kept changing while it was read.");
   }
+}
+
+/** A Markdown file's text as the app keeps it: without a BOM and with LF line
+ *  endings, with the line ending and BOM the file had. */
+function decodeMarkdown(bytes: Buffer): Pick<FilePayload, "content" | "eol" | "hadBom"> {
   const hadBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   let raw: string;
   try {
@@ -110,17 +121,34 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
   }
   const crlf = raw.match(/\r\n/g)?.length ?? 0;
   const lf = (raw.match(/\n/g)?.length ?? 0) - crlf;
-  return {
-    content: raw.replace(/\r\n?/g, "\n"),
-    eol: crlf > 0 && crlf >= lf ? "crlf" : "lf",
-    hadBom,
-    sizeBytes: bytes.length,
-    modifiedMs,
-  };
+  return { content: raw.replace(/\r\n?/g, "\n"), eol: crlf > 0 && crlf >= lf ? "crlf" : "lf", hadBom };
+}
+
+export async function readMarkdown(path: string): Promise<FilePayload> {
+  const { bytes, info } = await readVersion(absolutePath(path));
+  return { ...decodeMarkdown(bytes), sizeBytes: bytes.length, modifiedMs: Math.floor(info.mtimeMs) };
 }
 
 /** How often a read starts again while another program rewrites the file in place. */
 const READ_ATTEMPTS = 3;
+
+/** Whether the file at `path` holds `text`, as its LF form without a BOM, or is gone.
+ *  After the read, the path must still name the very file read, with the time and size
+ *  it had then, so a program that replaced the file during the read is noticed. */
+async function holdsText(path: string, text: string): Promise<boolean> {
+  const target = absolutePath(path);
+  const missing = (error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  };
+  const version = await readVersion(target).catch(missing);
+  if (!version) return true;
+  const now = await stat(target).catch(missing);
+  if (!now) return true;
+  const same = now.dev === version.info.dev && now.ino === version.info.ino
+    && now.mtimeMs === version.info.mtimeMs && now.size === version.info.size;
+  return same && decodeMarkdown(version.bytes).content === text;
+}
 
 /** The file's modification time and size, which tell whether it changed without
  *  reading it. They come from an open file, as a network file system can answer a
@@ -148,15 +176,7 @@ export function writeMarkdown(path: string, content: string, eol: Eol, expectedC
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
-    const beforeReplace = expectedContent === undefined
-      ? undefined
-      : async () => {
-        const current = await readMarkdown(path).catch((error: unknown) => {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-          throw error;
-        });
-        return !current || current.content === expectedContent;
-      };
+    const beforeReplace = expectedContent === undefined ? undefined : () => holdsText(path, expectedContent);
     try {
       const modifiedMs = await writeAtomic(path, text, { beforeReplace });
       return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };

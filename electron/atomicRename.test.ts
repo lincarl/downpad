@@ -113,6 +113,29 @@ it("checks again before a Windows rename retry, and leaves a file changed meanwh
   expect(await readdir(directory)).toEqual(["note.md"]);
 });
 
+it("refuses an automatic write when another program replaces the file while the check reads it", async () => {
+  const { directory, destination } = await fixture();
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    if (args[0] !== destination) return handle;
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      // Another program replaces the file with its own text during the read.
+      const replacement = join(directory, "replacement.md");
+      await writeFile(replacement, "Theirs\n");
+      await rename(replacement, destination);
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
 it("retries a Windows sharing lock that the check before the rename meets", async () => {
   const { destination } = await fixture();
   simulatePlatform("win32");

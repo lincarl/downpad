@@ -654,19 +654,26 @@ export class AppRuntime {
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!doc) return;
     try {
+      // A recovered document has no file time of its own until it is saved,
+      // and its file may have changed while Downpad was closed, which nothing
+      // tells, so only a save the user asks for writes it.
+      if (doc.filePath && doc.modifiedMs === 0) {
+        this.store.set({ banner: { kind: "info", message: "Save this recovered document first. Its file may have changed while Downpad was closed." } });
+        return;
+      }
       // A change on disk found while the save waited in the queue stops it
-      // too, and so does one the app has not seen yet. A recovered document's
-      // saved text is unknown, so it is saved as Save would.
-      const recovered = doc.filePath !== null && doc.savedMarkdown === null;
+      // too, and so does one the app has not seen yet.
       const saved = !doc.isDirty && doc.filePath
         ? true
-        : await this.files.save(recovered ? {} : { automatic: (id) => this.desktopEvents.holdSaveAfterChecks(id) });
+        : await this.files.save({ automatic: (id) => this.desktopEvents.holdSaveAfterChecks(id) });
       if (!saved) {
-        // An untitled document whose Save As the user cancelled copies nothing.
-        if (!doc.filePath) return;
+        // An untitled document whose Save As the user cancelled copies
+        // nothing, and a document no longer in front tells its change when it
+        // comes back.
+        if (!doc.filePath || this.disposed || this.store.get().activeTabId !== tabId) return;
         // The file changed on disk, which the bar then asks about.
         await this.desktopEvents.recheck();
-        if (this.disposed || this.desktopEvents.showPendingChange()) return;
+        if (this.disposed || this.store.get().activeTabId !== tabId || this.desktopEvents.showPendingChange()) return;
         this.store.set({ banner: { kind: "error", message: "Could not save the file before copying it. Please try again." } });
         return;
       }

@@ -606,6 +606,50 @@ describe("a file that changed on disk", () => {
     await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
   });
 
+  it("keeps callers waiting through the read that an out-of-date read starts", async () => {
+    await changeOnDisk("# Theirs\n", 200);
+    const tabId = store.get().activeTabId!;
+    let finishFirst!: (payload: FilePayload) => void;
+    let finishSecond!: (payload: FilePayload) => void;
+    disk.readFile
+      .mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)))
+      .mockImplementationOnce(() => new Promise((resolve) => (finishSecond = resolve)));
+    events.fileChanged!({ path: filePath, modifiedMs: 300 });
+    await eventually(() => expect(disk.readFile).toHaveBeenCalledTimes(2));
+    bindings.handleBannerAction("keep");
+    let settled = false;
+    void bindings.settled(tabId).then(() => (settled = true));
+    const later = { content: "# Theirs, later\n", eol: "lf" as const, hadBom: false, modifiedMs: 300, sizeBytes: 16 };
+    finishFirst(later);
+    await eventually(() => expect(disk.readFile).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    expect(bindings.holdSave(tabId)).toBe(true);
+    finishSecond(later);
+    await eventually(() => expect(settled).toBe(true));
+    expect(store.get().banner?.kind).toBe("file-changed");
+  });
+
+  it("takes a save of a tab in back as making its slow read out of date", async () => {
+    const first = store.get().activeTabId!;
+    let finishRead!: (payload: FilePayload) => void;
+    disk.fileStamp.mockResolvedValueOnce(stamp(200));
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    bindings.activeDocChanged();
+    await eventually(() => expect(disk.readFile).toHaveBeenCalledOnce());
+    // The user saves the tab, and switches away and back while the read runs.
+    store.addTab({ ...blankDoc(), markdown: "# Other\n" });
+    store.patchDocById(first, { savedMarkdown: "# Saved since\n", markdown: "# Saved since\n", modifiedMs: 300 });
+    disk.fileStamp.mockResolvedValue(stamp(300));
+    disk.readFile.mockResolvedValue({ content: "# Saved since\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 14 });
+    store.activateTab(first);
+    await eventually(() => expect(disk.fileStamp).toHaveBeenCalledTimes(2));
+    finishRead({ content: "# Mine\n", eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: 7 });
+    await bindings.settled(first);
+    expect(store.get().banner).toBeNull();
+    expect(bindings.holdSave(first)).toBe(false);
+  });
+
   it("keeps a newer change when an older read finishes after it", async () => {
     // The read for the change at 200 waits until the change at 300 is read.
     let finishOlderRead!: (payload: FilePayload) => void;

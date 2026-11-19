@@ -4574,6 +4574,35 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await expect(page).toHaveTitle("recovered.md — Downpad");
 });
 
+test("Copy file asks to save a recovered document first, and copies it once saved", async () => {
+  // The file holds other text than the snapshot, as after an edit while Downpad was closed.
+  const file = path.join(directory, "recovered-copy.md");
+  await writeFile(file, "# Changed while closed\n");
+  const recovery = path.join(directory, "profile", "recovery");
+  await mkdir(recovery);
+  const snapshot = { sessionId: "copy-session", savedAt: new Date().toISOString(), filePath: file, markdown: "# Recovered\n", isDirty: true };
+  await writeFile(path.join(recovery, "copy-session.json"), JSON.stringify(snapshot));
+  await launch(undefined, { duringStartup: true });
+  await page.getByRole("button", { name: "Open recovered", exact: true }).click();
+  await untilStarted();
+  await expect(page.locator(heading)).toHaveText("Recovered");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect(page.getByText("Save this recovered document first. Its file may have changed while Downpad was closed.")).toBeVisible();
+  expect(await readFile(file, "utf8")).toBe("# Changed while closed\n");
+
+  await page.locator(heading).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Recovered\n");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  const copied = () => app!.evaluate(async ({ clipboard }) => {
+    const [item] = await clipboard.read();
+    return item?.types.includes("text/uri-list") ? (await item.getType("text/uri-list")).text() : null;
+  });
+  await expect.poll(async () => (await copied())?.trim()).toBe(pathToFileURL(file).href);
+});
+
 test("a failed Open original preserves recovery and still allows Open recovered", async () => {
   const file = path.join(directory, "unavailable-original.md");
   const recovery = path.join(directory, "profile", "recovery");

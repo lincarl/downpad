@@ -9,7 +9,7 @@ import { FileService } from "./FileService";
 
 const native = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<FilePayload>>(),
-  writeFile: vi.fn<(path: string, content: string, eol: Eol, expectedModifiedMs?: number) => Promise<FileMeta>>(),
+  writeFile: vi.fn<(path: string, content: string, eol: Eol, expectedContent?: string) => Promise<FileMeta>>(),
   watchFile: vi.fn<(path: string) => Promise<void>>(),
   recordFileOpened: vi.fn<(path: string, openedAtMs: number) => Promise<unknown>>(),
   ask: vi.fn<(message: string) => Promise<boolean>>(),
