@@ -356,13 +356,13 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
     setApplied(next);
     return next;
   };
-  // The app's settings as the latest render got them, for a save that ends
-  // later.
-  const latestSaved = useRef(saved);
+  // A save under way leaves the app's settings alone, as they hold its own
+  // change then. Once it ends, a render takes them in as they are by then,
+  // after a failed save without its change, which this count asks for.
+  const [savesEnded, setSavesEnded] = useState(0);
   useEffect(() => {
-    latestSaved.current = saved;
     if (settled.current && !saving.current) follow(saved, applied);
-  }, [saved]);
+  }, [saved, savesEnded]);
 
   /** Save the settings in `next` that differ from `applied`, and mark them
    *  saved once written. The fields then show what was saved, such as a
@@ -382,11 +382,11 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
       // Before the next render, which compares the form with `applied`.
       showSaved(form, result, edited);
       setApplied(result);
-      // Settings that changed in the app while the save ran show too.
-      follow(latestSaved.current, result);
       return edited;
     } finally {
       saving.current = false;
+      // Settings that changed in the app while the save ran show then.
+      setSavesEnded((count) => count + 1);
     }
   };
 
@@ -658,7 +658,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                       <NumberInput
                         name="editorFontScalePct"
                         value={scalePercent(initial.editorFontScale)}
-                        chars={6}
+                        fitsText
                         min={60}
                         max={250}
                       />
@@ -1072,16 +1072,18 @@ function NumberInput({
   min,
   max,
   disabled,
-  chars,
+  fitsText,
 }: {
   name: string;
   value: number;
   min: number;
   max: number;
   disabled?: boolean;
-  /** The characters the field has room for, by default those of `max`. */
-  chars?: number;
+  /** Whether the field grows with its text, at least as wide as `max`, for a
+   *  saved value with decimals. */
+  fitsText?: boolean;
 }) {
+  const room = `calc(${Math.max(String(max).length, String(value).length)}ch + 26px)`;
   return (
     <Input
       name={name}
@@ -1090,8 +1092,11 @@ function NumberInput({
       min={min}
       max={max}
       disabled={disabled}
-      style={{ width: `calc(${chars ?? Math.max(String(max).length, String(value).length)}ch + 26px)` }}
-      className="min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      style={fitsText ? { minWidth: room } : { width: room }}
+      className={cn(
+        "min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+        fitsText && "[field-sizing:content]",
+      )}
     />
   );
 }

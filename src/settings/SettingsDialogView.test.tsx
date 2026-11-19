@@ -708,6 +708,30 @@ describe("SettingsDialog", () => {
     }
   });
 
+  it("takes in a hand edit that arrived while a failed save ran", async () => {
+    const store = createAppStore();
+    // A hand edit turns the same setting on while the save fails.
+    const onSave = vi.fn(async () => {
+      store.set((state) => ({ settings: { ...state.settings, recentFilesKeepRemoved: true } }));
+      return null;
+    });
+    const dialog = new SettingsDialog(store, onSave);
+    act(() => dialog.open());
+    try {
+      const user = userEvent.setup({ delay: null });
+      const keep = screen.getByRole("checkbox", { name: "Keep removed files in list" }) as HTMLInputElement;
+      const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+      await user.click(keep);
+      await user.click(apply);
+      await screen.findByRole("alert");
+      await waitFor(() => expect(apply.disabled).toBe(true));
+      await user.click(keep);
+      await waitFor(() => expect(apply.disabled).toBe(false));
+    } finally {
+      act(() => dialog.close());
+    }
+  });
+
   it("shows the recent files numbers as the file holds them after a save", async () => {
     const store = createAppStore();
     let file: Settings = { ...DEFAULT_SETTINGS, recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 };

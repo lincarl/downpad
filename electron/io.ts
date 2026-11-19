@@ -18,11 +18,13 @@ const WINDOWS_SHARING_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
  *  throws ReplaceDeclinedError. */
 async function renameAtomic(source: string, destination: string, beforeReplace?: () => Promise<boolean>): Promise<void> {
   for (let attempt = 0; ; attempt++) {
-    if (beforeReplace && !(await beforeReplace())) throw new ReplaceDeclinedError();
     try {
+      // The check reads the target, which a sharing lock can hold as well.
+      if (beforeReplace && !(await beforeReplace())) throw new ReplaceDeclinedError();
       await rename(source, destination);
       return;
     } catch (error: unknown) {
+      if (error instanceof ReplaceDeclinedError) throw error;
       if (process.platform !== "win32" || attempt >= 10 || !(error instanceof Error && "code" in error
         && typeof error.code === "string" && WINDOWS_SHARING_ERRORS.has(error.code))) throw error;
       await new Promise<void>((resolve) => setTimeout(resolve, 20 * (attempt + 1)));

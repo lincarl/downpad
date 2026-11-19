@@ -4,7 +4,7 @@ import { parse, type TomlTable } from "smol-toml";
 import { parseForESLint, type AST } from "toml-eslint-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { Settings } from "../src/state/types";
-import { SETTINGS_SYNTAX_BROKEN } from "../src/ipc/contracts";
+import { SETTINGS_ENCODING_BROKEN, SETTINGS_SYNTAX_BROKEN } from "../src/ipc/contracts";
 import { ReplaceDeclinedError, writeAtomic } from "./io";
 
 const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
@@ -115,7 +115,7 @@ async function readSettingsText(path: string): Promise<string> {
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch (error) {
-    throw new Error("Cannot save settings because settings.toml contains invalid UTF-8. Convert the file to UTF-8 before saving settings.", { cause: error });
+    throw new Error(`${SETTINGS_ENCODING_BROKEN} Convert the file to UTF-8 before saving settings.`, { cause: error });
   }
 }
 

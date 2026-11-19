@@ -10,7 +10,7 @@ import { isElectron } from "../ipc/env";
 import { applyTheme } from "../shell/theme";
 import { DEFAULT_ACCENT, normalizeHex, readableForeground } from "../shell/accent";
 import { sameSettings, withRecentLimit, writtenValues } from "./settingsChanges";
-import { SETTINGS_SYNTAX_BROKEN } from "../ipc/contracts";
+import { SETTINGS_ENCODING_BROKEN, SETTINGS_SYNTAX_BROKEN } from "../ipc/contracts";
 
 // Settings that change WYSIWYG output/rendering and so require a re-mount: the
 // serializer style (§5.16), the link display mode (§5.6), and whether the
@@ -51,9 +51,10 @@ export class SettingsModel {
    *  next write applies the change only while the file still holds it, so a
    *  hand edit the app has not read yet wins over the change. */
   private keptOver: Partial<Settings> = {};
-  /** Kept changes whose write failed on a settings.toml with broken syntax.
-   *  The app did not know the file's values then, so no later write sends
-   *  them, and they stay in use until an edit of the file replaces them. */
+  /** Kept changes whose write failed on a settings.toml with broken syntax
+   *  or encoding. The app did not know the file's values then, so no later
+   *  write sends them, and they stay in use until an edit of the file
+   *  replaces them. */
   private unsent = new Set<keyof Settings>();
   /** Saves whose write has not ended, in the order they were made. */
   private readonly pending: PendingSave[] = [];
@@ -173,7 +174,7 @@ export class SettingsModel {
       written = await saveSettings(sent, Object.keys(expected).length > 0 ? expected : undefined);
     } catch (err) {
       console.error("Downpad: failed to save settings", err);
-      brokenFile = err instanceof Error && err.message.includes(SETTINGS_SYNTAX_BROKEN);
+      brokenFile = err instanceof Error && [SETTINGS_SYNTAX_BROKEN, SETTINGS_ENCODING_BROKEN].some((message) => err.message.includes(message));
     }
     this.pending.splice(this.pending.indexOf(save), 1);
     if (written) {

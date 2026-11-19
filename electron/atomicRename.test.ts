@@ -113,6 +113,20 @@ it("checks again before a Windows rename retry, and leaves a file changed meanwh
   expect(await readdir(directory)).toEqual(["note.md"]);
 });
 
+it("retries a Windows sharing lock that the check before the rename meets", async () => {
+  const { destination } = await fixture();
+  simulatePlatform("win32");
+  let checks = 0;
+  const beforeReplace = async () => {
+    checks += 1;
+    if (checks === 1) throw Object.assign(new Error("The file has a transient sharing lock."), { code: "EBUSY" });
+    return true;
+  };
+  await writeAtomic(destination, "Replacement text\n", { beforeReplace });
+  expect(checks).toBe(2);
+  expect(await readFile(destination, "utf8")).toBe("Replacement text\n");
+});
+
 it("reads a file again that another program rewrites in place while it is read", async () => {
   const { destination } = await fixture();
   const originalOpen = filesystem.open;

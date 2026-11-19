@@ -7,7 +7,7 @@ import { createAppStore } from "../app/createAppStore";
 import type { ElectronBridge } from "../ipc/bridge";
 import type { Settings } from "../state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
-import { SETTINGS_SYNTAX_BROKEN } from "../ipc/contracts";
+import { SETTINGS_ENCODING_BROKEN, SETTINGS_SYNTAX_BROKEN } from "../ipc/contracts";
 import { SettingsModel } from "./SettingsModel";
 import { withRecentLimit } from "./settingsChanges";
 
@@ -359,6 +359,21 @@ describe("SettingsModel saves", () => {
     // An edit of the file replaces it.
     disk.send({ ...DEFAULT_SETTINGS, theme: "dark" });
     expect(store.get().settings.editorFontScale).toBe(DEFAULT_SETTINGS.editorFontScale);
+  });
+
+  it("treats a write that failed on a settings file with invalid UTF-8 as one on broken syntax", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { model } = await started();
+    const zoom = model.save({ editorFontScale: 1.1 });
+    await flush();
+    disk.writes[0].fail(new Error(`${SETTINGS_ENCODING_BROKEN} Convert the file to UTF-8 before saving settings.`));
+    expect(await zoom).toBeNull();
+    const theme = model.save({ theme: "dark" });
+    await flush();
+    expect(disk.writes[1].changes).toEqual({ theme: "dark" });
+    disk.writes[1].finish();
+    await theme;
   });
 
   it("shows no more recent files than kept, before and after the write", async () => {

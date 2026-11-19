@@ -35,6 +35,10 @@ export const FILE_CHANGED_ON_DISK = "The file changed on disk before it was save
  *  settings.toml has broken syntax. */
 export const SETTINGS_SYNTAX_BROKEN = "Cannot save settings because settings.toml contains invalid TOML.";
 
+/** The start of the message of a settings write that failed because
+ *  settings.toml is not valid UTF-8. */
+export const SETTINGS_ENCODING_BROKEN = "Cannot save settings because settings.toml contains invalid UTF-8.";
+
 /** Raw image bytes + MIME (guessed by extension); for relocate / copy-image (§5.5). */
 export interface ImageBytes {
   /** The file's bytes, which IPC copies as binary. */
