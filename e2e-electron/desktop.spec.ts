@@ -216,6 +216,28 @@ test("the document menu's Copy file saves the document and copies its file as th
   await expect(page.getByText("This file changed on disk.")).toBeHidden();
 });
 
+test("Recent offers no document actions for the document it hides", async () => {
+  const file = path.join(directory, "hidden-by-recent.md");
+  await writeFile(file, "# Hidden by Recent\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Hidden by Recent");
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  const search = page.getByPlaceholder("Search file names");
+  await expect(search).toBeVisible();
+  await search.click({ button: "right" });
+  for (const name of ["Copy as Markdown", "Copy file", "Check document spelling", "Print…"]) {
+    await expect(page.getByRole("menuitem", { name, exact: true })).toBeDisabled();
+  }
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+p");
+  await expect(page.locator(".print-workspace")).toHaveCount(0);
+  // With the document in front again, the menu acts on it.
+  await page.getByRole("tab", { name: "hidden-by-recent.md", exact: true }).click();
+  await page.locator(heading).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy as Markdown", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape");
+});
+
 test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {
   const file = path.join(directory, "paste-code-boundary.md");
   const original = "Before.\n\n```js\nconst original = 1;\nconst keep = 2;\n```\n\nAfter.\n";

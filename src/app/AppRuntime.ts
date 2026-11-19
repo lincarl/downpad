@@ -107,7 +107,7 @@ export class AppRuntime {
     // browser-level entries the native menu carries. Electron supplies spelling choices for the
     // ordinary menu; Shift+right-click keeps the native editing menu (§5.14).
     this.cleanups.push(installDocumentContextMenu({
-      hasDocument: () => this.store.get().activeTabId !== null,
+      hasDocument: () => this.documentShows(),
       print: () => void this.printActiveDocument(),
       copyMarkdown: () => void this.copyMarkdown(),
       canCopyFile: () => this.canCopyFile(),
@@ -470,8 +470,7 @@ export class AppRuntime {
    *  printed and a Document / Markdown version choice. Replaces both the browser
    *  print dialog and the old direct window.print(). */
   private async printActiveDocument(): Promise<void> {
-    const state = this.store.get();
-    if (!state.activeTabId) return; // nothing open to print
+    if (!this.documentShows()) return; // nothing open to print, or Recent hides it
     if (this.printWorkspace.isOpen()) return;
     // Capture in-progress edits so the printed sheets are current.
     this.editorHost.flush();
@@ -608,6 +607,7 @@ export class AppRuntime {
 
   /** Copy the active document's Markdown, including its latest edits. */
   private async copyMarkdown(): Promise<void> {
+    if (!this.documentShows()) return;
     this.editorHost.flush(); // include the latest typing
     try {
       await navigator.clipboard.writeText(this.store.get().doc.markdown);
@@ -616,13 +616,19 @@ export class AppRuntime {
     }
   }
 
+  /** Whether a document shows, which the Recent view hides while it keeps
+   *  the active tab. Print, the copies and the spelling check act on it. */
+  private documentShows(): boolean {
+    const { activeTabId, view } = this.store.get();
+    return activeTabId !== null && view !== "recent";
+  }
+
   /** Whether Copy file can run. It needs the desktop app and a document that
-   *  shows, so not the Recent view. It also waits while the bar for a change
-   *  on disk asks for Reload or Keep mine, since its save would replace the
-   *  other version without asking. */
+   *  shows. It also waits while the bar for a change on disk asks for Reload
+   *  or Keep mine, since its save would replace the other version without
+   *  asking. */
   private canCopyFile(): boolean {
-    const { activeTabId, view, banner } = this.store.get();
-    return isElectron() && activeTabId !== null && view !== "recent" && banner?.kind !== "file-changed";
+    return isElectron() && this.documentShows() && this.store.get().banner?.kind !== "file-changed";
   }
 
   /** Put the active document's file on the clipboard, as the file manager
