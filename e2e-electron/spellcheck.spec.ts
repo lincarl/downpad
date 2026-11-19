@@ -104,7 +104,7 @@ test("spelling languages save together, survive restart, and respond to external
   let dialog = await spellingSettings();
   await dialog.getByRole("searchbox", { name: "Find a language" }).fill("Swedish");
   await dialog.getByRole("checkbox", { name: "Swedish", exact: true }).check();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.downpadDesktop!.invoke("get_spellcheck_info")))
     .toMatchObject({ activeLanguages: ["en-US", "sv"] });
   expect(await readFile(path.join(directory, "profile", "settings.toml"), "utf8")).toContain('spellCheckLanguages = ["en-US","sv"]');
@@ -127,7 +127,7 @@ test("spelling languages save together, survive restart, and respond to external
   await expect(dialog.getByRole("checkbox", { name: "Spell check", exact: true })).not.toBeChecked();
   await dialog.getByRole("checkbox", { name: "Spell check", exact: true }).check();
   await dialog.getByRole("checkbox", { name: "Use system languages", exact: true }).check();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
   const info = await page.evaluate(() => window.downpadDesktop!.invoke("get_spellcheck_info"));
   await expect.poll(async () => (await page.evaluate(() => window.downpadDesktop!.invoke("get_spellcheck_info"))).activeLanguages)
     .toEqual(info.systemLanguages);
@@ -218,7 +218,7 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await page.keyboard.press("Escape");
   const settings = await spellingSettings();
   await settings.getByRole("checkbox", { name: "Spell check", exact: true }).uncheck();
-  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await settings.getByRole("button", { name: "OK", exact: true }).click();
   await expect(source).toHaveAttribute("spellcheck", "false");
   await expect((await wordMenu(source, "speling")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
 });

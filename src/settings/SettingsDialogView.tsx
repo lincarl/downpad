@@ -58,6 +58,8 @@ import { UI_PALETTES, resolveScheme, type Scheme } from "./themePalettes";
 
 export interface SettingsDialogViewProps {
   initial: Settings;
+  /** Save changed settings, for OK and Apply. Called only when something
+   *  differs from the settings saved last. */
   onSave: (next: Settings) => void;
   onRequestClose: () => void;
 }
@@ -138,6 +140,12 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   const [gitOn, setGitOn] = useState(initial.gitEnabled);
   const [hardWrapOn, setHardWrapOn] = useState(initial.mdHardWrap !== false);
   const [spellCheckLanguages, setSpellCheckLanguages] = useState(initial.spellCheckLanguages ?? []);
+  // The settings as saved last, at opening or by Apply. OK and Apply save
+  // only when the form differs from them.
+  const [applied, setApplied] = useState(initial);
+  // Whether the form differs from `applied`, which enables Apply.
+  const [changed, setChanged] = useState(false);
+  const okRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!isElectron()) return;
@@ -197,7 +205,9 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     document.getElementById(tabId(target))?.focus();
   };
 
-  /** The settings that Save would write, read from the form. */
+  /** The settings that OK or Apply would save, read from the form. Settings
+   *  the form does not show, and numbers left empty, keep their values from
+   *  `applied`. */
   const readForm = (): Settings | null => {
     const form = formRef.current;
     if (!form) return null;
@@ -226,26 +236,26 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
 
     return {
-      ...initial,
+      ...applied,
       theme: radio("theme").value as Settings["theme"],
       accentMode: input("accentMode").value as Settings["accentMode"],
       accentColor,
       editorTheme: radio("editorTheme").value as Settings["editorTheme"],
       editorWidthMode: select("editorWidthMode").value as Settings["editorWidthMode"],
-      editorWidthPx: numVal(editorWidthPx, initial.editorWidthPx),
-      fontFamily: fontFamily.value || initial.fontFamily,
+      editorWidthPx: numVal(editorWidthPx, applied.editorWidthPx),
+      fontFamily: fontFamily.value || applied.fontFamily,
       editorFontScale:
-        numVal(editorFontScalePct, Math.round(initial.editorFontScale * 100)) / 100,
+        numVal(editorFontScalePct, Math.round(applied.editorFontScale * 100)) / 100,
       linkDisplay: select("linkDisplay").value as Settings["linkDisplay"],
       embedImagesAsBase64: input("embedImagesAsBase64").checked,
-      maxEmbedSizeKB: numVal(maxEmbedSizeKB, initial.maxEmbedSizeKB),
-      attachmentsFolderName: attachmentsFolderName.value || initial.attachmentsFolderName,
+      maxEmbedSizeKB: numVal(maxEmbedSizeKB, applied.maxEmbedSizeKB),
+      attachmentsFolderName: attachmentsFolderName.value || applied.attachmentsFolderName,
       defaultView: select("defaultView").value as Settings["defaultView"],
       collapseBase64InRawView: input("collapseBase64InRawView").checked,
       spellCheckEnabled: input("spellCheckEnabled").checked,
       spellCheckLanguages,
       showFrontmatterPanel: input("showFrontmatterPanel").checked,
-      maxRetainedTabEditors: numVal(maxRetainedTabEditors, initial.maxRetainedTabEditors),
+      maxRetainedTabEditors: numVal(maxRetainedTabEditors, applied.maxRetainedTabEditors),
       mdBulletChar: select("mdBulletChar").value as Settings["mdBulletChar"],
       mdEmphasisChar: select("mdEmphasisChar").value as Settings["mdEmphasisChar"],
       mdStrongChar: select("mdStrongChar").value as Settings["mdStrongChar"],
@@ -254,31 +264,51 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       autosaveEnabled: input("autosaveEnabled").checked,
       autosaveIntervalSeconds: numVal(
         autosaveIntervalSeconds,
-        initial.autosaveIntervalSeconds,
+        applied.autosaveIntervalSeconds,
       ),
       recentFilesMaxRetained: numVal(
         recentFilesMaxRetained,
-        initial.recentFilesMaxRetained,
+        applied.recentFilesMaxRetained,
       ),
       recentFilesVisibleCount: numVal(
         recentFilesVisibleCount,
-        initial.recentFilesVisibleCount,
+        applied.recentFilesVisibleCount,
       ),
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
-      autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
-      gitEnabled: gitEnabled ? gitEnabled.checked : initial.gitEnabled,
-      gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : initial.gitAutoGetLatest,
-      gitUploadOnSave: gitUploadOnSave ? gitUploadOnSave.checked : initial.gitUploadOnSave,
+      autoUpdate: autoUpdate ? autoUpdate.checked : applied.autoUpdate,
+      gitEnabled: gitEnabled ? gitEnabled.checked : applied.gitEnabled,
+      gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : applied.gitAutoGetLatest,
+      gitUploadOnSave: gitUploadOnSave ? gitUploadOnSave.checked : applied.gitUploadOnSave,
     };
   };
 
-  const save = (event: FormEvent<HTMLFormElement>): void => {
+  /** Note whether the form now differs from the settings saved last. */
+  const refreshChanged = (): void => {
+    const next = readForm();
+    setChanged(next !== null && !sameSettings(next, applied));
+  };
+  // Some fields keep their value in state, such as the accent colour and the
+  // spelling languages, so check again after each render too.
+  useEffect(refreshChanged);
+
+  /** OK: save what changed, if anything, and close. Enter in a field does
+   *  the same. */
+  const accept = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     const next = readForm();
-    if (!next) return;
-    onSave(next);
+    if (next && !sameSettings(next, applied)) onSave(next);
     onRequestClose();
+  };
+
+  /** Apply: save what changed and keep the dialog open. */
+  const apply = (): void => {
+    const next = readForm();
+    if (!next || sameSettings(next, applied)) return;
+    onSave(next);
+    setApplied(next);
+    // Apply turns disabled, so its focus moves on to OK.
+    okRef.current?.focus();
   };
 
   const pageProps = (id: PageId) => ({ id: panelId(id), tabId: tabId(id), active: page === id });
@@ -298,9 +328,17 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
           <DialogDescription className="sr-only">
             Configure the editor appearance, editing behavior, files, autosave, Git, and updates.
           </DialogDescription>
-          {/* No native validation: it cannot point at a field on a hidden page, so
-              it would cancel Save silently. Save clamps every number instead. */}
-          <form ref={formRef} className="settings-form flex min-h-0 flex-1 flex-col" noValidate onSubmit={save}>
+          {/* No native validation, since it cannot point at a field on a hidden
+              page and would cancel OK silently. OK and Apply clamp every number
+              instead. */}
+          <form
+            ref={formRef}
+            className="settings-form flex min-h-0 flex-1 flex-col"
+            noValidate
+            onSubmit={accept}
+            onChange={refreshChanged}
+            onInput={refreshChanged}
+          >
             <div className="flex min-h-0 flex-1">
               <div className="settings-nav flex w-[196px] shrink-0 flex-col overflow-y-auto border-r border-line-bar bg-status px-2 py-2.5">
                 <DialogTitle asChild>
@@ -727,7 +765,17 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
               </div>
             </div>
 
+            {/* OK saves any changes and closes, Cancel closes without saving
+                the changes made since Apply, and Apply saves them and stays
+                open. */}
             <div className={cn("dialog-footer", dialogFooterClassName)}>
+              <Button
+                ref={okRef}
+                type="submit"
+                className={cn("dialog-btn primary", dialogButtonClassName)}
+              >
+                OK
+              </Button>
               <Button
                 type="button"
                 variant="outline"
@@ -737,10 +785,13 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 Cancel
               </Button>
               <Button
-                type="submit"
-                className={cn("dialog-btn primary", dialogButtonClassName)}
+                type="button"
+                variant="outline"
+                className={cn("dialog-btn", dialogButtonClassName)}
+                disabled={!changed}
+                onClick={apply}
               >
-                Save
+                Apply
               </Button>
             </div>
           </form>
@@ -933,6 +984,12 @@ function NumberInput({
 
 /** A number field's value as a whole number within its range, or the fallback.
  *  Every numeric setting is an integer, and the form skips native validation. */
+/** Whether two sets of settings hold the same values. */
+function sameSettings(a: Settings, b: Settings): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof Settings>;
+  return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
+}
+
 function numVal(input: HTMLInputElement, fallback: number): number {
   if (input.value.trim() === "") return fallback;
   const value = Math.round(Number(input.value));

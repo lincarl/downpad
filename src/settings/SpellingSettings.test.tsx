@@ -69,7 +69,7 @@ describe("spelling preferences", () => {
     expect((screen.getByRole("checkbox", { name: "English (United States)" }) as HTMLInputElement).disabled).toBe(false);
     await user.click(screen.getByRole("tab", { name: "Editor" }));
     expect(onSave).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls[0][0].spellCheckLanguages).toEqual(["en-US", "de-DE"]);
   });
 
@@ -91,7 +91,7 @@ describe("spelling preferences", () => {
     await screen.findByRole("checkbox", { name: "Norwegian Bokmål (unavailable)" });
     expect(screen.getByText(/Unavailable languages are saved but are not used/).textContent).toContain("uses system languages");
     await user.click(screen.getByRole("checkbox", { name: "Use system languages" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls[0][0].spellCheckLanguages).toEqual([]);
   });
 
@@ -117,7 +117,7 @@ describe("spelling preferences", () => {
     expect(screen.getByText(/Language selection and the custom dictionary are available in the installed app/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Manage dictionary…" })).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "Spell check" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls[0][0]).toMatchObject({ spellCheckEnabled: false, spellCheckLanguages: ["de-DE"] });
     expect(getSpellcheckInfo).not.toHaveBeenCalled();
   });

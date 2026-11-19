@@ -127,7 +127,7 @@ describe("SettingsDialogView pages", () => {
     await user.click(screen.getByRole("tab", { name: "Markdown" }));
     await user.selectOptions(document.querySelector('select[name="mdBulletChar"]')!, "*");
 
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave).toHaveBeenCalledTimes(1);
     // Untouched fields on every page keep their values.
     expect(onSave.mock.calls[0][0]).toEqual({
@@ -196,11 +196,64 @@ describe("SettingsDialogView pages", () => {
   it.each([
     ["the defaults", DEFAULT_SETTINGS],
     ["customized settings", customized],
-  ])("Save without changes writes the same settings for %s", async (_name, initial) => {
-    const { user, onSave } = renderDialog(initial);
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave.mock.calls[0][0]).toEqual(initial);
+  ])("reads %s back unchanged, so OK without changes saves nothing and Apply stays disabled", async (_name, initial) => {
+    const { user, onSave, onRequestClose } = renderDialog(initial);
+    // A field that read back another way would count as a change.
+    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("offers OK, Cancel and Apply, with Apply enabled only while something differs from the saved settings", async () => {
+    const { user, onSave, onRequestClose } = renderDialog();
+    const footer = screen.getByRole("button", { name: "Apply" }).parentElement!;
+    expect(within(footer).getAllByRole("button").map((button) => button.textContent)).toEqual(["OK", "Cancel", "Apply"]);
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    const keepRemoved = screen.getByRole("checkbox", { name: "Keep removed files in list" });
+    await user.click(keepRemoved);
+    expect(apply.disabled).toBe(false);
+    // Changing it back leaves nothing to apply.
+    await user.click(keepRemoved);
+    expect(apply.disabled).toBe(true);
+
+    // Apply saves and keeps the dialog open, and has nothing more to apply.
+    const width = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
+    await user.clear(width);
+    await user.type(width, "12");
+    expect(apply.disabled).toBe(false);
+    await user.click(apply);
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave.mock.calls[0][0]).toEqual({ ...DEFAULT_SETTINGS, recentFilesVisibleCount: 12 });
+    expect(onRequestClose).not.toHaveBeenCalled();
+    expect(apply.disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "OK" }));
+
+    // A later change goes in with OK, over the applied settings.
+    await user.click(keepRemoved);
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onSave.mock.calls[1][0]).toEqual({ ...DEFAULT_SETTINGS, recentFilesVisibleCount: 12, recentFilesKeepRemoved: true });
+    expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("enables Apply for a change kept in the dialog's state, such as the accent colour", async () => {
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+    await user.click(screen.getByRole("checkbox", { name: "Use the system accent color" }));
+    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("closes on Cancel after Apply without saving the changes made since", async () => {
+    const { user, onSave, onRequestClose } = renderDialog();
+    const keepRemoved = screen.getByRole("checkbox", { name: "Keep removed files in list" });
+    await user.click(keepRemoved);
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Default search:" }), "all");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave.mock.calls[0][0]).toMatchObject({ recentFilesKeepRemoved: true, recentFilesDefaultSearch: "names" });
+    expect(onRequestClose).toHaveBeenCalledOnce();
   });
 
   it("saves an out-of-range number on a hidden page clamped to its range", async () => {
@@ -210,7 +263,7 @@ describe("SettingsDialogView pages", () => {
     await user.type(interval, "2");
     await user.click(screen.getByRole("tab", { name: "Appearance" }));
 
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave.mock.calls[0][0].autosaveIntervalSeconds).toBe(5);
   });
@@ -221,7 +274,7 @@ describe("SettingsDialogView pages", () => {
     const column = document.querySelector<HTMLInputElement>('input[name="hardWrapCol"]')!;
     await user.clear(column);
     await user.type(column, "72.6");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls[0][0].mdHardWrap).toBe(73);
   });
 
@@ -243,7 +296,7 @@ describe("SettingsDialogView pages", () => {
 
 describe("SettingsDialogView accent", () => {
   const save = async (user: ReturnType<typeof userEvent.setup>, onSave: ReturnType<typeof vi.fn>) => {
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     return onSave.mock.calls.at(-1)?.[0] as Settings;
   };
 
@@ -326,7 +379,7 @@ describe("SettingsDialogView Git", () => {
     expect([getLatest.checked, uploadOnSave.checked]).toEqual([false, true]);
     await user.click(enabled);
     await user.click(screen.getByRole("tab", { name: "General" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 
@@ -334,7 +387,8 @@ describe("SettingsDialogView Git", () => {
     const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
     expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
     expect(screen.queryByRole("checkbox", { name: "Upload when saving" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 });
@@ -379,7 +433,7 @@ describe("SettingsDialogView updates", () => {
     const automatic = await screen.findByRole("checkbox", { name: "Update automatically" });
     expect((automatic as HTMLInputElement).checked).toBe(true);
     await user.click(automatic);
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ autoUpdate: false });
   });
 
@@ -419,7 +473,9 @@ describe("SettingsDialogView updates", () => {
     await user.click(screen.getByRole("button", { name: "Open download page" }));
     expect(bridge.openExternal).toHaveBeenCalledWith("https://github.com/lincarl/downpad/releases/tag/v1.3.0");
 
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ autoUpdate: false });
   });
 });

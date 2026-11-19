@@ -57,7 +57,7 @@ test("a fixed page width below 688px narrows the document's side padding in a wi
     await openSettings(page, "Appearance");
     const dialog = page.locator(".dialog");
     await dialog.locator(".dialog-row", { hasText: "Fixed width" }).locator("input").fill(width);
-    await dialog.getByRole("button", { name: "Save" }).click();
+    await dialog.getByRole("button", { name: "OK" }).click();
     await expect(dialog).toHaveCount(0);
   };
 

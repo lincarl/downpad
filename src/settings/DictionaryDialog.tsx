@@ -13,7 +13,8 @@ interface DictionaryDialogProps {
   onRestoreFocus: () => void;
 }
 
-/** Manage native dictionary entries immediately, independently of Settings Save. */
+/** Manage native dictionary entries immediately, independently of the
+ *  Settings dialog's OK and Apply. */
 export function DictionaryDialog({ sharedWithSystem, onClose, onRestoreFocus }: DictionaryDialogProps) {
   const [words, setWords] = useState<string[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);

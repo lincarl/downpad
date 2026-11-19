@@ -4699,7 +4699,7 @@ test("General Recent preferences persist and hide missing files without deleting
   await expect(dialog.getByRole("combobox", { name: "Default search:" })).toHaveValue("names");
   await dialog.getByRole("combobox", { name: "Default search:" }).selectOption("contents");
   await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(page.locator(".recent-name")).toHaveText(["missing.md", "available.md"]);
   await expect.poll(() => readFile(path.join(directory, "profile", "settings.toml"), "utf8")).toContain('recentFilesDefaultSearch = "contents"');
   await app!.close();
@@ -4714,7 +4714,7 @@ test("General Recent preferences persist and hide missing files without deleting
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const reopenedDialog = page.getByRole("dialog", { name: "Settings" });
   await reopenedDialog.getByRole("checkbox", { name: "Keep removed files in list" }).uncheck();
-  await reopenedDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await reopenedDialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(page.locator(".recent-name")).toHaveText(["available.md"]);
   const history = await page.evaluate(() => window.downpadDesktop!.invoke("get_recent_files"));
   expect(history.map((entry) => entry.path)).toContain(missing);
