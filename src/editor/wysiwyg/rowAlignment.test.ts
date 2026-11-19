@@ -92,6 +92,20 @@ describe("docOutline", () => {
     ]);
   });
 
+  it("lines a table row up by its first cell with text, as the cells share the row's line", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("table_header_row", null, [cell("table_header", ""), cell("table_header", "Mon")]),
+        schema.node("table_row", null, [cell("table_cell", ""), cell("table_cell", "x")]),
+      ]),
+    ]);
+    expect(outline(doc)).toEqual([
+      "table@0 monx space text",
+      "  row@1 mon text",
+      "  row@14 x text",
+    ]);
+  });
+
   it("lines a block up by its top when its first line holds no text, though text follows", () => {
     const doc = schema.node("doc", null, [
       schema.node("table", null, [

@@ -57,22 +57,25 @@ function kindOf(node: ProseNode): BlockKind | null {
  *  block `node` at `at`, which lines up with its first Markdown line, or -1
  *  when that line holds none. The line is that of the paragraph or heading
  *  the block starts with, through its first children, such as a table's
- *  header row. A table whose header row is empty, or a list item that starts
- *  with code, has none, though text follows further down. */
+ *  header row, where the first cell with text counts, since the cells share
+ *  the row's line. A table whose header row is empty, or a list item that
+ *  starts with code, has none, though text follows further down. */
 function leadText(node: ProseNode | null, at: number): number {
-  let pos = at;
-  let block = node;
-  while (block && !block.isTextblock) {
-    const first: ProseNode | null = block.firstChild;
-    const kind = first && kindOf(first);
-    if (kind && !TEXT_KINDS.has(kind)) return -1;
-    block = first;
-    pos += 1;
-  }
+  if (!node) return -1;
   let found = -1;
-  block?.forEach((child, offset) => {
-    if (found < 0 && child.isText && child.text) found = pos + 1 + offset;
-  });
+  if (node.isTextblock) {
+    node.forEach((child, offset) => {
+      if (found < 0 && child.isText && child.text) found = at + 1 + offset;
+    });
+  } else if (kindOf(node) === "row") {
+    node.forEach((cell, offset) => {
+      if (found < 0) found = leadText(cell, at + 1 + offset);
+    });
+  } else {
+    const first = node.firstChild;
+    const kind = first && kindOf(first);
+    if (!kind || TEXT_KINDS.has(kind)) found = leadText(first, at + 1);
+  }
   return found;
 }
 
