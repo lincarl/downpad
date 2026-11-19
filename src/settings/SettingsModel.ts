@@ -10,6 +10,7 @@ import { isElectron } from "../ipc/env";
 import { applyTheme } from "../shell/theme";
 import { DEFAULT_ACCENT, normalizeHex, readableForeground } from "../shell/accent";
 import { sameSettings, withRecentLimit, writtenValues } from "./settingsChanges";
+import { SETTINGS_SYNTAX_BROKEN } from "../ipc/contracts";
 
 // Settings that change WYSIWYG output/rendering and so require a re-mount: the
 // serializer style (§5.16), the link display mode (§5.6), and whether the
@@ -50,6 +51,10 @@ export class SettingsModel {
    *  next write applies the change only while the file still holds it, so a
    *  hand edit the app has not read yet wins over the change. */
   private keptOver: Partial<Settings> = {};
+  /** Kept changes whose write failed on a settings.toml with broken syntax.
+   *  The app did not know the file's values then, so no later write sends
+   *  them, and they stay in use until an edit of the file replaces them. */
+  private unsent = new Set<keyof Settings>();
   /** Saves whose write has not ended, in the order they were made. */
   private readonly pending: PendingSave[] = [];
   private settingsUnlisten: (() => void) | null = null;
@@ -102,6 +107,7 @@ export class SettingsModel {
     this.file = settings;
     this.kept = {};
     this.keptOver = {};
+    this.unsent = new Set();
     this.use(this.composed());
   }
 
@@ -154,17 +160,20 @@ export class SettingsModel {
   /** Write `save`'s changes, with the kept changes of failed writes, and use
    *  the result. Resolves with the settings the file then holds, or null. */
   private async write(save: PendingSave, undoIfUnwritten: boolean): Promise<Settings | null> {
-    const sent = { ...this.kept, ...save.changes };
+    const sendable = Object.entries(this.kept).filter(([key]) => !this.unsent.has(key as keyof Settings));
+    const sent = { ...Object.fromEntries(sendable), ...save.changes } as Partial<Settings>;
     // A kept change applies only over the value it was made over, unless this
     // save changes the setting itself.
     const expected = Object.fromEntries(
-      Object.entries(this.keptOver).filter(([key]) => !(key in save.changes)),
+      Object.entries(this.keptOver).filter(([key]) => key in sent && !(key in save.changes)),
     ) as Partial<Settings>;
     let written: Settings | null = null;
+    let brokenFile = false;
     try {
       written = await saveSettings(sent, Object.keys(expected).length > 0 ? expected : undefined);
     } catch (err) {
       console.error("Downpad: failed to save settings", err);
+      brokenFile = err instanceof Error && err.message.includes(SETTINGS_SYNTAX_BROKEN);
     }
     this.pending.splice(this.pending.indexOf(save), 1);
     if (written) {
@@ -172,14 +181,23 @@ export class SettingsModel {
       // arrived while it ran can be newer for the others, and an edit that
       // came before it arrives on its own.
       this.file = { ...this.file, ...writtenValues(sent, written) };
-      this.kept = {};
+      // The changes this write did not send stay until an edit of the file.
+      this.kept = Object.fromEntries(Object.entries(this.kept).filter(([key]) => !(key in sent))) as Partial<Settings>;
       this.keptOver = {};
+      this.unsent = new Set(Object.keys(this.kept) as (keyof Settings)[]);
     } else if (!undoIfUnwritten) {
       // The kept changes as they are now, as an edit of settings.toml may
       // have replaced them while this write ran.
       this.kept = { ...this.kept, ...save.changes };
-      const over = Object.fromEntries(Object.keys(save.changes).map((key) => [key, this.file[key as keyof Settings]]));
-      this.keptOver = { ...this.keptOver, ...over };
+      for (const key of Object.keys(save.changes) as (keyof Settings)[]) {
+        if (brokenFile) {
+          this.unsent.add(key);
+          delete this.keptOver[key];
+        } else {
+          this.unsent.delete(key);
+          this.keptOver = { ...this.keptOver, [key]: this.file[key] };
+        }
+      }
     }
     // Most writes change nothing the app shows, and applying the same
     // settings again would, for one, ask the system for its accent again.

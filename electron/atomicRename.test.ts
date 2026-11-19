@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import filesystem, { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
-import { readMarkdown, writeAtomic, writeMarkdown } from "./io";
+import { readMarkdown, ReplaceDeclinedError, writeAtomic, writeMarkdown } from "./io";
 
 const nativePlatform = process.platform;
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -87,6 +87,29 @@ it("reads a file's text and time from one open file, so a replacement right afte
   const read = await readMarkdown(destination);
   expect(read).toMatchObject({ content: "Original text\n", modifiedMs: original });
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
+it("checks again before a Windows rename retry, and leaves a file changed meanwhile", async () => {
+  const { directory, destination } = await fixture();
+  const originalRename = filesystem.rename;
+  const sharing = Object.assign(new Error("The file has a transient sharing lock."), { code: "EBUSY" });
+  vi.spyOn(filesystem, "rename").mockImplementationOnce(async () => {
+    // Another program saves the file while the rename waits to retry.
+    await writeFile(destination, "Theirs\n");
+    throw sharing;
+  }).mockImplementation(originalRename);
+  syncBuiltinESMExports();
+  simulatePlatform("win32");
+  let checks = 0;
+  const beforeReplace = async () => {
+    checks += 1;
+    return (await readFile(destination, "utf8")) === "Original text\n";
+  };
+
+  await expect(writeAtomic(destination, "Replacement text\n", { beforeReplace })).rejects.toBeInstanceOf(ReplaceDeclinedError);
+  expect(checks).toBe(2);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+  expect(await readdir(directory)).toEqual(["note.md"]);
 });
 
 it.each(["linux", "darwin"] as const)("fails immediately on %s and keeps the old file and removes staging", async (platform) => {

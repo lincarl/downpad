@@ -7,6 +7,7 @@ import { createAppStore } from "../app/createAppStore";
 import type { ElectronBridge } from "../ipc/bridge";
 import type { Settings } from "../state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
+import { SETTINGS_SYNTAX_BROKEN } from "../ipc/contracts";
 import { SettingsModel } from "./SettingsModel";
 import { withRecentLimit } from "./settingsChanges";
 
@@ -337,6 +338,27 @@ describe("SettingsModel saves", () => {
     // The failed change no longer applies, so an edit of the file shows.
     disk.send({ ...DEFAULT_SETTINGS, mdBulletChar: "+" });
     expect(store.get().settings.mdBulletChar).toBe("+");
+  });
+
+  it("keeps a change whose write failed on a broken settings file in use, and sends it with no later write", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const zoom = model.save({ editorFontScale: 1.1 });
+    await flush();
+    disk.writes[0].fail(new Error(`${SETTINGS_SYNTAX_BROKEN} Fix the file's syntax before saving settings.`));
+    expect(await zoom).toBeNull();
+    expect(store.get().settings.editorFontScale).toBe(1.1);
+
+    const theme = model.save({ theme: "dark" });
+    await flush();
+    expect(disk.writes[1].changes).toEqual({ theme: "dark" });
+    disk.writes[1].finish();
+    await theme;
+    expect(store.get().settings).toMatchObject({ editorFontScale: 1.1, theme: "dark" });
+    // An edit of the file replaces it.
+    disk.send({ ...DEFAULT_SETTINGS, theme: "dark" });
+    expect(store.get().settings.editorFontScale).toBe(DEFAULT_SETTINGS.editorFontScale);
   });
 
   it("shows no more recent files than kept, before and after the write", async () => {

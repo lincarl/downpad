@@ -13,9 +13,12 @@ export function absolutePath(value: unknown): string {
 
 const WINDOWS_SHARING_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 
-/** Allow briefly held Windows handles to close before failing an atomic replacement. */
-async function renameAtomic(source: string, destination: string): Promise<void> {
+/** Allow briefly held Windows handles to close before failing an atomic replacement.
+ *  `beforeReplace` runs before each attempt, also a retry, and a false answer
+ *  throws ReplaceDeclinedError. */
+async function renameAtomic(source: string, destination: string, beforeReplace?: () => Promise<boolean>): Promise<void> {
   for (let attempt = 0; ; attempt++) {
+    if (beforeReplace && !(await beforeReplace())) throw new ReplaceDeclinedError();
     try {
       await rename(source, destination);
       return;
@@ -38,8 +41,8 @@ export class ReplaceDeclinedError extends Error {
  *  and an existing target's permissions. A new file gets the default mode for the umask.
  *  Resolves with the modification time of the file written, which the rename keeps, so a
  *  write by another program right after it is not taken for this one. `beforeReplace` runs
- *  just before the rename, and a false answer leaves the target as it is and throws
- *  ReplaceDeclinedError. */
+ *  just before the rename, and again before a retry of it, and a false answer leaves the
+ *  target as it is and throws ReplaceDeclinedError. */
 export async function writeAtomic(
   destination: string,
   bytes: Uint8Array | string,
@@ -65,8 +68,7 @@ export async function writeAtomic(
     await file.sync();
     await file.close();
     const { mtimeMs } = await stat(temporary);
-    if (beforeReplace && !(await beforeReplace())) throw new ReplaceDeclinedError();
-    await renameAtomic(temporary, path);
+    await renameAtomic(temporary, path, beforeReplace);
     return mtimeMs;
   } catch (error) {
     await file.close().catch(() => {});

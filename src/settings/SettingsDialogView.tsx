@@ -326,20 +326,21 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
 
   // The app's settings as the dialog last took them in.
   const seen = useRef(saved);
-  /** Show the settings that changed in the app since the dialog last took
-   *  them in, in the fields the user has not changed since they were saved,
-   *  and take them as saved. Returns the settings saved then. */
+  /** Take the settings that changed in the app since the dialog last took
+   *  them in as saved, and show them in the fields the user has not changed.
+   *  A field the user changed keeps the user's value, which Apply and OK then
+   *  compare with the new saved one. Returns the settings saved then. */
   const follow = (current: Settings, base: Settings): Settings => {
     const now = latestForm.current();
     if (!now) return base;
     const before = seen.current;
     seen.current = current;
-    const keys = (Object.keys(current) as (keyof Settings)[]).filter(
-      (key) => !sameValue(current[key], before[key]) && sameValue(now[key], base[key]) && !sameValue(current[key], base[key]),
+    const taken = (Object.keys(current) as (keyof Settings)[]).filter(
+      (key) => !sameValue(current[key], before[key]) && !sameValue(current[key], base[key]),
     );
-    if (keys.length === 0) return base;
-    const next: Settings = { ...base, ...Object.fromEntries(keys.map((key) => [key, current[key]])) };
-    const changed = new Set(keys);
+    if (taken.length === 0) return base;
+    const next: Settings = { ...base, ...Object.fromEntries(taken.map((key) => [key, current[key]])) };
+    const changed = new Set(taken.filter((key) => sameValue(now[key], base[key])));
     showFields(form, next, changed);
     if (changed.has("theme")) setTheme(knownOr(next.theme, UI_THEMES, "system"));
     if (changed.has("editorTheme")) setDocumentTheme(knownOr(next.editorTheme, DOCUMENT_THEMES, "follow-ui"));
@@ -657,6 +658,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                       <NumberInput
                         name="editorFontScalePct"
                         value={scalePercent(initial.editorFontScale)}
+                        chars={6}
                         min={60}
                         max={250}
                       />
@@ -1070,12 +1072,15 @@ function NumberInput({
   min,
   max,
   disabled,
+  chars,
 }: {
   name: string;
   value: number;
   min: number;
   max: number;
   disabled?: boolean;
+  /** The characters the field has room for, by default those of `max`. */
+  chars?: number;
 }) {
   return (
     <Input
@@ -1085,7 +1090,7 @@ function NumberInput({
       min={min}
       max={max}
       disabled={disabled}
-      style={{ width: `calc(${Math.max(String(max).length, String(value).length)}ch + 26px)` }}
+      style={{ width: `calc(${chars ?? Math.max(String(max).length, String(value).length)}ch + 26px)` }}
       className="min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />
   );

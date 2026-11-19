@@ -4,6 +4,7 @@ import { parse, type TomlTable } from "smol-toml";
 import { parseForESLint, type AST } from "toml-eslint-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { Settings } from "../src/state/types";
+import { SETTINGS_SYNTAX_BROKEN } from "../src/ipc/contracts";
 import { ReplaceDeclinedError, writeAtomic } from "./io";
 
 const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
@@ -61,7 +62,7 @@ export function patchSettingsToml(existing: string, settings: Settings): string 
   try {
     original = parse(existing);
   } catch (error) {
-    throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
+    throw new Error(`${SETTINGS_SYNTAX_BROKEN} Fix the file's syntax before saving settings.`, { cause: error });
   }
 
   try {
@@ -167,7 +168,7 @@ export async function updateSettingsFile(path: string, changes: unknown, expecte
     try {
       if (existing) parsed = parse(existing);
     } catch (error) {
-      throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
+      throw new Error(`${SETTINGS_SYNTAX_BROKEN} Fix the file's syntax before saving settings.`, { cause: error });
     }
     const current = normalizeSettings(parsed);
     const applied = { ...changes };

@@ -227,3 +227,7 @@ export type GitSyncResult = GitOutcome & {
    *  can reload them. */
   changedOpenFiles: string[];
 };
+
+/** The start of the message of a settings write that failed because
+ *  settings.toml has broken syntax. */
+export const SETTINGS_SYNTAX_BROKEN = "Cannot save settings because settings.toml contains invalid TOML.";

@@ -680,6 +680,34 @@ describe("SettingsDialog", () => {
     }
   });
 
+  it("takes a hand edit as saved also for a field the user changed, which keeps the user's value", async () => {
+    const store = createAppStore();
+    const onSave = vi.fn(async (changes: Partial<Settings>) => {
+      const next = { ...store.get().settings, ...changes };
+      store.set({ settings: next });
+      return next;
+    });
+    const dialog = new SettingsDialog(store, onSave);
+    act(() => dialog.open());
+    try {
+      const user = userEvent.setup({ delay: null });
+      const keep = screen.getByRole("checkbox", { name: "Keep removed files in list" }) as HTMLInputElement;
+      const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+      await user.click(keep);
+      // The same setting turns on in settings.toml.
+      act(() => store.set((state) => ({ settings: { ...state.settings, recentFilesKeepRemoved: true } })));
+      expect(keep.checked).toBe(true);
+      await waitFor(() => expect(apply.disabled).toBe(true));
+      // Turning it off again is a change from what the file holds.
+      await user.click(keep);
+      await waitFor(() => expect(apply.disabled).toBe(false));
+      await user.click(apply);
+      expect(onSave).toHaveBeenCalledExactlyOnceWith({ recentFilesKeepRemoved: false });
+    } finally {
+      act(() => dialog.close());
+    }
+  });
+
   it("shows the recent files numbers as the file holds them after a save", async () => {
     const store = createAppStore();
     let file: Settings = { ...DEFAULT_SETTINGS, recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 };
