@@ -26,6 +26,7 @@ import { StartupCoordinator } from "./StartupCoordinator";
 import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
+import { saveDialogSettings } from "./saveDialogSettings";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
 import { copyFileToClipboard } from "../ipc/commands";
 import { GitSync } from "../git/GitSync";
@@ -73,14 +74,7 @@ export class AppRuntime {
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
-      async (next) => {
-        const enablingGit = next.gitEnabled && !store.get().settings.gitEnabled;
-        const written = await this.settingsModel.save(next, { undoIfUnwritten: true });
-        // Settings apply locally before they reach the main process. Check
-        // again once its Git guard can see the saved enabled setting.
-        if (enablingGit && written) void this.git.check({ force: true });
-        return written;
-      },
+      (next) => saveDialogSettings(next, { store, settings: this.settingsModel, git: this.git }),
     );
 
     // The editor presenter lets FileService flush + re-show the active document

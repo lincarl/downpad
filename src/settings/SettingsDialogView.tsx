@@ -49,6 +49,7 @@ import type { Settings } from "@/state/types";
 import { layoutFromDefaultView } from "@/state/types";
 import { cn } from "@/lib/utils";
 import { AccentColorFieldView } from "./AccentColorFieldView";
+import { changesFrom, sameSettings } from "./settingsChanges";
 import { CheckRow, FormRow, Hint, SettingsBox, SettingsPage } from "./SettingsLayout";
 import { SpellingSettings } from "./SpellingSettings";
 import { KEYBOARD_SHORTCUTS } from "./shortcuts";
@@ -1037,18 +1038,6 @@ function NumberInput({
       className="min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />
   );
-}
-
-/** Whether two sets of settings hold the same values. */
-function sameSettings(a: Settings, b: Settings): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof Settings>;
-  return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
-}
-
-/** The settings in `next` that differ from `base`. */
-function changesFrom(base: Settings, next: Settings): Partial<Settings> {
-  const keys = (Object.keys(next) as (keyof Settings)[]).filter((key) => JSON.stringify(next[key]) !== JSON.stringify(base[key]));
-  return Object.fromEntries(keys.map((key) => [key, next[key]]));
 }
 
 /** Put `settings` into the form's typed fields, which keep what the user

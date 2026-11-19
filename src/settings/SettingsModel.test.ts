@@ -142,26 +142,26 @@ describe("SettingsModel saves", () => {
     await second;
   });
 
-  it("applies a save whose write fails, reports the failure, and still writes the next one", async () => {
+  it("applies a save whose write fails, reports the failure, and writes it with the next one", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const disk = desktop({ holdWrites: true });
     const { store, model } = await started();
     const first = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 });
-    const second = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 900 });
+    const second = model.save({ ...store.get().settings, theme: "light" });
     await flush();
     disk.writes[0].fail(new Error("disk full"));
     expect(await first).toBe(false);
     expect(error).toHaveBeenCalledWith("Downpad: failed to save settings", expect.any(Error));
+    expect(store.get().settings.editorWidthPx).toBe(800);
 
     await flush();
-    expect(disk.writes).toHaveLength(2);
+    expect(disk.writes[1].settings).toEqual({ ...DEFAULT_SETTINGS, editorWidthPx: 800, theme: "light" });
     disk.writes[1].finish();
     expect(await second).toBe(true);
-    expect(store.get().settings.editorWidthPx).toBe(900);
-    expect(cssVar("--editor-width")).toBe("900px");
+    expect(cssVar("--editor-width")).toBe("800px");
   });
 
-  it("puts the settings from before back when a save that asks for it is not written", async () => {
+  it("puts the settings it changed back when a save that asks for it is not written", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const disk = desktop({ holdWrites: true });
     const { store, model } = await started();
@@ -174,16 +174,63 @@ describe("SettingsModel saves", () => {
     expect(store.get().settings).toEqual(DEFAULT_SETTINGS);
     expect(cssVar("--editor-width")).toBe(`${DEFAULT_SETTINGS.editorWidthPx}px`);
 
-    // A change that came while the write ran stays.
-    const first = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 }, { undoIfUnwritten: true });
-    const second = model.save({ ...store.get().settings, theme: "light" });
+    // A setting that changed again while the write ran keeps its new value.
+    const again = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const later = model.save({ ...store.get().settings, editorWidthPx: 900 });
     await flush();
     disk.writes[1].fail(new Error("invalid TOML"));
-    expect(await first).toBe(false);
-    expect(store.get().settings).toMatchObject({ editorWidthPx: 800, theme: "light" });
+    expect(await again).toBe(false);
+    expect(store.get().settings.editorWidthPx).toBe(900);
     await flush();
     disk.writes[2].finish();
-    await second;
+    expect(await later).toBe(true);
+  });
+
+  it("never writes a change whose own write failed and was put back", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    // A text size change while the dialog's write runs holds the dialog's
+    // page width too.
+    const dialog = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const zoom = model.save({ ...store.get().settings, editorFontScale: 1.1 });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await dialog).toBe(false);
+    expect(store.get().settings).toEqual({ ...DEFAULT_SETTINGS, editorFontScale: 1.1 });
+
+    await flush();
+    expect(disk.writes[1].settings).toEqual({ ...DEFAULT_SETTINGS, editorFontScale: 1.1 });
+    disk.writes[1].finish();
+    expect(await zoom).toBe(true);
+  });
+
+  it("puts back only its own settings, not an earlier change whose write failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    // The dialog closed while its first save ran and opened again.
+    const first = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const second = model.save({ ...store.get().settings, theme: "light" }, { undoIfUnwritten: true });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await first).toBe(false);
+    await flush();
+    expect(disk.writes[1].settings).toEqual({ ...DEFAULT_SETTINGS, theme: "light" });
+    disk.writes[1].fail(new Error("invalid TOML"));
+    expect(await second).toBe(false);
+    expect(store.get().settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("takes a settings file edit as the settings on disk for the next write", async () => {
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    disk.send({ ...DEFAULT_SETTINGS, editorWidthPx: 700 });
+    const saved = model.save({ ...store.get().settings, theme: "dark" });
+    await flush();
+    expect(disk.writes[0].settings).toEqual({ ...DEFAULT_SETTINGS, editorWidthPx: 700, theme: "dark" });
+    disk.writes[0].finish();
+    await saved;
   });
 });
 

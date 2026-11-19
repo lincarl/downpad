@@ -9,6 +9,7 @@ import { onSettingsChanged } from "../ipc/events";
 import { isElectron } from "../ipc/env";
 import { applyTheme } from "../shell/theme";
 import { DEFAULT_ACCENT, normalizeHex, readableForeground } from "../shell/accent";
+import { changesFrom, heldChanges } from "./settingsChanges";
 
 // Settings that change WYSIWYG output/rendering and so require a re-mount: the
 // serializer style (§5.16), the link display mode (§5.6), and whether the
@@ -33,6 +34,11 @@ export class SettingsModel {
   /** Serializes disk writes (see save()): each save chains after the previous so
    *  two near-simultaneous saves can't race and clobber each other on disk. */
   private writeChain: Promise<void> = Promise.resolve();
+  /** The settings last read from settings.toml or written to it. */
+  private onDisk: Settings;
+  /** Changes whose write failed and that the app keeps, which the next write
+   *  takes along. */
+  private unwritten: Partial<Settings> = {};
   private settingsUnlisten: (() => void) | null = null;
   private themeDispose: (() => void) | null = null;
   private disposed = false;
@@ -40,7 +46,9 @@ export class SettingsModel {
   constructor(
     private readonly store: Store,
     private readonly onWysiwygConfigChange: () => void,
-  ) {}
+  ) {
+    this.onDisk = store.get().settings;
+  }
 
   async init(): Promise<void> {
     if (this.disposed) return;
@@ -48,6 +56,7 @@ export class SettingsModel {
       try {
         const settings = await loadSettings();
         if (this.disposed) return;
+        this.onDisk = settings;
         this.store.set({ settings });
       } catch {
         // Keep defaults if the backend load fails.
@@ -73,8 +82,11 @@ export class SettingsModel {
     this.themeDispose = null;
   }
 
-  /** Apply settings arriving from the watcher (hand edits to settings.toml). */
+  /** Apply settings arriving from the watcher (hand edits to settings.toml).
+   *  The file wins, also over changes whose write failed. */
   private applyIncoming(settings: Settings): void {
+    this.onDisk = settings;
+    this.unwritten = {};
     this.use(settings);
   }
 
@@ -86,33 +98,58 @@ export class SettingsModel {
     if (wysiwygConfigSignature(settings) !== before) this.onWysiwygConfigChange();
   }
 
-  /** Persist settings edited via the in-app dialog. Applies immediately even if
-   *  the disk write fails (e.g. running outside Electron). Disk writes are serialized
-   *  (in call order) via writeChain: on first run the welcome flag and the
-   *  default-handler flag are saved from two separate fire-and-forget calls, and
-   *  without ordering the second's write could land before the first's and be
-   *  overwritten — silently dropping a flag (e.g. re-prompting for the default
-   *  handler forever). Each save writes the full settings captured at call time;
-   *  the synchronous store.set above keeps later callers' snapshots current.
+  /** Apply `next` at once and write it to settings.toml. Applies even if the
+   *  disk write fails (e.g. running outside Electron). Disk writes are
+   *  serialized (in call order) via writeChain: on first run the welcome flag
+   *  and the default-handler flag are saved from two separate fire-and-forget
+   *  calls, and without ordering the second's write could land before the
+   *  first's and be overwritten, silently dropping a flag (e.g. re-prompting
+   *  for the default handler forever).
+   *
+   *  Each write holds the settings last on disk, the kept changes of earlier
+   *  writes that failed, and this save's own changes from the settings before
+   *  it. So a later save, such as a text size change, never writes a change
+   *  whose own write is still running or failed and was undone.
+   *
    *  Resolves false when the write failed, such as for a settings.toml with
-   *  broken syntax, and true otherwise. `undoIfUnwritten` then puts back the
-   *  settings from before, unless another change came since, as the Settings
-   *  dialog asks, which says the change was not saved. */
+   *  broken syntax, and true otherwise. `undoIfUnwritten`, as the Settings
+   *  dialog asks, which then says the change was not saved, puts back each
+   *  changed setting the app still holds as this save set it. Otherwise the
+   *  app keeps the change, and the next write takes it along. */
   async save(next: Settings, { undoIfUnwritten = false }: { undoIfUnwritten?: boolean } = {}): Promise<boolean> {
     if (this.disposed) return false;
-    const previous = this.store.get().settings;
+    const changes = changesFrom(this.store.get().settings, next);
     this.use(next);
     if (!isElectron()) return true;
     let written = true;
-    this.writeChain = this.writeChain.then(() =>
-      saveSettings(next).catch((err) => {
+    this.writeChain = this.writeChain.then(async () => {
+      const target = { ...this.onDisk, ...this.unwritten, ...changes };
+      try {
+        await saveSettings(target);
+        this.onDisk = target;
+        this.unwritten = {};
+      } catch (err) {
         console.error("Downpad: failed to save settings", err);
         written = false;
-      }),
-    );
+        // Before the next write starts, so that it sees the undo.
+        if (undoIfUnwritten) this.undo(changes);
+        else this.unwritten = { ...this.unwritten, ...changes };
+      }
+    });
     await this.writeChain;
-    if (!written && undoIfUnwritten && !this.disposed && this.store.get().settings === next) this.use(previous);
     return written;
+  }
+
+  /** Give each setting in `changes` that the app still holds its value on
+   *  disk, or the kept change of an earlier failed write. A setting changed
+   *  since keeps its value. */
+  private undo(changes: Partial<Settings>): void {
+    if (this.disposed) return;
+    const current = this.store.get().settings;
+    const before = { ...this.onDisk, ...this.unwritten };
+    const keys = heldChanges(current, changes);
+    if (keys.length === 0) return;
+    this.use({ ...current, ...Object.fromEntries(keys.map((key) => [key, before[key]])) });
   }
 
   private applySideEffects(): void {
