@@ -338,6 +338,21 @@ describe("a file that changed on disk", () => {
     expect(store.get().doc).toMatchObject({ modifiedMs: 300, savedMarkdown: "# Mine\n", isDirty: false });
   });
 
+  it("asks again about a dismissed change until a save replaces it", async () => {
+    await changeOnDisk("# Theirs\n");
+    store.set({ banner: null });
+
+    expect(bindings.showPendingChange()).toBe(true);
+    expect(store.get().banner?.kind).toBe("file-changed");
+
+    store.set({ banner: null });
+    disk.writeFile.mockResolvedValueOnce({ modifiedMs: 300 });
+    expect(await files.save()).toBe(true);
+
+    expect(bindings.showPendingChange()).toBe(false);
+    expect(store.get().banner).toBeNull();
+  });
+
   it("keeps a newer change when an older read finishes after it", async () => {
     // The read for the change at 200 waits until the change at 300 is read.
     let finishOlderRead!: (payload: FilePayload) => void;

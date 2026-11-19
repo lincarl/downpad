@@ -72,9 +72,16 @@ export class DesktopEventBindings {
 
   /** Show the bar for a change on disk that the user has not resolved with
    *  Reload or Keep mine, such as after they dismissed it or another notice
-   *  replaced it. Returns whether there is such a change. */
+   *  replaced it. Returns whether there is such a change. A save since the
+   *  change, also Save As to another file, replaced it, as Keep mine treats
+   *  a newer save, so it is forgotten then. */
   showPendingChange(): boolean {
-    if (!this.pendingChange) return false;
+    const change = this.pendingChange;
+    if (!change) return false;
+    if (change.modifiedMs <= this.dependencies.store.get().doc.modifiedMs) {
+      this.pendingChange = null;
+      return false;
+    }
     this.showChangeBanner();
     return true;
   }

@@ -198,6 +198,22 @@ test("the document menu's Copy file saves the document and copies its file as th
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
   await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine.\n");
+  // A save after the notice was dismissed replaced the other version, so
+  // Copy file copies without asking again.
+  await page.locator(".ProseMirror p", { hasText: "Mine." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Again.");
+  await writeFile(file, "# Attach me\n\nTheirs again.\n");
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  await page.locator(".ProseMirror p", { hasText: "Again." }).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine. Again.\n");
+  await app!.evaluate(({ clipboard }) => clipboard.clear());
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect.poll(async () => (await copied("text/uri-list"))?.trim()).toBe(pathToFileURL(file).href);
+  await expect(page.getByText("This file changed on disk.")).toBeHidden();
 });
 
 test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {
