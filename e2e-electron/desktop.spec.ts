@@ -4784,9 +4784,8 @@ test("Settings says when settings.toml cannot be written, and Apply tries again 
 
   // The repair also changes a setting, and Apply right after it, before the
   // app reads the file again, keeps that change.
-  const repaired = valid.replace(/^editorWidthPx = \d+$/m, "editorWidthPx = 900");
-  expect(repaired).not.toBe(valid);
-  await writeFile(settingsFile, repaired);
+  expect(valid).not.toContain("editorWidthPx");
+  await writeFile(settingsFile, `${valid}editorWidthPx = 900\n`);
   await apply.click();
   await expect(apply).toBeDisabled();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
