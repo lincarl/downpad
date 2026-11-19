@@ -91,10 +91,7 @@ export class StartupCoordinator {
     if (!store.get().settings.hasSeenWelcome) {
       await this.loadWelcome();
       if (this.dependencies.isDisposed()) return false;
-      void this.dependencies.settings.save({
-        ...store.get().settings,
-        hasSeenWelcome: true,
-      });
+      void this.dependencies.settings.save({ hasSeenWelcome: true });
       return true;
     }
 
@@ -110,7 +107,7 @@ export class StartupCoordinator {
 
     // Persist before any async work so errors or early shutdown cannot make the
     // app ask again on its next launch.
-    void settings.save({ ...current, hasCheckedDefaultHandler: true });
+    void settings.save({ hasCheckedDefaultHandler: true });
 
     let isDefault: boolean;
     try {

@@ -226,8 +226,10 @@ export function loadSettings(): Promise<Settings> {
   return invoke("load_settings");
 }
 
-export function saveSettings(settings: Settings): Promise<void> {
-  return invoke("save_settings", { settings });
+/** Put `changes` onto settings.toml as it is when written, and resolve with
+ *  the settings it then holds. */
+export function saveSettings(changes: Partial<Settings>): Promise<Settings> {
+  return invoke("save_settings", { changes });
 }
 
 export function settingsPath(): Promise<string> {

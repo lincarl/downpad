@@ -253,6 +253,30 @@ describe("Existing settings and history compatibility", () => {
     expect(await readdir(directory)).toEqual(["settings.toml"]);
   });
 
+  it("puts changes onto settings.toml as it is when written and returns the settings it then holds", async () => {
+    const directory = await fixtureDirectory();
+    const store = new ConfigStore(directory);
+    await store.initialize();
+    // A hand edit the app has not read yet stays.
+    await writeFile(store.settingsPath, '# Mine\neditorWidthPx = 900\nrecentFilesMaxRetained = 50\nunknownKey = "keep"\n');
+    const [first, second] = await Promise.all([
+      store.updateSettings({ theme: "dark" }),
+      store.updateSettings({ recentFilesVisibleCount: 80 }),
+    ]);
+    expect(first).toEqual({ ...DEFAULT_SETTINGS, editorWidthPx: 900, recentFilesMaxRetained: 50, recentFilesVisibleCount: 50, theme: "dark" });
+    // Shown stays at most kept.
+    expect(second).toEqual({ ...first, recentFilesVisibleCount: 50 });
+    const saved = await readFile(store.settingsPath, "utf8");
+    expect(saved).toContain("# Mine\n");
+    expect(parse(saved)).toMatchObject({ editorWidthPx: 900, theme: "dark", recentFilesVisibleCount: 50, unknownKey: "keep" });
+    expect(await store.settings()).toEqual(second);
+
+    for (const changes of [null, "theme", ["dark"]]) {
+      await expect(store.updateSettings(changes)).rejects.toThrow("Settings changes must be an object.");
+    }
+    expect(await readFile(store.settingsPath, "utf8")).toBe(saved);
+  });
+
   it("preserves malformed settings when startup saves flags and resumes saving after syntax repair", async () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);
@@ -261,14 +285,15 @@ describe("Existing settings and history compatibility", () => {
     await writeFile(store.settingsPath, malformed);
     const loaded = await store.settings();
     expect(loaded).toEqual(DEFAULT_SETTINGS);
-    await expect(store.saveSettings({ ...loaded, hasSeenWelcome: true })).rejects.toThrow("contains invalid TOML. Fix the file's syntax");
-    await expect(store.saveSettings({ ...loaded, hasSeenWelcome: true, hasCheckedDefaultHandler: true })).rejects.toThrow("contains invalid TOML");
+    await expect(store.updateSettings({ hasSeenWelcome: true })).rejects.toThrow("contains invalid TOML. Fix the file's syntax");
+    await expect(store.updateSettings({ hasCheckedDefaultHandler: true })).rejects.toThrow("contains invalid TOML");
     expect(await readFile(store.settingsPath, "utf8")).toBe(malformed);
     expect(await readdir(directory)).toEqual(["settings.toml"]);
 
     const repaired = malformed.replace('fontFamily = "unfinished\n', 'fontFamily = "Readable"\n');
     await writeFile(store.settingsPath, repaired);
-    await store.saveSettings({ ...await store.settings(), hasSeenWelcome: true });
+    // The repair has not been read yet when the save runs.
+    await store.updateSettings({ hasSeenWelcome: true });
     const saved = await readFile(store.settingsPath, "utf8");
     expect(saved).toContain("# Keep these comments\n");
     expect(parse(saved)).toMatchObject({ theme: "light", unknownKey: "keep me", fontFamily: "Readable", hasSeenWelcome: true });
@@ -388,7 +413,7 @@ describe("Existing settings and history compatibility", () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);
     await store.initialize();
-    await store.saveSettings({ ...DEFAULT_SETTINGS, recentFilesMaxRetained: 10 });
+    await store.updateSettings({ recentFilesMaxRetained: 10 });
     const older = Array.from({ length: 8 }, (_, index) => ({
       path: join(directory, `older-${index + 1}.md`), lastOpenedMs: index + 1, favorite: false,
     }));

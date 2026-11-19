@@ -52,7 +52,7 @@ export interface DesktopCommandArgs {
   open_default_apps_settings: undefined;
   get_system_accent_color: undefined;
   load_settings: undefined;
-  save_settings: { settings: Settings };
+  save_settings: { changes: Partial<Settings> };
   settings_path: undefined;
   get_spellcheck_info: undefined;
   list_dictionary_words: undefined;
@@ -100,7 +100,7 @@ export interface DesktopCommandResults {
   open_default_apps_settings: void;
   get_system_accent_color: string | null;
   load_settings: Settings;
-  save_settings: void;
+  save_settings: Settings;
   settings_path: string;
   get_spellcheck_info: SpellcheckInfo;
   list_dictionary_words: string[];

@@ -4782,11 +4782,16 @@ test("Settings says when settings.toml cannot be written, and Apply tries again 
   await expect(dialog.getByRole("alert")).toBeVisible();
   await expect(dialog).toBeVisible();
 
-  await writeFile(settingsFile, valid);
+  // The repair also changes a setting, and Apply right after it, before the
+  // app reads the file again, keeps that change.
+  const repaired = valid.replace(/^editorWidthPx = \d+$/m, "editorWidthPx = 900");
+  expect(repaired).not.toBe(valid);
+  await writeFile(settingsFile, repaired);
   await apply.click();
   await expect(apply).toBeDisabled();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await expect.poll(() => readFile(settingsFile, "utf8")).toContain("recentFilesKeepRemoved = true");
+  expect(await readFile(settingsFile, "utf8")).toContain("editorWidthPx = 900\n");
   await dialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(dialog).toBeHidden();
 });

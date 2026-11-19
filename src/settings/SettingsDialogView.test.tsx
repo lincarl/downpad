@@ -9,6 +9,7 @@ import { createAppStore } from "@/app/createAppStore";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsDialog } from "./SettingsDialog";
 import { SettingsDialogView } from "./SettingsDialogView";
+import { withRecentLimit } from "./settingsChanges";
 
 function renderDialog(initial: Settings = DEFAULT_SETTINGS) {
   const onSave = vi.fn<(changes: Partial<Settings>) => Promise<Partial<Settings> | null>>(async (changes) => changes);
@@ -585,39 +586,39 @@ describe("SettingsDialogView updates", () => {
 });
 
 describe("SettingsDialog", () => {
-  it("saves the dialog's changes onto the settings as they are then, and a late OK leaves a newer dialog open", async () => {
+  it("saves only the dialog's changes, and a late OK leaves a newer dialog open", async () => {
     const store = createAppStore();
-    let finish!: (written: boolean) => void;
-    const onSave = vi.fn((_next: Settings) => new Promise<boolean>((resolve) => (finish = resolve)));
+    let finish!: (written: Settings | null) => void;
+    const onSave = vi.fn((_changes: Partial<Settings>) => new Promise<Settings | null>((resolve) => (finish = resolve)));
     const dialog = new SettingsDialog(store, onSave);
     // Radix lets presses reach the dialog once its effects have run.
     act(() => dialog.open());
     try {
       const user = userEvent.setup({ delay: null });
-      // A hand edit of settings.toml arrives while the dialog is open.
+      // A hand edit of settings.toml arrives while the dialog is open, and
+      // the save leaves it alone.
       act(() => store.set((state) => ({ settings: { ...state.settings, editorWidthPx: 900 } })));
       await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
       await user.click(screen.getByRole("button", { name: "OK" }));
-      expect(onSave).toHaveBeenCalledExactlyOnceWith({ ...DEFAULT_SETTINGS, ...store.get().settings, editorWidthPx: 900, recentFilesKeepRemoved: true });
+      expect(onSave).toHaveBeenCalledExactlyOnceWith({ recentFilesKeepRemoved: true });
 
       // Closed and opened again before that save ends.
       act(() => dialog.close());
       act(() => dialog.open());
-      await act(async () => finish(true));
+      await act(async () => finish({ ...store.get().settings, recentFilesKeepRemoved: true }));
       expect(dialog.isOpen()).toBe(true);
     } finally {
       act(() => dialog.close());
     }
   });
 
-  it("limits the recent files shown to those the settings keep then, and shows the result", async () => {
+  it("shows the recent files numbers as the file holds them after a save", async () => {
     const store = createAppStore();
-    store.set((state) => ({ settings: { ...state.settings, recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 } }));
-    // The app's save puts the settings into the store, as SettingsModel does.
-    const onSave = vi.fn(async (next: Settings) => {
-      store.set({ settings: next });
-      return true;
-    });
+    let file: Settings = { ...DEFAULT_SETTINGS, recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 };
+    store.set({ settings: file });
+    // The main process puts the changes onto the file and keeps shown at
+    // most kept.
+    const onSave = vi.fn(async (changes: Partial<Settings>) => (file = withRecentLimit({ ...file, ...changes })));
     const dialog = new SettingsDialog(store, onSave);
     act(() => dialog.open());
     try {
@@ -626,21 +627,22 @@ describe("SettingsDialog", () => {
       const retained = document.querySelector<HTMLInputElement>('input[name="recentFilesMaxRetained"]')!;
       const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
       // settings.toml keeps more history now, which the dialog still shows as 10.
-      act(() => store.set((state) => ({ settings: { ...state.settings, recentFilesMaxRetained: 50 } })));
+      file = { ...file, recentFilesMaxRetained: 50 };
+      act(() => store.set({ settings: file }));
       await user.clear(visible);
       await user.type(visible, "20");
       await user.click(apply);
-      expect(onSave.mock.calls[0][0]).toMatchObject({ recentFilesMaxRetained: 50, recentFilesVisibleCount: 20 });
+      expect(onSave.mock.calls[0][0]).toEqual({ recentFilesVisibleCount: 20 });
       await waitFor(() => expect(apply.disabled).toBe(true));
-      expect(visible.value).toBe("20");
+      expect([visible.value, retained.value]).toEqual(["20", "50"]);
 
       // Keeping fewer than are shown shows fewer too.
       await user.clear(retained);
       await user.type(retained, "15");
       await user.click(apply);
-      expect(onSave.mock.calls[1][0]).toMatchObject({ recentFilesMaxRetained: 15, recentFilesVisibleCount: 15 });
+      expect(onSave.mock.calls[1][0]).toEqual({ recentFilesMaxRetained: 15 });
       await waitFor(() => expect(apply.disabled).toBe(true));
-      expect(visible.value).toBe("15");
+      expect([visible.value, retained.value]).toEqual(["15", "15"]);
     } finally {
       act(() => dialog.close());
     }

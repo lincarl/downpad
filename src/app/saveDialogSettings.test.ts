@@ -14,13 +14,13 @@ const loaded: Settings = { ...DEFAULT_SETTINGS, gitEnabled: false };
 
 /** A desktop bridge whose settings writes fail while `broken` is set. */
 function desktop() {
-  const state = { broken: false };
+  const state = { broken: false, file: loaded };
   window.downpadDesktop = {
     platform: "linux",
-    invoke: vi.fn(async (command: string) => {
+    invoke: vi.fn(async (command: string, args?: { changes: Partial<Settings> }) => {
       if (command === "load_settings") return loaded;
       if (command === "save_settings" && state.broken) throw new Error("invalid TOML");
-      if (command === "save_settings") return undefined;
+      if (command === "save_settings") return (state.file = { ...state.file, ...args!.changes });
       throw new Error(`Unexpected command ${command}`);
     }),
     listen: () => () => {},
@@ -46,17 +46,17 @@ describe("saveDialogSettings", () => {
     const deps = { store, settings, git };
 
     disk.broken = true;
-    expect(await saveDialogSettings({ ...loaded, gitEnabled: true }, deps)).toBe(false);
+    expect(await saveDialogSettings({ gitEnabled: true }, deps)).toBeNull();
     expect(git.check).not.toHaveBeenCalled();
     expect(store.get().settings.gitEnabled).toBe(false);
 
     // The user repairs the file and tries again.
     disk.broken = false;
-    expect(await saveDialogSettings({ ...loaded, gitEnabled: true }, deps)).toBe(true);
+    expect(await saveDialogSettings({ gitEnabled: true }, deps)).toMatchObject({ gitEnabled: true });
     expect(git.check).toHaveBeenCalledExactlyOnceWith({ force: true });
 
     // A save that leaves Git on checks nothing more.
-    expect(await saveDialogSettings({ ...store.get().settings, editorWidthPx: 900 }, deps)).toBe(true);
+    expect(await saveDialogSettings({ editorWidthPx: 900 }, deps)).toMatchObject({ editorWidthPx: 900 });
     expect(git.check).toHaveBeenCalledOnce();
     settings.destroy();
   });

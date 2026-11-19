@@ -130,10 +130,35 @@ export async function loadSettingsFile(path: string): Promise<Settings> {
   try { return normalizeSettings(parse(text)); } catch { return { ...DEFAULT_SETTINGS }; }
 }
 
-export async function saveSettingsFile(path: string, input: unknown): Promise<void> {
-  const existing = await readSettingsText(path).catch((error: unknown) => {
+/** The text of settings.toml, or nothing when there is no file yet. */
+async function existingSettingsText(path: string): Promise<string> {
+  return readSettingsText(path).catch((error: unknown) => {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
     throw error;
   });
+}
+
+export async function saveSettingsFile(path: string, input: unknown): Promise<void> {
+  const existing = await existingSettingsText(path);
   await writeAtomic(path, patchSettingsToml(existing, normalizeSettings(input)));
+}
+
+/** Put `changes` onto settings.toml as it is now, and return the settings it
+ *  then holds. A change made to the file since the app last read it stays.
+ *  Unknown keys and malformed values are ignored, as when loading, and the
+ *  recent files shown stay at most those kept. */
+export async function updateSettingsFile(path: string, changes: unknown): Promise<Settings> {
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    throw new Error("Settings changes must be an object.");
+  }
+  const existing = await existingSettingsText(path);
+  let current: unknown = {};
+  try {
+    if (existing) current = parse(existing);
+  } catch (error) {
+    throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
+  }
+  const next = normalizeSettings({ ...normalizeSettings(current), ...changes });
+  await writeAtomic(path, patchSettingsToml(existing, next));
+  return next;
 }

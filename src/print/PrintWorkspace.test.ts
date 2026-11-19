@@ -118,7 +118,7 @@ function editInput(name: string, value: string): void {
 
 describe("PrintWorkspace React view", () => {
   let workspace: PrintWorkspace | null = null;
-  let saveSettings: ReturnType<typeof vi.fn<(settings: Settings) => void>>;
+  let saveSettings: ReturnType<typeof vi.fn<(changes: Partial<Settings>) => void>>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,7 +127,7 @@ describe("PrintWorkspace React view", () => {
     delete window.downpadDesktop;
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    saveSettings = vi.fn<(settings: Settings) => void>();
+    saveSettings = vi.fn<(changes: Partial<Settings>) => void>();
     workspace = new PrintWorkspace({
       getSettings: () => DEFAULT_SETTINGS,
       saveSettings,
@@ -217,7 +217,8 @@ describe("PrintWorkspace React view", () => {
 
     editInput("Scale", "120");
     act(() => workspace!.close());
-    expect(saveSettings.mock.calls[0]?.[0]).toMatchObject({ printVersion: "document", printScalePercent: 120 });
+    // The saved Document choice is left as it is.
+    expect(saveSettings).toHaveBeenCalledExactlyOnceWith({ printScalePercent: 120 });
   });
 
   it("switches orientation with radios and describes the paper under the preview", () => {
@@ -274,15 +275,15 @@ describe("PrintWorkspace React view", () => {
     expect(TestResizeObserver.latest?.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("clamps changed numeric settings and persists the working copy on close", () => {
+  it("clamps changed numeric settings and saves only the options changed on close", () => {
     act(() => workspace!.open(JOB));
     editInput("Scale", "999");
 
     expect(printRenderMocks.renderPrintPages).toHaveBeenCalledTimes(2);
     act(() => workspace!.close());
 
-    expect(saveSettings).toHaveBeenCalledOnce();
-    expect(saveSettings.mock.calls[0]?.[0]).toMatchObject({ printScalePercent: 200 });
+    // A setting changed elsewhere while Print was open keeps its new value.
+    expect(saveSettings).toHaveBeenCalledExactlyOnceWith({ printScalePercent: 200 });
   });
 
   it("steps number fields with the stepper and stops at the range ends", () => {

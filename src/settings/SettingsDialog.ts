@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { Store } from "../state/store";
 import type { Settings } from "../state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
-import { changesFrom, withRecentLimit } from "./settingsChanges";
+import { writtenValues } from "./settingsChanges";
 import { SettingsDialogView } from "./SettingsDialogView";
 import { disposeReactRoot } from "../app/disposeReactRoot";
 import { captureFocus } from "../app/restoreFocus";
@@ -19,11 +19,12 @@ export class SettingsDialog {
   private host: HTMLElement | null = null;
   private restoreFocus: (() => void) | null = null;
 
-  /** Open Settings with the current preferences and a save handler, which
-   *  resolves false when the settings could not be written. */
+  /** Open Settings with the current preferences and a save handler for the
+   *  changes made in it, which resolves with the settings then saved, or null
+   *  when they could not be written. */
   constructor(
     private readonly store: Store,
-    private readonly onSave: (next: Settings) => Promise<boolean>,
+    private readonly onSave: (changes: Partial<Settings>) => Promise<Settings | null>,
   ) {}
 
   isOpen(): boolean {
@@ -50,14 +51,12 @@ export class SettingsDialog {
       root.render(
         createElement(SettingsDialogView, {
           initial,
-          // The changes go onto the settings as they are when saved, so a
-          // change made meanwhile, such as in settings.toml, stays. The limit
-          // on recent files shown applies to the result.
+          // Only the changes are saved, so a change made meanwhile, such as
+          // in settings.toml, stays. The dialog then shows them as saved,
+          // such as fewer recent files shown than the file keeps.
           onSave: async (changes) => {
-            const merged = { ...DEFAULT_SETTINGS, ...this.store.get().settings, ...changes };
-            const next = withRecentLimit(merged);
-            if (!(await this.onSave(next))) return null;
-            return { ...changes, ...changesFrom(merged, next) };
+            const written = await this.onSave(changes);
+            return written && writtenValues(changes, written);
           },
           // A save that ends after this dialog closed leaves the next one open.
           onRequestClose: () => {

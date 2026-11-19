@@ -1,5 +1,5 @@
 // Compare settings and find what changed between two sets, for the Settings
-// dialog and for SettingsModel's writes.
+// dialog, Print and SettingsModel's writes.
 
 import type { Settings } from "../state/types";
 
@@ -20,9 +20,14 @@ export function changesFrom(base: Settings, next: Settings): Partial<Settings> {
   return Object.fromEntries(keys.map((key) => [key, next[key]]));
 }
 
-/** The keys of `changes` whose values `settings` holds. */
-export function heldChanges(settings: Settings, changes: Partial<Settings>): (keyof Settings)[] {
-  return (Object.keys(changes) as (keyof Settings)[]).filter((key) => sameValue(settings[key], changes[key]));
+/** The values `written` holds for the settings in `changes`. With either
+ *  recent files number, both, since the limit on one can change the other. */
+export function writtenValues(changes: Partial<Settings>, written: Settings): Partial<Settings> {
+  const keys = Object.keys(changes) as (keyof Settings)[];
+  if ("recentFilesVisibleCount" in changes || "recentFilesMaxRetained" in changes) {
+    keys.push("recentFilesVisibleCount", "recentFilesMaxRetained");
+  }
+  return Object.fromEntries(keys.map((key) => [key, written[key]]));
 }
 
 /** `settings` showing no more recent files than they keep, as the desktop

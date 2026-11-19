@@ -189,7 +189,7 @@ it("opens the welcome document on first run as a saved untitled document and rem
   const { store, startup, settings } = setup();
   store.set((state) => ({ settings: { ...state.settings, hasSeenWelcome: false } }));
   native.listRecoverySnapshots.mockResolvedValue([]);
-  const save = vi.spyOn(settings, "save").mockResolvedValue(true);
+  const save = vi.spyOn(settings, "save").mockResolvedValue(null);
   const welcome = vi.fn(async () => new Response("# Welcome asset\n"));
   vi.stubGlobal("fetch", welcome);
 
@@ -197,7 +197,7 @@ it("opens the welcome document on first run as a saved untitled document and rem
   expect(welcome).toHaveBeenCalledExactlyOnceWith("welcome.md");
   expect(store.get().tabs).toHaveLength(1);
   expect(store.get().doc).toMatchObject({ markdown: "# Welcome asset\n", filePath: null, isDirty: false, savedMarkdown: "# Welcome asset\n" });
-  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hasSeenWelcome: true }));
+  expect(save).toHaveBeenCalledExactlyOnceWith({ hasSeenWelcome: true });
 });
 
 describe("the one-time default app prompt on Windows", () => {
@@ -206,7 +206,7 @@ describe("the one-time default app prompt on Windows", () => {
     const startup = setup();
     // The prompt reads only the platform from the bridge. Its dialog is mocked.
     window.downpadDesktop = { platform } as ElectronBridge;
-    const save = vi.spyOn(startup.settings, "save").mockResolvedValue(true);
+    const save = vi.spyOn(startup.settings, "save").mockResolvedValue(null);
     return { ...startup, save };
   }
 
@@ -221,7 +221,7 @@ describe("the one-time default app prompt on Windows", () => {
 
     const prompting = startup.maybePromptDefaultHandler();
     expect(native.getDefaultMdHandler).toHaveBeenCalledOnce();
-    expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hasCheckedDefaultHandler: true }));
+    expect(save).toHaveBeenCalledExactlyOnceWith({ hasCheckedDefaultHandler: true });
     finishCheck({ progId: "Downpad.md", isDefault: true });
     await prompting;
 

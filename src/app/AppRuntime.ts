@@ -74,7 +74,7 @@ export class AppRuntime {
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
-      (next) => saveDialogSettings(next, { store, settings: this.settingsModel, git: this.git }),
+      (changes) => saveDialogSettings(changes, { store, settings: this.settingsModel, git: this.git }),
     );
 
     // The editor presenter lets FileService flush + re-show the active document
@@ -126,7 +126,7 @@ export class AppRuntime {
 
     this.printWorkspace = new PrintWorkspace({
       getSettings: () => this.store.get().settings,
-      saveSettings: (next) => void this.settingsModel.save(next),
+      saveSettings: (changes) => void this.settingsModel.save(changes),
     });
 
     this.startup = new StartupCoordinator({
@@ -272,10 +272,9 @@ export class AppRuntime {
 
   /** Toggle only the document surface. UI chrome remains controlled in Settings. */
   toggleDocumentTheme(): void {
-    const settings = this.store.get().settings;
     const current = document.documentElement.dataset.editorTheme;
     const editorTheme = current === "dark" ? "light" : "dark";
-    void this.settingsModel.save({ ...settings, editorTheme });
+    void this.settingsModel.save({ editorTheme });
   }
 
   zoomDocument(delta: number): void {
@@ -604,7 +603,7 @@ export class AppRuntime {
     const s = this.store.get().settings;
     const next = clampFontScale(round2(s.editorFontScale + delta));
     if (next === s.editorFontScale) return;
-    await this.settingsModel.save({ ...s, editorFontScale: next });
+    await this.settingsModel.save({ editorFontScale: next });
   }
 
   /** Copy the active document's Markdown, including its latest edits. */

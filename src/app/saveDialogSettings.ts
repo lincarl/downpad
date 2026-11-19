@@ -12,17 +12,18 @@ export interface DialogSaveDependencies {
   git: Pick<GitSync, "check">;
 }
 
-/** Save the Settings dialog's settings, and resolve whether they were
- *  written. A failed write puts the settings from before back. Settings apply
- *  locally before they reach the main process, so a write that turns Git on
- *  checks again once the main process's Git guard can see it. A failed write
- *  never checks, and a retry that is written then does. */
+/** Save the changes made in the Settings dialog, and resolve with the
+ *  settings the file then holds, or null when they were not written. A failed
+ *  write stops using the changes. Settings apply locally before they reach
+ *  the main process, so a write that turns Git on checks again once the main
+ *  process's Git guard can see it. A failed write never checks, and a retry
+ *  that is written then does. */
 export async function saveDialogSettings(
-  next: Settings,
+  changes: Partial<Settings>,
   { store, settings, git }: DialogSaveDependencies,
-): Promise<boolean> {
-  const enablingGit = next.gitEnabled && !store.get().settings.gitEnabled;
-  const written = await settings.save(next, { undoIfUnwritten: true });
+): Promise<Settings | null> {
+  const enablingGit = changes.gitEnabled === true && !store.get().settings.gitEnabled;
+  const written = await settings.save(changes, { undoIfUnwritten: true });
   if (enablingGit && written) void git.check({ force: true });
   return written;
 }

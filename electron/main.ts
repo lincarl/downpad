@@ -232,15 +232,14 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "copy_file_to_clipboard": return copyFileToClipboard(path(args));
     case "load_settings": return config.settings();
     case "save_settings": {
-      await config.saveSettings(args.settings);
-      const settings = await config.settings();
+      const settings = await config.updateSettings(args.changes);
       spellchecker?.apply(settings);
       // Deleting an automatic download waits for a running download, which
       // must not hold up the next settings save.
       if (!settings.autoUpdate) {
         void updates().automaticUpdatesOff().catch((error: unknown) => console.error("Downpad could not delete the automatic update", error));
       }
-      return;
+      return settings;
     }
     case "settings_path": return config.settingsPath;
     case "get_spellcheck_info": return spelling().info();
@@ -665,7 +664,7 @@ async function start(): Promise<void> {
   if (adoptedLegacySettings) {
     // A default .md app chosen as md-easy's executable no longer exists after the
     // upgrade, so offer to make Downpad the default once more.
-    await config.saveSettings({ ...await config.settings(), hasCheckedDefaultHandler: false })
+    await config.updateSettings({ hasCheckedDefaultHandler: false })
       .catch((error: unknown) => console.error("Downpad could not reset its default-app check", error));
   }
   // A copy whose installation cannot be told never updates itself, and still starts.
