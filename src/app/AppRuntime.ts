@@ -91,7 +91,7 @@ export class AppRuntime {
     // Double-clicking a `.md` link opens that file in a tab (§5.6); openPath
     // focuses it if already open, else opens a new tab (consistent with §5.19).
     this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
-    this.scheduler = new SnapshotScheduler(store, this.files, () => this.desktopEvents.holdSave());
+    this.scheduler = new SnapshotScheduler(store, this.files, (tabId) => this.desktopEvents.holdSave(tabId));
     this.session = new SessionKeeper(store);
     // The find card floats over the document and searches the formatted
     // document or raw Markdown according to the active layout. Its open state
@@ -641,19 +641,30 @@ export class AppRuntime {
   private async copyFile(): Promise<void> {
     // The menu can stay open while the file changes on disk.
     if (!this.canCopyFile()) return;
+    const tabId = this.store.get().activeTabId;
+    if (!tabId) return;
+    // A comparison of the document with its file that runs, as after a
+    // switch of tabs, tells first whether the file changed.
+    await this.desktopEvents.settled(tabId);
+    if (this.disposed || this.store.get().activeTabId !== tabId || !this.canCopyFile()) return;
     // A change on disk whose bar was dismissed or replaced is still
     // unresolved, so the bar asks again and nothing is saved or copied.
     if (this.desktopEvents.showPendingChange()) return;
     this.editorHost.flush();
-    const tabId = this.store.get().activeTabId;
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-    if (!tabId || !doc) return;
+    if (!doc) return;
     try {
-      // A change on disk found while the save waited in the queue stops it too.
+      // A change on disk found while the save waited in the queue stops it
+      // too, and so does one the app has not seen yet.
       const saved = !doc.isDirty && doc.filePath
         ? true
-        : await this.files.save({ unless: () => this.desktopEvents.holdSave() });
-      if (!saved) return;
+        : await this.files.save({ automatic: (id) => this.desktopEvents.holdSave(id) });
+      if (!saved) {
+        // A held or refused save leaves the bar for the change on disk, which
+        // shows now or once the watcher reports it.
+        this.desktopEvents.showPendingChange();
+        return;
+      }
       const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
       if (path) await copyFileToClipboard(path);
     } catch (error) {

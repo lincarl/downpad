@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import type { DesktopEventPayloads, HistoryCommand, SaveChangesChoice } from "../src/ipc/bridge";
 import type { DefaultHandler, GitOpenFile } from "../src/ipc/contracts";
 import { copyFileToClipboard } from "./fileClipboard";
-import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, modifiedTime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
+import { absolutePath, ensureAttachmentsDirectory, exists, fileStamp, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
@@ -211,11 +211,15 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
       const eol = string(args, "eol");
       if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
       const target = path(args);
-      const meta = await writeMarkdown(target, string(args, "content"), eol);
+      const expected = args.expectedModifiedMs;
+      if (expected !== undefined && (typeof expected !== "number" || !Number.isFinite(expected))) {
+        throw new Error("The expected modification time must be a number.");
+      }
+      const meta = await writeMarkdown(target, string(args, "content"), eol, expected);
       return meta;
     }
     case "path_exists": return exists(path(args));
-    case "file_modified_time": return modifiedTime(path(args));
+    case "file_stamp": return fileStamp(path(args));
     case "watch_file": {
       const target = path(args);
       unwatchDocument?.();

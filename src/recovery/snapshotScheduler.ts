@@ -28,14 +28,15 @@ export class SnapshotScheduler {
   private clearing: Promise<void> | null = null;
   private stopVersion = 0;
 
-  /** `holdAutosave` tells whether autosave must wait, such as while a change
-   *  on disk to the active document is not resolved with Reload or Keep
-   *  mine, since its save would replace the other version without asking. It
-   *  runs again just before the write, after the saves queued before it. */
+  /** `holdAutosave` tells whether autosave must wait for the tab, such as
+   *  while a change on disk to its document is not resolved with Reload or
+   *  Keep mine, since its save would replace the other version without
+   *  asking. It runs again just before the write, after the saves queued
+   *  before it. */
   constructor(
     private readonly store: Store,
     private readonly files: FileService,
-    private readonly holdAutosave: () => boolean = () => false,
+    private readonly holdAutosave: (tabId: string) => boolean = () => false,
   ) {}
 
   /** Start both timers. A changed interval restarts that timer, which counts
@@ -139,9 +140,9 @@ export class SnapshotScheduler {
    *  saved as Save would write it, but keeps waiting in the editor, so a pause
    *  in typing never decides it there. */
   private async tickAutosave(): Promise<void> {
-    const { doc, settings } = this.store.get();
-    if (settings.autosaveEnabled && doc.filePath && doc.isDirty && !this.holdAutosave()) {
-      await this.files.save({ keepTypedMark: true, unless: this.holdAutosave }).catch(() => {});
+    const { activeTabId, doc, settings } = this.store.get();
+    if (settings.autosaveEnabled && activeTabId && doc.filePath && doc.isDirty && !this.holdAutosave(activeTabId)) {
+      await this.files.save({ keepTypedMark: true, automatic: this.holdAutosave }).catch(() => {});
     }
   }
 }

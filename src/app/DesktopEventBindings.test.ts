@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorHost } from "../editor/EditorHost";
 import { FileService } from "../files/FileService";
 import type { ElectronBridge } from "../ipc/bridge";
-import type { FileMeta, FilePayload } from "../ipc/contracts";
+import type { FileMeta, FilePayload, FileStamp } from "../ipc/contracts";
 import type { FileChangedPayload } from "../ipc/events";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import { blankDoc, type Eol } from "../state/types";
@@ -18,14 +18,14 @@ const events = vi.hoisted(() => ({
 const disk = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<FilePayload>>(),
   writeFile: vi.fn<(path: string, content: string, eol: Eol) => Promise<FileMeta>>(),
-  fileModifiedTime: vi.fn<(path: string) => Promise<number>>(),
+  fileStamp: vi.fn<(path: string) => Promise<FileStamp>>(),
 }));
 
 vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   readFile: disk.readFile,
   writeFile: disk.writeFile,
-  fileModifiedTime: disk.fileModifiedTime,
+  fileStamp: disk.fileStamp,
 }));
 
 vi.mock("../ipc/events", () => ({
@@ -41,11 +41,16 @@ vi.mock("../ipc/events", () => ({
   },
 }));
 
+/** A file's stamp at `modifiedMs`, with a size the documents in these tests
+ *  do not record. */
+const stamp = (modifiedMs: number): FileStamp => ({ modifiedMs, sizeBytes: 0 });
+
 beforeEach(() => {
   disk.readFile.mockReset();
-  disk.fileModifiedTime.mockReset();
-  // The file's time as the documents in these tests recorded it.
-  disk.fileModifiedTime.mockResolvedValue(100);
+  disk.fileStamp.mockReset();
+  // The file as the documents in these tests recorded it.
+  disk.fileStamp.mockResolvedValue(stamp(100));
+  disk.readFile.mockResolvedValue({ content: "# Mine\n", eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: 7 });
   disk.writeFile.mockReset();
 });
 
@@ -279,15 +284,6 @@ describe("a file that changed on disk", () => {
 
   it.each([
     {
-      report: "its own save during later typing",
-      prepare: async (): Promise<FileChangedPayload> => {
-        disk.writeFile.mockResolvedValueOnce({ modifiedMs: 200 });
-        expect(await files.save()).toBe(true);
-        store.patchDoc({ markdown: "# Mine\n\nMore typing\n", isDirty: true });
-        return { path: filePath, modifiedMs: 200 };
-      },
-    },
-    {
       report: "a change to another file",
       prepare: async (): Promise<FileChangedPayload> => ({ path: "/docs/other.md", modifiedMs: 999 }),
     },
@@ -311,6 +307,20 @@ describe("a file that changed on disk", () => {
     expect(disk.readFile).not.toHaveBeenCalled();
     expect(store.get().banner).toBeNull();
     expect(store.get().doc).toBe(before);
+  });
+
+  it("takes its own save during later typing for no change on disk", async () => {
+    disk.writeFile.mockResolvedValueOnce({ modifiedMs: 200 });
+    expect(await files.save()).toBe(true);
+    store.patchDoc({ markdown: "# Mine\n\nMore typing\n", isDirty: true });
+    // What the file holds after the save, which differs from the open text.
+    disk.readFile.mockResolvedValue({ content: "# Mine\n", eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: 7 });
+    await eventually(() => expect(events.fileChanged).not.toBeNull());
+    events.fileChanged!({ path: filePath, modifiedMs: 200 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.get().banner).toBeNull();
+    expect(store.get().doc).toMatchObject({ markdown: "# Mine\n\nMore typing\n", savedMarkdown: "# Mine\n", isDirty: true, modifiedMs: 200 });
   });
 
   it("counts the open text as unsaved once the user keeps it", async () => {
@@ -373,7 +383,7 @@ describe("a file that changed on disk", () => {
 
   it("shows a dismissed change again once its tab is in front again, and holds autosave for it", async () => {
     await changeOnDisk("# Theirs\n");
-    disk.fileModifiedTime.mockResolvedValue(200);
+    disk.fileStamp.mockResolvedValue(stamp(200));
     const first = store.get().activeTabId!;
     expect(bindings.holdSave()).toBe(true);
 
@@ -396,7 +406,7 @@ describe("a file that changed on disk", () => {
     store.addTab({ ...blankDoc(), markdown: "# Other\n" });
     bindings.activeDocChanged();
     disk.readFile.mockResolvedValue({ content: "# Theirs\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 9 });
-    disk.fileModifiedTime.mockResolvedValue(300);
+    disk.fileStamp.mockResolvedValue(stamp(300));
     store.activateTab(first);
     bindings.activeDocChanged();
     await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
@@ -438,8 +448,8 @@ describe("a file that changed on disk", () => {
     bindings.handleBannerAction("reload");
     // The reload shows the file and clears the bar, as the app does.
     store.set({ banner: null });
-    store.patchDoc({ markdown: "# Older still\n", savedMarkdown: "# Older still\n", modifiedMs: 40, isDirty: false });
-    disk.fileModifiedTime.mockResolvedValue(40);
+    store.patchDoc({ markdown: "# Older still\n", savedMarkdown: "# Older still\n", modifiedMs: 40, fileSize: 14, isDirty: false });
+    disk.fileStamp.mockResolvedValue({ modifiedMs: 40, sizeBytes: 14 });
     bindings.activeDocChanged();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.get().banner).toBeNull();
@@ -452,7 +462,7 @@ describe("a file that changed on disk", () => {
     store.set({ banner: null });
     bindings.activeDocChanged();
     // The file changes again while its tab is in back.
-    disk.fileModifiedTime.mockResolvedValue(300);
+    disk.fileStamp.mockResolvedValue(stamp(300));
     disk.readFile.mockResolvedValueOnce({ content: "# Theirs, later\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 16 });
     store.activateTab(first);
     bindings.activeDocChanged();
@@ -471,7 +481,7 @@ describe("a file that changed on disk", () => {
     store.patchDoc({ markdown: "# Saving, and more\n", isDirty: true });
     // The file holds the new text, or still the old one.
     for (const content of ["# Saving\n", "# Mine\n"]) {
-      disk.fileModifiedTime.mockResolvedValueOnce(200);
+      disk.fileStamp.mockResolvedValueOnce(stamp(200));
       disk.readFile.mockResolvedValueOnce({ content, eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: content.length });
       bindings.activeDocChanged();
       await eventually(() => expect(disk.readFile.mock.results.at(-1)?.value).toBeDefined());
@@ -483,11 +493,11 @@ describe("a file that changed on disk", () => {
   });
 
   it("holds automatic saves while it compares a tab with its file, and shows a dismissed notice when it holds one", async () => {
-    let answer!: (time: number) => void;
-    disk.fileModifiedTime.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    let answer!: (value: FileStamp) => void;
+    disk.fileStamp.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
     bindings.activeDocChanged();
     expect(bindings.holdSave()).toBe(true);
-    answer(100);
+    answer(stamp(100));
     await eventually(() => expect(bindings.holdSave()).toBe(false));
     // The time is the one the document recorded, so the file is not read.
     expect(disk.readFile).not.toHaveBeenCalled();
@@ -496,6 +506,69 @@ describe("a file that changed on disk", () => {
     store.set({ banner: null });
     expect(bindings.holdSave()).toBe(true);
     expect(store.get().banner?.kind).toBe("file-changed");
+  });
+
+  it("keeps holding automatic saves when the user cancels Reload", async () => {
+    await changeOnDisk("# Theirs\n");
+    // The reload asks about the unsaved text, and the user cancels, so the
+    // document stays as it is. This test's run() runs nothing.
+    bindings.handleBannerAction("reload");
+    store.set({ banner: null });
+    expect(bindings.holdSave()).toBe(true);
+    expect(store.get().banner?.kind).toBe("file-changed");
+  });
+
+  it("compares a tab with its file as soon as it comes to the front, and holds saves of the tab it names", async () => {
+    await changeOnDisk("# Theirs\n");
+    const first = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), markdown: "# Other\n", filePath: "/docs/other.md", modifiedMs: 100, savedMarkdown: "# Other\n" });
+    const second = store.get().activeTabId!;
+    await bindings.settled(second);
+    // The change of the tab in back holds its saves without showing its bar.
+    store.set({ banner: null });
+    expect(bindings.holdSave(first)).toBe(true);
+    expect(store.get().banner).toBeNull();
+    expect(bindings.holdSave(second)).toBe(false);
+
+    store.activateTab(first);
+    await bindings.settled(first);
+    let answer!: (value: FileStamp) => void;
+    disk.fileStamp.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    store.activateTab(second);
+    // Before the editor shows the tab, its comparison runs already.
+    expect(bindings.holdSave(second)).toBe(true);
+    const settled = bindings.settled(second);
+    answer(stamp(100));
+    await settled;
+    expect(bindings.holdSave(second)).toBe(false);
+  });
+
+  it("does not use a read that a save made out of date", async () => {
+    let finishRead!: (payload: FilePayload) => void;
+    disk.fileStamp.mockResolvedValueOnce(stamp(200));
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    bindings.activeDocChanged();
+    await eventually(() => expect(disk.readFile).toHaveBeenCalledOnce());
+    // The user saves before the read ends, which records another version.
+    store.patchDoc({ modifiedMs: 300, savedMarkdown: "# Mine\n" });
+    finishRead({ content: "# Theirs\n", eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: 9 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get().banner).toBeNull();
+    expect(bindings.holdSave()).toBe(false);
+  });
+
+  it("notices a replacement that keeps the file's time, and one that only changes its size", async () => {
+    // The watcher reports the time the document recorded.
+    await changeOnDisk("# Theirs, same time\n", 100);
+    expect(store.get().banner?.kind).toBe("file-changed");
+    bindings.handleBannerAction("keep");
+
+    // The size the document recorded tells a tab coming back that the file changed.
+    store.patchDoc({ fileSize: 21 });
+    disk.fileStamp.mockResolvedValueOnce({ modifiedMs: 100, sizeBytes: 30 });
+    disk.readFile.mockResolvedValueOnce({ content: "# Theirs, same time again\n", eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: 30 });
+    bindings.activeDocChanged();
+    await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
   });
 
   it("keeps a newer change when an older read finishes after it", async () => {

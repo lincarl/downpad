@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { FileMeta, FilePayload, ImageBytes } from "../src/ipc/contracts";
+import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload, type FileStamp, type ImageBytes } from "../src/ipc/contracts";
 import type { Eol } from "../src/state/types";
 
 export function absolutePath(value: unknown): string {
@@ -80,15 +80,23 @@ export async function writeAtomic(
 export async function readMarkdown(path: string): Promise<FilePayload> {
   const target = absolutePath(path);
   // The text and its time come from one open file, so a replacement of the file in
-  // between cannot pair the old text with the new time.
-  const handle = await open(target, "r");
-  let bytes: Buffer;
-  let modifiedMs: number;
-  try {
-    bytes = await handle.readFile();
-    modifiedMs = Math.floor((await handle.stat()).mtimeMs);
-  } finally {
-    await handle.close();
+  // between cannot pair the old text with the new time. A program that rewrites the
+  // file in place while it is read changes its time or size, and the read starts again.
+  let bytes!: Buffer;
+  let modifiedMs!: number;
+  for (let attempt = 1; ; attempt++) {
+    const handle = await open(target, "r");
+    let settled: boolean;
+    try {
+      const before = await handle.stat();
+      bytes = await handle.readFile();
+      const after = await handle.stat();
+      modifiedMs = Math.floor(after.mtimeMs);
+      settled = before.mtimeMs === after.mtimeMs && before.size === after.size && bytes.length === after.size;
+    } finally {
+      await handle.close();
+    }
+    if (settled || attempt >= READ_ATTEMPTS) break;
   }
   const hadBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   let raw: string;
@@ -108,20 +116,49 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
   };
 }
 
-/** The file's modification time, which tells whether it changed without reading it. */
-export async function modifiedTime(path: string): Promise<number> {
-  return Math.floor((await stat(absolutePath(path))).mtimeMs);
+/** How often a read starts again while another program rewrites the file in place. */
+const READ_ATTEMPTS = 3;
+
+/** The file's modification time and size, which tell whether it changed without
+ *  reading it. They come from an open file, as a network file system can answer a
+ *  plain stat from attributes it cached earlier. */
+export async function fileStamp(path: string): Promise<FileStamp> {
+  const handle = await open(absolutePath(path), "r");
+  try {
+    const info = await handle.stat();
+    return { modifiedMs: Math.floor(info.mtimeMs), sizeBytes: info.size };
+  } finally {
+    await handle.close();
+  }
 }
 
 let pendingMarkdownWrite: Promise<void> = Promise.resolve();
 
-/** Serialize document saves before path resolution so aliases cannot reorder writes. */
-export function writeMarkdown(path: string, content: string, eol: Eol): Promise<FileMeta> {
+/** Serialize document saves before path resolution so aliases cannot reorder writes.
+ *  With `expectedModifiedMs`, the write replaces the file only while it still has that
+ *  modification time, or is gone, and otherwise throws FILE_CHANGED_ON_DISK and leaves
+ *  the file as it is. */
+export function writeMarkdown(path: string, content: string, eol: Eol, expectedModifiedMs?: number): Promise<FileMeta> {
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
-    const modifiedMs = await writeAtomic(path, eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized);
-    return { modifiedMs: Math.floor(modifiedMs) };
+    const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
+    const beforeReplace = expectedModifiedMs === undefined
+      ? undefined
+      : async () => {
+        const info = await stat(absolutePath(path)).catch((error: unknown) => {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+          throw error;
+        });
+        return !info || Math.floor(info.mtimeMs) === expectedModifiedMs;
+      };
+    try {
+      const modifiedMs = await writeAtomic(path, text, { beforeReplace });
+      return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };
+    } catch (error) {
+      if (error instanceof ReplaceDeclinedError) throw new Error(FILE_CHANGED_ON_DISK);
+      throw error;
+    }
   });
   pendingMarkdownWrite = result.then(() => {}, () => {});
   return result;

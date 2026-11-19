@@ -6,6 +6,7 @@ import type {
   DefaultHandler,
   FileMeta,
   FilePayload,
+  FileStamp,
   FileStat,
   GitFileStatus,
   GitOpenFile,
@@ -27,9 +28,9 @@ import type {
 
 export interface DesktopCommandArgs {
   read_file: { path: string };
-  write_file: { path: string; content: string; eol: Eol };
+  write_file: { path: string; content: string; eol: Eol; expectedModifiedMs?: number };
   path_exists: { path: string };
-  file_modified_time: { path: string };
+  file_stamp: { path: string };
   watch_file: { path: string };
   unwatch_file: undefined;
   ensure_attachments_dir: { docPath: string; folderName: string };
@@ -78,7 +79,7 @@ export interface DesktopCommandResults {
   read_file: FilePayload;
   write_file: FileMeta;
   path_exists: boolean;
-  file_modified_time: number;
+  file_stamp: FileStamp;
   watch_file: void;
   unwatch_file: void;
   ensure_attachments_dir: string;

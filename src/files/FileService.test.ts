@@ -3,13 +3,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppStore } from "../app/createAppStore";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
-import type { FileMeta, FilePayload } from "../ipc/contracts";
+import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload } from "../ipc/contracts";
 import { blankDoc, type Eol } from "../state/types";
 import { FileService } from "./FileService";
 
 const native = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<FilePayload>>(),
-  writeFile: vi.fn<(path: string, content: string, eol: Eol) => Promise<FileMeta>>(),
+  writeFile: vi.fn<(path: string, content: string, eol: Eol, expectedModifiedMs?: number) => Promise<FileMeta>>(),
   watchFile: vi.fn<(path: string) => Promise<void>>(),
   recordFileOpened: vi.fn<(path: string, openedAtMs: number) => Promise<unknown>>(),
   ask: vi.fn<(message: string) => Promise<boolean>>(),
@@ -191,13 +191,31 @@ describe("saving document snapshots", () => {
     // An autosave waits behind it, and a change on disk shows meanwhile.
     applyEditorMarkdownForTab(store, tabId, "# Second\n");
     let held = false;
-    const autosave = files.save({ keepTypedMark: true, unless: () => held });
+    const autosave = files.save({ keepTypedMark: true, automatic: () => held });
     held = true;
     write.resolve({ modifiedMs: 200 });
     expect(await first).toBe(true);
     expect(await autosave).toBe(false);
     expect(native.writeFile).toHaveBeenCalledOnce();
     expect(files.isOwnWrite(tabId, "# First\n")).toBe(false);
+  });
+
+  it("writes an automatic save's document as it is then, only over the version it recorded", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    applyEditorMarkdownForTab(store, tabId, "# Typed\n");
+    expect(await files.save({ automatic: () => false })).toBe(true);
+    expect(native.writeFile).toHaveBeenLastCalledWith(filePath, "# Typed\n", "lf", 100);
+
+    // Nothing is unsaved, as after a reload, so it writes nothing.
+    expect(await files.save({ automatic: () => false })).toBe(true);
+    expect(native.writeFile).toHaveBeenCalledOnce();
+
+    // The main process refuses a file that another program changed.
+    applyEditorMarkdownForTab(store, tabId, "# More\n");
+    native.writeFile.mockRejectedValueOnce(new Error(`Error invoking remote method: Error: ${FILE_CHANGED_ON_DISK}`));
+    expect(await files.save({ automatic: () => false })).toBe(false);
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Typed\n", isDirty: true, modifiedMs: 200 });
   });
 
   it("restores the saved text when the write fails", async () => {

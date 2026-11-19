@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import filesystem, { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
-import { readMarkdown, ReplaceDeclinedError, writeAtomic, writeMarkdown } from "./io";
+import { FILE_CHANGED_ON_DISK } from "../src/ipc/contracts";
+import { fileStamp, readMarkdown, ReplaceDeclinedError, writeAtomic, writeMarkdown } from "./io";
 
 const nativePlatform = process.platform;
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -110,6 +111,43 @@ it("checks again before a Windows rename retry, and leaves a file changed meanwh
   expect(checks).toBe(2);
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
   expect(await readdir(directory)).toEqual(["note.md"]);
+});
+
+it("reads a file again that another program rewrites in place while it is read", async () => {
+  const { destination } = await fixture();
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementationOnce(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      // Another program rewrites the same file in place right after the read.
+      await writeFile(destination, "Rewritten in place\n");
+      await utimes(destination, new Date(), new Date(Date.now() + 60_000));
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  const read = await readMarkdown(destination);
+  expect(read).toMatchObject({ content: "Rewritten in place\n", modifiedMs: Math.floor((await stat(destination)).mtimeMs) });
+});
+
+it("writes a document only over the version it expects, and stamps a file with its time and size", async () => {
+  const { destination } = await fixture();
+  const recorded = await fileStamp(destination);
+  expect(recorded).toEqual({ modifiedMs: Math.floor((await stat(destination)).mtimeMs), sizeBytes: 14 });
+
+  const written = await writeMarkdown(destination, "Mine\n", "lf", recorded.modifiedMs);
+  expect(written).toEqual({ modifiedMs: expect.any(Number), sizeBytes: 5 });
+  expect(await readFile(destination, "utf8")).toBe("Mine\n");
+
+  // Another program changes the file after the document recorded it.
+  await writeFile(destination, "Theirs\n");
+  await utimes(destination, new Date(), new Date(written.modifiedMs + 60_000));
+  await expect(writeMarkdown(destination, "Mine again\n", "lf", written.modifiedMs)).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
 });
 
 it.each(["linux", "darwin"] as const)("fails immediately on %s and keeps the old file and removes staging", async (platform) => {

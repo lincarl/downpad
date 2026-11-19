@@ -7,7 +7,7 @@
 
 import { openDialog, saveDialog, ask, confirmSaveChanges } from "../ipc/dialogs";
 import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
-import type { FilePayload } from "../ipc/contracts";
+import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
 import { blankDoc, hasUnsavedChanges, type DocumentState, type Tab } from "../state/types";
@@ -45,8 +45,8 @@ interface SaveRequest {
   expectedPath: string | null;
   saveAs: boolean;
   choice: SaveAsChoice;
-  /** Skips the write when it answers true just before the write starts. */
-  unless?: () => boolean;
+  /** Marks a save nobody asked for as such, with the check that holds it. */
+  automatic?: (tabId: string) => boolean;
   /** The saved text the write replaces, once the write starts. */
   replaced?: string | null;
 }
@@ -235,10 +235,17 @@ export class FileService {
    *  writes a typed closing `$` or `~` that still waits for the next character
    *  as Save would, but leaves it waiting in the editor, so the save never
    *  changes the document while the user types, and a digit typed next still
-   *  keeps it text. `unless` runs just before the write starts, after the
-   *  saves queued before it, and a true answer skips the write, which the
-   *  save reports as failed. */
-  save(options: { keepTypedMark?: boolean; unless?: () => boolean } = {}): Promise<boolean> {
+   *  keeps it text.
+   *
+   *  `automatic` marks a save nobody asked for as such, such as autosave or
+   *  the save before Copy file, with a check that holds it, given the tab. It
+   *  runs just before the write starts, after the saves queued before it. The
+   *  save then writes the document as it is, does nothing when nothing is
+   *  unsaved any more, as after a reload, and skips the write when the check
+   *  holds it. It writes only over the file version the document recorded,
+   *  so a change on disk the app has not seen yet stays, and the save reports
+   *  failure then, as for a held one. */
+  save(options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean } = {}): Promise<boolean> {
     return this.queueSave(this.store.get().activeTabId, false, options);
   }
 
@@ -272,16 +279,16 @@ export class FileService {
   private queueSave(
     tabId: string | null,
     saveAs: boolean,
-    options: { keepTypedMark?: boolean; unless?: () => boolean } = {},
+    options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean } = {},
     choice: SaveAsChoice = {},
   ): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
-    const { unless, ...flushOptions } = options;
+    const { automatic, ...flushOptions } = options;
     this.present.flush(flushOptions);
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!tabId || !doc) return Promise.resolve(false);
-    const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, unless };
+    const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, automatic };
     this.pendingSaves.add(request);
     const operation = this.saveQueue.then(() => this.saveSnapshot(request))
       .finally(() => this.pendingSaves.delete(request));
@@ -291,7 +298,7 @@ export class FileService {
   }
 
   private async saveSnapshot(request: SaveRequest): Promise<boolean> {
-    const { tabId, snapshot, expectedPath, saveAs, choice } = request;
+    const { tabId, expectedPath, saveAs, choice, automatic } = request;
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== expectedPath) return false;
     const originalPath = current.filePath;
@@ -302,17 +309,34 @@ export class FileService {
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
     }
-    if (!path || request.unless?.()) return false;
+    if (!path) return false;
+    let expectedModifiedMs: number | undefined;
+    if (automatic) {
+      const now = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+      if (!now) return false;
+      if (!now.isDirty && !choosePath) return true;
+      if (automatic(tabId)) return false;
+      request.snapshot = now;
+      if (!choosePath && now.modifiedMs > 0) expectedModifiedMs = now.modifiedMs;
+    }
+    const { snapshot } = request;
     // Until the write settles, the file may hold the old saved text or the new
     // one, so an edit back to either still counts as unsaved.
     const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
     request.replaced = previous;
     this.store.patchDocById(tabId, { savedMarkdown: null });
-    const meta = await writeFile(path, snapshot.markdown, snapshot.eol).catch((error: unknown) => {
+    let meta: FileMeta;
+    try {
+      meta = await (expectedModifiedMs === undefined
+        ? writeFile(path, snapshot.markdown, snapshot.eol)
+        : writeFile(path, snapshot.markdown, snapshot.eol, expectedModifiedMs));
+    } catch (error) {
       this.restoreSavedMarkdown(tabId, originalPath, previous);
+      // Another program changed the file, which the watcher reports.
+      if (expectedModifiedMs !== undefined && error instanceof Error && error.message.includes(FILE_CHANGED_ON_DISK)) return false;
       throw error;
-    });
-    this.markSaved(tabId, snapshot, originalPath, path, meta.modifiedMs);
+    }
+    this.markSaved(tabId, snapshot, originalPath, path, meta);
     if (choosePath) this.recordOpened(path);
     return true;
   }
@@ -320,7 +344,7 @@ export class FileService {
   /** Apply saved metadata to its owner, keeping later edits dirty. A change on
    *  disk that was recorded while the write was pending, with a later mtime,
    *  stays the file's text. */
-  private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, modifiedMs: number): void {
+  private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, { modifiedMs, sizeBytes }: FileMeta): void {
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== originalPath) return;
     const newerOnDisk = path === originalPath && current.savedMarkdown !== null && current.modifiedMs > modifiedMs;
@@ -333,6 +357,7 @@ export class FileService {
             isDirty: current.markdown !== snapshot.markdown || current.eol !== snapshot.eol,
             savedMarkdown: snapshot.markdown,
             modifiedMs,
+            fileSize: sizeBytes,
           },
     );
     // Requests queued during Save As follow the owner's new path, retaining
@@ -421,6 +446,7 @@ function fileDocument(path: string, payload: FilePayload, frontmatterCollapsed =
     eol: payload.eol,
     hadBom: payload.hadBom,
     modifiedMs: payload.modifiedMs,
+    fileSize: payload.sizeBytes,
     isDirty: false,
     savedMarkdown: payload.content,
     frontmatterCollapsed,

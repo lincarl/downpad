@@ -3,7 +3,7 @@ import type { DesktopCommandArgs, DesktopCommandResults, DesktopEventPayloads, E
 import { spellingWord, spellingWords, type NativeSpellingResult, type NativeSuggestionsResult } from "./spellingRequests";
 
 const commands = new Set<keyof DesktopCommandArgs>([
-  "read_file", "write_file", "path_exists", "file_modified_time", "watch_file", "unwatch_file", "ensure_attachments_dir", "write_attachment",
+  "read_file", "write_file", "path_exists", "file_stamp", "watch_file", "unwatch_file", "ensure_attachments_dir", "write_attachment",
   "read_image_bytes", "copy_file_to_clipboard", "get_recent_files", "record_file_opened", "remove_recent", "set_favorite", "stat_files",
   "search_recent_contents", "cancel_search", "write_snapshot", "delete_snapshot", "list_recovery_snapshots",
   "load_session", "save_session", "get_launch_args", "get_default_md_handler", "open_default_apps_settings", "get_system_accent_color",

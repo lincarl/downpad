@@ -50,6 +50,10 @@ export interface DocumentState {
   hadBom: boolean;
   /** Last known on-disk mtime (ms); used to suppress self-write watcher events (§5.1). */
   modifiedMs: number;
+  /** The size in bytes of the file version `modifiedMs` belongs to, when
+   *  known. With the time, it tells whether the file can have changed
+   *  without reading it. */
+  fileSize?: number;
   /** WYSIWYG-only UI state for the collapsible frontmatter block (spec §5.17). */
   frontmatterCollapsed: boolean;
 }
