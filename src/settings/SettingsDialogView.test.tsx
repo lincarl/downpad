@@ -15,7 +15,7 @@ function renderDialog(initial: Settings = DEFAULT_SETTINGS) {
   const onSave = vi.fn<(changes: Partial<Settings>) => Promise<Partial<Settings> | null>>(async (changes) => changes);
   const onRequestClose = vi.fn();
   render(
-    <SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />,
+    <SettingsDialogView initial={initial} saved={initial} onSave={onSave} onRequestClose={onRequestClose} />,
   );
   return { onSave, onRequestClose, user: userEvent.setup({ delay: null }) };
 }
@@ -274,6 +274,20 @@ describe("SettingsDialogView pages", () => {
     await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave).not.toHaveBeenCalled();
     expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows a hand-edited text size as it is saved, and keeps it in an emptied field", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, editorFontScale: 2.504 });
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+    const size = document.querySelector<HTMLInputElement>('input[name="editorFontScalePct"]')!;
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    expect(size.value).toBe("250.4");
+    await user.clear(size);
+    expect(apply.disabled).toBe(true);
+    await user.type(size, "250");
+    expect(apply.disabled).toBe(false);
+    await user.click(apply);
+    expect(onSave.mock.calls[0][0]).toEqual({ editorFontScale: 2.5 });
   });
 
   it("saves the field's largest value over a saved value above its range", async () => {
@@ -624,6 +638,43 @@ describe("SettingsDialog", () => {
       act(() => dialog.open());
       await act(async () => finish({ ...store.get().settings, recentFilesKeepRemoved: true }));
       expect(dialog.isOpen()).toBe(true);
+    } finally {
+      act(() => dialog.close());
+    }
+  });
+
+  it("follows settings that change in the app while it is open, except fields the user changed", async () => {
+    const store = createAppStore();
+    const onSave = vi.fn(async (changes: Partial<Settings>) => {
+      const next = { ...store.get().settings, ...changes };
+      store.set({ settings: next });
+      return next;
+    });
+    const dialog = new SettingsDialog(store, onSave);
+    act(() => dialog.open());
+    try {
+      const user = userEvent.setup({ delay: null });
+      const field = (name: string) => document.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+      await user.click(screen.getByRole("tab", { name: "Appearance" }));
+      await user.clear(field("editorWidthPx"));
+      await user.type(field("editorWidthPx"), "1000");
+      // A hand edit of settings.toml arrives.
+      act(() => store.set((state) => ({ settings: {
+        ...state.settings,
+        editorWidthPx: 900,
+        linkDisplay: "text-only",
+        recentFilesKeepRemoved: true,
+        recentFilesMaxRetained: 50,
+        theme: "light",
+      } })));
+      expect(field("editorWidthPx").value).toBe("1000");
+      expect(document.querySelector<HTMLSelectElement>('select[name="linkDisplay"]')!.value).toBe("text-only");
+      expect(field("recentFilesKeepRemoved").checked).toBe(true);
+      expect(field("recentFilesMaxRetained").value).toBe("50");
+      expect((card("UI theme", "Light") as HTMLInputElement).checked).toBe(true);
+
+      await user.click(screen.getByRole("button", { name: "Apply" }));
+      expect(onSave).toHaveBeenCalledExactlyOnceWith({ editorWidthPx: 1000 });
     } finally {
       act(() => dialog.close());
     }

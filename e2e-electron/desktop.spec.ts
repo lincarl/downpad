@@ -4819,6 +4819,26 @@ test("General Recent preferences persist and hide missing files without deleting
   expect(history.map((entry) => entry.path)).toContain(missing);
 });
 
+test("an open Settings dialog shows a hand edit of settings.toml in the fields the user did not change", async () => {
+  const settingsFile = path.join(directory, "profile", "settings.toml");
+  await launch();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const shown = dialog.getByRole("spinbutton", { name: "Recent files shown" });
+  const kept = dialog.getByRole("spinbutton", { name: "Recent history kept" });
+  await shown.fill("30");
+  await writeFile(settingsFile, `${await readFile(settingsFile, "utf8")}recentFilesMaxRetained = 50\nrecentFilesKeepRemoved = true\n`);
+  await expect(kept).toHaveValue("50");
+  await expect(dialog.getByRole("checkbox", { name: "Keep removed files in list" })).toBeChecked();
+  await expect(shown).toHaveValue("30");
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect.poll(async () => {
+    const text = await readFile(settingsFile, "utf8");
+    return ["recentFilesVisibleCount = 30", "recentFilesMaxRetained = 50", "recentFilesKeepRemoved = true"].every((line) => text.includes(line));
+  }).toBe(true);
+});
+
 test("Settings says when settings.toml cannot be written, and Apply tries again once it can", async () => {
   const settingsFile = path.join(directory, "profile", "settings.toml");
   await launch();
