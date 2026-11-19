@@ -176,6 +176,20 @@ test("the document menu's Copy file saves the document and copies its file as th
   if (process.platform === "linux") {
     expect(await copied('electron application/osclipboard;format="x-special/gnome-copied-files"')).toBe(`copy\n${pathToFileURL(file).href}`);
   }
+  // While the file changed on disk and neither Reload nor Keep mine is
+  // chosen, Copy file waits, as its save would replace the other version.
+  await page.locator(".ProseMirror p", { hasText: "Latest edit." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Mine.");
+  await writeFile(file, "# Attach me\n\nTheirs.\n");
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await page.locator(heading).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Keep mine", exact: true }).click();
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine.\n");
 });
 
 test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {

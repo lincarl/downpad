@@ -116,7 +116,7 @@ export class AppRuntime {
       hasDocument: () => this.store.get().activeTabId !== null,
       print: () => void this.printActiveDocument(),
       copyMarkdown: () => void this.copyMarkdown(),
-      canCopyFile: () => isElectron() && this.store.get().activeTabId !== null,
+      canCopyFile: () => this.canCopyFile(),
       copyFile: () => void this.copyFile(),
       canCheckSpelling: () => this.editorHost.canCheckSpelling(),
       checkSpelling: () => this.checkDocumentSpelling(),
@@ -623,13 +623,23 @@ export class AppRuntime {
     }
   }
 
+  /** Whether Copy file can run. It needs the desktop app and a document that
+   *  shows, so not the Recent view. It also waits while the file changed on
+   *  disk and the user has chosen neither Reload nor Keep mine, since its
+   *  save would replace the other version without asking. */
+  private canCopyFile(): boolean {
+    const { activeTabId, view, banner } = this.store.get();
+    return isElectron() && activeTabId !== null && view !== "recent" && banner?.kind !== "file-changed";
+  }
+
   /** Put the active document's file on the clipboard, as the file manager
    *  copies it, to paste into a folder or as an attachment. Unsaved changes
    *  are saved first, and an untitled document asks where to save it, so the
    *  file holds what the editor shows. Cancelling that Save As copies
    *  nothing. */
   private async copyFile(): Promise<void> {
-    if (!isElectron()) return;
+    // The menu can stay open while the file changes on disk.
+    if (!this.canCopyFile()) return;
     this.editorHost.flush();
     const tabId = this.store.get().activeTabId;
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
