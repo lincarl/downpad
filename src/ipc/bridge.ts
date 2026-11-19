@@ -52,7 +52,7 @@ export interface DesktopCommandArgs {
   open_default_apps_settings: undefined;
   get_system_accent_color: undefined;
   load_settings: undefined;
-  save_settings: { changes: Partial<Settings> };
+  save_settings: { changes: Partial<Settings>; expected?: Partial<Settings> };
   settings_path: undefined;
   get_spellcheck_info: undefined;
   list_dictionary_words: undefined;

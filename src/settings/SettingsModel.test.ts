@@ -23,6 +23,7 @@ function deferred<T>() {
 
 interface Write {
   changes: Partial<Settings>;
+  expected?: Partial<Settings>;
   /** End the write, which returns `result`, or by default the file with the
    *  changes on it. */
   finish(result?: Settings): void;
@@ -33,8 +34,9 @@ interface Write {
  * A desktop bridge that records settings writes, holds each one until the test
  * finishes it when `holdWrites` is set, sends settings-changed events, and
  * answers the system accent when the test says so. Like the main process, it
- * puts each write's changes onto its file, with no more recent files shown
- * than kept, and returns the result.
+ * puts each write's changes onto its file, skips a change whose expected value
+ * the file no longer holds, keeps no more recent files shown than kept, and
+ * returns the result.
  */
 function desktop({ loaded = DEFAULT_SETTINGS as Settings | Error, holdWrites = false } = {}) {
   const writes: Write[] = [];
@@ -42,15 +44,19 @@ function desktop({ loaded = DEFAULT_SETTINGS as Settings | Error, holdWrites = f
   const systemAccent = deferred<string | null>();
   let handler: ((settings: Settings) => void) | null = null;
   const unlisten = vi.fn();
-  const invoke = vi.fn((command: string, args?: { changes: Partial<Settings> }) => {
+  const invoke = vi.fn((command: string, args?: { changes: Partial<Settings>; expected?: Partial<Settings> }) => {
     if (command === "load_settings") return loaded instanceof Error ? Promise.reject(loaded) : Promise.resolve(loaded);
     if (command === "get_system_accent_color") return systemAccent.promise;
     if (command === "save_settings") {
       const write = deferred<Settings>();
-      const changes = args!.changes;
+      const { changes, expected } = args!;
+      const applies = ([key]: [string, unknown]) =>
+        !expected || !(key in expected) || JSON.stringify(file[key as keyof Settings]) === JSON.stringify(expected[key as keyof Settings]);
       writes.push({
         changes,
-        finish: (result) => write.resolve(result ?? (file = withRecentLimit({ ...file, ...changes }))),
+        expected,
+        finish: (result) =>
+          write.resolve(result ?? (file = withRecentLimit({ ...file, ...Object.fromEntries(Object.entries(changes).filter(applies)) }))),
         fail: write.reject,
       });
       if (!holdWrites) writes.at(-1)!.finish();
@@ -76,6 +82,10 @@ function desktop({ loaded = DEFAULT_SETTINGS as Settings | Error, holdWrites = f
     send: (settings: Settings) => {
       file = settings;
       handler?.(settings);
+    },
+    /** Edit settings.toml without the watcher telling the app yet. */
+    edit: (settings: Settings) => {
+      file = settings;
     },
   };
 }
@@ -288,6 +298,45 @@ describe("SettingsModel saves", () => {
     expect(disk.writes[2].changes).toEqual({ theme: "dark", editorWidthPx: 900 });
     disk.writes[2].finish();
     await width;
+  });
+
+  it("applies a kept change only over the value it was made over, so a hand edit not read yet wins", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const zoom = model.save({ editorFontScale: 1.1 });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await zoom).toBeNull();
+    // The user repairs the file and sets another size there, and saves a
+    // setting before the app has read the repair.
+    disk.edit({ ...DEFAULT_SETTINGS, editorFontScale: 1.5 });
+    const theme = model.save({ theme: "dark" });
+    await flush();
+    expect(disk.writes[1]).toMatchObject({
+      changes: { editorFontScale: 1.1, theme: "dark" },
+      expected: { editorFontScale: DEFAULT_SETTINGS.editorFontScale },
+    });
+    disk.writes[1].finish();
+    expect(await theme).toMatchObject({ editorFontScale: 1.5, theme: "dark" });
+    expect(store.get().settings).toMatchObject({ editorFontScale: 1.5, theme: "dark" });
+  });
+
+  it("writes a save whose change throws while it applies, so the change does not stay", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model, remount } = await started();
+    remount.mockImplementationOnce(() => {
+      throw new Error("remount failed");
+    });
+    await expect(model.save({ mdBulletChar: "*" }, { undoIfUnwritten: true })).rejects.toThrow("remount failed");
+    await flush();
+    expect(disk.writes.map((write) => write.changes)).toEqual([{ mdBulletChar: "*" }]);
+    disk.writes[0].fail(new Error("invalid TOML"));
+    await flush();
+    // The failed change no longer applies, so an edit of the file shows.
+    disk.send({ ...DEFAULT_SETTINGS, mdBulletChar: "+" });
+    expect(store.get().settings.mdBulletChar).toBe("+");
   });
 
   it("shows no more recent files than kept, before and after the write", async () => {

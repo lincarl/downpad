@@ -46,6 +46,10 @@ export class SettingsModel {
   /** Changes whose write failed and that the app keeps, which the next write
    *  takes along. */
   private kept: Partial<Settings> = {};
+  /** For each kept change, the value the file had when its write failed. The
+   *  next write applies the change only while the file still holds it, so a
+   *  hand edit the app has not read yet wins over the change. */
+  private keptOver: Partial<Settings> = {};
   /** Saves whose write has not ended, in the order they were made. */
   private readonly pending: PendingSave[] = [];
   private settingsUnlisten: (() => void) | null = null;
@@ -97,6 +101,7 @@ export class SettingsModel {
   private applyIncoming(settings: Settings): void {
     this.file = settings;
     this.kept = {};
+    this.keptOver = {};
     this.use(this.composed());
   }
 
@@ -138,9 +143,11 @@ export class SettingsModel {
     }
     const save: PendingSave = { changes };
     this.pending.push(save);
-    this.use(this.composed());
+    // Queued before the change applies, so an error while it applies cannot
+    // leave it in use without a write that ends it.
     const run = this.writeChain.then(() => this.write(save, undoIfUnwritten));
     this.writeChain = run.then(() => {}, () => {});
+    this.use(this.composed());
     return run;
   }
 
@@ -148,9 +155,14 @@ export class SettingsModel {
    *  the result. Resolves with the settings the file then holds, or null. */
   private async write(save: PendingSave, undoIfUnwritten: boolean): Promise<Settings | null> {
     const sent = { ...this.kept, ...save.changes };
+    // A kept change applies only over the value it was made over, unless this
+    // save changes the setting itself.
+    const expected = Object.fromEntries(
+      Object.entries(this.keptOver).filter(([key]) => !(key in save.changes)),
+    ) as Partial<Settings>;
     let written: Settings | null = null;
     try {
-      written = await saveSettings(sent);
+      written = await saveSettings(sent, Object.keys(expected).length > 0 ? expected : undefined);
     } catch (err) {
       console.error("Downpad: failed to save settings", err);
     }
@@ -161,10 +173,13 @@ export class SettingsModel {
       // came before it arrives on its own.
       this.file = { ...this.file, ...writtenValues(sent, written) };
       this.kept = {};
+      this.keptOver = {};
     } else if (!undoIfUnwritten) {
       // The kept changes as they are now, as an edit of settings.toml may
       // have replaced them while this write ran.
       this.kept = { ...this.kept, ...save.changes };
+      const over = Object.fromEntries(Object.keys(save.changes).map((key) => [key, this.file[key as keyof Settings]]));
+      this.keptOver = { ...this.keptOver, ...over };
     }
     // Most writes change nothing the app shows, and applying the same
     // settings again would, for one, ask the system for its accent again.

@@ -4,7 +4,7 @@ import { parse, type TomlTable } from "smol-toml";
 import { parseForESLint, type AST } from "toml-eslint-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { Settings } from "../src/state/types";
-import { writeAtomic } from "./io";
+import { ReplaceDeclinedError, writeAtomic } from "./io";
 
 const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
   theme: ["system", "light", "dark"], editorTheme: ["follow-ui", "light", "dark"],
@@ -20,9 +20,10 @@ const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
 // Longer intervals overflow browser timers and run almost immediately.
 const MAX_INTERVAL_SECONDS = Math.floor(0x7fffffff / 1000);
 
-/** Ignore malformed keys while retaining complete defaults for older settings files. */
-export function normalizeSettings(input: unknown): Settings {
-  const settings = { ...DEFAULT_SETTINGS };
+/** Ignore malformed keys while retaining complete defaults for older settings files.
+ *  A missing or malformed key takes its value from `fallback`. */
+export function normalizeSettings(input: unknown, fallback: Settings = DEFAULT_SETTINGS): Settings {
+  const settings = { ...fallback };
   if (!input || typeof input !== "object" || Array.isArray(input)) return settings;
   const source = input as Record<string, unknown>;
   const target = settings as unknown as Record<string, unknown>;
@@ -138,27 +139,49 @@ async function existingSettingsText(path: string): Promise<string> {
   });
 }
 
-export async function saveSettingsFile(path: string, input: unknown): Promise<void> {
-  const existing = await existingSettingsText(path);
-  await writeAtomic(path, patchSettingsToml(existing, normalizeSettings(input)));
+/** How often a settings write merges again with a file that another program changes
+ *  while the write runs, before it gives up. */
+const UPDATE_ATTEMPTS = 3;
+
+/** Whether `value` is a plain object, as settings changes are. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Put `changes` onto settings.toml as it is now, and return the settings it
  *  then holds. A change made to the file since the app last read it stays.
- *  Unknown keys and malformed values are ignored, as when loading, and the
- *  recent files shown stay at most those kept. */
-export async function updateSettingsFile(path: string, changes: unknown): Promise<Settings> {
-  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+ *  Unknown keys are ignored, a malformed value leaves its setting as it is,
+ *  and the recent files shown stay at most those kept.
+ *
+ *  `expected` gives, for some of the changes, the value the file had when the
+ *  change was made. Such a change applies only while the file still holds that
+ *  value, so an edit of the file made since wins over it. If another program
+ *  changes the file while the write runs, the changes go onto its version. */
+export async function updateSettingsFile(path: string, changes: unknown, expected?: unknown): Promise<Settings> {
+  if (!isRecord(changes) || (expected !== undefined && !isRecord(expected))) {
     throw new Error("Settings changes must be an object.");
   }
-  const existing = await existingSettingsText(path);
-  let current: unknown = {};
-  try {
-    if (existing) current = parse(existing);
-  } catch (error) {
-    throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
+  for (let attempt = 1; ; attempt++) {
+    const existing = await existingSettingsText(path);
+    let parsed: unknown = {};
+    try {
+      if (existing) parsed = parse(existing);
+    } catch (error) {
+      throw new Error("Cannot save settings because settings.toml contains invalid TOML. Fix the file's syntax before saving settings.", { cause: error });
+    }
+    const current = normalizeSettings(parsed);
+    const applied = { ...changes };
+    for (const [key, value] of Object.entries(expected ?? {})) {
+      if (!isDeepStrictEqual(current[key as keyof Settings], value)) delete applied[key];
+    }
+    const next = normalizeSettings({ ...current, ...applied }, current);
+    try {
+      await writeAtomic(path, patchSettingsToml(existing, next), {
+        beforeReplace: async () => (await existingSettingsText(path)) === existing,
+      });
+      return next;
+    } catch (error) {
+      if (!(error instanceof ReplaceDeclinedError) || attempt >= UPDATE_ATTEMPTS) throw error;
+    }
   }
-  const next = normalizeSettings({ ...normalizeSettings(current), ...changes });
-  await writeAtomic(path, patchSettingsToml(existing, next));
-  return next;
 }

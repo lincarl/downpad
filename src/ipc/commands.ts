@@ -227,9 +227,10 @@ export function loadSettings(): Promise<Settings> {
 }
 
 /** Put `changes` onto settings.toml as it is when written, and resolve with
- *  the settings it then holds. */
-export function saveSettings(changes: Partial<Settings>): Promise<Settings> {
-  return invoke("save_settings", { changes });
+ *  the settings it then holds. A change listed in `expected` applies only
+ *  while the file still holds the value given there. */
+export function saveSettings(changes: Partial<Settings>, expected?: Partial<Settings>): Promise<Settings> {
+  return invoke("save_settings", expected ? { changes, expected } : { changes });
 }
 
 export function settingsPath(): Promise<string> {

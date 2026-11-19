@@ -232,7 +232,7 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "copy_file_to_clipboard": return copyFileToClipboard(path(args));
     case "load_settings": return config.settings();
     case "save_settings": {
-      const settings = await config.updateSettings(args.changes);
+      const settings = await config.updateSettings(args.changes, args.expected);
       spellchecker?.apply(settings);
       // Deleting an automatic download waits for a running download, which
       // must not hold up the next settings save.

@@ -27,11 +27,24 @@ async function renameAtomic(source: string, destination: string): Promise<void> 
   }
 }
 
+/** Thrown by writeAtomic when its `beforeReplace` check declines the replacement. */
+export class ReplaceDeclinedError extends Error {
+  constructor() {
+    super("The file changed while its replacement was written.");
+  }
+}
+
 /** Replace the real target after its complete replacement reaches disk, preserving symlinks
  *  and an existing target's permissions. A new file gets the default mode for the umask.
  *  Resolves with the modification time of the file written, which the rename keeps, so a
- *  write by another program right after it is not taken for this one. */
-export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<number> {
+ *  write by another program right after it is not taken for this one. `beforeReplace` runs
+ *  just before the rename, and a false answer leaves the target as it is and throws
+ *  ReplaceDeclinedError. */
+export async function writeAtomic(
+  destination: string,
+  bytes: Uint8Array | string,
+  { beforeReplace }: { beforeReplace?: () => Promise<boolean> } = {},
+): Promise<number> {
   const requested = absolutePath(destination);
   const path = await realpath(requested).catch(async (error: unknown) => {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
@@ -52,6 +65,7 @@ export async function writeAtomic(destination: string, bytes: Uint8Array | strin
     await file.sync();
     await file.close();
     const { mtimeMs } = await stat(temporary);
+    if (beforeReplace && !(await beforeReplace())) throw new ReplaceDeclinedError();
     await renameAtomic(temporary, path);
     return mtimeMs;
   } catch (error) {

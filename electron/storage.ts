@@ -158,9 +158,10 @@ export class ConfigStore {
   }
 
   /** Put `changes` onto settings.toml as it is when the write runs, after
-   *  every write queued before it, and return the settings it then holds. */
-  updateSettings(changes: unknown): Promise<Settings> {
-    return this.mutate(() => updateSettingsFile(this.settingsPath, changes));
+   *  every write queued before it, and return the settings it then holds.
+   *  `expected` is as updateSettingsFile takes it. */
+  updateSettings(changes: unknown, expected?: unknown): Promise<Settings> {
+    return this.mutate(() => updateSettingsFile(this.settingsPath, changes, expected));
   }
 
   private async loadRecent(): Promise<RecentEntry[]> {
