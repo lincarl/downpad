@@ -4734,6 +4734,33 @@ test("General Recent preferences persist and hide missing files without deleting
   expect(history.map((entry) => entry.path)).toContain(missing);
 });
 
+test("Settings says when settings.toml cannot be written, and Apply tries again once it can", async () => {
+  const settingsFile = path.join(directory, "profile", "settings.toml");
+  await launch();
+  const valid = await readFile(settingsFile, "utf8");
+  // A hand edit breaks the file's syntax while the app runs.
+  await writeFile(settingsFile, `${valid}broken = \n`);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const apply = dialog.getByRole("button", { name: "Apply", exact: true });
+  await expect(apply).toBeDisabled();
+  await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
+  await apply.click();
+  await expect(dialog.getByRole("alert")).toHaveText("Could not save the settings file. Try again with OK or Apply.");
+  await expect(apply).toBeEnabled();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await expect(dialog).toBeVisible();
+
+  await writeFile(settingsFile, valid);
+  await apply.click();
+  await expect(apply).toBeDisabled();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect.poll(() => readFile(settingsFile, "utf8")).toContain("recentFilesKeepRemoved = true");
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(dialog).toBeHidden();
+});
+
 test("Save on close writes an inactive tab before removing it", async () => {
   const first = path.join(directory, "save-inactive.md");
   const second = path.join(directory, "keep-active.md");

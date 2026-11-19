@@ -88,21 +88,25 @@ export class SettingsModel {
    *  without ordering the second's write could land before the first's and be
    *  overwritten — silently dropping a flag (e.g. re-prompting for the default
    *  handler forever). Each save writes the full settings captured at call time;
-   *  the synchronous store.set above keeps later callers' snapshots current. */
-  async save(next: Settings): Promise<void> {
-    if (this.disposed) return;
+   *  the synchronous store.set above keeps later callers' snapshots current.
+   *  Resolves false when the write failed, such as for a settings.toml with
+   *  broken syntax, and true otherwise. */
+  async save(next: Settings): Promise<boolean> {
+    if (this.disposed) return false;
     const before = wysiwygConfigSignature(this.store.get().settings);
     this.store.set({ settings: next });
     this.applySideEffects();
     if (wysiwygConfigSignature(next) !== before) this.onWysiwygConfigChange();
-    if (isElectron()) {
-      this.writeChain = this.writeChain.then(() =>
-        saveSettings(next).catch((err) => {
-          console.error("Downpad: failed to save settings", err);
-        }),
-      );
-      await this.writeChain;
-    }
+    if (!isElectron()) return true;
+    let written = true;
+    this.writeChain = this.writeChain.then(() =>
+      saveSettings(next).catch((err) => {
+        console.error("Downpad: failed to save settings", err);
+        written = false;
+      }),
+    );
+    await this.writeChain;
+    return written;
   }
 
   private applySideEffects(): void {

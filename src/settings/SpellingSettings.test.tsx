@@ -34,7 +34,7 @@ const nativeInfo: SpellcheckInfo = {
 
 /** Open the real settings form so Save and nested modal behavior are exercised. */
 async function openSpelling(initial: Settings = DEFAULT_SETTINGS) {
-  const onSave = vi.fn<(next: Settings) => void>();
+  const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
   const onRequestClose = vi.fn();
   const user = userEvent.setup({ delay: null });
   render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />);

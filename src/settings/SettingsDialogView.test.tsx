@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsDialogView } from "./SettingsDialogView";
 
 function renderDialog(initial: Settings = DEFAULT_SETTINGS) {
-  const onSave = vi.fn<(next: Settings) => void>();
+  const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
   const onRequestClose = vi.fn();
   render(
     <SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />,
@@ -254,6 +254,62 @@ describe("SettingsDialogView pages", () => {
     expect(onSave).toHaveBeenCalledOnce();
     expect(onSave.mock.calls[0][0]).toMatchObject({ recentFilesKeepRemoved: true, recentFilesDefaultSearch: "names" });
     expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("takes a saved value that the form shows otherwise for no change", async () => {
+    const { user, onSave, onRequestClose } = renderDialog({
+      ...DEFAULT_SETTINGS,
+      autosaveEnabled: true,
+      autosaveIntervalSeconds: 7200,
+      accentMode: "custom",
+      accentColor: "#FF8800",
+      editorFontScale: 1.125,
+    });
+    // A hand-edited interval above the field's range shows as OK would save it.
+    expect(document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!.value).toBe("3600");
+    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows the saved values in the fields after Apply", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, autosaveEnabled: true });
+    const interval = document.querySelector<HTMLInputElement>('input[name="autosaveIntervalSeconds"]')!;
+    const visible = document.querySelector<HTMLInputElement>('input[name="recentFilesVisibleCount"]')!;
+    await user.clear(interval);
+    await user.type(interval, "2");
+    await user.clear(visible);
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      autosaveIntervalSeconds: 5,
+      recentFilesVisibleCount: DEFAULT_SETTINGS.recentFilesVisibleCount,
+    });
+    // The number brought into range, and the value the emptied field kept.
+    await waitFor(() => expect(interval.value).toBe("5"));
+    expect(visible.value).toBe(String(DEFAULT_SETTINGS.recentFilesVisibleCount));
+    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says so and keeps Apply on when the settings cannot be written, and OK keeps the dialog open", async () => {
+    const { user, onSave, onRequestClose } = renderDialog();
+    onSave.mockResolvedValue(false);
+    await user.click(screen.getByRole("checkbox", { name: "Keep removed files in list" }));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Could not save the settings file.");
+    const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(false);
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(onRequestClose).not.toHaveBeenCalled();
+
+    // Once the file can be written, Apply saves the same change.
+    onSave.mockResolvedValue(true);
+    await user.click(apply);
+    await waitFor(() => expect(apply.disabled).toBe(true));
+    expect(onSave).toHaveBeenCalledTimes(3);
+    expect(onSave.mock.calls[2][0]).toMatchObject({ recentFilesKeepRemoved: true });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("saves an out-of-range number on a hidden page clamped to its range", async () => {

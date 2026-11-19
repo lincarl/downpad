@@ -18,10 +18,11 @@ export class SettingsDialog {
   private host: HTMLElement | null = null;
   private restoreFocus: (() => void) | null = null;
 
-  /** Open Settings with the current preferences and a save handler. */
+  /** Open Settings with the current preferences and a save handler, which
+   *  resolves false when the settings could not be written. */
   constructor(
     private readonly store: Store,
-    private readonly onSave: (next: Settings) => void,
+    private readonly onSave: (next: Settings) => Promise<boolean>,
   ) {}
 
   isOpen(): boolean {

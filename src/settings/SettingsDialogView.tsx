@@ -59,8 +59,9 @@ import { UI_PALETTES, resolveScheme, type Scheme } from "./themePalettes";
 export interface SettingsDialogViewProps {
   initial: Settings;
   /** Save changed settings, for OK and Apply. Called only when something
-   *  differs from the settings saved last. */
-  onSave: (next: Settings) => void;
+   *  differs from the settings saved last. Resolves false when they could
+   *  not be written. */
+  onSave: (next: Settings) => Promise<boolean>;
   onRequestClose: () => void;
 }
 
@@ -116,7 +117,9 @@ const FIRST_CONTROL =
   'input[type="radio"]:checked, input:not([type="radio"]):not([type="hidden"]):not(:disabled), select:not(:disabled), button:not(:disabled)';
 
 export function SettingsDialogView({ initial, onSave, onRequestClose }: SettingsDialogViewProps) {
-  const formRef = useRef<HTMLFormElement>(null);
+  // The form, in state, as the dialog draws it in a portal after its first
+  // render. The render it starts reads what the form shows first.
+  const [form, setForm] = useState<HTMLFormElement | null>(null);
   const baseId = useId();
   const tabId = (page: PageId) => `${baseId}-tab-${page}`;
   const panelId = (page: PageId) => `${baseId}-page-${page}`;
@@ -140,11 +143,19 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   const [gitOn, setGitOn] = useState(initial.gitEnabled);
   const [hardWrapOn, setHardWrapOn] = useState(initial.mdHardWrap !== false);
   const [spellCheckLanguages, setSpellCheckLanguages] = useState(initial.spellCheckLanguages ?? []);
-  // The settings as saved last, at opening or by Apply. OK and Apply save
-  // only when the form differs from them.
+  // The settings as saved last, at opening or by Apply, as the form reads
+  // them. OK and Apply save only when the form differs from them.
   const [applied, setApplied] = useState(initial);
+  // Whether `applied` holds the form's reading yet, which it takes once the
+  // form first shows.
+  const settled = useRef(false);
   // Whether the form differs from `applied`, which enables Apply.
   const [changed, setChanged] = useState(false);
+  // Whether the last save could not be written, such as to a settings.toml
+  // with broken syntax.
+  const [saveFailed, setSaveFailed] = useState(false);
+  // A save under way, which OK and Apply wait for.
+  const saving = useRef(false);
   const okRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -209,7 +220,6 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
    *  the form does not show, and numbers left empty, keep their values from
    *  `applied`. */
   const readForm = (): Settings | null => {
-    const form = formRef.current;
     if (!form) return null;
 
     const input = (name: string): HTMLInputElement =>
@@ -286,27 +296,55 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   /** Note whether the form now differs from the settings saved last. */
   const refreshChanged = (): void => {
     const next = readForm();
-    setChanged(next !== null && !sameSettings(next, applied));
+    if (!next) return;
+    if (!settled.current) {
+      // A saved value the form cannot show, such as a number outside its
+      // field's range or a colour in capitals, reads as the form shows it,
+      // so it is no change. The fields show it so too.
+      settled.current = true;
+      showSaved(form, next);
+      if (!sameSettings(next, applied)) setApplied(next);
+      return;
+    }
+    setChanged(!sameSettings(next, applied));
   };
   // Some fields keep their value in state, such as the accent colour and the
   // spelling languages, so check again after each render too.
   useEffect(refreshChanged);
 
+  /** Save `next`. Returns whether it was written, and otherwise says so in
+   *  the dialog. */
+  const save = async (next: Settings): Promise<boolean> => {
+    saving.current = true;
+    try {
+      const saved = await onSave(next);
+      setSaveFailed(!saved);
+      return saved;
+    } finally {
+      saving.current = false;
+    }
+  };
+
   /** OK: save what changed, if anything, and close. Enter in a field does
-   *  the same. */
-  const accept = (event: FormEvent<HTMLFormElement>): void => {
+   *  the same. A save that fails keeps the dialog open. */
+  const accept = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
+    if (saving.current) return;
     const next = readForm();
-    if (next && !sameSettings(next, applied)) onSave(next);
+    if (next && !sameSettings(next, applied) && !(await save(next))) return;
     onRequestClose();
   };
 
-  /** Apply: save what changed and keep the dialog open. */
-  const apply = (): void => {
+  /** Apply: save what changed and keep the dialog open. A save that fails
+   *  leaves Apply on, to try again. */
+  const apply = async (): Promise<void> => {
+    if (saving.current) return;
     const next = readForm();
-    if (!next || sameSettings(next, applied)) return;
-    onSave(next);
+    if (!next || sameSettings(next, applied) || !(await save(next))) return;
     setApplied(next);
+    // The fields show what was saved, such as a number brought into its
+    // field's range, or the value an emptied field kept.
+    showSaved(form, next);
     // Apply turns disabled, so its focus moves on to OK.
     okRef.current?.focus();
   };
@@ -332,10 +370,10 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
               page and would cancel OK silently. OK and Apply clamp every number
               instead. */}
           <form
-            ref={formRef}
+            ref={setForm}
             className="settings-form flex min-h-0 flex-1 flex-col"
             noValidate
-            onSubmit={accept}
+            onSubmit={(event) => void accept(event)}
             onChange={refreshChanged}
             onInput={refreshChanged}
           >
@@ -769,6 +807,11 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 the changes made since Apply, and Apply saves them and stays
                 open. */}
             <div className={cn("dialog-footer", dialogFooterClassName)}>
+              {saveFailed && (
+                <p role="alert" className="m-0 mr-auto self-center text-ink-danger">
+                  Could not save the settings file. Try again with OK or Apply.
+                </p>
+              )}
               <Button
                 ref={okRef}
                 type="submit"
@@ -789,7 +832,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 variant="outline"
                 className={cn("dialog-btn", dialogButtonClassName)}
                 disabled={!changed}
-                onClick={apply}
+                onClick={() => void apply()}
               >
                 Apply
               </Button>
@@ -982,14 +1025,36 @@ function NumberInput({
   );
 }
 
-/** A number field's value as a whole number within its range, or the fallback.
- *  Every numeric setting is an integer, and the form skips native validation. */
 /** Whether two sets of settings hold the same values. */
 function sameSettings(a: Settings, b: Settings): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof Settings>;
   return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
 }
 
+/** Put `settings` into the form's typed fields, which keep what the user
+ *  typed until then, such as a number outside the field's range. */
+function showSaved(form: HTMLFormElement | null, settings: Settings): void {
+  if (!form) return;
+  const values: Record<string, string | number> = {
+    editorWidthPx: settings.editorWidthPx,
+    editorFontScalePct: Math.round(settings.editorFontScale * 100),
+    fontFamily: settings.fontFamily,
+    maxEmbedSizeKB: settings.maxEmbedSizeKB,
+    attachmentsFolderName: settings.attachmentsFolderName,
+    maxRetainedTabEditors: settings.maxRetainedTabEditors,
+    autosaveIntervalSeconds: settings.autosaveIntervalSeconds,
+    recentFilesMaxRetained: settings.recentFilesMaxRetained,
+    recentFilesVisibleCount: settings.recentFilesVisibleCount,
+  };
+  if (typeof settings.mdHardWrap === "number") values.hardWrapCol = settings.mdHardWrap;
+  for (const [name, value] of Object.entries(values)) {
+    const field = form.elements.namedItem(name);
+    if (field instanceof HTMLInputElement) field.value = String(value);
+  }
+}
+
+/** A number field's value as a whole number within its range, or the fallback.
+ *  Every numeric setting is an integer, and the form skips native validation. */
 function numVal(input: HTMLInputElement, fallback: number): number {
   if (input.value.trim() === "") return fallback;
   const value = Math.round(Number(input.value));

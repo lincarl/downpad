@@ -189,7 +189,7 @@ it("opens the welcome document on first run as a saved untitled document and rem
   const { store, startup, settings } = setup();
   store.set((state) => ({ settings: { ...state.settings, hasSeenWelcome: false } }));
   native.listRecoverySnapshots.mockResolvedValue([]);
-  const save = vi.spyOn(settings, "save").mockResolvedValue();
+  const save = vi.spyOn(settings, "save").mockResolvedValue(true);
   const welcome = vi.fn(async () => new Response("# Welcome asset\n"));
   vi.stubGlobal("fetch", welcome);
 
@@ -206,7 +206,7 @@ describe("the one-time default app prompt on Windows", () => {
     const startup = setup();
     // The prompt reads only the platform from the bridge. Its dialog is mocked.
     window.downpadDesktop = { platform } as ElectronBridge;
-    const save = vi.spyOn(startup.settings, "save").mockResolvedValue();
+    const save = vi.spyOn(startup.settings, "save").mockResolvedValue(true);
     return { ...startup, save };
   }
 

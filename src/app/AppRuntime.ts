@@ -73,13 +73,13 @@ export class AppRuntime {
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
-      (next) => {
+      async (next) => {
         const enablingGit = next.gitEnabled && !store.get().settings.gitEnabled;
-        void this.settingsModel.save(next).then(() => {
-          // Settings apply locally before they reach the main process. Check
-          // again once its Git guard can see the saved enabled setting.
-          if (enablingGit) void this.git.check({ force: true });
-        });
+        const written = await this.settingsModel.save(next);
+        // Settings apply locally before they reach the main process. Check
+        // again once its Git guard can see the saved enabled setting.
+        if (enablingGit) void this.git.check({ force: true });
+        return written;
       },
     );
 

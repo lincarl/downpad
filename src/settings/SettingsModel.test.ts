@@ -142,7 +142,7 @@ describe("SettingsModel saves", () => {
     await second;
   });
 
-  it("applies a save whose write fails, and still writes the next one", async () => {
+  it("applies a save whose write fails, reports the failure, and still writes the next one", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const disk = desktop({ holdWrites: true });
     const { store, model } = await started();
@@ -150,13 +150,13 @@ describe("SettingsModel saves", () => {
     const second = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 900 });
     await flush();
     disk.writes[0].fail(new Error("disk full"));
-    await first;
+    expect(await first).toBe(false);
     expect(error).toHaveBeenCalledWith("Downpad: failed to save settings", expect.any(Error));
 
     await flush();
     expect(disk.writes).toHaveLength(2);
     disk.writes[1].finish();
-    await second;
+    expect(await second).toBe(true);
     expect(store.get().settings.editorWidthPx).toBe(900);
     expect(cssVar("--editor-width")).toBe("900px");
   });
