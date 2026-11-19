@@ -8,6 +8,7 @@ import type { ElectronBridge } from "../ipc/bridge";
 import type { Settings } from "../state/types";
 import { DEFAULT_SETTINGS } from "./defaults";
 import { SettingsModel } from "./SettingsModel";
+import { withRecentLimit } from "./settingsChanges";
 
 /** A promise the test settles. */
 function deferred<T>() {
@@ -21,28 +22,38 @@ function deferred<T>() {
 }
 
 interface Write {
-  settings: Settings;
-  finish(): void;
+  changes: Partial<Settings>;
+  /** End the write, which returns `result`, or by default the file with the
+   *  changes on it. */
+  finish(result?: Settings): void;
   fail(error: Error): void;
 }
 
 /**
  * A desktop bridge that records settings writes, holds each one until the test
  * finishes it when `holdWrites` is set, sends settings-changed events, and
- * answers the system accent when the test says so.
+ * answers the system accent when the test says so. Like the main process, it
+ * puts each write's changes onto its file, with no more recent files shown
+ * than kept, and returns the result.
  */
 function desktop({ loaded = DEFAULT_SETTINGS as Settings | Error, holdWrites = false } = {}) {
   const writes: Write[] = [];
+  let file: Settings = loaded instanceof Error ? DEFAULT_SETTINGS : loaded;
   const systemAccent = deferred<string | null>();
   let handler: ((settings: Settings) => void) | null = null;
   const unlisten = vi.fn();
-  const invoke = vi.fn((command: string, args?: { settings: Settings }) => {
+  const invoke = vi.fn((command: string, args?: { changes: Partial<Settings> }) => {
     if (command === "load_settings") return loaded instanceof Error ? Promise.reject(loaded) : Promise.resolve(loaded);
     if (command === "get_system_accent_color") return systemAccent.promise;
     if (command === "save_settings") {
-      const write = deferred<void>();
-      writes.push({ settings: args!.settings, finish: () => write.resolve(), fail: write.reject });
-      if (!holdWrites) write.resolve();
+      const write = deferred<Settings>();
+      const changes = args!.changes;
+      writes.push({
+        changes,
+        finish: (result) => write.resolve(result ?? (file = withRecentLimit({ ...file, ...changes }))),
+        fail: write.reject,
+      });
+      if (!holdWrites) writes.at(-1)!.finish();
       return write.promise;
     }
     return Promise.reject(new Error(`Unexpected command ${command}`));
@@ -62,7 +73,10 @@ function desktop({ loaded = DEFAULT_SETTINGS as Settings | Error, holdWrites = f
     unlisten,
     systemAccent,
     /** Deliver an edit of settings.toml, as the main process's watcher does. */
-    send: (settings: Settings) => handler?.(settings),
+    send: (settings: Settings) => {
+      file = settings;
+      handler?.(settings);
+    },
   };
 }
 
@@ -119,46 +133,192 @@ describe("SettingsModel start and stop", () => {
 });
 
 describe("SettingsModel saves", () => {
-  it("writes saves one at a time, in the order they were made", async () => {
+  it("writes saves one at a time, in the order they were made, each with its own changes", async () => {
     // At first run the welcome flag and the default-handler flag are saved by
     // two calls that nobody awaits. A write that overtook the other dropped a flag.
     const disk = desktop({ holdWrites: true });
-    const { store, model } = await started();
-    const first = model.save({ ...store.get().settings, hasSeenWelcome: true });
-    const second = model.save({ ...store.get().settings, hasCheckedDefaultHandler: true });
+    const { model } = await started();
+    const first = model.save({ hasSeenWelcome: true });
+    const second = model.save({ hasCheckedDefaultHandler: true });
     await flush();
-    expect(disk.writes.map((write) => write.settings)).toEqual([
-      { ...DEFAULT_SETTINGS, hasSeenWelcome: true },
-    ]);
+    expect(disk.writes.map((write) => write.changes)).toEqual([{ hasSeenWelcome: true }]);
 
     disk.writes[0].finish();
-    await first;
+    expect(await first).toEqual({ ...DEFAULT_SETTINGS, hasSeenWelcome: true });
     await flush();
-    expect(disk.writes.map((write) => write.settings)).toEqual([
-      { ...DEFAULT_SETTINGS, hasSeenWelcome: true },
-      { ...DEFAULT_SETTINGS, hasSeenWelcome: true, hasCheckedDefaultHandler: true },
-    ]);
+    expect(disk.writes.map((write) => write.changes)).toEqual([{ hasSeenWelcome: true }, { hasCheckedDefaultHandler: true }]);
     disk.writes[1].finish();
-    await second;
+    expect(await second).toEqual({ ...DEFAULT_SETTINGS, hasSeenWelcome: true, hasCheckedDefaultHandler: true });
   });
 
-  it("applies a save whose write fails, and still writes the next one", async () => {
+  it("keeps a save whose write fails in use, reports it, and writes it with the next one", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const disk = desktop({ holdWrites: true });
     const { store, model } = await started();
-    const first = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 800 });
-    const second = model.save({ ...DEFAULT_SETTINGS, editorWidthPx: 900 });
+    const first = model.save({ editorWidthPx: 800 });
+    const second = model.save({ theme: "light" });
     await flush();
     disk.writes[0].fail(new Error("disk full"));
-    await first;
+    expect(await first).toBeNull();
     expect(error).toHaveBeenCalledWith("Downpad: failed to save settings", expect.any(Error));
+    expect(store.get().settings.editorWidthPx).toBe(800);
 
     await flush();
-    expect(disk.writes).toHaveLength(2);
+    expect(disk.writes[1].changes).toEqual({ editorWidthPx: 800, theme: "light" });
     disk.writes[1].finish();
-    await second;
+    expect(await second).toMatchObject({ editorWidthPx: 800, theme: "light" });
+    expect(cssVar("--editor-width")).toBe("800px");
+  });
+
+  it("stops using a failed save that asks for it, while a setting changed since keeps its new value", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const saved = model.save({ editorWidthPx: 800 }, { undoIfUnwritten: true });
+    // The page shows the change while the write runs.
+    expect(cssVar("--editor-width")).toBe("800px");
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await saved).toBeNull();
+    expect(store.get().settings).toEqual(DEFAULT_SETTINGS);
+    expect(cssVar("--editor-width")).toBe(`${DEFAULT_SETTINGS.editorWidthPx}px`);
+
+    const again = model.save({ editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const later = model.save({ editorWidthPx: 900 });
+    await flush();
+    disk.writes[1].fail(new Error("invalid TOML"));
+    expect(await again).toBeNull();
     expect(store.get().settings.editorWidthPx).toBe(900);
-    expect(cssVar("--editor-width")).toBe("900px");
+    await flush();
+    expect(disk.writes[2].changes).toEqual({ editorWidthPx: 900 });
+    disk.writes[2].finish();
+    await later;
+  });
+
+  it("never writes a failed change that was undone through another save", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    // A text size change while the dialog's write runs.
+    const dialog = model.save({ editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const zoom = model.save({ editorFontScale: 1.1 });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await dialog).toBeNull();
+    expect(store.get().settings).toEqual({ ...DEFAULT_SETTINGS, editorFontScale: 1.1 });
+
+    await flush();
+    expect(disk.writes[1].changes).toEqual({ editorFontScale: 1.1 });
+    disk.writes[1].finish();
+    expect(await zoom).toEqual({ ...DEFAULT_SETTINGS, editorFontScale: 1.1 });
+  });
+
+  it("stops using only the failed save's own changes, not those of the saves after it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    // The toolbar goes to 110% and back to 120% while the dialog's 120% is
+    // being written.
+    const dialog = model.save({ editorFontScale: 1.2 }, { undoIfUnwritten: true });
+    const smaller = model.save({ editorFontScale: 1.1 });
+    const larger = model.save({ editorFontScale: 1.2 });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await dialog).toBeNull();
+    expect(store.get().settings.editorFontScale).toBe(1.2);
+    for (const index of [1, 2]) {
+      await flush();
+      disk.writes[index].finish();
+    }
+    await Promise.all([smaller, larger]);
+    expect(store.get().settings.editorFontScale).toBe(1.2);
+  });
+
+  it("puts back no earlier change whose write failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    // The dialog closed while its first save ran and opened again.
+    const first = model.save({ editorWidthPx: 800 }, { undoIfUnwritten: true });
+    const second = model.save({ theme: "light" }, { undoIfUnwritten: true });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await first).toBeNull();
+    await flush();
+    expect(disk.writes[1].changes).toEqual({ theme: "light" });
+    disk.writes[1].fail(new Error("invalid TOML"));
+    expect(await second).toBeNull();
+    expect(store.get().settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("keeps an edit of settings.toml that arrives while a write runs, also when the write's answer comes later", async () => {
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const saved = model.save({ theme: "dark" });
+    await flush();
+    disk.send({ ...DEFAULT_SETTINGS, editorWidthPx: 700 });
+    // The change being written stays in use.
+    expect(store.get().settings).toMatchObject({ editorWidthPx: 700, theme: "dark" });
+    // The write ended before the edit.
+    disk.writes[0].finish({ ...DEFAULT_SETTINGS, theme: "dark" });
+    await saved;
+    expect(store.get().settings).toEqual({ ...DEFAULT_SETTINGS, editorWidthPx: 700, theme: "dark" });
+  });
+
+  it("lets an edit of settings.toml replace the kept changes of failed writes", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const zoom = model.save({ editorFontScale: 1.1 });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    expect(await zoom).toBeNull();
+    // The next write takes the kept change along, and the file is repaired
+    // while it runs, which also fails.
+    const theme = model.save({ theme: "dark" });
+    await flush();
+    expect(disk.writes[1].changes).toEqual({ editorFontScale: 1.1, theme: "dark" });
+    disk.send(DEFAULT_SETTINGS);
+    disk.writes[1].fail(new Error("invalid TOML"));
+    expect(await theme).toBeNull();
+    expect(store.get().settings).toEqual({ ...DEFAULT_SETTINGS, theme: "dark" });
+
+    const width = model.save({ editorWidthPx: 900 });
+    await flush();
+    expect(disk.writes[2].changes).toEqual({ theme: "dark", editorWidthPx: 900 });
+    disk.writes[2].finish();
+    await width;
+  });
+
+  it("shows no more recent files than kept, before and after the write", async () => {
+    const disk = desktop({ holdWrites: true });
+    const { store, model } = await started();
+    const saved = model.save({ recentFilesMaxRetained: 10 });
+    expect(store.get().settings).toMatchObject({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 });
+    await flush();
+    disk.writes[0].finish();
+    expect(await saved).toMatchObject({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 });
+    expect(store.get().settings).toMatchObject({ recentFilesMaxRetained: 10, recentFilesVisibleCount: 10 });
+  });
+
+  it("goes on writing after code that runs on a change throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const disk = desktop({ holdWrites: true });
+    const { model, remount } = await started();
+    // The document view re-mounts when the change applies, and throws when
+    // the failed change goes.
+    remount.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+      throw new Error("remount failed");
+    });
+    const first = model.save({ mdBulletChar: "*" }, { undoIfUnwritten: true });
+    await flush();
+    disk.writes[0].fail(new Error("invalid TOML"));
+    await expect(first).rejects.toThrow("remount failed");
+
+    const second = model.save({ theme: "light" });
+    await flush();
+    disk.writes[1].finish();
+    expect(await second).toMatchObject({ theme: "light" });
   });
 });
 

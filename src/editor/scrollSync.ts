@@ -6,7 +6,10 @@
 // to anchor on. Instead the panes are kept at the same *fractional* position:
 // when one is scrolled, the other is moved to the same percentage of its own
 // scrollable range. Good enough to keep the same region of the document in view
-// in both panes while the user scrolls either one.
+// in both panes while the user scrolls either one. The split's row alignment
+// (splitAlign.ts) adds space until both panes have the same height and their
+// rows start at the same heights, so the same fraction is the same position
+// and the panes show the same rows side by side.
 //
 // Both panes scroll on their `.editor-pane` wrapper (overflow:auto in the split;
 // see app.css §6.1 — CodeMirror runs height:auto so the wrapper scrolls, not
@@ -60,6 +63,9 @@ export class ScrollSync {
   private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private suppressing = false;
   private suppressTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Where the app scrolled a pane itself (`scrollQuietly`), whose scroll
+   *  event is then not taken for the user's. */
+  private readonly expected = new Map<HTMLElement, number>();
 
   /** Listen on both panes and mirror either one's scroll into the other.
    *  Idempotent for the same pair; rewires (and drops the old listeners) when the
@@ -87,6 +93,22 @@ export class ScrollSync {
     }, SUPPRESS_MS);
   }
 
+  /** Scroll `el` to `top` without the scroll counting as the user's, as the
+   *  split's row alignment does when it changes the space in the panes. Only
+   *  the scroll event that lands there is ignored, so a scroll the user makes
+   *  meanwhile still syncs. */
+  scrollQuietly(el: HTMLElement, top: number): void {
+    const before = el.scrollTop;
+    el.scrollTop = top;
+    // A pane that was there already, or cannot scroll there, sends no event.
+    if (el.scrollTop !== before) this.expected.set(el, el.scrollTop);
+  }
+
+  /** The pane the user scrolls now, which the other one follows, or null. */
+  driving(): HTMLElement | null {
+    return this.driver;
+  }
+
   /** Stop syncing and release everything. Safe to call when not connected. */
   disconnect(): void {
     this.a?.removeEventListener("scroll", this.onScroll);
@@ -95,6 +117,7 @@ export class ScrollSync {
     this.b = null;
     this.driver = null;
     this.suppressing = false;
+    this.expected.clear();
     if (this.releaseTimer != null) {
       clearTimeout(this.releaseTimer);
       this.releaseTimer = null;
@@ -110,6 +133,11 @@ export class ScrollSync {
     // gesture, so it does not drive the other pane.
     if (this.suppressing) return;
     const src = e.currentTarget as HTMLElement;
+    const expected = this.expected.get(src);
+    if (expected !== undefined) {
+      this.expected.delete(src);
+      if (Math.abs(src.scrollTop - expected) < 1) return;
+    }
     // Drop the echo: the other pane is driving and this scroll is the one we just
     // applied to mirror it.
     if (this.driver !== null && this.driver !== src) return;

@@ -26,7 +26,9 @@ import { StartupCoordinator } from "./StartupCoordinator";
 import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
+import { saveDialogSettings } from "./saveDialogSettings";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
+import { copyFileToClipboard } from "../ipc/commands";
 import { GitSync } from "../git/GitSync";
 
 export interface AppRuntimeHosts {
@@ -72,14 +74,7 @@ export class AppRuntime {
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
-      (next) => {
-        const enablingGit = next.gitEnabled && !store.get().settings.gitEnabled;
-        void this.settingsModel.save(next).then(() => {
-          // Settings apply locally before they reach the main process. Check
-          // again once its Git guard can see the saved enabled setting.
-          if (enablingGit) void this.git.check({ force: true });
-        });
-      },
+      (changes) => saveDialogSettings(changes, { store, settings: this.settingsModel, git: this.git }),
     );
 
     // The editor presenter lets FileService flush + re-show the active document
@@ -96,7 +91,7 @@ export class AppRuntime {
     // Double-clicking a `.md` link opens that file in a tab (§5.6); openPath
     // focuses it if already open, else opens a new tab (consistent with §5.19).
     this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
-    this.scheduler = new SnapshotScheduler(store, this.files);
+    this.scheduler = new SnapshotScheduler(store, this.files, () => this.desktopEvents.hasPendingChange());
     this.session = new SessionKeeper(store);
     // The find card floats over the document and searches the formatted
     // document or raw Markdown according to the active layout. Its open state
@@ -108,13 +103,15 @@ export class AppRuntime {
 
     // Replace the native WebView right-click menu with Downpad's own (§6.1). It
     // offers the editing commands over editable text and the document actions
-    // (Copy as Markdown, Print) everywhere, instead of the browser-level entries
-    // the native menu carries. Electron supplies spelling choices for the
+    // (Copy as Markdown, Copy file, Print) everywhere, instead of the
+    // browser-level entries the native menu carries. Electron supplies spelling choices for the
     // ordinary menu; Shift+right-click keeps the native editing menu (§5.14).
     this.cleanups.push(installDocumentContextMenu({
-      hasDocument: () => this.store.get().activeTabId !== null,
+      hasDocument: () => this.documentShows(),
       print: () => void this.printActiveDocument(),
       copyMarkdown: () => void this.copyMarkdown(),
+      canCopyFile: () => this.canCopyFile(),
+      copyFile: () => void this.copyFile(),
       canCheckSpelling: () => this.editorHost.canCheckSpelling(),
       checkSpelling: () => this.checkDocumentSpelling(),
       insertLink: (href) => this.editorHost.insertLink(href),
@@ -129,7 +126,7 @@ export class AppRuntime {
 
     this.printWorkspace = new PrintWorkspace({
       getSettings: () => this.store.get().settings,
-      saveSettings: (next) => void this.settingsModel.save(next),
+      saveSettings: (changes) => void this.settingsModel.save(changes),
     });
 
     this.startup = new StartupCoordinator({
@@ -275,10 +272,9 @@ export class AppRuntime {
 
   /** Toggle only the document surface. UI chrome remains controlled in Settings. */
   toggleDocumentTheme(): void {
-    const settings = this.store.get().settings;
     const current = document.documentElement.dataset.editorTheme;
     const editorTheme = current === "dark" ? "light" : "dark";
-    void this.settingsModel.save({ ...settings, editorTheme });
+    void this.settingsModel.save({ editorTheme });
   }
 
   zoomDocument(delta: number): void {
@@ -474,8 +470,7 @@ export class AppRuntime {
    *  printed and a Document / Markdown version choice. Replaces both the browser
    *  print dialog and the old direct window.print(). */
   private async printActiveDocument(): Promise<void> {
-    const state = this.store.get();
-    if (!state.activeTabId) return; // nothing open to print
+    if (!this.documentShows()) return; // nothing open to print, or Recent hides it
     if (this.printWorkspace.isOpen()) return;
     // Capture in-progress edits so the printed sheets are current.
     this.editorHost.flush();
@@ -595,11 +590,13 @@ export class AppRuntime {
   }
 
   /** Re-point the file watcher at the active document and clear a stale banner
-   *  left over from the previously active file (§5.1, §5.19). */
+   *  left over from the previously active file (§5.1, §5.19). The notice for
+   *  an unresolved change on disk to this document shows again, and a change
+   *  made while another tab was in front shows it too. */
   private afterActiveDocChanged(): void {
     this.store.set({ banner: null });
-    this.desktopEvents.resetPendingChange();
     this.files.watchActive();
+    this.desktopEvents.activeDocChanged();
   }
 
   /** Adjust the document text size (spec §5.20), persisting via settings. */
@@ -607,16 +604,57 @@ export class AppRuntime {
     const s = this.store.get().settings;
     const next = clampFontScale(round2(s.editorFontScale + delta));
     if (next === s.editorFontScale) return;
-    await this.settingsModel.save({ ...s, editorFontScale: next });
+    await this.settingsModel.save({ editorFontScale: next });
   }
 
   /** Copy the active document's Markdown, including its latest edits. */
   private async copyMarkdown(): Promise<void> {
+    if (!this.documentShows()) return;
     this.editorHost.flush(); // include the latest typing
     try {
       await navigator.clipboard.writeText(this.store.get().doc.markdown);
     } catch {
       // Clipboard may be unavailable outside the app shell; ignore.
+    }
+  }
+
+  /** Whether a document shows, which the Recent view hides while it keeps
+   *  the active tab. Print, the copies and the spelling check act on it. */
+  private documentShows(): boolean {
+    const { activeTabId, view } = this.store.get();
+    return activeTabId !== null && view !== "recent";
+  }
+
+  /** Whether Copy file can run. It needs the desktop app and a document that
+   *  shows. It also waits while the bar for a change on disk asks for Reload
+   *  or Keep mine, since its save would replace the other version without
+   *  asking. */
+  private canCopyFile(): boolean {
+    return isElectron() && this.documentShows() && this.store.get().banner?.kind !== "file-changed";
+  }
+
+  /** Put the active document's file on the clipboard, as the file manager
+   *  copies it, to paste into a folder or as an attachment. Unsaved changes
+   *  are saved first, and an untitled document asks where to save it, so the
+   *  file holds what the editor shows. Cancelling that Save As copies
+   *  nothing. */
+  private async copyFile(): Promise<void> {
+    // The menu can stay open while the file changes on disk.
+    if (!this.canCopyFile()) return;
+    // A change on disk whose bar was dismissed or replaced is still
+    // unresolved, so the bar asks again and nothing is saved or copied.
+    if (this.desktopEvents.showPendingChange()) return;
+    this.editorHost.flush();
+    const tabId = this.store.get().activeTabId;
+    const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!tabId || !doc) return;
+    try {
+      if ((doc.isDirty || !doc.filePath) && !(await this.files.save())) return;
+      const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
+      if (path) await copyFileToClipboard(path);
+    } catch (error) {
+      console.error("Downpad: copying the file failed", error);
+      if (!this.disposed) this.store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });
     }
   }
 

@@ -34,7 +34,7 @@ const nativeInfo: SpellcheckInfo = {
 
 /** Open the real settings form so Save and nested modal behavior are exercised. */
 async function openSpelling(initial: Settings = DEFAULT_SETTINGS) {
-  const onSave = vi.fn<(next: Settings) => void>();
+  const onSave = vi.fn<(changes: Partial<Settings>) => Promise<Partial<Settings> | null>>(async (changes) => changes);
   const onRequestClose = vi.fn();
   const user = userEvent.setup({ delay: null });
   render(<SettingsDialogView initial={initial} onSave={onSave} onRequestClose={onRequestClose} />);
@@ -69,7 +69,7 @@ describe("spelling preferences", () => {
     expect((screen.getByRole("checkbox", { name: "English (United States)" }) as HTMLInputElement).disabled).toBe(false);
     await user.click(screen.getByRole("tab", { name: "Editor" }));
     expect(onSave).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls[0][0].spellCheckLanguages).toEqual(["en-US", "de-DE"]);
   });
 
@@ -91,7 +91,7 @@ describe("spelling preferences", () => {
     await screen.findByRole("checkbox", { name: "Norwegian Bokmål (unavailable)" });
     expect(screen.getByText(/Unavailable languages are saved but are not used/).textContent).toContain("uses system languages");
     await user.click(screen.getByRole("checkbox", { name: "Use system languages" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
     expect(onSave.mock.calls[0][0].spellCheckLanguages).toEqual([]);
   });
 
@@ -117,8 +117,9 @@ describe("spelling preferences", () => {
     expect(screen.getByText(/Language selection and the custom dictionary are available in the installed app/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Manage dictionary…" })).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "Spell check" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(onSave.mock.calls[0][0]).toMatchObject({ spellCheckEnabled: false, spellCheckLanguages: ["de-DE"] });
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    // The saved languages are no change, so they stay as saved.
+    expect(onSave.mock.calls[0][0]).toEqual({ spellCheckEnabled: false });
     expect(getSpellcheckInfo).not.toHaveBeenCalled();
   });
 

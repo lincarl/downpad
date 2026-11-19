@@ -154,6 +154,125 @@ test("the toolbar copies the whole document as Markdown or formatted text to the
   await expect(source).toContainText("A **bold** paragraph.");
 });
 
+test("the document menu's Copy file saves the document and copies its file as the file manager does", async () => {
+  const file = path.join(directory, "attach me #1.md");
+  await writeFile(file, "# Attach me\n\nFirst text.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Attach me");
+  // An edit that is not saved yet goes into the file before it is copied.
+  await page.locator(".ProseMirror p", { hasText: "First text." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Latest edit.");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit.\n");
+  // Electron reads `text/uri-list` back from the system's list of copied
+  // files, CF_HDROP on Windows.
+  const copied = (format: string) => app!.evaluate(async ({ clipboard }, type) => {
+    const [item] = await clipboard.read();
+    return item?.types.includes(type) ? (await item.getType(type)).text() : null;
+  }, format);
+  await expect.poll(async () => (await copied("text/uri-list"))?.trim()).toBe(pathToFileURL(file).href);
+  if (process.platform === "linux") {
+    expect(await copied('electron application/osclipboard;format="x-special/gnome-copied-files"')).toBe(`copy\n${pathToFileURL(file).href}`);
+  }
+  // While the file changed on disk and neither Reload nor Keep mine is
+  // chosen, Copy file waits, as its save would replace the other version.
+  await page.locator(".ProseMirror p", { hasText: "Latest edit." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Mine.");
+  await writeFile(file, "# Attach me\n\nTheirs.\n");
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await page.locator(heading).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  // Dismissed, the change is still unresolved, so Copy file asks again and
+  // leaves the other version alone.
+  await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  await expect(page.getByText("This file changed on disk.")).toBeHidden();
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  expect(await readFile(file, "utf8")).toBe("# Attach me\n\nTheirs.\n");
+  await page.getByRole("button", { name: "Keep mine", exact: true }).click();
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine.\n");
+  // A save after the notice was dismissed replaced the other version, so
+  // Copy file copies without asking again.
+  await page.locator(".ProseMirror p", { hasText: "Mine." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Again.");
+  await writeFile(file, "# Attach me\n\nTheirs again.\n");
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  await page.locator(".ProseMirror p", { hasText: "Again." }).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine. Again.\n");
+  await app!.evaluate(({ clipboard }) => clipboard.clear());
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect.poll(async () => (await copied("text/uri-list"))?.trim()).toBe(pathToFileURL(file).href);
+  await expect(page.getByText("This file changed on disk.")).toBeHidden();
+});
+
+test("Recent offers no document actions for the document it hides", async () => {
+  const file = path.join(directory, "hidden-by-recent.md");
+  await writeFile(file, "# Hidden by Recent\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Hidden by Recent");
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  const search = page.getByPlaceholder("Search file names");
+  await expect(search).toBeVisible();
+  await search.click({ button: "right" });
+  for (const name of ["Copy as Markdown", "Copy file", "Check document spelling", "Print…"]) {
+    await expect(page.getByRole("menuitem", { name, exact: true })).toBeDisabled();
+  }
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+p");
+  await expect(page.locator(".print-workspace")).toHaveCount(0);
+  // With the document in front again, the menu acts on it.
+  await page.getByRole("tab", { name: "hidden-by-recent.md", exact: true }).click();
+  await page.locator(heading).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy as Markdown", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape");
+});
+
+test("a change on disk stays unresolved while another tab is in front, and one made meanwhile shows when its tab does", async () => {
+  const first = path.join(directory, "conflict-first.md");
+  const second = path.join(directory, "conflict-second.md");
+  await writeFile(first, "# First\n\nMine.\n");
+  await writeFile(second, "# Second\n");
+  await launch(first);
+  await page.locator(".ProseMirror p", { hasText: "Mine." }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Unsaved.");
+  await writeFile(first, "# First\n\nTheirs.\n");
+  const notice = page.getByText("This file changed on disk.");
+  // The tab in back keeps its editor in the page, hidden.
+  const shownHeading = page.locator(".editor-pane:not([hidden]) .ProseMirror h1");
+  await expect(notice).toBeVisible();
+  await chooseOpen(second);
+  await expect(shownHeading).toHaveText("Second");
+  await expect(notice).toBeHidden();
+
+  await page.getByRole("tab", { name: /conflict-first\.md/ }).click();
+  await expect(notice).toBeVisible();
+  await shownHeading.click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  expect(await readFile(first, "utf8")).toBe("# First\n\nTheirs.\n");
+
+  // The second file changes while its tab is not watched.
+  await writeFile(second, "# Second, changed\n");
+  await page.getByRole("tab", { name: /conflict-second\.md/ }).click();
+  await expect(shownHeading).toHaveText("Second");
+  await expect(notice).toBeVisible();
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(shownHeading).toHaveText("Second, changed");
+  await expect(notice).toBeHidden();
+});
+
 test("Markdown pasted after Shift+Down into code keeps the remaining code fenced", async () => {
   const file = path.join(directory, "paste-code-boundary.md");
   const original = "Before.\n\n```js\nconst original = 1;\nconst keep = 2;\n```\n\nAfter.\n";
@@ -1573,7 +1692,11 @@ test("Shift+click from the find card or the Markdown pane beside or below a tabl
    *  button that adds a row or column under the pointer, so the presses stay
    *  11 pixels in, which is still in the cell's 16-pixel padding. */
   const shiftClickCell = async (text: string, inset: number, y: number, typed: string) => {
-    const box = (await documentView.locator("td, th").filter({ hasText: new RegExp(`^${text}$`) }).boundingBox())!;
+    const cell = documentView.locator("td, th").filter({ hasText: new RegExp(`^${text}$`) });
+    // The split's panes scroll together, so in a short window a click in the
+    // Markdown pane can scroll the cell out of view, under the toolbar.
+    await cell.scrollIntoViewIfNeeded();
+    const box = (await cell.boundingBox())!;
     await page.keyboard.down("Shift");
     await page.mouse.click(inset >= 0 ? box.x + inset : box.x + box.width + inset, box.y + box.height * y);
     await page.keyboard.up("Shift");
@@ -2041,6 +2164,125 @@ test("a narrow Split pane keeps a readable text column and room for the block ha
   }).toBe(true);
 });
 
+test("the Split view lines the Markdown up with the document row for row", async () => {
+  const file = path.join(directory, "aligned-split.md");
+  const markdown = [
+    "---\ntitle: Aligned\n---",
+    "# Aligned split",
+    "A paragraph long enough to wrap onto several lines in both panes, so that the monospace Markdown and the proportional document give it different heights in each pane.",
+    "- First item\n- Second item\n  - Nested item\n- Third item",
+    "[ref]: https://example.com/a-definition-only-the-markdown-shows",
+    "| Name | Value |\n| --- | --- |\n| One | 1 |\n| Two | 2 |",
+    "> A quote.",
+    "Last paragraph.",
+  ].join("\n\n") + "\n";
+  await writeFile(file, markdown);
+  await launch(file);
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(1100, 760));
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentPane = page.locator(".editor-pane-wysiwyg");
+  const sourcePane = page.locator(".editor-pane-raw");
+  await expect(documentPane).toHaveClass(/md-row-aligned/);
+  /** How far apart each document row and its Markdown line are, by the
+   *  middle of their first lines of text. */
+  const offsets = () => page.evaluate(() => {
+    const middleOfFirstLine = (element: Element): number => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP) });
+      const range = document.createRange();
+      range.selectNodeContents(walker.nextNode()!);
+      const box = range.getClientRects()[0]!;
+      return (box.top + box.bottom) / 2;
+    };
+    const lines = [...document.querySelectorAll(".editor-pane-raw .cm-line")];
+    const lineHeight = parseFloat(getComputedStyle(document.querySelector(".editor-pane-raw .cm-content")!).lineHeight);
+    const sourceMiddle = (text: string): number => {
+      const line = lines.find((candidate) => candidate.textContent!.includes(text))!;
+      return line.getBoundingClientRect().top + lineHeight / 2;
+    };
+    // Each document row, by its element and text, and its Markdown line.
+    const rows: Array<[string, string, string]> = [
+      [".frontmatter-toggle", "Frontmatter", "---"],
+      [".ProseMirror h1", "Aligned split", "# Aligned split"],
+      [".ProseMirror > p", "A paragraph long enough", "A paragraph long enough"],
+      [".ProseMirror li", "Second item", "- Second item"],
+      [".ProseMirror li li", "Nested item", "- Nested item"],
+      [".ProseMirror tr", "Two", "| Two | 2 |"],
+      [".ProseMirror blockquote", "A quote.", "> A quote."],
+      [".ProseMirror > p", "Last paragraph.", "Last paragraph."],
+    ];
+    return rows.map(([selector, text, line]) => {
+      const row = [...document.querySelectorAll(selector)].find((element) => element.textContent!.includes(text))!;
+      return Math.abs(sourceMiddle(line) - middleOfFirstLine(row));
+    });
+  });
+  /** The largest distance between a row and its line, which spaces rounded
+   *  to whole pixels keep within a pixel. */
+  const misalignment = async () => Math.max(...(await offsets()));
+  await expect.poll(misalignment).toBeLessThanOrEqual(1);
+  // Both panes end at the same height, so they scroll as one.
+  const heights = async () => [await documentPane.evaluate((element) => element.scrollHeight), await sourcePane.evaluate((element) => element.scrollHeight)];
+  await expect.poll(async () => { const [a, b] = await heights(); return Math.abs(a! - b!) <= 1; }).toBe(true);
+
+  // An edit in the Markdown pane keeps the rows lined up.
+  const source = sourcePane.locator(".cm-content");
+  await sourcePane.locator(".cm-line", { hasText: "# Aligned split" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("\n\nA new paragraph typed into the Markdown pane, long enough to wrap there.");
+  await expect(page.locator(".ProseMirror p", { hasText: "A new paragraph typed" })).toBeVisible();
+  await expect.poll(misalignment).toBeLessThanOrEqual(1);
+  await expect(source).toContainText("A new paragraph typed");
+
+  // The Document and Markdown views show no added space.
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  await expect(documentPane).not.toHaveClass(/md-row-aligned/);
+  await expect(documentPane.locator('.ProseMirror [style*="--md-row-gap"]')).toHaveCount(0);
+  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await expect(sourcePane.locator(".cm-row-spacer")).toHaveCount(0);
+  // Back in the split, the rows line up again.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  await expect.poll(misalignment).toBeLessThanOrEqual(1);
+});
+
+test("the aligned Split view keeps its place after a switch to another tab and back", async () => {
+  const file = path.join(directory, "aligned-tabs.md");
+  // Link reference definitions show only in the Markdown, so the document
+  // pane takes space above every section.
+  const definitions = (index: number) => ["a", "b", "c", "d", "e"].map((name) => `[s${index}${name}]: https://example.com/${index}/${name}`).join("\n");
+  const sections = Array.from({ length: 40 }, (_, index) => `## Section ${index + 1}\n\nParagraph ${index + 1} with [a link][s${index}a].\n\n${definitions(index)}`);
+  await writeFile(file, ["# Aligned tabs", ...sections].join("\n\n") + "\n");
+  await launch(file);
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const documentPane = page.locator(".editor-pane-wysiwyg:not([hidden])");
+  await expect(documentPane).toHaveClass(/md-row-aligned/);
+  // Scroll a heading to the top, past the space above it.
+  await documentPane.locator("h2", { hasText: /^Section 8$/ }).evaluate((element) => element.scrollIntoView({ block: "start" }));
+  /** The document block at the top of the view, how far it sits below the
+   *  pane's top, and whether both panes scroll together. The space above it
+   *  can change by a few pixels as CodeMirror measures lines it had only
+   *  estimated, so the scroll position itself can too. */
+  const place = () => page.evaluate(() => {
+    const pane = document.querySelector(".editor-pane-wysiwyg:not([hidden])")!;
+    const top = pane.getBoundingClientRect().top;
+    const first = [...pane.querySelectorAll(".ProseMirror > *")].find((block) => block.getBoundingClientRect().bottom > top + 1)!;
+    const markdown = document.querySelector(".editor-pane-raw:not([hidden])")!;
+    return { first: first.textContent, offset: Math.round(first.getBoundingClientRect().top - top), together: Math.abs(pane.scrollTop - markdown.scrollTop) <= 1 };
+  });
+  await expect.poll(async () => (await place()).together).toBe(true);
+  await expect(documentPane.locator('.ProseMirror [style*="--md-row-gap"]').first()).toBeAttached();
+  const before = await place();
+  // Each round trip took the space out of the hidden panes and added it again
+  // above where they had been scrolled, so the view moved down each time.
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page.locator(".tab-label")).toHaveCount(2);
+  for (let round = 0; round < 2; round++) {
+    if (round > 0) await page.locator(".tab-label", { hasText: "Untitled" }).click();
+    await expect(page.locator(".tab.active")).toContainText("Untitled");
+    await page.locator(".tab-label", { hasText: "aligned-tabs.md" }).click();
+    await expect(page.locator(".tab.active")).toContainText("aligned-tabs.md");
+    await expect.poll(place).toEqual(before);
+  }
+});
+
 test("the block handle's add button from a code block puts the next key in the new paragraph", async () => {
   const file = path.join(directory, "block-handle-add-from-code.md");
   await writeFile(file, ["```\nconst alpha = 1;\n```", "First line.", "Last line."].join("\n\n") + "\n");
@@ -2127,7 +2369,10 @@ test("after a press or drag on the block handle from anywhere, the next key repl
 
 test("the block handle hides when the document changes width, so a click on a bullet or a task's box right after a switch of view reaches it", async () => {
   const file = path.join(directory, "block-handle-resize.md");
-  await writeFile(file, ["First line.", "- one\n- two\n- three", "Middle line.", "- [ ] task a\n- [ ] task b", "Last line."].join("\n\n") + "\n");
+  // Headings around the lists are taller in the document than their Markdown
+  // lines, so the split's row alignment puts space only into the Markdown
+  // pane there, and each bullet stays where the handle was.
+  await writeFile(file, ["# First line", "- one\n- two\n- three", "## Middle line", "- [ ] task a\n- [ ] task b", "Last line."].join("\n\n") + "\n");
   await launch(file);
   const documentView = page.locator(".milkdown .ProseMirror");
   const handle = page.locator(".milkdown-block-handle");
@@ -2175,7 +2420,7 @@ test("the block handle hides when the document changes width, so a click on a bu
   await expect(documentView).toBeFocused();
   await page.keyboard.type("b");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(["First line.", "- one\n- abtwo\n- three", "Middle line.", "- [ ] task a\n- [x] task b", "Last line."].join("\n\n") + "\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe(["# First line", "- one\n- abtwo\n- three", "## Middle line", "- [ ] task a\n- [x] task b", "Last line."].join("\n\n") + "\n");
 });
 
 test("a press on the page around the document leaves focus where it was, and Shift+click there or on the tab strip never extends the Markdown pane's selection", async () => {
@@ -4553,7 +4798,7 @@ test("General Recent preferences persist and hide missing files without deleting
   await expect(dialog.getByRole("combobox", { name: "Default search:" })).toHaveValue("names");
   await dialog.getByRole("combobox", { name: "Default search:" }).selectOption("contents");
   await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(page.locator(".recent-name")).toHaveText(["missing.md", "available.md"]);
   await expect.poll(() => readFile(path.join(directory, "profile", "settings.toml"), "utf8")).toContain('recentFilesDefaultSearch = "contents"');
   await app!.close();
@@ -4568,10 +4813,47 @@ test("General Recent preferences persist and hide missing files without deleting
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const reopenedDialog = page.getByRole("dialog", { name: "Settings" });
   await reopenedDialog.getByRole("checkbox", { name: "Keep removed files in list" }).uncheck();
-  await reopenedDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await reopenedDialog.getByRole("button", { name: "OK", exact: true }).click();
   await expect(page.locator(".recent-name")).toHaveText(["available.md"]);
   const history = await page.evaluate(() => window.downpadDesktop!.invoke("get_recent_files"));
   expect(history.map((entry) => entry.path)).toContain(missing);
+});
+
+test("Settings says when settings.toml cannot be written, and Apply tries again once it can", async () => {
+  const settingsFile = path.join(directory, "profile", "settings.toml");
+  await launch();
+  const valid = await readFile(settingsFile, "utf8");
+  // A hand edit breaks the file's syntax while the app runs.
+  await writeFile(settingsFile, `${valid}broken = \n`);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const apply = dialog.getByRole("button", { name: "Apply", exact: true });
+  await expect(apply).toBeDisabled();
+  await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
+  // Each failed attempt ends with the renderer's report of the failed write.
+  const failedWrite = () => page.waitForEvent("console", (message) => message.text().includes("failed to save settings"));
+  let failed = failedWrite();
+  await apply.click();
+  await failed;
+  await expect(dialog.getByRole("alert")).toHaveText("Could not save the settings file. Try again with OK or Apply.");
+  await expect(apply).toBeEnabled();
+  failed = failedWrite();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await failed;
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  await expect(dialog).toBeVisible();
+
+  // The repair also changes a setting, and Apply right after it, before the
+  // app reads the file again, keeps that change.
+  expect(valid).not.toContain("editorWidthPx");
+  await writeFile(settingsFile, `${valid}editorWidthPx = 900\n`);
+  await apply.click();
+  await expect(apply).toBeDisabled();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect.poll(() => readFile(settingsFile, "utf8")).toContain("recentFilesKeepRemoved = true");
+  expect(await readFile(settingsFile, "utf8")).toContain("editorWidthPx = 900\n");
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test("Save on close writes an inactive tab before removing it", async () => {

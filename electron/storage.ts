@@ -4,7 +4,7 @@ import { dirname, join, normalize } from "node:path";
 import type { FileStat, SearchHit, SearchSummary, Session, Snapshot } from "../src/ipc/contracts";
 import type { RecentEntry, Settings } from "../src/state/types";
 import { absolutePath, readMarkdown, writeAtomic } from "./io";
-import { loadSettingsFile, saveSettingsFile } from "./settings";
+import { loadSettingsFile, updateSettingsFile } from "./settings";
 
 interface DiskEntry { p: string; t: number; f?: boolean }
 
@@ -157,8 +157,10 @@ export class ConfigStore {
     return loadSettingsFile(this.settingsPath);
   }
 
-  saveSettings(settings: unknown): Promise<void> {
-    return this.mutate(() => saveSettingsFile(this.settingsPath, settings));
+  /** Put `changes` onto settings.toml as it is when the write runs, after
+   *  every write queued before it, and return the settings it then holds. */
+  updateSettings(changes: unknown): Promise<Settings> {
+    return this.mutate(() => updateSettingsFile(this.settingsPath, changes));
   }
 
   private async loadRecent(): Promise<RecentEntry[]> {
@@ -213,7 +215,7 @@ export class ConfigStore {
 
   async saveSession(value: unknown): Promise<void> {
     const session = validateSession(value);
-    return this.mutate(() => writeAtomic(join(this.directory, "session.json"), JSON.stringify(session)));
+    await this.mutate(() => writeAtomic(join(this.directory, "session.json"), JSON.stringify(session)));
   }
 
   private async recoveryDirectory(): Promise<string> {

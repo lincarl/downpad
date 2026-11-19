@@ -9,6 +9,7 @@ import { onSettingsChanged } from "../ipc/events";
 import { isElectron } from "../ipc/env";
 import { applyTheme } from "../shell/theme";
 import { DEFAULT_ACCENT, normalizeHex, readableForeground } from "../shell/accent";
+import { sameSettings, withRecentLimit, writtenValues } from "./settingsChanges";
 
 // Settings that change WYSIWYG output/rendering and so require a re-mount: the
 // serializer style (§5.16), the link display mode (§5.6), and whether the
@@ -26,13 +27,27 @@ function wysiwygConfigSignature(s: Settings): string {
   ].join("|");
 }
 
+/** A save whose write has not ended. */
+interface PendingSave {
+  changes: Partial<Settings>;
+}
+
 export class SettingsModel {
   /** Cached Windows accent: undefined = not fetched, null = unavailable. */
   private systemAccent: string | null | undefined;
 
   /** Serializes disk writes (see save()): each save chains after the previous so
-   *  two near-simultaneous saves can't race and clobber each other on disk. */
+   *  two near-simultaneous saves can't race and clobber each other on disk. It
+   *  never rejects, so a failure cannot stop the writes after it. */
   private writeChain: Promise<void> = Promise.resolve();
+  /** settings.toml as the app last learnt it, by loading it, from an edit of
+   *  it, or from what a write returned for the settings it sent. */
+  private file: Settings;
+  /** Changes whose write failed and that the app keeps, which the next write
+   *  takes along. */
+  private kept: Partial<Settings> = {};
+  /** Saves whose write has not ended, in the order they were made. */
+  private readonly pending: PendingSave[] = [];
   private settingsUnlisten: (() => void) | null = null;
   private themeDispose: (() => void) | null = null;
   private disposed = false;
@@ -40,7 +55,9 @@ export class SettingsModel {
   constructor(
     private readonly store: Store,
     private readonly onWysiwygConfigChange: () => void,
-  ) {}
+  ) {
+    this.file = store.get().settings;
+  }
 
   async init(): Promise<void> {
     if (this.disposed) return;
@@ -48,7 +65,8 @@ export class SettingsModel {
       try {
         const settings = await loadSettings();
         if (this.disposed) return;
-        this.store.set({ settings });
+        this.file = settings;
+        this.store.set({ settings: this.composed() });
       } catch {
         // Keep defaults if the backend load fails.
       }
@@ -73,36 +91,86 @@ export class SettingsModel {
     this.themeDispose = null;
   }
 
-  /** Apply settings arriving from the watcher (hand edits to settings.toml). */
+  /** Apply settings arriving from the watcher (hand edits to settings.toml).
+   *  The file wins over changes whose write failed. Changes still being
+   *  written stay, since their writes put them onto the file as it is then. */
   private applyIncoming(settings: Settings): void {
+    this.file = settings;
+    this.kept = {};
+    this.use(this.composed());
+  }
+
+  /** The settings the app uses: the file's, the kept changes of failed
+   *  writes, and the changes being written, in that order, with no more
+   *  recent files shown than kept, as the file stores them. */
+  private composed(): Settings {
+    return withRecentLimit(Object.assign({}, this.file, this.kept, ...this.pending.map((save) => save.changes)));
+  }
+
+  /** Make `settings` the app's settings and apply them to the page. */
+  private use(settings: Settings): void {
     const before = wysiwygConfigSignature(this.store.get().settings);
     this.store.set({ settings });
     this.applySideEffects();
     if (wysiwygConfigSignature(settings) !== before) this.onWysiwygConfigChange();
   }
 
-  /** Persist settings edited via the in-app dialog. Applies immediately even if
-   *  the disk write fails (e.g. running outside Electron). Disk writes are serialized
+  /** Apply `changes` at once, and write them to settings.toml. The main
+   *  process puts them onto the file as it is when the write runs, so a hand
+   *  edit made since the app read the file stays. Disk writes are serialized
    *  (in call order) via writeChain: on first run the welcome flag and the
-   *  default-handler flag are saved from two separate fire-and-forget calls, and
-   *  without ordering the second's write could land before the first's and be
-   *  overwritten — silently dropping a flag (e.g. re-prompting for the default
-   *  handler forever). Each save writes the full settings captured at call time;
-   *  the synchronous store.set above keeps later callers' snapshots current. */
-  async save(next: Settings): Promise<void> {
-    if (this.disposed) return;
-    const before = wysiwygConfigSignature(this.store.get().settings);
-    this.store.set({ settings: next });
-    this.applySideEffects();
-    if (wysiwygConfigSignature(next) !== before) this.onWysiwygConfigChange();
-    if (isElectron()) {
-      this.writeChain = this.writeChain.then(() =>
-        saveSettings(next).catch((err) => {
-          console.error("Downpad: failed to save settings", err);
-        }),
-      );
-      await this.writeChain;
+   *  default-handler flag are saved from two separate fire-and-forget calls,
+   *  and the second write must not start before the first ends.
+   *
+   *  Resolves with the settings the file holds after the write, or null when
+   *  the write failed, such as for a settings.toml with broken syntax. Outside
+   *  the desktop app there is no file, and it resolves with the settings in
+   *  use. A failed save stays in use and the next write takes it along, unless
+   *  `undoIfUnwritten` is set, as the Settings dialog asks, which then says
+   *  the change was not saved. The app then stops using it, and each setting
+   *  it changed shows what the file and the other changes give it. */
+  async save(changes: Partial<Settings>, { undoIfUnwritten = false }: { undoIfUnwritten?: boolean } = {}): Promise<Settings | null> {
+    if (this.disposed) return null;
+    if (!isElectron()) {
+      this.file = withRecentLimit({ ...this.file, ...changes });
+      this.use(this.composed());
+      return this.file;
     }
+    const save: PendingSave = { changes };
+    this.pending.push(save);
+    this.use(this.composed());
+    const run = this.writeChain.then(() => this.write(save, undoIfUnwritten));
+    this.writeChain = run.then(() => {}, () => {});
+    return run;
+  }
+
+  /** Write `save`'s changes, with the kept changes of failed writes, and use
+   *  the result. Resolves with the settings the file then holds, or null. */
+  private async write(save: PendingSave, undoIfUnwritten: boolean): Promise<Settings | null> {
+    const sent = { ...this.kept, ...save.changes };
+    let written: Settings | null = null;
+    try {
+      written = await saveSettings(sent);
+    } catch (err) {
+      console.error("Downpad: failed to save settings", err);
+    }
+    this.pending.splice(this.pending.indexOf(save), 1);
+    if (written) {
+      // Only the settings this write sent. An edit of settings.toml that
+      // arrived while it ran can be newer for the others, and an edit that
+      // came before it arrives on its own.
+      this.file = { ...this.file, ...writtenValues(sent, written) };
+      this.kept = {};
+    } else if (!undoIfUnwritten) {
+      // The kept changes as they are now, as an edit of settings.toml may
+      // have replaced them while this write ran.
+      this.kept = { ...this.kept, ...save.changes };
+    }
+    // Most writes change nothing the app shows, and applying the same
+    // settings again would, for one, ask the system for its accent again.
+    const next = this.composed();
+    if (!this.disposed && !sameSettings(next, this.store.get().settings)) this.use(next);
+    return written;
   }
 
   private applySideEffects(): void {

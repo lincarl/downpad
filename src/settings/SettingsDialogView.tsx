@@ -49,6 +49,7 @@ import type { Settings } from "@/state/types";
 import { layoutFromDefaultView } from "@/state/types";
 import { cn } from "@/lib/utils";
 import { AccentColorFieldView } from "./AccentColorFieldView";
+import { changesFrom, sameSettings } from "./settingsChanges";
 import { CheckRow, FormRow, Hint, SettingsBox, SettingsPage } from "./SettingsLayout";
 import { SpellingSettings } from "./SpellingSettings";
 import { KEYBOARD_SHORTCUTS } from "./shortcuts";
@@ -58,7 +59,12 @@ import { UI_PALETTES, resolveScheme, type Scheme } from "./themePalettes";
 
 export interface SettingsDialogViewProps {
   initial: Settings;
-  onSave: (next: Settings) => void;
+  /** Save the settings that changed in the dialog since it opened or since
+   *  Apply, for OK and Apply. Called only when something changed. Resolves
+   *  with the changes as saved, which can hold other values, such as fewer
+   *  recent files shown than the history keeps, or null when they could not
+   *  be written. */
+  onSave: (changes: Partial<Settings>) => Promise<Partial<Settings> | null>;
   onRequestClose: () => void;
 }
 
@@ -114,7 +120,9 @@ const FIRST_CONTROL =
   'input[type="radio"]:checked, input:not([type="radio"]):not([type="hidden"]):not(:disabled), select:not(:disabled), button:not(:disabled)';
 
 export function SettingsDialogView({ initial, onSave, onRequestClose }: SettingsDialogViewProps) {
-  const formRef = useRef<HTMLFormElement>(null);
+  // The form, in state, as the dialog draws it in a portal after its first
+  // render. The render it starts reads what the form shows first.
+  const [form, setForm] = useState<HTMLFormElement | null>(null);
   const baseId = useId();
   const tabId = (page: PageId) => `${baseId}-tab-${page}`;
   const panelId = (page: PageId) => `${baseId}-page-${page}`;
@@ -138,6 +146,21 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
   const [gitOn, setGitOn] = useState(initial.gitEnabled);
   const [hardWrapOn, setHardWrapOn] = useState(initial.mdHardWrap !== false);
   const [spellCheckLanguages, setSpellCheckLanguages] = useState(initial.spellCheckLanguages ?? []);
+  // The settings as saved last, at opening or by Apply, as the form reads
+  // them. OK and Apply save only when the form differs from them.
+  const [applied, setApplied] = useState(initial);
+  // Whether `applied` holds the form's reading yet, which it takes once the
+  // form first shows.
+  const settled = useRef(false);
+  // Whether the form differs from `applied`, which enables Apply.
+  const [changed, setChanged] = useState(false);
+  // Whether the last save could not be written, such as to a settings.toml
+  // with broken syntax.
+  const [saveFailed, setSaveFailed] = useState(false);
+  // A save under way, which OK and Apply wait for.
+  const saving = useRef(false);
+  const okRef = useRef<HTMLButtonElement>(null);
+  const applyRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!isElectron()) return;
@@ -197,9 +220,11 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     document.getElementById(tabId(target))?.focus();
   };
 
-  /** The settings that Save would write, read from the form. */
+  /** The settings that OK or Apply would save, read from the form. Settings
+   *  the form does not show, and numbers left empty, keep their values from
+   *  `applied`. A number field that still shows its saved value keeps that
+   *  value, also one outside the field's range, such as a hand-edited one. */
   const readForm = (): Settings | null => {
-    const form = formRef.current;
     if (!form) return null;
 
     const input = (name: string): HTMLInputElement =>
@@ -224,61 +249,122 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const gitEnabled = form.elements.namedItem("gitEnabled") as HTMLInputElement | null;
     const gitAutoGetLatest = form.elements.namedItem("gitAutoGetLatest") as HTMLInputElement | null;
     const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
+    const number = (field: HTMLInputElement, saved: number): number =>
+      field.value === String(saved) ? saved : numVal(field, saved);
+    const scalePct = Math.round(applied.editorFontScale * 100);
+    const wrapCol = typeof applied.mdHardWrap === "number" ? applied.mdHardWrap : 80;
 
     return {
-      ...initial,
+      ...applied,
       theme: radio("theme").value as Settings["theme"],
       accentMode: input("accentMode").value as Settings["accentMode"],
       accentColor,
       editorTheme: radio("editorTheme").value as Settings["editorTheme"],
       editorWidthMode: select("editorWidthMode").value as Settings["editorWidthMode"],
-      editorWidthPx: numVal(editorWidthPx, initial.editorWidthPx),
-      fontFamily: fontFamily.value || initial.fontFamily,
+      editorWidthPx: number(editorWidthPx, applied.editorWidthPx),
+      fontFamily: fontFamily.value || applied.fontFamily,
+      // The field shows a whole percentage, so an unedited one keeps the
+      // saved scale, such as 1.125 from the toolbar.
       editorFontScale:
-        numVal(editorFontScalePct, Math.round(initial.editorFontScale * 100)) / 100,
+        editorFontScalePct.value === String(scalePct) ? applied.editorFontScale : numVal(editorFontScalePct, scalePct) / 100,
       linkDisplay: select("linkDisplay").value as Settings["linkDisplay"],
       embedImagesAsBase64: input("embedImagesAsBase64").checked,
-      maxEmbedSizeKB: numVal(maxEmbedSizeKB, initial.maxEmbedSizeKB),
-      attachmentsFolderName: attachmentsFolderName.value || initial.attachmentsFolderName,
+      maxEmbedSizeKB: number(maxEmbedSizeKB, applied.maxEmbedSizeKB),
+      attachmentsFolderName: attachmentsFolderName.value || applied.attachmentsFolderName,
       defaultView: select("defaultView").value as Settings["defaultView"],
       collapseBase64InRawView: input("collapseBase64InRawView").checked,
       spellCheckEnabled: input("spellCheckEnabled").checked,
       spellCheckLanguages,
       showFrontmatterPanel: input("showFrontmatterPanel").checked,
-      maxRetainedTabEditors: numVal(maxRetainedTabEditors, initial.maxRetainedTabEditors),
+      maxRetainedTabEditors: number(maxRetainedTabEditors, applied.maxRetainedTabEditors),
       mdBulletChar: select("mdBulletChar").value as Settings["mdBulletChar"],
       mdEmphasisChar: select("mdEmphasisChar").value as Settings["mdEmphasisChar"],
       mdStrongChar: select("mdStrongChar").value as Settings["mdStrongChar"],
       mdHeadingStyle: select("mdHeadingStyle").value as Settings["mdHeadingStyle"],
-      mdHardWrap: input("hardWrapOn").checked ? numVal(hardWrapCol, 80) : false,
+      mdHardWrap: input("hardWrapOn").checked ? number(hardWrapCol, wrapCol) : false,
       autosaveEnabled: input("autosaveEnabled").checked,
-      autosaveIntervalSeconds: numVal(
-        autosaveIntervalSeconds,
-        initial.autosaveIntervalSeconds,
-      ),
-      recentFilesMaxRetained: numVal(
-        recentFilesMaxRetained,
-        initial.recentFilesMaxRetained,
-      ),
-      recentFilesVisibleCount: numVal(
-        recentFilesVisibleCount,
-        initial.recentFilesVisibleCount,
-      ),
+      autosaveIntervalSeconds: number(autosaveIntervalSeconds, applied.autosaveIntervalSeconds),
+      recentFilesMaxRetained: number(recentFilesMaxRetained, applied.recentFilesMaxRetained),
+      recentFilesVisibleCount: number(recentFilesVisibleCount, applied.recentFilesVisibleCount),
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
-      autoUpdate: autoUpdate ? autoUpdate.checked : initial.autoUpdate,
-      gitEnabled: gitEnabled ? gitEnabled.checked : initial.gitEnabled,
-      gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : initial.gitAutoGetLatest,
-      gitUploadOnSave: gitUploadOnSave ? gitUploadOnSave.checked : initial.gitUploadOnSave,
+      autoUpdate: autoUpdate ? autoUpdate.checked : applied.autoUpdate,
+      gitEnabled: gitEnabled ? gitEnabled.checked : applied.gitEnabled,
+      gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : applied.gitAutoGetLatest,
+      gitUploadOnSave: gitUploadOnSave ? gitUploadOnSave.checked : applied.gitUploadOnSave,
     };
   };
 
-  const save = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
+  /** Note whether the form now differs from the settings saved last. */
+  const refreshChanged = (): void => {
     const next = readForm();
     if (!next) return;
-    onSave(next);
+    if (!settled.current) {
+      // A saved value the form cannot show, such as a colour in capitals,
+      // reads as the form shows it, so it is no change.
+      settled.current = true;
+      showSaved(form, next);
+      if (!sameSettings(next, applied)) setApplied(next);
+      return;
+    }
+    setChanged(!sameSettings(next, applied));
+  };
+  // Some fields keep their value in state, such as the accent colour and the
+  // spelling languages, so check again after each render too.
+  useEffect(refreshChanged);
+  // The form as the latest render reads it, for a save that ends later.
+  const latestForm = useRef(readForm);
+  useEffect(() => {
+    latestForm.current = readForm;
+  });
+
+  /** Save the settings in `next` that differ from `applied`, and mark them
+   *  saved once written. The fields then show what was saved, such as a
+   *  number brought into its field's range, the value an emptied field kept,
+   *  or fewer recent files shown than kept. A field edited while the save ran
+   *  keeps the edit. Returns those edits, or null when the settings were not
+   *  written, which the dialog then says. */
+  const save = async (next: Settings): Promise<Partial<Settings> | null> => {
+    saving.current = true;
+    try {
+      const written = await onSave(changesFrom(applied, next));
+      setSaveFailed(!written);
+      if (!written) return null;
+      const now = latestForm.current();
+      const edited = now ? changesFrom(next, now) : {};
+      const saved = { ...next, ...written };
+      // Before the next render, which compares the form with `applied`.
+      showSaved(form, saved, edited);
+      setApplied(saved);
+      return edited;
+    } finally {
+      saving.current = false;
+    }
+  };
+
+  /** OK: save what changed, if anything, and close. Enter in a field does
+   *  the same. A save that fails keeps the dialog open, and so does an edit
+   *  made while the save ran, which is then left to save. */
+  const accept = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    if (saving.current) return;
+    const next = readForm();
+    if (next && !sameSettings(next, applied)) {
+      const edited = await save(next);
+      if (!edited || Object.keys(edited).length > 0) return;
+    }
     onRequestClose();
+  };
+
+  /** Apply: save what changed and keep the dialog open. A save that fails
+   *  leaves Apply on, to try again. */
+  const apply = async (): Promise<void> => {
+    if (saving.current) return;
+    const next = readForm();
+    if (!next || sameSettings(next, applied)) return;
+    const edited = await save(next);
+    // Apply turns disabled, so its focus moves on to OK.
+    if (edited && Object.keys(edited).length === 0 && document.activeElement === applyRef.current) okRef.current?.focus();
   };
 
   const pageProps = (id: PageId) => ({ id: panelId(id), tabId: tabId(id), active: page === id });
@@ -298,9 +384,17 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
           <DialogDescription className="sr-only">
             Configure the editor appearance, editing behavior, files, autosave, Git, and updates.
           </DialogDescription>
-          {/* No native validation: it cannot point at a field on a hidden page, so
-              it would cancel Save silently. Save clamps every number instead. */}
-          <form ref={formRef} className="settings-form flex min-h-0 flex-1 flex-col" noValidate onSubmit={save}>
+          {/* No native validation, since it cannot point at a field on a hidden
+              page and would cancel OK silently. OK and Apply clamp every number
+              instead. */}
+          <form
+            ref={setForm}
+            className="settings-form flex min-h-0 flex-1 flex-col"
+            noValidate
+            onSubmit={(event) => void accept(event)}
+            onChange={refreshChanged}
+            onInput={refreshChanged}
+          >
             <div className="flex min-h-0 flex-1">
               <div className="settings-nav flex w-[196px] shrink-0 flex-col overflow-y-auto border-r border-line-bar bg-status px-2 py-2.5">
                 <DialogTitle asChild>
@@ -727,7 +821,22 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
               </div>
             </div>
 
+            {/* OK saves any changes and closes, Cancel closes without saving
+                the changes made since Apply, and Apply saves them and stays
+                open. */}
             <div className={cn("dialog-footer", dialogFooterClassName)}>
+              {saveFailed && (
+                <p role="alert" className="m-0 mr-auto self-center text-ink-danger">
+                  Could not save the settings file. Try again with OK or Apply.
+                </p>
+              )}
+              <Button
+                ref={okRef}
+                type="submit"
+                className={cn("dialog-btn primary", dialogButtonClassName)}
+              >
+                OK
+              </Button>
               <Button
                 type="button"
                 variant="outline"
@@ -737,10 +846,14 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                 Cancel
               </Button>
               <Button
-                type="submit"
-                className={cn("dialog-btn primary", dialogButtonClassName)}
+                ref={applyRef}
+                type="button"
+                variant="outline"
+                className={cn("dialog-btn", dialogButtonClassName)}
+                disabled={!changed}
+                onClick={() => void apply()}
               >
-                Save
+                Apply
               </Button>
             </div>
           </form>
@@ -929,6 +1042,31 @@ function NumberInput({
       className="min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />
   );
+}
+
+/** Put `settings` into the form's typed fields, which keep what the user
+ *  typed until then, such as a number outside the field's range. A field
+ *  whose setting is in `edited`, as after an edit while a save ran, keeps
+ *  its text. */
+function showSaved(form: HTMLFormElement | null, settings: Settings, edited: Partial<Settings> = {}): void {
+  if (!form) return;
+  const fields: [name: string, key: keyof Settings, value: string | number][] = [
+    ["editorWidthPx", "editorWidthPx", settings.editorWidthPx],
+    ["editorFontScalePct", "editorFontScale", Math.round(settings.editorFontScale * 100)],
+    ["fontFamily", "fontFamily", settings.fontFamily],
+    ["maxEmbedSizeKB", "maxEmbedSizeKB", settings.maxEmbedSizeKB],
+    ["attachmentsFolderName", "attachmentsFolderName", settings.attachmentsFolderName],
+    ["maxRetainedTabEditors", "maxRetainedTabEditors", settings.maxRetainedTabEditors],
+    ["autosaveIntervalSeconds", "autosaveIntervalSeconds", settings.autosaveIntervalSeconds],
+    ["recentFilesMaxRetained", "recentFilesMaxRetained", settings.recentFilesMaxRetained],
+    ["recentFilesVisibleCount", "recentFilesVisibleCount", settings.recentFilesVisibleCount],
+  ];
+  if (typeof settings.mdHardWrap === "number") fields.push(["hardWrapCol", "mdHardWrap", settings.mdHardWrap]);
+  for (const [name, key, value] of fields) {
+    if (key in edited) continue;
+    const field = form.elements.namedItem(name);
+    if (field instanceof HTMLInputElement) field.value = String(value);
+  }
 }
 
 /** A number field's value as a whole number within its range, or the fallback.

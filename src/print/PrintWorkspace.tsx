@@ -30,6 +30,7 @@ import { listPrinters, printWebview, printWebviewToPdf } from "../ipc/commands";
 import { onPrintCompleted } from "../ipc/events";
 import type { NativePrintOptions, PrinterInfo } from "../ipc/contracts";
 import type { Settings } from "../state/types";
+import { changesFrom } from "../settings/settingsChanges";
 import { pageCount, renderPrintPages } from "./printRender";
 import { pageRangeError } from "./pageRange";
 import {
@@ -57,7 +58,7 @@ export interface PrintJob {
 export interface PrintWorkspaceCallbacks {
   getSettings: () => Settings;
   /** Persist the print options the user changed, so the next print starts here. */
-  saveSettings: (next: Settings) => void;
+  saveSettings: (changes: Partial<Settings>) => void;
 }
 
 interface CoveredSibling {
@@ -81,6 +82,9 @@ export class PrintWorkspace {
   private job: PrintJob | null = null;
   /** Working copy of the print settings; written back on close. */
   private settings: Settings | null = null;
+  /** The settings when the workspace opened. Only the options changed since
+   *  are written back, so a setting changed elsewhere meanwhile stays. */
+  private opened: Settings | null = null;
   private printRoot: HTMLElement | null = null;
   private printers: PrinterInfo[] = [];
   /** Pages: All, or Custom with the range in `pageRange` (empty while cleared). */
@@ -117,7 +121,8 @@ export class PrintWorkspace {
     this.previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.job = job;
-    this.settings = { ...this.cb.getSettings() };
+    this.opened = this.cb.getSettings();
+    this.settings = { ...this.opened };
     this.pageMode = "all";
     this.pageRange = "";
     this.dirty = false;
@@ -147,7 +152,7 @@ export class PrintWorkspace {
     const reactRoot = this.reactRoot;
     const detachedPrintRoot =
       this.printRoot && !host.contains(this.printRoot) ? this.printRoot : null;
-    const changedSettings = this.settings && this.dirty ? this.settings : null;
+    const changedSettings = this.settings && this.opened && this.dirty ? changesFrom(this.opened, this.settings) : null;
     this.host = null;
     this.reactRoot = null;
     if (reactRoot) disposeReactRoot(reactRoot, host);
@@ -158,8 +163,9 @@ export class PrintWorkspace {
     this.canvas = null;
     this.printRoot = null;
     this.job = null;
-    if (changedSettings) this.cb.saveSettings(changedSettings);
+    if (changedSettings && Object.keys(changedSettings).length > 0) this.cb.saveSettings(changedSettings);
     this.settings = null;
+    this.opened = null;
     this.snapshot = null;
     this.dirty = false;
     this.busy = false;

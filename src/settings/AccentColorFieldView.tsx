@@ -30,7 +30,7 @@ export interface AccentColorFieldViewProps {
 /**
  * Mervin's accent swatch: a 48x24 button filled with the accent that opens a
  * staged picker. Its OK button commits only to the surrounding Settings form;
- * the form's Save button is still what applies the setting.
+ * the form's OK or Apply button is still what applies the setting.
  */
 export function AccentColorFieldView({ value, defaultColor, disabled, onCommit, onOpenChange }: AccentColorFieldViewProps) {
   const [draft, setDraft] = useState(value);

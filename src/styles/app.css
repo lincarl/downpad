@@ -564,6 +564,25 @@ body {
   padding: max(16px, var(--find-room, 0px)) 24px 64px;
 }
 
+/* Row alignment in the split (splitAlign.ts): the space the document pane
+   takes above its first block, after its end, between the frontmatter
+   disclosure and the document, and above other blocks as a larger top margin
+   that replaces the gap to the block before. All of it applies only while the
+   pane has the class, which the alignment drops for a moment to measure the
+   pane without it. */
+.editor-area.split .editor-pane-wysiwyg.md-row-aligned {
+  padding-top: calc(max(16px, var(--find-room, 0px)) + var(--md-row-top, 0px));
+  padding-bottom: calc(64px + var(--md-row-end, 0px));
+}
+
+.editor-pane-wysiwyg.md-row-aligned > .crepe-root {
+  padding-top: var(--md-row-body, 0);
+}
+
+.editor-pane-wysiwyg.md-row-aligned .ProseMirror [style*="--md-row-gap"] {
+  margin-top: var(--md-row-gap) !important;
+}
+
 /* One pane per (tab, view); the inactive ones are kept alive (to preserve undo,
    §5.19) but hidden. A visible pane fills the available width by default. */
 .editor-pane {
@@ -691,6 +710,13 @@ body {
 
   /* Document text size (spec §5.20): scale the raw view's base size. */
   font-size: calc(13.5px * var(--editor-font-scale));
+}
+
+/* In the split, the row alignment (splitAlign.ts) adds space after the last
+   line of the Markdown as bottom padding, which a press still reaches as a
+   press below the text. CodeMirror's own padding is 4px. */
+.editor-area.split .editor-pane-raw .cm-content {
+  padding-bottom: calc(4px + var(--md-row-end, 0px));
 }
 
 /* Crepe's bundled code-block theme uses a dark-editor syntax palette even on

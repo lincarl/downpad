@@ -338,6 +338,73 @@ describe("a file that changed on disk", () => {
     expect(store.get().doc).toMatchObject({ modifiedMs: 300, savedMarkdown: "# Mine\n", isDirty: false });
   });
 
+  it("asks again about a dismissed change until a save replaces it", async () => {
+    await changeOnDisk("# Theirs\n");
+    store.set({ banner: null });
+
+    expect(bindings.showPendingChange()).toBe(true);
+    expect(store.get().banner?.kind).toBe("file-changed");
+
+    store.set({ banner: null });
+    disk.writeFile.mockResolvedValueOnce({ modifiedMs: 300 });
+    expect(await files.save()).toBe(true);
+
+    expect(bindings.showPendingChange()).toBe(false);
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("forgets a dismissed change once Save As gives the document another file, also one dated earlier", async () => {
+    // The other program's clock runs ahead.
+    await changeOnDisk("# Theirs\n", 10_000);
+    store.set({ banner: null });
+    window.downpadDesktop!.saveDialog = async () => "/docs/copy.md";
+    disk.writeFile.mockResolvedValueOnce({ modifiedMs: 300 });
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/copy.md");
+
+    expect(bindings.showPendingChange()).toBe(false);
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("shows a dismissed change again once its tab is in front again, and holds autosave for it", async () => {
+    await changeOnDisk("# Theirs\n");
+    const first = store.get().activeTabId!;
+    expect(bindings.hasPendingChange()).toBe(true);
+
+    // Another tab comes to the front, as the app clears the bar then.
+    store.addTab({ ...blankDoc(), markdown: "# Other\n" });
+    store.set({ banner: null });
+    bindings.activeDocChanged();
+    expect(bindings.hasPendingChange()).toBe(false);
+    expect(store.get().banner).toBeNull();
+
+    store.activateTab(first);
+    bindings.activeDocChanged();
+    expect(store.get().banner?.kind).toBe("file-changed");
+    expect(bindings.hasPendingChange()).toBe(true);
+    expect(disk.readFile).toHaveBeenCalledOnce();
+  });
+
+  it("notices a change made while another tab was in front, but not for a recovered document", async () => {
+    const first = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), markdown: "# Other\n" });
+    bindings.activeDocChanged();
+    disk.readFile.mockResolvedValue({ content: "# Theirs\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 9 });
+    store.activateTab(first);
+    bindings.activeDocChanged();
+    await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
+    bindings.handleBannerAction("keep");
+    expect(store.get().doc).toMatchObject({ modifiedMs: 300, savedMarkdown: "# Theirs\n", isDirty: true });
+
+    // A recovered document has no file time, so only the watcher tells.
+    disk.readFile.mockClear();
+    store.addTab({ ...blankDoc(), markdown: "# Recovered\n", filePath: "/docs/recovered.md", modifiedMs: 0, isDirty: true });
+    bindings.activeDocChanged();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disk.readFile).not.toHaveBeenCalled();
+    expect(store.get().banner).toBeNull();
+  });
+
   it("keeps a newer change when an older read finishes after it", async () => {
     // The read for the change at 200 waits until the change at 300 is read.
     let finishOlderRead!: (payload: FilePayload) => void;

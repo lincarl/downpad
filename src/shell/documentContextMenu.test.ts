@@ -16,6 +16,8 @@ function actions(overrides: Partial<DocumentMenuActions> = {}): DocumentMenuActi
     hasDocument: () => true,
     print: () => {},
     copyMarkdown: () => {},
+    canCopyFile: () => true,
+    copyFile: () => {},
     canCheckSpelling: () => true,
     checkSpelling: async () => {},
     insertLink: () => true,
@@ -76,7 +78,7 @@ describe("buildItems", () => {
 
   it("offers only the document actions off an editable, and exactly one Print entry", () => {
     const items = buildItems(null, actions());
-    expect(labels(items)).toEqual(["Copy as Markdown", "Check document spelling", "Print…"]);
+    expect(labels(items)).toEqual(["Copy as Markdown", "Copy file", "Check document spelling", "Print…"]);
     // The version choice lives in the print workspace, never as a submenu here.
     expect(items.filter((i) => i.label.startsWith("Print"))).toHaveLength(1);
     expect(byLabel(items, "Print…").shortcut).toBe("Ctrl+P");
@@ -86,6 +88,7 @@ describe("buildItems", () => {
     const items = buildItems(null, actions({ hasDocument: () => false }));
     expect(byLabel(items, "Print…").disabled).toBe(true);
     expect(byLabel(items, "Copy as Markdown").disabled).toBe(true);
+    expect(byLabel(items, "Copy file").disabled).toBe(true);
     expect(byLabel(items, "Check document spelling").disabled).toBe(true);
   });
 
@@ -99,6 +102,7 @@ describe("buildItems", () => {
       "Insert link…",
       "Select all",
       "Copy as Markdown",
+      "Copy file",
       "Check document spelling",
       "Print…",
     ]);
@@ -135,6 +139,14 @@ describe("buildItems", () => {
     byLabel(items, "Copy as Markdown").run();
     expect(print).toHaveBeenCalledOnce();
     expect(copyMarkdown).toHaveBeenCalledOnce();
+  });
+
+  it("copies the document's file, and offers it only where files can be copied", () => {
+    const copyFile = vi.fn();
+    byLabel(buildItems(null, actions({ copyFile })), "Copy file").run();
+    expect(copyFile).toHaveBeenCalledOnce();
+    expect(byLabel(buildItems(null, actions()), "Copy file").disabled).toBe(false);
+    expect(byLabel(buildItems(target("raw"), actions({ canCopyFile: () => false })), "Copy file").disabled).toBe(true);
   });
 
   it("checks the whole document and disables checking when unavailable", async () => {
