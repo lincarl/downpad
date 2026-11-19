@@ -31,7 +31,8 @@ import { isElectron } from "../ipc/env";
 import { hasEditorSpelling, spellingAt } from "../editor/spelling";
 
 export interface DocumentMenuActions {
-  /** Whether a document is open — Print / Copy as Markdown are document-scoped. */
+  /** Whether a document shows, which it does not on Recent. Print, the copies
+   *  and the spelling check act on it. */
   hasDocument: () => boolean;
   /** Open the print workspace (spec §5.21). */
   print: () => void;
