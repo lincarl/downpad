@@ -14,6 +14,7 @@ import { RecentView } from "../home/RecentView";
 import { createIpcRecentDataSource } from "../home/recentData";
 import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
+import { failureReason } from "../ipc/failureReason";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Tab, EditorLayout } from "../state/types";
 import { layoutFromDefaultView, shownLayout } from "../state/types";
@@ -90,7 +91,7 @@ export class AppRuntime {
     this.editorHost.setSaveHandler(() => this.files.save());
     // Double-clicking a `.md` link opens that file in a tab (§5.6); openPath
     // focuses it if already open, else opens a new tab (consistent with §5.19).
-    this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
+    this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path), OPEN_FAILED));
     this.scheduler = new SnapshotScheduler(store, this.files, (tabId) => this.desktopEvents.holdSave(tabId));
     this.session = new SessionKeeper(store);
     // The find card floats over the document and searches the formatted
@@ -145,14 +146,14 @@ export class AppRuntime {
     // Images pasted into the document view go in as the files of a drop at
     // the caret, so one that waits for a Save As never goes into a hidden or
     // rebuilt editor (§5.5).
-    this.editorHost.setPasteHandler((tabId, files) => this.run(() => this.fileDrops.pasteImages(tabId, files)));
+    this.editorHost.setPasteHandler((tabId, files) => this.run(() => this.fileDrops.pasteImages(tabId, files), "Downpad could not add the pasted file."));
     this.desktopEvents = new DesktopEventBindings({
       store,
       files: this.files,
       editorHost: this.editorHost,
       scheduler: this.scheduler,
       session: this.session,
-      run: (action) => this.run(action),
+      run: (action, failure) => this.run(action, failure),
       handleDrop: (paths, drop) => this.fileDrops.handle(paths, drop),
     });
 
@@ -172,7 +173,7 @@ export class AppRuntime {
       {
         // Opening from the Recent view lands the file in its own tab (§5.19);
         // openPath flushes the current editor and re-shows the active document.
-        onOpenFile: (p) => this.run(() => this.files.openPath(p)),
+        onOpenFile: (p) => this.run(() => this.files.openPath(p), OPEN_FAILED),
         onSummaryChange: (text) => this.callbacks.setRecentSummary(text),
         pickFile: () => this.pickMarkdownFile(),
         reveal: (p) => this.reveal(p),
@@ -221,15 +222,15 @@ export class AppRuntime {
   }
 
   openDocument(): void {
-    this.run(() => this.files.openViaDialog());
+    this.run(() => this.files.openViaDialog(), OPEN_FAILED);
   }
 
   saveDocument(): void {
-    this.run(() => this.saveByUser(false));
+    this.run(() => this.saveByUser(false), SAVE_FAILED);
   }
 
   saveDocumentAs(): void {
-    this.run(() => this.saveByUser(true));
+    this.run(() => this.saveByUser(true), SAVE_FAILED);
   }
 
   /** Upload the active document (the toolbar's Upload). */
@@ -290,11 +291,11 @@ export class AppRuntime {
   }
 
   closeDocumentTab(id: string): void {
-    this.run(() => this.closeTab(id));
+    this.run(() => this.closeTab(id), CLOSE_FAILED);
   }
 
   closeEveryTab(): void {
-    this.run(() => this.closeAllTabs());
+    this.run(() => this.closeAllTabs(), CLOSE_FAILED);
   }
 
   handleBannerAction(id: string): void {
@@ -394,8 +395,8 @@ export class AppRuntime {
       findPrevious: () => this.findBar.prev(),
       showFind: (mode) => this.findBar.show(mode),
       focusRecentSearch: () => this.recentView.focusSearch(),
-      save: (saveAs) => this.run(() => this.saveByUser(saveAs)),
-      open: () => this.run(() => this.files.openViaDialog()),
+      save: (saveAs) => this.run(() => this.saveByUser(saveAs), SAVE_FAILED),
+      open: () => this.run(() => this.files.openViaDialog(), OPEN_FAILED),
       create: () => this.run(() => this.files.newDocument()),
       print: () => void this.printActiveDocument(),
     }));
@@ -688,14 +689,22 @@ export class AppRuntime {
     };
   }
 
-  /** Run a file action, surfacing failures without crashing the shell. */
-  private run(action: () => Promise<unknown>): void {
+  /** Run a file action. A failure does not crash the shell, and shows as an
+   *  error notice that says `failure` and then the reason the error gives. */
+  private run(action: () => Promise<unknown>, failure = "Downpad could not finish that action."): void {
     if (this.disposed) return;
-    action().catch((err) => {
-      console.error("Downpad: file action failed", err);
+    action().catch((error: unknown) => {
+      console.error("Downpad: file action failed", error);
+      if (this.disposed) return;
+      this.store.set({ banner: { kind: "error", message: `${failure} ${failureReason(error)}`.trimEnd() } });
     });
   }
 }
+
+/** What the error notice of a failed file action says before the reason. */
+const OPEN_FAILED = "Downpad could not open the file.";
+const SAVE_FAILED = "Downpad could not save the document.";
+const CLOSE_FAILED = "Downpad could not close the document.";
 
 /** Run a reload of the active document and scroll its new editors to where
  *  the old ones were, so a document that Get latest changed stays in place. */

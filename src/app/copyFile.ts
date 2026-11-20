@@ -44,8 +44,9 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   // other, so it waits until neither runs.
   do {
     // After a Save As that failed, the document still has the file the user
-    // was leaving, which Copy file's own save must not write then. The
-    // failed save has told the user.
+    // was leaving, which Copy file's own save must not write then. A failed
+    // save shows its own error notice (`AppRuntime.run`), and a cancelled
+    // one was the user's choice.
     if (!(await files.untilSaved(tabId))) return;
     await desktopEvents.settled(tabId);
   } while (files.isSaving(tabId));

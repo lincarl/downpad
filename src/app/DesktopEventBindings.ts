@@ -30,7 +30,8 @@ export interface DesktopEventDependencies {
   scheduler: SnapshotScheduler;
   /** Records the open documents, which a close must wait for. */
   session: Pick<SessionKeeper, "flush">;
-  run(action: () => Promise<unknown>): void;
+  /** Run a file action, and show `failure` with the reason when it fails. */
+  run(action: () => Promise<unknown>, failure?: string): void;
   /** Open or embed dropped files. It reads where they go from `drop`, the
    *  drop event, before it first awaits. */
   handleDrop(paths: string[], drop: DropPoint): Promise<void>;
@@ -80,7 +81,7 @@ export class DesktopEventBindings {
     this.captureCleanup(onFileChanged((payload) => void this.handleFileChanged(payload)));
     this.captureCleanup(
       onOpenFileRequested((path) =>
-        this.dependencies.run(() => this.dependencies.files.openPath(path)),
+        this.dependencies.run(() => this.dependencies.files.openPath(path), "Downpad could not open the file."),
       ),
     );
     this.captureCleanup(onHistoryRequested(undoOrRedo));
@@ -229,7 +230,7 @@ export class DesktopEventBindings {
       // The change stays until the reload records the file, so a reload the
       // user cancels or that fails keeps automatic saves waiting.
       const path = doc.filePath;
-      run(() => files.openPath(path, { reload: true }));
+      run(() => files.openPath(path, { reload: true }), "Downpad could not reload the file.");
     } else if (id === "keep") {
       // The file holds the changed text, so the open text is unsaved unless it
       // matches it. A save since then is newer, and already recorded what the
@@ -386,7 +387,7 @@ export class DesktopEventBindings {
         .map((file) => bridge.getPathForFile(file))
         .filter((path) => path.length > 0);
       if (paths.length > 0) {
-        this.dependencies.run(() => this.dependencies.handleDrop(paths, event));
+        this.dependencies.run(() => this.dependencies.handleDrop(paths, event), "Downpad could not take the dropped files.");
       }
     };
     // Capture native file drops before editor plugins upload or navigate them.
@@ -399,7 +400,7 @@ export class DesktopEventBindings {
   }
 
   private async registerCloseGuard(): Promise<() => void> {
-    return onCloseRequested(() => this.dependencies.run(() => this.handleCloseRequested()));
+    return onCloseRequested(() => this.dependencies.run(() => this.handleCloseRequested(), "Downpad could not close."));
   }
 
   private async handleCloseRequested(): Promise<void> {
