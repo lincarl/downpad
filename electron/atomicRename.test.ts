@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import { existsSync, renameSync } from "node:fs";
-import filesystem, { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { existsSync, renameSync, symlinkSync } from "node:fs";
+import filesystem, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
 import { FILE_CHANGED_ON_DISK } from "../src/ipc/contracts";
@@ -152,7 +152,8 @@ it("refuses an automatic write when another program replaces the file while the 
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
 });
 
-it("checks the real file that an automatic write replaces, also when its symbolic link changes meanwhile", async () => {
+// Creating a symbolic link needs a privilege on Windows, as in backend.test.ts.
+it.skipIf(process.platform === "win32")("checks the real file that an automatic write replaces, also when its symbolic link changes meanwhile", async () => {
   const { directory, destination } = await fixture();
   const link = join(directory, "link.md");
   await symlink(destination, link);
@@ -174,6 +175,50 @@ it("checks the real file that an automatic write replaces, also when its symboli
   await expect(writeMarkdown(link, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
   expect(await readFile(decoy, "utf8")).toBe("Original text\n");
+});
+
+it.skipIf(process.platform === "win32")("refuses an automatic write when the document's symbolic link leads to another file by then", async () => {
+  const { directory, destination } = await fixture();
+  const link = join(directory, "link.md");
+  await symlink(destination, link);
+  const other = join(directory, "other.md");
+  await writeFile(other, "Other text\n");
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      // While Downpad writes its replacement, another program points the
+      // link at another file, which the document never showed.
+      await rm(link);
+      await symlink(other, link);
+    }
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(link, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Original text\n");
+  expect(await readlink(link)).toBe(other);
+});
+
+it.skipIf(process.platform === "win32")("refuses an automatic write when another program puts a symbolic link in the file's place during the check", async () => {
+  const { directory, destination } = await fixture();
+  const moved = join(directory, "moved.md");
+  let replaced = false;
+  const decode = TextDecoder.prototype.decode;
+  vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: Parameters<TextDecoder["decode"]>) {
+    if (!replaced) {
+      // Another program moves the file away and leaves a link to it in its
+      // place, which a check through the link takes for the same file.
+      replaced = true;
+      renameSync(destination, moved);
+      symlinkSync(moved, destination);
+    }
+    return decode.apply(this, args);
+  });
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+  expect(await readFile(moved, "utf8")).toBe("Original text\n");
 });
 
 it("retries a Windows sharing lock that the check before the rename meets", async () => {

@@ -17,7 +17,7 @@ beforeEach(() => {
  *  that ends with `saved` and a file that has no unresolved change on disk. */
 function setup(doc: Partial<DocumentState>, saved = true) {
   const store = createAppStore();
-  store.patchDoc({ filePath, markdown: "# Mine\n", savedMarkdown: "# Mine\n", isDirty: false, modifiedMs: 100, ...doc });
+  store.patchDoc({ filePath, markdown: "# Mine\n", savedMarkdown: "# Mine\n", isDirty: false, modifiedMs: 100, fileSize: 7, ...doc });
   const tabId = store.get().activeTabId!;
   const files = { save: vi.fn<CopyFileDependencies["files"]["save"]>(async () => saved) };
   const desktopEvents = {
@@ -39,7 +39,7 @@ function setup(doc: Partial<DocumentState>, saved = true) {
 
 describe("Copy file", () => {
   it("asks to save a recovered document first, and saves and copies nothing", async () => {
-    const { store, files, copy } = setup({ modifiedMs: 0, savedMarkdown: null, isDirty: true });
+    const { store, files, copy } = setup({ modifiedMs: 0, fileSize: undefined, savedMarkdown: null, isDirty: true });
     await copy();
     expect(store.get().banner).toEqual({ kind: "info", message: "Save this recovered document first. Its file may have changed while Downpad was closed." });
     expect(files.save).not.toHaveBeenCalled();
@@ -49,6 +49,7 @@ describe("Copy file", () => {
   it.each([
     { document: "a document whose save is being written", doc: { modifiedMs: 100, savedMarkdown: null, isDirty: true } },
     { document: "a document whose file says it was written in 1970", doc: { modifiedMs: 0, isDirty: true } },
+    { document: "a document dated 1970 whose save is being written", doc: { modifiedMs: 0, savedMarkdown: null, isDirty: true } },
   ])("saves $document through the guarded save, and copies its file", async ({ doc }) => {
     const { store, files, desktopEvents, copy } = setup(doc);
     await copy();

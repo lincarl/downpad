@@ -294,6 +294,38 @@ describe("Existing settings and history compatibility", () => {
     expect(await readdir(directory)).toEqual(["settings.toml"]);
   });
 
+  it.skipIf(process.platform === "win32")("checks the real file before the rename, also when settings.toml is a symbolic link that changes meanwhile", async () => {
+    const directory = await fixtureDirectory();
+    const real = join(directory, "real.toml");
+    const decoy = join(directory, "decoy.toml");
+    const path = join(directory, "settings.toml");
+    await writeFile(real, 'theme = "light"\n');
+    await writeFile(decoy, 'theme = "light"\n');
+    await symlink(real, path);
+    const originalReadFile = filesystem.readFile;
+    let reads = 0;
+    const reading = vi.spyOn(filesystem, "readFile").mockImplementation(async (...args: Parameters<typeof filesystem.readFile>) => {
+      reads += 1;
+      if (reads === 2) {
+        // Before the rename, another program edits the real file and points
+        // the link at a file with the text the write read first.
+        await writeFile(real, 'theme = "light"\neditorWidthPx = 900\n');
+        await rm(path);
+        await symlink(decoy, path);
+      }
+      return originalReadFile(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await updateSettingsFile(path, { theme: "dark" });
+    } finally {
+      reading.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(await readFile(real, "utf8")).toBe('theme = "light"\neditorWidthPx = 900\n');
+    expect(parse(await readFile(decoy, "utf8"))).toMatchObject({ theme: "dark" });
+  });
+
   it("puts changes onto settings.toml as it is when written and returns the settings it then holds", async () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);

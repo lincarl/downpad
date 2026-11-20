@@ -155,10 +155,24 @@ async function holdsText(target: string, text: string): Promise<boolean> {
     return false;
   }
   if (content !== text) return false;
-  const now = await stat(target).catch(missing);
+  // Not through a symbolic link that another program put in the file's place,
+  // which the rename would replace.
+  const now = await lstat(target).catch(missing);
   if (!now) return true;
   return now.dev === version.info.dev && now.ino === version.info.ino
     && now.mtimeMs === version.info.mtimeMs && now.size === version.info.size;
+}
+
+/** Whether `path` still leads to the real file `target`, as it did when a write
+ *  resolved it, or now leads nowhere. A symbolic link that another program pointed at
+ *  another file meanwhile does not, so the write would not replace the file the
+ *  path names. */
+async function leadsTo(path: string, target: string): Promise<boolean> {
+  const now = await realpath(absolutePath(path)).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  });
+  return now === null || now === target;
 }
 
 /** The file's modification time and size, which tell whether it changed without
@@ -182,13 +196,16 @@ let pendingMarkdownWrite: Promise<void> = Promise.resolve();
  *  FILE_CHANGED_ON_DISK and leaves the file as it is. The text tells also a replacement
  *  that kept the file's time, and reading it revalidates a network file system's
  *  cached attributes. The check reads the real file that the write replaces, so a
- *  symbolic link that changes or goes meanwhile cannot point it at another file. */
+ *  symbolic link that changes or goes meanwhile cannot point it at another file, and
+ *  it refuses the write when `path` leads to another file by then. */
 export function writeMarkdown(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
-    const beforeReplace = expectedContent === undefined ? undefined : (target: string) => holdsText(target, expectedContent);
+    const beforeReplace = expectedContent === undefined
+      ? undefined
+      : async (target: string) => await holdsText(target, expectedContent) && await leadsTo(path, target);
     try {
       const modifiedMs = await writeAtomic(path, text, { beforeReplace });
       return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };

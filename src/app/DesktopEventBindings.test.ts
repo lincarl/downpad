@@ -401,7 +401,7 @@ describe("a file that changed on disk", () => {
     expect(disk.readFile).toHaveBeenCalledOnce();
   });
 
-  it("notices a change made while another tab was in front, but not for a recovered document", async () => {
+  it("notices a change made while another tab was in front, also in a file dated 1970, but not for a recovered document", async () => {
     const first = store.get().activeTabId!;
     store.addTab({ ...blankDoc(), markdown: "# Other\n" });
     bindings.activeDocChanged();
@@ -415,11 +415,17 @@ describe("a file that changed on disk", () => {
 
     // A recovered document has no file time, so only the watcher tells.
     disk.readFile.mockClear();
-    store.addTab({ ...blankDoc(), markdown: "# Recovered\n", filePath: "/docs/recovered.md", modifiedMs: 0, isDirty: true });
+    store.addTab({ ...blankDoc(), markdown: "# Recovered\n", filePath: "/docs/recovered.md", modifiedMs: 0, savedMarkdown: null, isDirty: true });
     bindings.activeDocChanged();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(disk.readFile).not.toHaveBeenCalled();
     expect(store.get().banner).toBeNull();
+
+    // A file dated 1970 has the time 0, but a version of its own.
+    store.addTab({ ...blankDoc(), markdown: "# Mine\n", savedMarkdown: "# Mine\n", filePath: "/docs/dated.md", modifiedMs: 0, fileSize: 7 });
+    bindings.activeDocChanged();
+    await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
+    expect(disk.readFile).toHaveBeenCalledWith("/docs/dated.md");
   });
 
   it("drops a change for the old file after Save As, and notices edits of the new file", async () => {
@@ -475,7 +481,9 @@ describe("a file that changed on disk", () => {
   it("takes the app's own save under way for no change on disk", async () => {
     let finish!: (meta: FileMeta) => void;
     disk.writeFile.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
-    store.patchDoc({ markdown: "# Saving\n", isDirty: true });
+    // With the size of the version it recorded, as every opened document has,
+    // so a save under way does not make it look recovered.
+    store.patchDoc({ markdown: "# Saving\n", isDirty: true, fileSize: 7 });
     const saving = files.save();
     await eventually(() => expect(disk.writeFile).toHaveBeenCalledOnce());
     store.patchDoc({ markdown: "# Saving, and more\n", isDirty: true });

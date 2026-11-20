@@ -178,7 +178,9 @@ export async function updateSettingsFile(path: string, changes: unknown, expecte
     const next = normalizeSettings({ ...current, ...applied }, current);
     try {
       await writeAtomic(path, patchSettingsToml(existing, next), {
-        beforeReplace: async () => (await existingSettingsText(path)) === existing,
+        // The real file that the rename replaces, also when settings.toml
+        // is a symbolic link that another program points elsewhere meanwhile.
+        beforeReplace: async (target) => (await existingSettingsText(target)) === existing,
       });
       return next;
     } catch (error) {

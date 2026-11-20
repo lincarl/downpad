@@ -20,7 +20,7 @@ import { isElectron } from "../ipc/env";
 import { undoOrRedo } from "../shell/editorActions";
 import type { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Store } from "../state/store";
-import type { DocumentState } from "../state/types";
+import { isRecoveredDocument, type DocumentState } from "../state/types";
 import type { SessionKeeper } from "./SessionKeeper";
 
 export interface DesktopEventDependencies {
@@ -266,12 +266,12 @@ export class DesktopEventBindings {
    *  differs from what the document last read or wrote and from the open
    *  text. Without `read`, as when a tab comes to the front, the file's time
    *  and size tell first whether it can have changed. A recovered document
-   *  has no file time or text of its own to compare with, so only a report
-   *  of the watcher or a refused save makes it read. */
+   *  has no file version of its own to compare with, so only a report of the
+   *  watcher or a refused save makes it read. */
   private async compareWithDisk(read: boolean): Promise<void> {
     const { files, store } = this.dependencies;
     const { activeTabId: tabId, doc } = store.get();
-    if (!tabId || !doc.filePath || (!read && doc.modifiedMs === 0)) return;
+    if (!tabId || !doc.filePath || (!read && isRecoveredDocument(doc))) return;
     const path = doc.filePath;
     // A save, reload or Keep mine that records another file version
     // meanwhile makes this read out of date, and the app compares again then.

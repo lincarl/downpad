@@ -7,6 +7,7 @@ import type { EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
 import { copyFileToClipboard } from "../ipc/commands";
 import type { Store } from "../state/store";
+import { isRecoveredDocument } from "../state/types";
 import type { DesktopEventBindings } from "./DesktopEventBindings";
 
 export interface CopyFileDependencies {
@@ -45,12 +46,9 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   const doc = store.get().tabs.find((tab) => tab.id === tabId)?.doc;
   if (!doc) return;
   try {
-    // A recovered document has no file time or saved text of its own until
-    // it is saved, and its file may have changed while Downpad was closed,
-    // which nothing tells, so only a save the user asks for writes it. A
-    // document whose save is being written has no saved text either, but has
-    // a file time, and so has a file that says it was written in 1970.
-    if (doc.filePath && doc.modifiedMs === 0 && doc.savedMarkdown === null) {
+    // The file of a recovered document may have changed while Downpad was
+    // closed, which nothing tells, so only a save the user asks for writes it.
+    if (isRecoveredDocument(doc)) {
       store.set({ banner: { kind: "info", message: "Save this recovered document first. Its file may have changed while Downpad was closed." } });
       return;
     }
