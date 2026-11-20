@@ -498,17 +498,16 @@ export class GitSync {
       if (holder) {
         this.deps.store.patchDocById(tab.id, { isDirty: true, savedMarkdown: null });
         // Text typed while Git worked gets a newer copy, which Open copy
-        // then opens.
+        // then opens. When it cannot be kept, Open copy opens the copy kept
+        // before, and the tab, which still has all the text, as unsaved,
+        // keeps what the copy lacks, so the rest goes on as it would.
         if (holder.doc.markdown !== kept) {
           try {
             copy = await keepDiscardedCopy(path, holder.doc.markdown);
+            kept = holder.doc.markdown;
           } catch (error) {
-            if (this.isCurrent(generation)) {
-              this.showError(`“${name}” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now, but Downpad could not keep a copy of the latest of them. ${errorText(error)}`);
-            }
-            return;
+            console.error("Downpad: could not keep a newer copy of the discarded changes", error);
           }
-          kept = holder.doc.markdown;
         }
       }
     }

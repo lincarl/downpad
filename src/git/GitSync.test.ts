@@ -635,10 +635,19 @@ describe("GitSync conflicts", () => {
     await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md"));
   });
 
-  it("keeps a newer copy of text typed while Git worked when the latest version has no such file", async () => {
+  it.each([
+    { newer: "is kept", opens: "/profile/discarded-changes/latest.md" },
+    // Open copy opens the copy kept before, and the tab still has all the text.
+    { newer: "cannot be kept", opens: "/profile/discarded-changes/first.md" },
+  ])("keeps a newer copy of text typed while Git worked when the latest version has no such file, and goes on when it $newer", async ({ newer, opens }) => {
+    const notes = store.get().activeTabId!;
+    const other = store.addTab({ ...blankDoc(), filePath: "/work/other.md" });
+    store.activateTab(notes);
     deps.askConflict.mockResolvedValue("discard");
     git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/first.md");
-    git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/latest.md");
+    if (newer === "is kept") git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/latest.md");
+    else git.keepCopy.mockRejectedValueOnce(new Error("Disk full"));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     // The editor reports the typing only when its text is collected.
     let typed = false;
     vi.mocked(deps.flush).mockImplementation(() => {
@@ -646,14 +655,20 @@ describe("GitSync conflicts", () => {
     });
     git.discard.mockImplementation(async () => {
       typed = true;
-      return done([PATH]);
+      return done([PATH, "/work/other.md"]);
     });
-    git.pathExists.mockResolvedValue(false);
+    // The file is gone, and its folder is still there.
+    git.pathExists.mockImplementation(async (path) => path !== PATH);
     await sync.check({ force: true });
     expect(git.keepCopy).toHaveBeenLastCalledWith(PATH, "# Notes\n\nMine, and more\n");
     expect(store.get().doc).toMatchObject({ markdown: "# Notes\n\nMine, and more\n", isDirty: true, savedMarkdown: null });
+    // The other document that Git changed is reloaded.
+    expect(deps.files.refreshFromDisk).toHaveBeenCalledWith(other);
+    expect(store.get().banner?.message).toBe(saveToPutBack);
+    expect(logged).toHaveBeenCalledTimes(newer === "is kept" ? 0 : 1);
+    logged.mockRestore();
     sync.handleBannerAction(GIT_OPEN_COPY);
-    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/latest.md"));
+    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith(opens));
   });
 
   it.each([
