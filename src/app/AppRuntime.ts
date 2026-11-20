@@ -593,7 +593,7 @@ export class AppRuntime {
     if (this.findBar.isOpen()) this.findBar.close();
     // The hidden editor area measures as not scrolled, so its place is taken
     // now, for the tab whose editors show, which can lag behind the active one.
-    this.placesBehindRecent.take(this.editorArea, this.editorHost.shownTabId, this.store.get().tabs.map((tab) => tab.id));
+    this.placesBehindRecent.take(this.editorArea, this.editorHost, this.store);
     this.store.set({ view: "recent" });
     await this.recentView.refresh();
   }

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { blankDoc } from "../state/types";
+import { createAppStore } from "./createAppStore";
 import { capturePlace, keepingPlace, PlacesBehindRecent, restorePlace } from "./keepingPlace";
 
 /** An editor area with a document pane and a Markdown pane, scrolled. */
@@ -62,49 +64,69 @@ describe("a document's place", () => {
 });
 
 describe("the places of documents behind the Recent view", () => {
+  /** A store with the tabs `a` and `b`, the second one in front, and an
+   *  editor host that shows the editors of `shown`. */
+  function tabs(shown: string | null) {
+    const store = createAppStore();
+    const first = store.get().activeTabId!;
+    const second = store.addTab(blankDoc());
+    const ids: Record<string, string> = { a: first, b: second };
+    return { store, a: first, b: second, host: { shownTabId: shown === null ? null : ids[shown] } };
+  }
+
   it("puts a document's place back when it shows again, once, also in editors built meanwhile", () => {
     const { editorArea } = area();
+    const { store, host, b } = tabs("b");
     const places = new PlacesBehindRecent();
-    places.take(editorArea, "a", ["a", "b"]);
+    places.take(editorArea, host, store);
     const built = rebuild(editorArea);
-    places.giveBack(editorArea, "a", () => "a");
+    places.giveBack(editorArea, b, () => b);
     expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([10, 200, 300]);
     // The next time the document shows, it is where the user left it.
     built.wysiwyg.scrollTop = 50;
-    places.giveBack(editorArea, "a", () => "a");
+    places.giveBack(editorArea, b, () => b);
     expect(built.wysiwyg.scrollTop).toBe(50);
   });
 
   it("keeps a document's place while another tab shows, and gives that tab none", () => {
     const { editorArea } = area();
+    const { store, host, a, b } = tabs("b");
     const places = new PlacesBehindRecent();
-    places.take(editorArea, "a", ["a", "b"]);
-    // The user leaves the Recent view for another tab, whose panes are at the top.
+    places.take(editorArea, host, store);
+    // The user leaves the Recent view for the other tab, whose panes are at the top.
     let built = rebuild(editorArea);
-    places.giveBack(editorArea, "b", () => "b");
+    places.giveBack(editorArea, a, () => a);
     expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([0, 0, 0]);
     built = rebuild(editorArea);
-    places.giveBack(editorArea, "a", () => "a");
+    places.giveBack(editorArea, b, () => b);
     expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([10, 200, 300]);
   });
 
-  it("takes the place for the tab whose editors show, not for one that is still being built", () => {
+  it("takes the place for the tab whose editors show, not for the store's tab in front, which is still being built", () => {
     const { editorArea } = area();
+    // The store's tab in front is the second one already, and the panes are
+    // still those of the first.
+    const { store, host, a, b } = tabs("a");
+    expect(store.get().activeTabId).toBe(b);
     const places = new PlacesBehindRecent();
-    // The store's tab in front is "b" already, and the panes are still those of "a".
-    places.take(editorArea, "a", ["a", "b"]);
-    const built = rebuild(editorArea);
-    places.giveBack(editorArea, "b", () => "b");
-    expect(built.wysiwyg.scrollTop).toBe(0);
+    places.take(editorArea, host, store);
+    let built = rebuild(editorArea);
+    places.giveBack(editorArea, b, () => b);
+    expect([built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([0, 0]);
+    built = rebuild(editorArea);
+    places.giveBack(editorArea, a, () => a);
+    expect([built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([200, 300]);
   });
 
   it("forgets the place of a tab that was closed, and takes none when no editors show", () => {
     const { editorArea } = area();
+    const { store, host, b } = tabs("b");
     const places = new PlacesBehindRecent();
-    places.take(editorArea, "a", ["a"]);
-    places.take(editorArea, null, []);
+    places.take(editorArea, host, store);
+    store.closeTab(b);
+    places.take(editorArea, { shownTabId: null }, store);
     const built = rebuild(editorArea);
-    places.giveBack(editorArea, "a", () => "a");
+    places.giveBack(editorArea, b, () => b);
     places.giveBack(editorArea, null, () => null);
     expect([editorArea.scrollTop, built.wysiwyg.scrollTop]).toEqual([0, 0]);
   });

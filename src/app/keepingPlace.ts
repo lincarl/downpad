@@ -1,6 +1,9 @@
 // Keeps a document where it is scrolled while its editors are built again
 // (design, Git).
 
+import type { EditorHost } from "../editor/EditorHost";
+import type { Store } from "../state/store";
+
 /** Where the editor area and each pane shown in it are scrolled. */
 export type Place = ReadonlyMap<string, number>;
 
@@ -41,13 +44,16 @@ export class PlacesBehindRecent {
   private readonly places = new Map<string, Place>();
 
   /** The Recent view comes to the front: take the place of the tab whose
-   *  editors the area shows, which is `shownTab`, and forget the tabs that
-   *  are not among `openTabs` any more. */
-  take(editorArea: HTMLElement, shownTab: string | null, openTabs: readonly string[]): void {
+   *  editors the area shows, and forget the tabs that are closed by now. The
+   *  editors' tab comes from `host`, since the store's tab in front is ahead
+   *  of it while that tab's editors are built. */
+  take(editorArea: HTMLElement, host: Pick<EditorHost, "shownTabId">, store: Pick<Store, "get">): void {
+    const { tabs } = store.get();
     for (const tab of this.places.keys()) {
-      if (!openTabs.includes(tab)) this.places.delete(tab);
+      if (!tabs.some((open) => open.id === tab)) this.places.delete(tab);
     }
-    if (shownTab !== null) this.places.set(shownTab, capturePlace(editorArea));
+    const shown = host.shownTabId;
+    if (shown !== null) this.places.set(shown, capturePlace(editorArea));
   }
 
   /** The document of `tab` shows: put the place back that was taken for it,
