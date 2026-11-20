@@ -221,8 +221,14 @@ it.skipIf(process.platform === "win32")("refuses an automatic write when another
   expect(await readFile(moved, "utf8")).toBe("Original text\n");
 });
 
-it("refuses an automatic write when another program replaces the file while the check looks up the document's path", async () => {
+it.each([
+  { change: "replaces", missing: false },
+  { change: "creates", missing: true },
+])("refuses an automatic write when another program $change the file while the check looks up the document's path", async ({ missing }) => {
   const { directory, destination } = await fixture();
+  // A file that is gone when the check reads it must still be gone at the
+  // last look, so a file created meanwhile is not written over.
+  if (missing) await rm(destination);
   const replacement = join(directory, "replacement.md");
   await writeFile(replacement, "Theirs\n");
   const originalRealpath = filesystem.realpath;
