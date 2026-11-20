@@ -13,8 +13,8 @@ describe("the reason of a failure", () => {
 
   it.each([
     ["ENOENT: no such file or directory, open '/docs/gone/.a.md.1234.tmp'", "The file or folder does not exist."],
-    ["Error invoking remote method 'command': Error: EACCES: permission denied, open '/docs/a.md'", "Permission was denied."],
-    ["EPERM: operation not permitted, rename 'a' -> 'b'", "Permission was denied."],
+    ["Error invoking remote method 'command': Error: EACCES: permission denied, open '/docs/a.md'", "Permission was denied, or another program is using the file."],
+    ["EPERM: operation not permitted, rename 'a' -> 'b'", "Permission was denied, or another program is using the file."],
     ["EROFS: read-only file system, open '/docs/a.md'", "The disk is read-only."],
     ["ENOSPC: no space left on device, write", "The disk is full."],
     ["EBUSY: resource busy or locked, rename 'a' -> 'b'", "Another program is using the file."],

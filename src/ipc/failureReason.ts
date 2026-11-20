@@ -1,8 +1,9 @@
 /** Plain reasons for the file system errors a user can act on. */
 const FILE_SYSTEM_REASONS: Record<string, string> = {
   ENOENT: "The file or folder does not exist.",
-  EACCES: "Permission was denied.",
-  EPERM: "Permission was denied.",
+  // On Windows these also come from a file that another program holds open.
+  EACCES: "Permission was denied, or another program is using the file.",
+  EPERM: "Permission was denied, or another program is using the file.",
   EROFS: "The disk is read-only.",
   ENOSPC: "The disk is full.",
   EBUSY: "Another program is using the file.",

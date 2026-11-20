@@ -127,6 +127,22 @@ describe("Copy file", () => {
     expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith("/docs/other.md");
   });
 
+  it("still copies its file when a Copy file chosen later copied nothing", async () => {
+    const { store, files, desktopEvents, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
+    let saved!: (value: boolean) => void;
+    files.save.mockReturnValueOnce(new Promise((resolve) => { saved = resolve; }));
+    const first = copy();
+    await vi.waitFor(() => expect(files.save).toHaveBeenCalledOnce(), { interval: 1 });
+    // The later one only shows the notice for a change on disk.
+    desktopEvents.showPendingChange.mockReturnValueOnce(true);
+    await copy();
+    expect(clipboard.copy).not.toHaveBeenCalled();
+    saved(true);
+    await first;
+    expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith(filePath);
+    expect(store.get().banner).toBeNull();
+  });
+
   it.each([
     { document: "a document with a recorded file size whose saved text is unknown", doc: { modifiedMs: 100, savedMarkdown: null, isDirty: true } },
     { document: "a document whose file says it was written in 1970", doc: { modifiedMs: 0, isDirty: true } },

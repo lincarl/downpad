@@ -20,17 +20,18 @@ export interface CopyFileDependencies {
   isDisposed(): boolean;
 }
 
-/** Counts the runs of Copy file, so that the latest one chosen decides what
- *  the clipboard holds. */
+/** Counts the runs of Copy file, and tells the latest one that wrote the
+ *  clipboard, so that a run chosen earlier does not write over it. */
 let runs = 0;
+let copied = 0;
 
 /** Put the active document's file on the clipboard, as the file manager
  *  copies it, to paste into a folder or as an attachment. Unsaved changes are
  *  saved first, and an untitled document asks where to save it, so the file
  *  holds what the editor shows. Cancelling that Save As copies nothing. Copy
  *  file first waits for a save of the tab under way, and does nothing when a
- *  Save As failed or was cancelled meanwhile, or when Copy file was chosen
- *  again before it reached the clipboard. A recovered document
+ *  Save As failed or was cancelled meanwhile, or when a Copy file chosen
+ *  later has copied its file already. A recovered document
  *  that no save has recorded, whose file may have changed while Downpad was
  *  closed, asks the user to save it first, and a change on disk that is not
  *  resolved shows its notice instead. Failures show as an error notice. */
@@ -87,11 +88,14 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
       store.set({ banner: { kind: "error", message: "Could not save the file before copying it. Please try again." } });
       return;
     }
-    // A Copy file chosen since, as for another tab while this one's save
-    // ran, decides what the clipboard holds.
-    if (run !== runs) return;
     const path = store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
-    if (path) await copyFileToClipboard(path);
+    if (!path) return;
+    // A Copy file chosen since that copied its file already, as for another
+    // tab while this one's save ran, decides what the clipboard holds. One
+    // that copied nothing, such as one that showed a notice, does not.
+    if (run < copied) return;
+    copied = run;
+    await copyFileToClipboard(path);
   } catch (error) {
     console.error("Downpad: copying the file failed", error);
     if (!isDisposed()) store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });
