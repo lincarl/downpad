@@ -267,6 +267,20 @@ describe("upload", () => {
     expect(await gitStatus(notes(), { fetch: false })).toMatchObject({ changed: false, ahead: 0, behind: 0 });
   });
 
+  it("uploads a YAML or JSON file alone, with no file its text would link to as Markdown", async () => {
+    await mkdir(join(mine, "attachments"));
+    await writeFile(join(mine, "attachments", "a.png"), "png");
+    for (const name of ["config.yaml", "data.json"]) {
+      const file = join(mine, name);
+      // Read as Markdown, this text holds an image.
+      await writeFile(file, 'note: "![](attachments/a.png)"\n');
+      expect(await upload(file, [{ path: file, unsaved: false }])).toMatchObject({ kind: "done", uploaded: true });
+      expect(run(remote, "log", "-1", "--format=%s", "main")).toBe(`Add ${name}\n`);
+      expect(run(remote, "show", "--name-only", "--format=", "main")).toBe(`${name}\n`);
+    }
+    expect(run(mine, "status", "--porcelain")).toBe("?? attachments/\n");
+  });
+
   it("adds a new document", async () => {
     const fresh = join(mine, "docs", "new.md");
     await mkdir(join(mine, "docs"));

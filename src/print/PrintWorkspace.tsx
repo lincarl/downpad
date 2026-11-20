@@ -44,13 +44,17 @@ import {
   type PaperSize,
   type PrintVersion,
 } from "./paper";
+import { LANGUAGE_NAMES, type DocumentLanguage } from "../files/documentLanguage";
 
 /** What is being printed. `documentNode` is a detached, already-sanitized clone,
- *  or null when Downpad could not render the document, so only the Markdown
- *  version can print. */
+ *  or null when Downpad could not render the document, or the document is a
+ *  JSON or YAML file, so only its source can print. */
 export interface PrintJob {
   markdown: string;
   documentNode: Element | null;
+  /** The language of the source, which names the version that prints it.
+   *  Markdown without one. */
+  language?: DocumentLanguage;
   /** File name shown in the header bar and the running header, e.g. "notes.md". */
   docTitle: string;
 }
@@ -315,6 +319,7 @@ export class PrintWorkspace {
       busy: this.busy,
       electron: isElectron(),
       documentRendered: this.job?.documentNode != null,
+      language: this.job?.language ?? "markdown",
     };
     for (const listener of this.listeners) listener();
   }
@@ -694,6 +699,8 @@ interface PrintWorkspaceSnapshot {
   electron: boolean;
   /** False when the document could not be rendered; the Markdown version prints. */
   documentRendered: boolean;
+  /** The language of the document's source. */
+  language: DocumentLanguage;
 }
 
 interface PrintWorkspaceViewProps {
@@ -769,14 +776,16 @@ function PrintWorkspaceView({
               name="print-version"
               options={[
                 ["document", "Document"],
-                ["markdown", "Markdown"],
+                ["markdown", LANGUAGE_NAMES[view.language]],
               ]}
               value={view.documentRendered ? s.printVersion : "markdown"}
               disabled={view.documentRendered ? [] : ["document"]}
               onChange={(printVersion) => onUpdate({ printVersion })}
             />
             <p className="print-ws-hint m-0 mt-1.5 text-ink-soft">
-              {!view.documentRendered
+              {view.language !== "markdown"
+                ? `A ${LANGUAGE_NAMES[view.language]} file prints as its source, in a monospace face.`
+                : !view.documentRendered
                 ? "Downpad can't show this document in the Document view, so it prints the Markdown source."
                 : s.printVersion === "document"
                   ? "The formatted document, as the editor renders it."

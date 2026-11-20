@@ -1,22 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { classifyDrop, extOf, baseName } from "./dropHandler";
-
-describe("extOf", () => {
-  it("extracts lowercase extensions", () => {
-    expect(extOf("C:/notes/Draft.MD")).toBe("md");
-    expect(extOf("/home/me/pic.PNG")).toBe("png");
-  });
-  it("returns empty for no extension or dotfiles in a parent dir", () => {
-    expect(extOf("C:/notes/README")).toBe("");
-    expect(extOf("C:/my.dir/file")).toBe("");
-  });
-});
+import { classifyDrop, baseName } from "./dropHandler";
 
 describe("classifyDrop", () => {
-  it("classifies markdown files", () => {
-    expect(classifyDrop("C:/notes/draft.md")).toBe("md");
-    expect(classifyDrop("notes.markdown")).toBe("md");
-    expect(classifyDrop("readme.txt")).toBe("md");
+  it("classifies the files that open in a tab: Markdown, text, JSON and YAML", () => {
+    expect(classifyDrop("C:/notes/draft.md")).toBe("document");
+    expect(classifyDrop("notes.markdown")).toBe("document");
+    expect(classifyDrop("readme.txt")).toBe("document");
+    expect(classifyDrop("C:/app/package.JSON")).toBe("document");
+    expect(classifyDrop("/srv/compose.yaml")).toBe("document");
+    expect(classifyDrop("ci.yml")).toBe("document");
   });
   it("classifies image files", () => {
     expect(classifyDrop("C:/img/shot.png")).toBe("image");
@@ -27,6 +19,9 @@ describe("classifyDrop", () => {
     expect(classifyDrop("report.pdf")).toBe("other");
     expect(classifyDrop("data.csv")).toBe("other");
     expect(classifyDrop("archive")).toBe("other");
+    // A name that only ends like one of them is no such file.
+    expect(classifyDrop("notes.json.bak")).toBe("other");
+    expect(classifyDrop("C:/data.yaml/export")).toBe("other");
   });
 });
 

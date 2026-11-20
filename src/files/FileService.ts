@@ -10,14 +10,9 @@ import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from ".
 import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
+import { documentLanguage, fileFilters } from "./documentLanguage";
 import { blankDoc, hasUnsavedChanges, type DocumentState, type Tab } from "../state/types";
 import type { Store } from "../state/store";
-
-const MD_FILTERS = [
-  { name: "Markdown", extensions: ["md", "markdown", "mdown", "mkd"] },
-  { name: "Text", extensions: ["txt"] },
-  { name: "All files", extensions: ["*"] },
-];
 
 /**
  * Presents the active document in the editor. Implemented by AppRuntime, which
@@ -291,7 +286,7 @@ export class FileService {
   }
 
   async openViaDialog(): Promise<void> {
-    const selected = await openDialog({ multiple: false, filters: MD_FILTERS });
+    const selected = await openDialog({ multiple: false, filters: fileFilters() });
     if (typeof selected === "string") {
       await this.openPath(selected);
     }
@@ -429,7 +424,9 @@ export class FileService {
     let path = originalPath;
     const choosePath = saveAs || !path;
     if (choosePath) {
-      path = await saveDialog({ filters: MD_FILTERS, defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
+      // The dialog adds its first filter's extension to a name typed without
+      // one, so a JSON or YAML file keeps its kind.
+      path = await saveDialog({ filters: fileFilters(documentLanguage(originalPath)), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
       // Two tabs with one file would each take the other's reload, notice

@@ -4,7 +4,7 @@
 // them per document theme as `--md-src-*` variables.
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { HighlightStyle, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
+import { HighlightStyle, type LanguageSupport } from "@codemirror/language";
 import { getSearchQuery } from "@codemirror/search";
 import { RangeSetBuilder, type Extension } from "@codemirror/state";
 import {
@@ -296,7 +296,8 @@ const findHighlights = ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations },
 );
 
-/** Syntax colours, selection colours and find highlights for the Markdown view. */
-export function markdownSourceStyle(): Extension {
-  return [syntaxHighlighting(sourceHighlightStyle), selectionTheme, findHighlights];
+/** Selection colours and find highlights for the source view, whatever
+ *  language it shows. The language brings its own syntax colours. */
+export function sourceViewStyle(): Extension {
+  return [selectionTheme, findHighlights];
 }

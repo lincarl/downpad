@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "@/settings/defaults";
@@ -239,6 +239,43 @@ describe("App shell", () => {
     await user.click(copy);
     await user.click(screen.getByRole("menuitem", { name: "Copy as markdown" }));
     await waitFor(() => expect(runtime.copyDocumentMarkdown).toHaveBeenCalledOnce());
+  });
+
+  it("offers a JSON file its source view alone, a copy of its source and no formatted copy", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/data/settings.json" });
+    render(<App store={store} />);
+    const user = userEvent.setup();
+
+    // The view control names the source and offers no other view.
+    const views = within(screen.getByRole("radiogroup", { name: "Editor view" })).getAllByRole("radio");
+    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "JSON"]);
+    for (const view of views) expect(view.hasAttribute("disabled")).toBe(true);
+    expect(views[2].getAttribute("aria-checked")).toBe("true");
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as JSON", "Copy formatted text"]);
+    expect(screen.getByRole("menuitem", { name: "Copy formatted text" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("menuitem", { name: "Copy as JSON" }));
+    await waitFor(() => expect(runtime.copyDocumentMarkdown).toHaveBeenCalledOnce());
+    expect(runtime.copyDocumentFormatted).not.toHaveBeenCalled();
+  });
+
+  it("names the source of a YAML file, and keeps every view for a Markdown or text file", () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/data/compose.yml" });
+    const { unmount } = render(<App store={store} />);
+    expect(screen.getByRole("radio", { name: "YAML" }).hasAttribute("disabled")).toBe(true);
+    // Data has no words to count, so the status bar shows its size alone.
+    expect(document.querySelector(".status-right")?.textContent).not.toContain("word");
+    unmount();
+
+    store.patchDoc({ filePath: "/notes/readme.txt" });
+    render(<App store={store} />);
+    const views = within(screen.getByRole("radiogroup", { name: "Editor view" })).getAllByRole("radio");
+    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "Markdown"]);
+    for (const view of views) expect(view.hasAttribute("disabled")).toBe(false);
+    expect(document.querySelector(".status-right")?.textContent).toMatch(/^\d+ words? · /);
   });
 
   it("keeps Settings available on Recent while disabling document copy", async () => {

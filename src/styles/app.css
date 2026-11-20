@@ -209,8 +209,8 @@
   --doc-muted: color-mix(in srgb, var(--editor-surface-fg) 62%, var(--editor-surface-bg));
   --doc-accent: var(--accent);
 
-  /* Markdown view token colours: VS Code's Light+ Markdown and YAML colours,
-     with its light editor selection colours. */
+  /* Source view token colours: VS Code's Light+ Markdown, YAML and JSON
+     colours, with its light editor selection colours. */
   --md-src-heading: #800000;
   --md-src-strong: #000080;
   --md-src-emphasis: #800080;
@@ -227,6 +227,10 @@
   --md-src-attribute-value: #00f;
   --md-src-yaml-key: #800000;
   --md-src-yaml-value: #00f;
+  --md-src-property: #0451a5;
+  --md-src-number: #098658;
+  --md-src-keyword: #00f;
+  --md-src-anchor: #267f99;
   --md-src-selection: #add6ff;
   --md-src-selection-inactive: #e5ebf1;
   --md-src-selection-match: rgb(173 214 255 / 50%);
@@ -297,7 +301,7 @@
   --editor-surface-bg: #040404;
   --editor-surface-fg: #d4d4d4;
 
-  /* VS Code's Dark+ Markdown and YAML colours and dark selection colours. */
+  /* VS Code's Dark+ Markdown, YAML and JSON colours and dark selection colours. */
   --md-src-heading: #569cd6;
   --md-src-strong: #569cd6;
   --md-src-emphasis: #c586c0;
@@ -314,6 +318,10 @@
   --md-src-attribute-value: #ce9178;
   --md-src-yaml-key: #569cd6;
   --md-src-yaml-value: #ce9178;
+  --md-src-property: #9cdcfe;
+  --md-src-number: #b5cea8;
+  --md-src-keyword: #569cd6;
+  --md-src-anchor: #4ec9b0;
   --md-src-selection: #264f78;
   --md-src-selection-inactive: #3a3d41;
   --md-src-selection-match: rgb(173 214 255 / 15%);

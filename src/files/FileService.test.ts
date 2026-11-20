@@ -426,6 +426,27 @@ describe("saving document snapshots", () => {
     expect(await other).toBe(true);
   });
 
+  it("suggests the document's own kind first in the save dialog, whose extension the dialog adds to a bare name", async () => {
+    const { store, files } = setup();
+    const offered = (): string[] => (native.saveDialog.mock.lastCall![0] as { filters: Array<{ name: string }> }).filters.map((filter) => filter.name);
+
+    await files.saveAs();
+    expect(offered()).toEqual(["Markdown", "Text", "JSON", "YAML", "All files"]);
+
+    store.patchDoc({ filePath: "/docs/settings.json" });
+    await files.saveAs();
+    expect(offered()).toEqual(["JSON", "Markdown", "Text", "YAML", "All files"]);
+
+    store.patchDoc({ filePath: "/docs/compose.yml" });
+    await files.saveAs();
+    expect(offered()[0]).toBe("YAML");
+
+    // An untitled document is Markdown.
+    store.patchDoc({ filePath: null });
+    await files.save();
+    expect(offered()[0]).toBe("Markdown");
+  });
+
   it("counts a Save As that fails or is cancelled and a cancelled save of an untitled document, but not a plain save that fails", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;

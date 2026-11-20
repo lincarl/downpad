@@ -7,7 +7,8 @@
 // side in a split with a draggable divider between them. In the split both panes
 // are live editors over the same canonical string; an edit in one is mirrored
 // into the other (debounced) so the split stays in sync without ever letting the
-// two views diverge.
+// two views diverge. A JSON or YAML file shows as its source alone, whatever
+// the layout, since the document view would read and rewrite it as Markdown.
 //
 // To preserve undo history across tab switches and while the split opens/closes
 // (spec §5.19), a live editor instance is kept per `(tab, view)` and hidden/shown
@@ -27,6 +28,7 @@ import type { Store } from "../state/store";
 import { serializerStyleFromSettings } from "../state/types";
 import type { DocumentViewFailure, EditorLayout } from "../state/types";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
+import { documentLanguage, type DocumentLanguage } from "../files/documentLanguage";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { forgetImageAnswers } from "./wysiwyg/imageView";
 import type { DropTarget } from "./wysiwyg/fileDrop";
@@ -641,9 +643,11 @@ export class EditorHost implements FindController {
     }
   }
 
-  /** Whether the active document can run an explicit native spelling scan. */
+  /** Whether the active document can run an explicit native spelling scan.
+   *  A JSON or YAML file has no prose to check. */
   canCheckSpelling(): boolean {
-    return !this.disposed && !!this.active() && this.store.get().settings.spellCheckEnabled && managedSpellingAvailable();
+    const active = this.active();
+    return !this.disposed && !!active && (active.raw?.hasProse() ?? true) && this.store.get().settings.spellCheckEnabled && managedSpellingAvailable();
   }
 
   /** Recheck the active document and its visible split mirror, counting once. */
@@ -1090,6 +1094,10 @@ export class EditorHost implements FindController {
    *  Markdown source, or both side by side (§6.1). Rebuilds stale panes, hides
    *  every other tab's pane, and lays out the divider.
    *
+   *  A JSON or YAML file shows as its source alone, and no document pane is
+   *  built for it. A document pane the tab has from before a Save As made it
+   *  such a file is hidden.
+   *
    *  When the document pane cannot be built, the tab shows its Markdown alone
    *  and the failure is recorded on the tab for the notice bar. Later reveals
    *  leave the document pane unbuilt until `retry`, or a `rebuild` after the
@@ -1103,13 +1111,17 @@ export class EditorHost implements FindController {
     const id = this.store.get().activeTabId;
     if (!id) return;
     const rebuild = opts.rebuild ?? false;
+    const sourceOnly = this.languageOf(id) !== "markdown";
+    // A document view that failed before the document became a JSON or YAML
+    // file is not missed any more.
+    if (sourceOnly) this.store.setDocumentViewFailure(id, null);
     const failed = this.hasFailed(id);
     const replaced = this.replacedTabs.delete(id);
 
     // Building a pane never changes the tab's text, because the document pane
     // reports its exact source until the user edits it. In the Markdown-only
     // view the document pane isn't built at all, except to try a failed one again.
-    const attempt = failed ? rebuild || replaced || (opts.retry ?? false) : this.windowLayout !== "markdown";
+    const attempt = !sourceOnly && (failed ? rebuild || replaced || (opts.retry ?? false) : this.windowLayout !== "markdown");
     let wysiwygPane: Pane | null = null;
     let failure: DocumentViewFailure | null = null;
     if (attempt) {
@@ -1122,7 +1134,7 @@ export class EditorHost implements FindController {
       if (this.disposed || (!failure && !wysiwygPane)) return;
     }
     const fallback = attempt ? failure !== null : failed;
-    const layout = fallback ? "markdown" : this.windowLayout;
+    const layout = sourceOnly || fallback ? "markdown" : this.windowLayout;
     // A document pane built only to try it again stays hidden in the Markdown view.
     if (layout === "markdown") wysiwygPane = null;
     // Record the build's outcome once the panes are shown and focused. A notice
@@ -1134,6 +1146,9 @@ export class EditorHost implements FindController {
     const showRaw = layout !== "document";
     const rawPane = showRaw ? await this.ensurePane(id, "raw", rebuild) : null;
     if (this.disposed || this.store.get().activeTabId !== id || (showRaw && !rawPane)) return record();
+    // A Save As can have given the document a file of another kind since the
+    // pane was built.
+    rawPane?.raw?.setLanguage(this.languageOf(id));
 
     // The split's row alignment takes its space out of panes that leave the
     // split while they still show, so each keeps the content in view.
@@ -1335,7 +1350,7 @@ export class EditorHost implements FindController {
           el,
           markdown,
           { onChange, onFindChange },
-          { collapseBase64: this.store.get().settings.collapseBase64InRawView },
+          { collapseBase64: this.store.get().settings.collapseBase64InRawView, language: documentLanguage(tab.doc.filePath) },
         );
       } catch (err) {
         await this.destroyPane(pane).catch(() => {});
@@ -1576,6 +1591,11 @@ export class EditorHost implements FindController {
 
   private hasTab(tabId: string): boolean {
     return this.store.get().tabs.some((tab) => tab.id === tabId);
+  }
+
+  /** The language of a tab's document, which its file name tells. */
+  private languageOf(tabId: string): DocumentLanguage {
+    return documentLanguage(this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null);
   }
 
   /** Whether the tab's Document view failed to build and has not built since. */

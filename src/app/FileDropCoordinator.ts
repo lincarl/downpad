@@ -1,15 +1,19 @@
 // Files dropped from the desktop (spec §5.4), and images pasted into the
-// document view (§5.5). Each dropped Markdown file opens in a tab. Other
+// document view (§5.5). Each dropped Markdown file opens in a tab, as does a
+// text, JSON or YAML file, which the code below counts as one. Other
 // dropped files go into the document they were dropped on, an image as an
 // image and any other file as a link to its copy in the attachments folder. A
 // pasted image goes in the same way, at the caret where it was pasted.
 // EditorHost decides where in that document each file goes, and holds a file
 // back while its document is behind another tab. A file that cannot be read
-// or stored is left out, and the drop's other files still go in.
+// or stored is left out, and the drop's other files still go in. Only a
+// Markdown document takes files, since a file goes in as a Markdown image or
+// link.
 
 import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
 import { lookUpImages } from "../editor/wysiwyg/imageView";
 import type { FileService } from "../files/FileService";
+import { documentLanguage, LANGUAGE_NAMES } from "../files/documentLanguage";
 import { resolveImageSrc, storeBesideDocument, type ImageStoreContext } from "../images/imageStore";
 import { readImageBytes, writeAttachment } from "../ipc/commands";
 import type { ImageBytes } from "../ipc/contracts";
@@ -70,8 +74,8 @@ export class FileDropCoordinator {
    * awaits.
    */
   async handle(paths: string[], point: DropPoint): Promise<void> {
-    const markdown = paths.filter((path) => classifyDrop(path) === "md");
-    const others = paths.filter((path) => classifyDrop(path) !== "md");
+    const markdown = paths.filter((path) => classifyDrop(path) === "document");
+    const others = paths.filter((path) => classifyDrop(path) !== "document");
     let inserted: Promise<Failure[]> = Promise.resolve([]);
     try {
       const drop = others.length > 0 ? await this.aim(point) : null;
@@ -135,7 +139,11 @@ export class FileDropCoordinator {
     // file was dropped on. Reading the file comes after. With no document open,
     // create one first so the drop has somewhere to go, and from the Recent
     // view show the document. The files then go in at its caret.
-    const { activeTabId, view } = store.get();
+    const { activeTabId, view, doc } = store.get();
+    const language = documentLanguage(doc.filePath);
+    if (activeTabId && language !== "markdown") {
+      throw new Error(`A ${LANGUAGE_NAMES[language]} file takes no dropped files. Drop them on a Markdown document.`);
+    }
     let drop: FileDrop | null = null;
     if (!activeTabId) await files.newDocument();
     else if (view === "recent") await this.dependencies.showActiveDoc();

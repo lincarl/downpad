@@ -5,11 +5,12 @@ import {
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { DesktopEventPayloads, HistoryCommand, SaveChangesChoice } from "../src/ipc/bridge";
 import type { DefaultHandler, GitOpenFile } from "../src/ipc/contracts";
+import { DOCUMENT_EXTENSIONS, extensionOf } from "../src/files/documentLanguage";
 import { copyFileToClipboard } from "./fileClipboard";
 import { absolutePath, ensureAttachmentsDirectory, exists, fileStamp, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { historyItems, macApplicationMenu } from "./menus";
@@ -65,7 +66,7 @@ function firstFileArgument(argv: string[], cwd = process.cwd()): string | null {
   for (const argument of argv.slice(app.isPackaged ? 1 : 2)) {
     if (argument.startsWith("-")) continue;
     const candidate = resolve(cwd, argument);
-    if ([".md", ".markdown", ".mdown", ".mkd", ".txt"].includes(extname(candidate).toLowerCase())) return candidate;
+    if (DOCUMENT_EXTENSIONS.includes(extensionOf(candidate))) return candidate;
     try { if (statSync(candidate).isFile()) return candidate; } catch { /* Ignore non-file launcher arguments. */ }
   }
   return null;

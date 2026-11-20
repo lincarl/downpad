@@ -4,7 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { SearchQuery, search, setSearchQuery } from "@codemirror/search";
 import { highlightTree, tags as t } from "@lezer/highlight";
-import { markdownSource, markdownSourceStyle, sourceHighlightStyle } from "./markdownSource";
+import { markdownSource, sourceViewStyle, sourceHighlightStyle } from "./markdownSource";
 
 /** Look up the highlight classes at the first occurrence of a text in `doc`. */
 function tokens(doc: string): { get(text: string): string } {
@@ -110,7 +110,7 @@ describe("Markdown view find highlights", () => {
       parent: document.body,
       state: EditorState.create({
         doc: "one two one three one",
-        extensions: [search(), markdownSourceStyle()],
+        extensions: [search(), sourceViewStyle()],
       }),
     });
     view.dispatch({
@@ -128,7 +128,7 @@ describe("Markdown view find highlights", () => {
   it("marks a match that runs past the end of the rendered lines", () => {
     view = new EditorView({
       parent: document.body,
-      state: EditorState.create({ doc: "line\n".repeat(5000), extensions: [search(), markdownSourceStyle()] }),
+      state: EditorState.create({ doc: "line\n".repeat(5000), extensions: [search(), sourceViewStyle()] }),
     });
     // Each match spans a line break, so the last rendered line's match ends
     // in the first line that is not rendered.

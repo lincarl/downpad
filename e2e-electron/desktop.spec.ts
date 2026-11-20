@@ -125,6 +125,123 @@ async function clipboardText(): Promise<string> {
   return text.replace(/\r\n/g, "\n");
 }
 
+test("a JSON file opens as its source alone with JSON colours, and saves its exact text", async () => {
+  const file = path.join(directory, "settings.json");
+  const text = '{\n  "name": "Downpad",\n  "count": 12,\n  "on": true\n}\n';
+  await writeFile(file, text);
+  await launch(file);
+
+  // No document view reads the JSON as Markdown, and the view control names the source.
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toContainText('"name": "Downpad"');
+  await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
+  const views = page.getByRole("radiogroup", { name: "Editor view" }).getByRole("radio");
+  await expect(views).toHaveText(["Document", "Split", "JSON"]);
+  for (const view of await views.all()) await expect(view).toBeDisabled();
+
+  // A property name, a string, a number and a constant each have a colour of their own.
+  const colourOf = (token: string): Promise<string> =>
+    source.locator("span", { hasText: new RegExp(`^${token}$`) }).first().evaluate((span) => getComputedStyle(span).color);
+  const colours = [await colourOf('"name"'), await colourOf('"Downpad"'), await colourOf("12"), await colourOf("true")];
+  expect(new Set(colours).size).toBe(4);
+  const body = await source.evaluate((content) => getComputedStyle(content).color);
+  for (const colour of colours) expect(colour).not.toBe(body);
+
+  // An edit saves as typed, with nothing rewritten around it.
+  await source.getByText('"count"').click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("3,");
+  await page.keyboard.press("Control+S");
+  await expect.poll(() => readFile(file, "utf8")).toBe(text.replace("12,", "123,"));
+
+  // The copy menu names the source, and offers no formatted copy.
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Copy formatted text" })).toBeDisabled();
+  await page.getByRole("menuitem", { name: "Copy as JSON", exact: true }).click();
+  await expect.poll(clipboardText).toBe(text.replace("12,", "123,"));
+});
+
+test("a YAML file opens as its source with YAML colours beside a Markdown tab that keeps its views, and a Save As to Markdown gives the document its views", async () => {
+  const notes = path.join(directory, "notes.md");
+  const file = path.join(directory, "compose.yml");
+  // Read as Markdown, this would be a heading and a list.
+  const text = "# Services\nservices:\n  - name: web\n    port: 80\n";
+  await writeFile(notes, "# Notes\n\nBody.\n");
+  await writeFile(file, text);
+  await launch(notes);
+  await expect(page.locator(heading)).toHaveText("Notes");
+
+  await chooseOpen(file);
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toContainText("services:");
+  await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "YAML", exact: true })).toBeDisabled();
+  const colourOf = (token: string): Promise<string> =>
+    source.locator("span", { hasText: new RegExp(`^${token}$`) }).first().evaluate((span) => getComputedStyle(span).color);
+  const body = await source.evaluate((content) => getComputedStyle(content).color);
+  const colours = [await colourOf("# Services"), await colourOf("services"), await colourOf("web")];
+  expect(new Set([...colours, body]).size).toBe(4);
+  // The comment has the comment's colour, not a heading's weight.
+  expect(await source.locator("span", { hasText: /^# Services$/ }).first().evaluate((span) => getComputedStyle(span).fontWeight)).toBe("400");
+
+  // The Markdown tab still shows its document, with every view on offer.
+  await page.getByRole("tab", { name: /notes\.md/ }).click();
+  await expect(page.locator(heading)).toHaveText("Notes");
+  await expect(page.getByRole("radio", { name: "Split", exact: true })).toBeEnabled();
+
+  // Saved as Markdown, the YAML tab's text becomes a document with its views.
+  await page.getByRole("tab", { name: /compose\.yml/ }).click();
+  await expect(source).toContainText("services:");
+  const copy = path.join(directory, "compose.md");
+  await chooseSave(copy);
+  await page.keyboard.press("Control+Shift+S");
+  await expect(page.locator(".editor-pane-wysiwyg:visible h1")).toHaveText("Services");
+  await expect(page.getByRole("radio", { name: "Markdown", exact: true })).toBeEnabled();
+  expect(await readFile(copy, "utf8")).toBe(text);
+  expect(await readFile(file, "utf8")).toBe(text);
+});
+
+test("a JSON file opened into an empty untitled tab, and an untitled document saved as JSON, show as JSON source that takes typing", async () => {
+  const file = path.join(directory, "data.json");
+  await writeFile(file, '{"a": 1}\n');
+  await launch();
+  await page.keyboard.press("Control+N");
+  await expect(page.locator(".milkdown .ProseMirror")).toBeVisible();
+
+  // The file takes the empty untitled tab, whose document view gives way to the source.
+  await chooseOpen(file);
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toHaveText('{"a": 1}');
+  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "JSON", exact: true })).toBeDisabled();
+  await expect(source).toHaveAttribute("aria-label", "JSON source editor");
+  await source.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("[2]");
+  await page.keyboard.press("Control+S");
+  await expect.poll(() => readFile(file, "utf8")).toBe('{"a": 1}\n[2]');
+
+  // A new document typed in the document view and saved as .json shows as its source from then on.
+  await page.keyboard.press("Control+N");
+  const documentView = page.locator(".editor-pane-wysiwyg:visible .ProseMirror");
+  await documentView.click();
+  await page.keyboard.type("[1, 2]");
+  const saved = path.join(directory, "list.json");
+  await chooseSave(saved);
+  await page.keyboard.press("Control+S");
+  await expect(page.getByRole("radio", { name: "JSON", exact: true })).toBeDisabled();
+  await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
+  const text = await readFile(saved, "utf8");
+  await expect(source).toHaveText(text.trimEnd());
+  await source.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.type(" ");
+  await page.keyboard.press("Control+S");
+  await expect.poll(() => readFile(saved, "utf8")).toBe(` ${text}`);
+});
+
 test("the toolbar copies the whole document as Markdown or formatted text to the desktop clipboard", async () => {
   const file = path.join(directory, "copy-formats.md");
   const markdown = "# Copy formats\n\nA **bold** paragraph.\n\nLatest edit with [related](../related%20note.md#section)[^1].\n\n[^1]: A footnote.\n";

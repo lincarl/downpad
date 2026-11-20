@@ -13,6 +13,7 @@ Downpad is a desktop Markdown editor built with Electron, React, TypeScript, Mil
 - Find and replace, frontmatter editing, and configurable Markdown output.
 - Autosave, recovery snapshots, external file-change detection, and atomic saves.
 - Native file dialogs, Markdown file associations, and print/PDF support.
+- JSON and YAML files open as syntax-colored source, and Downpad installs as an app that can open them.
 
 ## Development
 
