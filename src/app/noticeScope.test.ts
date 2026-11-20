@@ -14,7 +14,7 @@ function setup() {
 }
 
 describe("the document a notice is about", () => {
-  it("keeps the notice while the same document stays in front, also when it is reloaded or shown again", () => {
+  it("keeps the notice while the same document stays in front, also when it is shown again", () => {
     const { store, first } = setup();
     store.patchDoc({ markdown: "# Edited\n", isDirty: true, modifiedMs: 200 });
     store.replaceActiveDoc({ ...blankDoc(), filePath: "/docs/notes.md", markdown: "# From disk\n", savedMarkdown: "# From disk\n" });

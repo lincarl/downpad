@@ -86,8 +86,10 @@ export class FileService {
 
   /**
    * Open a known path (drag-drop, the Recent view, launch args). If the file is
-   * already open, focuses that tab; if the active tab is an empty untitled
-   * buffer, replaces it; otherwise opens a new tab. Reload rereads an existing
+   * already open, focuses that tab, also when a Save As under way is giving
+   * the file to it, or when it got its tab while this open read it; if the
+   * active tab is an empty untitled buffer, replaces it; otherwise opens a
+   * new tab. Reload rereads an existing
    * tab from disk after confirming any unsaved changes. If that tab closes
    * during the read, or gets another file, as through Save As, the read is
    * discarded and the tab keeps its document. Text typed in the tab during
@@ -96,13 +98,13 @@ export class FileService {
   async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
     this.present.flush();
 
-    const existing = this.store.get().tabs.find((t) => samePath(t.doc.filePath, path));
-    if (existing && !options.reload) {
-      this.store.activateTab(existing.id);
+    const existing = options.reload ? this.store.get().tabs.find((t) => samePath(t.doc.filePath, path)) : this.tabOf(path);
+    const focus = async (tab: Tab): Promise<void> => {
+      this.store.activateTab(tab.id);
       await this.present.showActiveDoc(); // focus the open tab — keep its undo
       this.recordOpened(path);
-      return;
-    }
+    };
+    if (existing && !options.reload) return focus(existing);
 
     if (existing?.doc.isDirty) {
       const label = path.split(/[\\/]/).pop() ?? path;
@@ -124,6 +126,10 @@ export class FileService {
       throw error;
     }
     if (moved()) return;
+    // Another open of the file, or a Save As onto it, can have given it a tab
+    // while it was read, and one file never gets two tabs.
+    const opened = existing ? undefined : this.tabOf(path);
+    if (opened) return focus(opened);
     const doc = fileDocument(path, payload, existing?.doc.frontmatterCollapsed ?? false);
     if (existing) {
       this.store.activateTab(existing.id);
@@ -133,6 +139,16 @@ export class FileService {
 
     await this.present.reloadActiveDoc(); // fresh content → fresh editor
     this.recordOpened(path);
+  }
+
+  /** The tab that shows the file at `path`, or that a save under way is
+   *  giving it to, as a Save As that is writing it. */
+  private tabOf(path: string): Tab | undefined {
+    const { tabs } = this.store.get();
+    const shown = tabs.find((tab) => samePath(tab.doc.filePath, path));
+    if (shown) return shown;
+    const writer = [...this.pendingSaves].find((request) => request.write !== undefined && samePath(request.write.path, path));
+    return writer && tabs.find((tab) => tab.id === writer.tabId);
   }
 
   /** Reopen the files of an earlier session in new tabs, in their order,

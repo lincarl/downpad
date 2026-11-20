@@ -104,6 +104,7 @@ beforeEach(() => {
     flush: vi.fn(),
     discardEditors: vi.fn(async () => {}),
     keepingPlace: vi.fn(async (reload: () => Promise<void>) => reload()),
+    compareWithDisk: vi.fn(async () => {}),
     askConflict: vi.fn(async () => "later" as ConflictChoice),
   };
   sync = new GitSync(deps);
@@ -356,6 +357,7 @@ describe("GitSync checks", () => {
     expect(deps.keepingPlace).toHaveBeenCalledOnce();
     // The document in front built its editors again as it took the file.
     expect(deps.discardEditors).not.toHaveBeenCalled();
+    expect(deps.compareWithDisk).not.toHaveBeenCalled();
     expect(store.get().doc.markdown).toBe("# Theirs\n");
     expect(store.get().banner).toBeNull();
   });
@@ -373,6 +375,8 @@ describe("GitSync checks", () => {
     expect(deps.files.replaceFromDisk).toHaveBeenCalledOnce();
     expect(store.get().doc.markdown).toBe("# Notes\n\nTyped during the read\n");
     expect(deps.files.openPath).not.toHaveBeenCalled();
+    // The document differs from its file now, which the notice asks about at once.
+    expect(deps.compareWithDisk).toHaveBeenCalledOnce();
   });
 
   it("drops the editors of a tab that went behind another one while Get latest read its file", async () => {

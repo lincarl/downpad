@@ -8,7 +8,9 @@ import type { Store } from "../state/store";
  *  about what was in front when it showed. It goes at that moment and not
  *  once the new document's editor is built, so a notice that shows while the
  *  editor is built stays, and so does one over a document that is only shown
- *  or reloaded again. Returns the unsubscribe function. */
+ *  again. A document that is replaced in its tab, as by a reload, clears the
+ *  bar where it is replaced (`AppRuntime.presentActiveDoc`). Returns the
+ *  unsubscribe function. */
 export function clearNoticesOfOtherDocuments(store: Pick<Store, "get" | "set" | "select">): () => void {
   return store.select(
     (state) => (state.view === "recent" ? "recent" : `${state.activeTabId ?? ""}\n${state.doc.filePath ?? ""}`),

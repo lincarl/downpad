@@ -871,6 +871,51 @@ describe("reloading an open file", () => {
     expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
   });
 
+  it("gives a file one tab when it is opened twice before the first read ends", async () => {
+    const { store, presenter, files } = setup();
+    const tabs = store.get().tabs.length;
+    const first = deferred<FilePayload>();
+    const second = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const opening = files.openPath("/docs/other.md");
+    const again = files.openPath("/docs/other.md");
+    await eventually(() => expect(native.readFile).toHaveBeenCalledTimes(2));
+    first.resolve(onDisk);
+    await opening;
+    second.resolve(onDisk);
+    await again;
+    expect(store.get().tabs).toHaveLength(tabs + 1);
+    expect(store.get().doc.filePath).toBe("/docs/other.md");
+    // The second open only shows the tab the first one made.
+    expect(presenter.reloadActiveDoc).toHaveBeenCalledOnce();
+    expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
+  });
+
+  it("shows the tab whose Save As is writing a file when that file is opened", async () => {
+    const { store, presenter, files } = setup(true);
+    const writer = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    const tabs = store.get().tabs.length;
+    store.activateTab(writer);
+    const write = deferred<FileMeta>();
+    native.saveDialog.mockResolvedValueOnce("/docs/target.md");
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saveAs = files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    store.activateTab(store.get().tabs.find((tab) => tab.doc.filePath === "/docs/other.md")!.id);
+    await files.openPath("/docs/target.md");
+    expect(native.readFile).not.toHaveBeenCalled();
+    expect(store.get().activeTabId).toBe(writer);
+    expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
+    // Another file opens in a tab of its own meanwhile.
+    await files.openPath("/docs/third.md");
+    expect(store.get().tabs).toHaveLength(tabs + 1);
+    expect(store.get().doc.filePath).toBe("/docs/third.md");
+    write.resolve({ modifiedMs: 300 });
+    expect(await saveAs).toBe(true);
+    expect(store.get().tabs.filter((tab) => tab.doc.filePath === "/docs/target.md")).toHaveLength(1);
+  });
+
   it("says nothing about a reload's failed read once its tab shows another file", async () => {
     const { store, presenter, files } = setup();
     const owner = store.get().activeTabId!;

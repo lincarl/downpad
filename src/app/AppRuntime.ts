@@ -175,6 +175,7 @@ export class AppRuntime {
       flush: () => this.editorHost.flush(),
       discardEditors: (tabId) => this.editorHost.discardTab(tabId),
       keepingPlace: (reload) => keepingPlace(hosts.editorArea, () => this.store.get().activeTabId, reload),
+      compareWithDisk: () => this.desktopEvents.recheck(),
     });
 
     // Recent view (§5.8). Opening a file from it shows the editor first, then
@@ -610,6 +611,10 @@ export class AppRuntime {
     // Leaving Recent re-enters the editor; the editor host honours the persisted
     // `editorLayout` (document / split / Markdown only) when it presents.
     this.store.set({ view: "wysiwyg" });
+    // A document that was replaced, as by a reload, leaves the notices about
+    // what it was behind. They go before its editor is built, so a notice
+    // that shows meanwhile stays (`noticeScope`).
+    if (reload && this.store.get().banner) this.store.set({ banner: null });
     if (reload) await this.editorHost.reloadActiveDoc();
     else await this.editorHost.showActiveDoc();
     this.afterActiveDocChanged();
