@@ -446,8 +446,8 @@ export class GitSync {
   }
 
   /** Keep a copy of the user's changes, then replace the document with the
-   *  latest version. The notice then says where the latest version went,
-   *  since another tab can be in front by then, and that Upload's menu
+   *  latest version. The notice then says where the latest version is as it
+   *  shows, since another tab can be in front by then, and that Upload's menu
    *  offers the copy. */
   private async discardMine(path: string, generation: number): Promise<void> {
     this.deps.flush();
@@ -465,9 +465,9 @@ export class GitSync {
     if (!result) return;
     const name = fileName(path);
     const discarded = result.changedOpenFiles.some((file) => sameFilePath(file, path));
-    // Where the file that Git put back went: into the document in front, into
-    // its tab behind another one, or nowhere, as when the tab was closed.
-    let replaced: "shown" | "stored" | "gone" = "gone";
+    // Whether the document's tab took the file that Git put back. It did not
+    // when the tab was closed or got another file meanwhile.
+    let tookFile = false;
     if (discarded) {
       // The file is put back, so the tab gets it too. Text typed since the
       // last copy was kept gets a newer copy first, so no typing is lost.
@@ -476,7 +476,7 @@ export class GitSync {
         const outcome = await this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
         if (outcome === "stored") await this.deps.discardEditors(tab.id);
         if (outcome !== "changed") {
-          replaced = outcome;
+          tookFile = outcome !== "gone";
           break;
         }
         if (attempt === 5) {
@@ -506,12 +506,17 @@ export class GitSync {
     if (!this.isCurrent(generation)) return;
     this.conflict = null;
     this.discardedCopy = { document: path, copy };
-    const where = {
-      shown: `Your changes to “${name}” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.`,
-      stored: `Your changes to “${name}” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`,
-      gone: `Your changes to “${name}” are discarded. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`,
-    };
-    this.showNotice({ kind: "info", message: where[replaced], actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });
+    // Where the latest version is now, since the user can have shown another
+    // tab, or the document's tab again, while the other documents reloaded.
+    const { tabs, activeTabId, view } = this.deps.store.get();
+    const holder = tookFile ? tabs.find((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path)) : undefined;
+    let message = `Your changes to “${name}” are discarded. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`;
+    if (holder && activeTabId === holder.id && view !== "recent") {
+      message = `Your changes to “${name}” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.`;
+    } else if (holder) {
+      message = `Your changes to “${name}” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`;
+    }
+    this.showNotice({ kind: "info", message, actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });
     await this.refresh(generation);
   }
 

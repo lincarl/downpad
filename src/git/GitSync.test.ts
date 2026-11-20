@@ -557,7 +557,39 @@ describe("GitSync conflicts", () => {
   });
 
   it.each([
-    { put: "put the file back", changed: [PATH], message: "Your changes to “notes.md” are discarded, and Upload's menu offers a copy of them for 30 days. Get latest failed. No connection." },
+    {
+      when: "another tab comes to the front",
+      inFront: "other",
+      message: "Your changes to “notes.md” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “notes.md” is in front.",
+    },
+    {
+      when: "its tab comes back to the front",
+      inFront: "notes",
+      message: "Your changes to “notes.md” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.",
+    },
+  ])("says where the latest version is when $when while other documents reload", async ({ inFront, message }) => {
+    const notes = store.get().activeTabId!;
+    const other = store.addTab({ ...blankDoc(), filePath: "/work/other.md" });
+    const third = store.addTab({ ...blankDoc(), filePath: "/work/third.md" });
+    store.activateTab(notes);
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockImplementation(async () => {
+      // The document goes behind another tab before Git is done, when it is to come back.
+      if (inFront === "notes") store.activateTab(third);
+      return done([PATH, "/work/other.md"]);
+    });
+    deps.files.refreshFromDisk.mockImplementation(async () => {
+      store.activateTab(inFront === "notes" ? notes : other);
+      return true;
+    });
+    await sync.check({ force: true });
+    expect(deps.files.refreshFromDisk).toHaveBeenCalledOnce();
+    expect(store.get().banner?.message).toBe(message);
+  });
+
+  it.each([
+    { put: "put the file back", changed: [PATH], message:"Your changes to “notes.md” are discarded, and Upload's menu offers a copy of them for 30 days. Get latest failed. No connection." },
     { put: "changed nothing", changed: [], message: "Get latest failed. No connection." },
   ])("says whether the changes are discarded when Git $put but could not get the latest version", async ({ changed, message }) => {
     deps.askConflict.mockResolvedValue("discard");
