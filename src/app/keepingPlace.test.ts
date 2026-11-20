@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { keepingPlace } from "./keepingPlace";
+import { capturePlace, keepingPlace, restorePlace } from "./keepingPlace";
 
 /** An editor area with a document pane and a Markdown pane, scrolled. */
 function area(): { editorArea: HTMLElement; wysiwyg: HTMLElement; raw: HTMLElement } {
@@ -28,6 +28,28 @@ function rebuild(editorArea: HTMLElement): { wysiwyg: HTMLElement; raw: HTMLElem
   });
   return { wysiwyg: panes[0], raw: panes[1] };
 }
+
+describe("a document's place", () => {
+  it("is taken from the area and its panes, and put back onto the panes shown later", () => {
+    const { editorArea } = area();
+    const place = capturePlace(editorArea);
+    expect([...place]).toEqual([["area", 10], ["wysiwyg", 200], ["raw", 300]]);
+    const built = rebuild(editorArea);
+    restorePlace(editorArea, place);
+    expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([10, 200, 300]);
+  });
+
+  it("leaves a pane alone that the place has nothing for, and a hidden pane", () => {
+    const { editorArea, raw } = area();
+    raw.hidden = true;
+    const place = capturePlace(editorArea);
+    expect([...place.keys()]).toEqual(["area", "wysiwyg"]);
+    raw.hidden = false;
+    raw.scrollTop = 40;
+    restorePlace(editorArea, place);
+    expect(raw.scrollTop).toBe(40);
+  });
+});
 
 describe("keeping a reloaded document in place", () => {
   it("scrolls the new editors to where the old ones were", async () => {

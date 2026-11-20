@@ -107,7 +107,11 @@ test("gets someone else's change to a document without asking", async () => {
 });
 
 test("gets someone else's change while the Recent view shows, and stays on that view", async () => {
-  await pushTheirs(NOTES.replace("First paragraph.", "Their first paragraph."));
+  // A document long enough to scroll, which both clones have.
+  const long = `${NOTES}\n${Array.from({ length: 150 }, (_, index) => `Paragraph ${index + 1}.\n`).join("\n")}`;
+  await pushTheirs(long);
+  git(mine, "pull", "--quiet", "--ff-only");
+  await pushTheirs(long.replace("First paragraph.", "Their first paragraph."));
   // Hold Get latest until released. Electron keeps the handlers of
   // ipcMain.handle in `_invokeHandlers`, and a handler on the window's own
   // `ipc` runs in their place.
@@ -124,6 +128,14 @@ test("gets someone else's change while the Recent view shows, and stays on that 
     });
   }));
   await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "getLatestHeld") === true)).toBe(true);
+  // Both panes of the Split layout scroll on their own.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const paneTops = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")].map((pane) => pane.scrollTop));
+  await expect.poll(async () => (await paneTops()).length).toBe(2);
+  await page.evaluate(() => {
+    for (const pane of document.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")) pane.scrollTop = 600;
+  });
+  expect(await paneTops()).toEqual([600, 600]);
   await page.getByRole("button", { name: "Recent", exact: true }).click();
   const recent = page.locator(".recent-name").first();
   await expect(recent).toBeVisible();
@@ -134,6 +146,8 @@ test("gets someone else's change while the Recent view shows, and stays on that 
   await page.getByRole("tab", { name: /notes\.md/ }).click();
   await expect(shownDocument()).toContainText("Their first paragraph.");
   await expect(status()).toHaveText("Up to date");
+  // Its new editors are where the old ones were scrolled.
+  await expect.poll(paneTops).toEqual([600, 600]);
 });
 
 test("uploads typed changes", async () => {

@@ -52,7 +52,6 @@ let deps: GitSyncDependencies & {
 };
 let sync: GitSync;
 
-/** Open `PATH` in the store's only tab, with `markdown` saved or, with `unsaved`, edited. */
 /** Run `act` while the next replacement of a tab's document reads its file. */
 function duringRead(act: () => void): void {
   type Replace = FileService["replaceFromDisk"];
@@ -64,6 +63,7 @@ function duringRead(act: () => void): void {
   });
 }
 
+/** Open `PATH` in the store's only tab, with `markdown` saved or, with `unsaved`, edited. */
 function openDocument({ unsaved = false } = {}): void {
   const doc = {
     ...store.get().doc,

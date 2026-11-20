@@ -29,7 +29,7 @@ import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
 import { copyActiveFile } from "./copyFile";
-import { keepingPlace } from "./keepingPlace";
+import { capturePlace, keepingPlace, restorePlace, type Place } from "./keepingPlace";
 import { clearNoticesOfOtherDocuments } from "./noticeScope";
 import { SaveFailureNotice } from "./saveFailureNotice";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
@@ -66,6 +66,12 @@ export class AppRuntime {
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
   private closingTabs = false;
+  /** The element the document's editors show in, which the Recent view hides. */
+  private readonly editorArea: HTMLElement;
+  /** While the Recent view is in front: the tab behind it, where its document
+   *  was scrolled when the view came, and whether that document was replaced
+   *  meanwhile, so that its new editors get that place when it shows again. */
+  private behindRecent: { tabId: string | null; place: Place; replaced: boolean } | null = null;
   /** The error notice of a save the user asked for that failed. */
   private readonly saveFailure: SaveFailureNotice;
   private disposed = false;
@@ -77,6 +83,7 @@ export class AppRuntime {
     hosts: AppRuntimeHosts,
     private readonly callbacks: AppRuntimeCallbacks,
   ) {
+    this.editorArea = hosts.editorArea;
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
@@ -88,7 +95,7 @@ export class AppRuntime {
     const presenter: EditorPresenter = {
       flush: (options) => this.editorHost.flush(options),
       showActiveDoc: () => this.showActiveDoc(),
-      reloadActiveDoc: (options) => this.reloadActiveDoc(options?.background ? hosts.editorArea : null),
+      reloadActiveDoc: (options) => this.reloadActiveDoc(options?.background ?? false),
     };
     this.saveFailure = new SaveFailureNotice(store);
     this.cleanups.push(clearNoticesOfOtherDocuments(store));
@@ -586,6 +593,8 @@ export class AppRuntime {
   private async showRecent(): Promise<void> {
     if (this.store.get().view === "recent") return;
     if (this.findBar.isOpen()) this.findBar.close();
+    // The hidden editor area measures as not scrolled, so its place is taken now.
+    this.behindRecent = { tabId: this.store.get().activeTabId, place: capturePlace(this.editorArea), replaced: false };
     this.store.set({ view: "recent" });
     await this.recentView.refresh();
   }
@@ -598,20 +607,32 @@ export class AppRuntime {
 
   /** Show the active tab's document after its content was replaced (open / new /
    *  reload), forcing a fresh editor (undo resets). With `background`, the
-   *  editor area, the user did not ask for the replacement at that moment,
-   *  as for Git's: the new editors are scrolled to where the old ones were,
-   *  and the Recent view stays in front if it shows. */
-  private async reloadActiveDoc(background: HTMLElement | null = null): Promise<void> {
+   *  user did not ask for the replacement at that moment, as for Git's: the
+   *  new editors are scrolled to where the old ones were, and the Recent
+   *  view stays in front if it shows. Behind the Recent view nothing can be
+   *  scrolled, so the document gets its place when it shows again. */
+  private async reloadActiveDoc(background = false): Promise<void> {
     if (!background) return this.presentActiveDoc(true);
-    await keepingPlace(background, () => this.store.get().activeTabId, () => this.presentActiveDoc(true, true));
+    const inFront = (): string | null => this.store.get().activeTabId;
+    if (this.store.get().view !== "recent") {
+      await keepingPlace(this.editorArea, inFront, () => this.presentActiveDoc(true, true));
+      return;
+    }
+    await this.presentActiveDoc(true, true);
+    if (this.behindRecent && this.behindRecent.tabId === inFront()) this.behindRecent.replaced = true;
   }
 
   private async presentActiveDoc(reload: boolean, background = false): Promise<void> {
     // The find bar is bound to the editor we're about to (re)show; close it so it
     // doesn't linger with stale search state from the previous document.
     if (this.findBar.isOpen()) this.findBar.close();
+    let back: AppRuntime["behindRecent"] = null;
     if (!background || this.store.get().view !== "recent") {
-      if (this.store.get().view === "recent") this.recentView.onLeave();
+      if (this.store.get().view === "recent") {
+        this.recentView.onLeave();
+        back = this.behindRecent;
+        this.behindRecent = null;
+      }
       // Leaving Recent re-enters the editor; the editor host honours the persisted
       // `editorLayout` (document / split / Markdown only) when it presents.
       this.store.set({ view: "wysiwyg" });
@@ -622,6 +643,10 @@ export class AppRuntime {
     if (reload && this.store.get().banner) this.store.set({ banner: null });
     if (reload) await this.editorHost.reloadActiveDoc();
     else await this.editorHost.showActiveDoc();
+    // The document that was replaced behind the Recent view shows again, in
+    // new editors, which get the place the old ones had.
+    const tab = this.store.get().activeTabId;
+    if (back?.replaced && !reload && back.tabId === tab) restorePlace(this.editorArea, back.place, () => this.store.get().activeTabId === tab);
     this.afterActiveDocChanged();
   }
 
