@@ -127,25 +127,7 @@ describe("Copy file", () => {
     expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith("/docs/other.md");
   });
 
-  it("copies its file when a Copy file chosen later failed at the clipboard", async () => {
-    const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
-    let saved!: (value: boolean) => void;
-    files.save.mockReturnValueOnce(new Promise((resolve) => { saved = resolve; }));
-    const first = copy();
-    await vi.waitFor(() => expect(files.save).toHaveBeenCalledOnce(), { interval: 1 });
-    // The other tab's file is gone by the time it is copied.
-    store.addTab({ ...blankDoc(), filePath: "/docs/other.md", savedMarkdown: "", modifiedMs: 100, fileSize: 0 });
-    clipboard.copy.mockRejectedValueOnce(new Error("Only a file can be copied."));
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    await copy();
-    logged.mockRestore();
-    expect(store.get().banner).toEqual({ kind: "error", message: "Could not copy the file. Please try again." });
-    saved(true);
-    await first;
-    expect(clipboard.copy).toHaveBeenLastCalledWith(filePath);
-  });
-
-  it("waits for a Copy file chosen later that is at the clipboard, and then leaves the clipboard to it", async () => {
+  it("leaves the clipboard to a Copy file chosen later that is still at it, or that failed there and said so", async () => {
     const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
     let saved!: (value: boolean) => void;
     files.save.mockReturnValueOnce(new Promise((resolve) => { saved = resolve; }));
@@ -153,16 +135,20 @@ describe("Copy file", () => {
     await vi.waitFor(() => expect(files.save).toHaveBeenCalledOnce(), { interval: 1 });
     // The later copy's look at its file is slow, as on a network drive.
     store.addTab({ ...blankDoc(), filePath: "/docs/other.md", savedMarkdown: "", modifiedMs: 100, fileSize: 0 });
-    let written!: () => void;
-    clipboard.copy.mockReturnValueOnce(new Promise((resolve) => { written = resolve; }));
+    let fail!: (error: Error) => void;
+    clipboard.copy.mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }));
     const later = copy();
     await vi.waitFor(() => expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith("/docs/other.md"), { interval: 1 });
+    // The earlier one does not wait for it, and copies nothing.
     saved(true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await first;
     expect(clipboard.copy).toHaveBeenCalledOnce();
-    written();
-    await Promise.all([first, later]);
-    expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith("/docs/other.md");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    fail(new Error("Only a file can be copied."));
+    await later;
+    logged.mockRestore();
+    expect(clipboard.copy).toHaveBeenCalledOnce();
+    expect(store.get().banner).toEqual({ kind: "error", message: "Could not copy the file. Please try again." });
   });
 
   it("still copies its file when a Copy file chosen later copied nothing", async () => {

@@ -5,7 +5,20 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const native = vi.hoisted(() => ({
   write: vi.fn(async (_items: unknown[]) => {}),
+  /** Called before the look at a file, to hold it back. */
+  beforeStat: vi.fn(async (_path: string) => {}),
 }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    stat: async (path: string) => {
+      await native.beforeStat(path);
+      return actual.stat(path);
+    },
+  };
+});
 
 vi.mock("electron", () => ({
   clipboard: { write: native.write },
@@ -51,6 +64,21 @@ describe("copyFileToClipboard", () => {
     expect(native.write).toHaveBeenCalledOnce();
     const [items] = native.write.mock.calls[0];
     expect(items).toEqual([{ entries: fileClipboardEntries(join(folder, "note.md"), process.platform) }]);
+  });
+
+  it("lets a copy asked for later go first and win when the look at an earlier file is slow", async () => {
+    native.write.mockClear();
+    await writeFile(join(folder, "later.md"), "# Later\n");
+    let release!: () => void;
+    native.beforeStat.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const slow = copyFileToClipboard(join(folder, "note.md"));
+    // The later copy does not wait for the earlier one.
+    await copyFileToClipboard(join(folder, "later.md"));
+    const later = [{ entries: fileClipboardEntries(join(folder, "later.md"), process.platform) }];
+    expect(native.write.mock.calls.map(([items]) => items)).toEqual([later]);
+    release();
+    await slow;
+    expect(native.write.mock.calls.map(([items]) => items)).toEqual([later]);
   });
 
   it("refuses a folder or a missing file and leaves the clipboard alone", async () => {

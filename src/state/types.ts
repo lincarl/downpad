@@ -42,7 +42,8 @@ export interface DocumentState {
   isDirty: boolean;
   /** The text last read from or written to the file, or the starting text of a
    *  document with no file ("" for a new one). Null when unknown, as for a
-   *  recovered snapshot or while a save is being written. */
+   *  recovered snapshot or while a save of the document's own file is being
+   *  written. A Save As to another file leaves it as it is. */
   savedMarkdown: string | null;
   /** Detected on open, re-applied on write (spec §5.18). */
   eol: Eol;
@@ -98,7 +99,7 @@ export function hasUnsavedChanges(tab: Tab): boolean {
 /** Whether `doc` is a recovered snapshot whose file Downpad has not read or
  *  written since. The file may have changed while Downpad was closed, which
  *  nothing tells, so there is no version of it to compare with or to save
- *  over. A document whose save is being written lacks its saved text too, but
+ *  over. A document whose own file is being written lacks its saved text too, but
  *  has the size of the version it recorded, and so has a file dated 1970,
  *  whose time is 0. */
 export function isRecoveredDocument(doc: DocumentState): boolean {

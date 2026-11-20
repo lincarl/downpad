@@ -20,13 +20,10 @@ export interface CopyFileDependencies {
   isDisposed(): boolean;
 }
 
-/** Counts the runs of Copy file, and tells the latest one that put its file
- *  on the clipboard, so that a run chosen earlier does not write over it. */
+/** Counts the runs of Copy file, and tells the latest one that got as far as
+ *  the clipboard, so that a run chosen earlier does not write over it. */
 let runs = 0;
-let copied = 0;
-/** The clipboard step of the runs, one at a time, so that a run looks at
- *  `copied` only after the runs that reached the clipboard before it ended. */
-let clipboardTurn: Promise<void> = Promise.resolve();
+let reached = 0;
 
 /** Put the active document's file on the clipboard, as the file manager
  *  copies it, to paste into a folder or as an attachment. Unsaved changes are
@@ -34,7 +31,7 @@ let clipboardTurn: Promise<void> = Promise.resolve();
  *  holds what the editor shows. Cancelling that Save As copies nothing. Copy
  *  file first waits for a save of the tab under way, and does nothing when a
  *  Save As failed or was cancelled meanwhile, or when a Copy file chosen
- *  later has copied its file already. A recovered document
+ *  later got as far as the clipboard already. A recovered document
  *  that no save has recorded, whose file may have changed while Downpad was
  *  closed, asks the user to save it first, and a change on disk that is not
  *  resolved shows its notice instead. Failures show as an error notice. */
@@ -60,7 +57,7 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   // After a Save As that failed or was cancelled meanwhile, the document
   // still has the file the user was leaving, which Copy file's own save must
   // not write then. A failed save shows its own error notice
-  // (`AppRuntime.run`), and a cancelled one was the user's choice.
+  // (`AppRuntime.saveByUser`), and a cancelled one was the user's choice.
   if (files.failedMoves(tabId) !== failedMoves) return;
   if (!stillInFront() || !canCopyFile()) return;
   // A change on disk whose bar was dismissed or replaced is still unresolved,
@@ -93,17 +90,15 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
     }
     const path = store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
     if (!path) return;
-    // A Copy file chosen since that copied its file already, as for another
-    // tab while this one's save ran, decides what the clipboard holds. One
-    // that copied nothing, such as one that showed a notice or failed, does
-    // not.
-    const copy = clipboardTurn.then(async () => {
-      if (run < copied) return;
-      await copyFileToClipboard(path);
-      copied = run;
-    });
-    clipboardTurn = copy.then(() => {}, () => {});
-    await copy;
+    // A Copy file chosen since that got as far as the clipboard, as for
+    // another tab while this one's save ran, decides what the clipboard
+    // holds, and says so itself if its copy fails. One that stopped before,
+    // such as one that showed a notice, does not. Nothing waits here, so a
+    // copy that hangs, as on a network drive that went away, holds no later
+    // one up.
+    if (run < reached) return;
+    reached = run;
+    await copyFileToClipboard(path);
   } catch (error) {
     console.error("Downpad: copying the file failed", error);
     if (!isDisposed()) store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });

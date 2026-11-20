@@ -21,11 +21,17 @@ export function fileClipboardEntries(path: string, platform: NodeJS.Platform): R
   return entries;
 }
 
+/** Counts the copies asked for, so that the one asked for last wins. */
+let asked = 0;
+
 /** Put the file at `path` on the clipboard as copied files. Throws when
- *  `path` is not a file. The renderer asks for one copy at a time
- *  (`src/app/copyFile.ts`), so a slow look at one file cannot put it on the
- *  clipboard after a file copied later. */
+ *  `path` is not a file. A copy asked for while this one still looks at its
+ *  file takes its place, so a slow look, as on a network drive that went
+ *  away, neither holds a later copy up nor puts its file on the clipboard
+ *  after that one's. */
 export async function copyFileToClipboard(path: string): Promise<void> {
+  const mine = ++asked;
   if (!(await stat(path)).isFile()) throw new Error("Only a file can be copied.");
+  if (mine !== asked) return;
   await clipboard.write([new ClipboardItem(fileClipboardEntries(path, process.platform))]);
 }
