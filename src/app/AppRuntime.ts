@@ -27,8 +27,8 @@ import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
+import { copyActiveFile } from "./copyFile";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
-import { copyFileToClipboard } from "../ipc/commands";
 import { GitSync } from "../git/GitSync";
 
 export interface AppRuntimeHosts {
@@ -633,56 +633,16 @@ export class AppRuntime {
     return isElectron() && this.documentShows() && this.store.get().banner?.kind !== "file-changed";
   }
 
-  /** Put the active document's file on the clipboard, as the file manager
-   *  copies it, to paste into a folder or as an attachment. Unsaved changes
-   *  are saved first, and an untitled document asks where to save it, so the
-   *  file holds what the editor shows. Cancelling that Save As copies
-   *  nothing. */
-  private async copyFile(): Promise<void> {
-    // The menu can stay open while the file changes on disk.
-    if (!this.canCopyFile()) return;
-    const tabId = this.store.get().activeTabId;
-    if (!tabId) return;
-    // A comparison of the document with its file that runs, as after a
-    // switch of tabs, tells first whether the file changed.
-    await this.desktopEvents.settled(tabId);
-    if (this.disposed || this.store.get().activeTabId !== tabId || !this.canCopyFile()) return;
-    // A change on disk whose bar was dismissed or replaced is still
-    // unresolved, so the bar asks again and nothing is saved or copied.
-    if (this.desktopEvents.showPendingChange()) return;
-    this.editorHost.flush();
-    const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-    if (!doc) return;
-    try {
-      // A recovered document has no file time of its own until it is saved,
-      // and its file may have changed while Downpad was closed, which nothing
-      // tells, so only a save the user asks for writes it.
-      if (doc.filePath && doc.modifiedMs === 0) {
-        this.store.set({ banner: { kind: "info", message: "Save this recovered document first. Its file may have changed while Downpad was closed." } });
-        return;
-      }
-      // A change on disk found while the save waited in the queue stops it
-      // too, and so does one the app has not seen yet.
-      const saved = !doc.isDirty && doc.filePath
-        ? true
-        : await this.files.save({ automatic: (id) => this.desktopEvents.holdSaveAfterChecks(id) });
-      if (!saved) {
-        // An untitled document whose Save As the user cancelled copies
-        // nothing, and a document no longer in front tells its change when it
-        // comes back.
-        if (!doc.filePath || this.disposed || this.store.get().activeTabId !== tabId) return;
-        // The file changed on disk, which the bar then asks about.
-        await this.desktopEvents.recheck();
-        if (this.disposed || this.store.get().activeTabId !== tabId || this.desktopEvents.showPendingChange()) return;
-        this.store.set({ banner: { kind: "error", message: "Could not save the file before copying it. Please try again." } });
-        return;
-      }
-      const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
-      if (path) await copyFileToClipboard(path);
-    } catch (error) {
-      console.error("Downpad: copying the file failed", error);
-      if (!this.disposed) this.store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });
-    }
+  /** Run Copy file on the active document (see copyActiveFile). */
+  private copyFile(): Promise<void> {
+    return copyActiveFile({
+      store: this.store,
+      files: this.files,
+      editorHost: this.editorHost,
+      desktopEvents: this.desktopEvents,
+      canCopyFile: () => this.canCopyFile(),
+      isDisposed: () => this.disposed,
+    });
   }
 
   /** Flush the source pane too, so every layout copies the latest document. */

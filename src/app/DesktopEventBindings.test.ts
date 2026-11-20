@@ -606,7 +606,7 @@ describe("a file that changed on disk", () => {
     await eventually(() => expect(store.get().banner?.kind).toBe("file-changed"));
   });
 
-  it("keeps callers waiting through the read that an out-of-date read starts", async () => {
+  it("keeps a recheck and callers waiting through the read that an out-of-date read starts", async () => {
     await changeOnDisk("# Theirs\n", 200);
     const tabId = store.get().activeTabId!;
     let finishFirst!: (payload: FilePayload) => void;
@@ -614,7 +614,8 @@ describe("a file that changed on disk", () => {
     disk.readFile
       .mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)))
       .mockImplementationOnce(() => new Promise((resolve) => (finishSecond = resolve)));
-    events.fileChanged!({ path: filePath, modifiedMs: 300 });
+    let rechecked = false;
+    void bindings.recheck().then(() => (rechecked = true));
     await eventually(() => expect(disk.readFile).toHaveBeenCalledTimes(2));
     bindings.handleBannerAction("keep");
     let settled = false;
@@ -624,9 +625,10 @@ describe("a file that changed on disk", () => {
     await eventually(() => expect(disk.readFile).toHaveBeenCalledTimes(3));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(settled).toBe(false);
+    expect(rechecked).toBe(false);
     expect(bindings.holdSave(tabId)).toBe(true);
     finishSecond(later);
-    await eventually(() => expect(settled).toBe(true));
+    await eventually(() => expect(settled && rechecked).toBe(true));
     expect(store.get().banner?.kind).toBe("file-changed");
   });
 

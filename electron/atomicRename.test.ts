@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import filesystem, { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { existsSync, renameSync } from "node:fs";
+import filesystem, { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
 import { FILE_CHANGED_ON_DISK } from "../src/ipc/contracts";
@@ -136,6 +137,45 @@ it("refuses an automatic write when another program replaces the file while the 
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
 });
 
+it("refuses an automatic write when another program replaces the file while the check compares its text", async () => {
+  const { directory, destination } = await fixture();
+  const replacement = join(directory, "replacement.md");
+  await writeFile(replacement, "Theirs\n");
+  const decode = TextDecoder.prototype.decode;
+  vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: Parameters<TextDecoder["decode"]>) {
+    // Another program replaces the file while the check decodes the text it read.
+    if (existsSync(replacement)) renameSync(replacement, destination);
+    return decode.apply(this, args);
+  });
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
+it("checks the real file that an automatic write replaces, also when its symbolic link changes meanwhile", async () => {
+  const { directory, destination } = await fixture();
+  const link = join(directory, "link.md");
+  await symlink(destination, link);
+  const decoy = join(directory, "decoy.md");
+  await writeFile(decoy, "Original text\n");
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      // While Downpad writes its replacement, another program edits the file
+      // and points the link at a file that holds the text the write expects.
+      await writeFile(destination, "Theirs\n");
+      await rm(link);
+      await symlink(decoy, link);
+    }
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(link, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+  expect(await readFile(decoy, "utf8")).toBe("Original text\n");
+});
+
 it("retries a Windows sharing lock that the check before the rename meets", async () => {
   const { destination } = await fixture();
   simulatePlatform("win32");
@@ -204,6 +244,11 @@ it("writes a document only while the file holds the text it expects, and stamps 
   await utimes(destination, new Date(), new Date(written.modifiedMs));
   await expect(writeMarkdown(destination, "Mine again\n", "lf", "Mine\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
   expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+
+  // Another program writes bytes that are not valid UTF-8.
+  await writeFile(destination, Buffer.from([0x23, 0x20, 0xff, 0x0a]));
+  await expect(writeMarkdown(destination, "Mine again\n", "lf", "Theirs\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination)).toEqual(Buffer.from([0x23, 0x20, 0xff, 0x0a]));
 });
 
 it.each(["linux", "darwin"] as const)("fails immediately on %s and keeps the old file and removes staging", async (platform) => {

@@ -109,10 +109,14 @@ export class DesktopEventBindings {
   }
 
   /** Read the active document's file now and compare it, as when a save that
-   *  only writes over the version the document recorded was refused. */
-  recheck(): Promise<void> {
-    if (!this.started || this.disposed) return Promise.resolve();
-    return this.compareWithDisk(true);
+   *  only writes over the version the document recorded was refused. Resolves
+   *  once no comparison of the tab runs, also one that a read found out of
+   *  date started again. */
+  async recheck(): Promise<void> {
+    if (!this.started || this.disposed) return;
+    const tabId = this.dependencies.store.get().activeTabId;
+    await this.compareWithDisk(true);
+    if (tabId) await this.settled(tabId);
   }
 
   /** As holdSave, once the comparisons of the tab that run have ended. */
