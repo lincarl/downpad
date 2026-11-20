@@ -207,6 +207,7 @@ export class AppRuntime {
       flush: () => this.editorHost.flush(),
       discardEditors: (tabId) => this.editorHost.discardTab(tabId),
       compareWithDisk: () => this.desktopEvents.recheck(),
+      fileGone: (tabId) => this.desktopEvents.fileGone(tabId),
     });
 
     // Recent view (§5.8). Opening a file from it shows the editor first, then

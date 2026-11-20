@@ -125,6 +125,16 @@ export class DesktopEventBindings {
     if (tabId) await this.settled(tabId);
   }
 
+  /** The file of the tab's document is gone and stays gone, as when Git got
+   *  a latest version without it. An unresolved change on disk of the
+   *  document is about a file that is no longer there, so it is forgotten and
+   *  its bar goes, and a comparison under way that read the file before it
+   *  went counts as out of date, so it shows no bar either. */
+  fileGone(tabId: string): void {
+    this.revisions.set(tabId, (this.revisions.get(tabId) ?? 0) + 1);
+    this.resolve(tabId);
+  }
+
   /** As holdSave, once the comparisons of the tab that run have ended. */
   async holdSaveAfterChecks(tabId: string): Promise<boolean> {
     await this.settled(tabId);

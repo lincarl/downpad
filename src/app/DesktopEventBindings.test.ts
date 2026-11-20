@@ -615,6 +615,32 @@ describe("a file that changed on disk", () => {
     expect(bindings.holdSave(second)).toBe(false);
   });
 
+  it("forgets the change of a file that is gone, and shows no bar for a read of it that was under way", async () => {
+    const tabId = store.get().activeTabId!;
+    await changeOnDisk("# Theirs\n");
+    expect(store.get().banner?.kind).toBe("file-changed");
+    expect(bindings.holdSave(tabId)).toBe(true);
+
+    bindings.fileGone(tabId);
+    expect(store.get().banner).toBeNull();
+    expect(bindings.showPendingChange()).toBe(false);
+
+    // A read that started while the file was still there ends after the file
+    // went. The file is then read again, which fails now, and no bar shows.
+    let finishRead!: (payload: FilePayload) => void;
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    const reads = disk.readFile.mock.calls.length;
+    events.fileChanged!({ path: filePath, modifiedMs: 300 });
+    await eventually(() => expect(disk.readFile.mock.calls.length).toBe(reads + 1));
+    bindings.fileGone(tabId);
+    disk.readFile.mockRejectedValue(new Error("ENOENT: no such file or directory"));
+    finishRead({ content: "# Put back\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 11 });
+    await bindings.settled(tabId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get().banner).toBeNull();
+    expect(bindings.showPendingChange()).toBe(false);
+  });
+
   it("does not use a read that a save made out of date", async () => {
     let finishRead!: (payload: FilePayload) => void;
     disk.fileStamp.mockResolvedValueOnce(stamp(200));

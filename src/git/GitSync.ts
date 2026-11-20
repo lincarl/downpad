@@ -51,6 +51,8 @@ export interface GitSyncDependencies {
   /** Read the file of the document in front now, and show the notice for a
    *  change on disk if it differs from the document. */
   compareWithDisk(): Promise<void>;
+  /** Forget the change on disk of a tab's document, whose file is gone. */
+  fileGone(tabId: string): void;
   /** Ask what to do about overlapping changes. Tests replace the dialog. */
   askConflict?: (options: ConflictDialogOptions) => Promise<ConflictChoice>;
 }
@@ -497,6 +499,10 @@ export class GitSync {
       const holder = this.deps.store.get().tabs.find((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
       if (holder) {
         this.deps.store.patchDocById(tab.id, { isDirty: true, savedMarkdown: null });
+        // Git put the committed file back before it took the file away, and
+        // the watcher can have told of that version. Its bar would ask about
+        // a file that is gone, and would keep the notice below from showing.
+        this.deps.fileGone(tab.id);
         // Text typed while Git worked gets a newer copy, which Open copy
         // then opens. When it cannot be kept, Open copy opens the copy kept
         // before, and the tab, which still has all the text, as unsaved,
