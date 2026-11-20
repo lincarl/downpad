@@ -473,13 +473,31 @@ export class GitSync {
     // tab keeps it. A look that fails counts as a file, whose read then says
     // what is wrong.
     const missing = discarded && !(await pathExists(path).catch(() => true));
+    // The text of the copy that `copy` names.
+    let kept = tab.doc.markdown;
     if (missing) {
       // No file holds the tab's text any more, so the document counts as
       // unsaved with no saved text known. Closing it then asks first, and
       // autosave, which only writes over a version it knows, does not put the
       // file back by itself. Only a save the user asks for does.
-      const holds = this.deps.store.get().tabs.some((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
-      if (holds) this.deps.store.patchDocById(tab.id, { isDirty: true, savedMarkdown: null });
+      this.deps.flush();
+      const holder = this.deps.store.get().tabs.find((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
+      if (holder) {
+        this.deps.store.patchDocById(tab.id, { isDirty: true, savedMarkdown: null });
+        // Text typed while Git worked gets a newer copy, which Open copy
+        // then opens.
+        if (holder.doc.markdown !== kept) {
+          try {
+            copy = await keepDiscardedCopy(path, holder.doc.markdown);
+          } catch (error) {
+            if (this.isCurrent(generation)) {
+              this.showError(`“${name}” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now, but Downpad could not keep a copy of the latest of them. ${errorText(error)}`);
+            }
+            return;
+          }
+          kept = holder.doc.markdown;
+        }
+      }
     }
     // Whether the document's tab took the file that Git put back. It did not
     // when the tab was closed or got another file meanwhile.
@@ -487,7 +505,6 @@ export class GitSync {
     if (discarded && !missing) {
       // The file is put back, so the tab gets it too. Text typed since the
       // last copy was kept gets a newer copy first, so no typing is lost.
-      let kept = tab.doc.markdown;
       for (let attempt = 1; ; attempt++) {
         const outcome = await this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
         if (outcome === "stored") await this.deps.discardEditors(tab.id);

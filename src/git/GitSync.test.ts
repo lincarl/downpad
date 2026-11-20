@@ -625,6 +625,27 @@ describe("GitSync conflicts", () => {
     await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md"));
   });
 
+  it("keeps a newer copy of text typed while Git worked when the latest version has no such file", async () => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/first.md");
+    git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/latest.md");
+    // The editor reports the typing only when its text is collected.
+    let typed = false;
+    vi.mocked(deps.flush).mockImplementation(() => {
+      if (typed) store.patchDoc({ markdown: "# Notes\n\nMine, and more\n" });
+    });
+    git.discard.mockImplementation(async () => {
+      typed = true;
+      return done([PATH]);
+    });
+    git.pathExists.mockResolvedValue(false);
+    await sync.check({ force: true });
+    expect(git.keepCopy).toHaveBeenLastCalledWith(PATH, "# Notes\n\nMine, and more\n");
+    expect(store.get().doc).toMatchObject({ markdown: "# Notes\n\nMine, and more\n", isDirty: true, savedMarkdown: null });
+    sync.handleBannerAction(GIT_OPEN_COPY);
+    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/latest.md"));
+  });
+
   it.each([
     { put: "put the file back", changed: [PATH], message: "Your changes to “notes.md” are discarded, and Upload's menu offers a copy of them for 30 days. Get latest failed. No connection." },
     { put: "changed nothing", changed: [], message: "Get latest failed. No connection." },
