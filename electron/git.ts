@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { GFM, parser as markdownParser } from "@lezer/markdown";
@@ -795,6 +795,9 @@ export async function listDiscardedCopies(userData: string, path: string): Promi
   return copies.filter((copy) => copy !== null).sort((a, b) => b.keptMs - a.keptMs);
 }
 
+/** The name of a folder that keeps one document's copies (`discardedCopyFolder`). */
+const COPY_FOLDER_NAME = /^[0-9a-f]{16}$/;
+
 /** The folder that keeps one document's copies, named by a hash of its path
  *  so that documents with the same file name keep theirs apart. Windows
  *  paths are compared without case, as Downpad's tabs compare them. */
@@ -804,22 +807,27 @@ function discardedCopyFolder(userData: string, path: string): string {
 }
 
 /** Delete the copies older than DISCARDED_COPY_DAYS in `root`, and in the
- *  documents' folders in it, which go once they are empty. */
+ *  documents' folders in it, which go once they are empty. Only regular files
+ *  go, and only Downpad's own folders are entered, never through a symbolic
+ *  link, so a folder that is not Downpad's, such as one an opened copy got for
+ *  its attachments, keeps its files. */
 async function deleteExpiredCopies(root: string): Promise<void> {
   const cutoff = copyCutoff();
-  const deleteIn = async (folder: string, depth: number): Promise<void> => {
+  const deleteOldFiles = async (folder: string): Promise<void> => {
     for (const name of await readdir(folder).catch(() => [])) {
       const entry = join(folder, name);
-      const info = await stat(entry).catch(() => null);
+      const info = await lstat(entry).catch(() => null);
       if (info?.isFile() && info.mtimeMs < cutoff) await unlink(entry).catch(() => {});
-      else if (info?.isDirectory() && depth === 0) {
-        await deleteIn(entry, 1);
-        // Fails, as it should, while the folder still holds a copy.
-        await rmdir(entry).catch(() => {});
-      }
     }
   };
-  await deleteIn(root, 0);
+  await deleteOldFiles(root);
+  for (const name of await readdir(root).catch(() => [])) {
+    const folder = join(root, name);
+    if (!COPY_FOLDER_NAME.test(name) || !(await lstat(folder).catch(() => null))?.isDirectory()) continue;
+    await deleteOldFiles(folder);
+    // Fails, as it should, while the folder still holds anything.
+    await rmdir(folder).catch(() => {});
+  }
 }
 
 /** Copies kept before this time are older than DISCARDED_COPY_DAYS. */

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import * as childProcess from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -455,5 +455,27 @@ describe("discarded copies", () => {
     const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
     expect(await readdir(join(data, "discarded-changes"))).toEqual([copy.split(/[\\/]/).at(-2)]);
     expect((await listDiscardedCopies(data, notes())).map((entry) => entry.path)).toEqual([copy]);
+  });
+
+  it.skipIf(process.platform === "win32")("deletes old files only in its own folders, and follows no symbolic link", async () => {
+    const data = join(root, "profile");
+    const kept = join(data, "discarded-changes");
+    // A folder that is not Downpad's, as one an opened copy got for its
+    // attachments, and a folder outside with a link to it under a copy
+    // folder's name, and a link to a file outside.
+    const outside = join(root, "outside");
+    await mkdir(join(kept, "attachments"), { recursive: true });
+    await mkdir(outside);
+    const files = [join(kept, "attachments", "image.png"), join(outside, "keep.md")];
+    for (const file of files) {
+      await writeFile(file, "Keep\n");
+      await utimes(file, past, past);
+    }
+    await symlink(outside, join(kept, "0123456789abcdef"));
+    await symlink(join(outside, "keep.md"), join(kept, "linked.md"));
+    await keepDiscardedCopy(data, notes(), "Mine\n");
+    for (const file of files) expect(await readFile(file, "utf8")).toBe("Keep\n");
+    expect((await lstat(join(kept, "0123456789abcdef"))).isSymbolicLink()).toBe(true);
+    expect((await lstat(join(kept, "linked.md"))).isSymbolicLink()).toBe(true);
   });
 });
