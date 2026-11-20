@@ -61,6 +61,7 @@ import { documentSize, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
 import { documentLanguage, LANGUAGE_NAMES } from "@/files/documentLanguage";
 import { showContextMenu } from "@/shell/contextMenu";
+import { MENU_ICONS } from "@/shell/menuIcons";
 import { EditorIsland } from "@/editor/EditorIsland";
 import { middleTruncate } from "@/editor/wysiwyg/linkView";
 import { gitStatusText } from "@/git/gitText";
@@ -778,7 +779,10 @@ function DocumentTab({
     const folder = path ? dirName(path) : "";
     showContextMenu(event.clientX, event.clientY, [
       { label: "Open folder", icon: FolderOpen, disabled: !path, run: () => { if (path) runtime?.revealPath(path); } },
-      { label: "Copy file path", icon: FileCopyIcon, disabled: !path, separatorBefore: true, run: () => { if (path) runtime?.copyText(path); } },
+      // Copy file brings the tab to the front first, also from the Recent
+      // view, and then saves and copies as from the document's menu.
+      { label: "Copy file", icon: MENU_ICONS.copyFile, disabled: !runtime?.canCopyTabFile(tab.id), separatorBefore: true, run: () => runtime?.copyTabFile(tab.id) },
+      { label: "Copy file path", icon: FileCopyIcon, disabled: !path, run: () => { if (path) runtime?.copyText(path); } },
       { label: "Copy folder path", icon: FolderCopyIcon, disabled: !folder, run: () => { if (folder) runtime?.copyText(folder); } },
       { label: "Close all tabs", icon: X, separatorBefore: true, run: () => runtime?.closeEveryTab() },
     ], "Tab");

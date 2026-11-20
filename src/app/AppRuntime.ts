@@ -317,6 +317,21 @@ export class AppRuntime {
     this.run(() => this.closeAllTabs(), CLOSE_FAILED);
   }
 
+  /** Whether Copy file in the menu of the tab `tabId` can run. It needs the
+   *  desktop app, and for the active tab it waits while the bar for a change
+   *  on disk asks for Reload or Keep mine, as in the document's menu. Another
+   *  tab comes to the front first (`copyTabFile`), and Copy file then checks
+   *  it as the document that shows. */
+  canCopyTabFile(tabId: string): boolean {
+    const { activeTabId, banner } = this.store.get();
+    return isElectron() && (tabId !== activeTabId || banner?.kind !== "file-changed");
+  }
+
+  /** Copy file in the tab's menu (see copyFileOfTab). */
+  copyTabFile(tabId: string): void {
+    this.run(() => this.copyFileOfTab(tabId));
+  }
+
   handleBannerAction(id: string): void {
     if (id === RETRY_DOCUMENT_VIEW) void this.retryDocumentView();
     else if (!this.git.handleBannerAction(id)) this.desktopEvents.handleBannerAction(id);
@@ -719,6 +734,19 @@ export class AppRuntime {
         if (tab) this.saveFailure.show(tabId, tabLabel(tab), error);
       },
     });
+  }
+
+  /** Run Copy file on the document of the tab `tabId`. Copy file acts on the
+   *  document in front: its save, its Save As dialog, the comparison with the
+   *  file that it waits for and its notices are all about that document, and
+   *  a tab in back is not watched. So the tab comes to the front first, as a
+   *  click on it brings it, also from the Recent view, and is compared with
+   *  its file then. A tab chosen while another switch runs does not come to
+   *  the front (`activateTab`), and nothing is copied then, since Copy file
+   *  checks that the document shows. */
+  private async copyFileOfTab(tabId: string): Promise<void> {
+    await this.activateTab(tabId);
+    if (this.store.get().activeTabId === tabId) await this.copyFile();
   }
 
   /** Flush the source pane too, so every layout copies the latest document.
