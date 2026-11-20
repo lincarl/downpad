@@ -141,6 +141,8 @@ export class DesktopEventBindings {
   /** Whether the file of the tab's document is known to be gone: `fileGone`
    *  said so, and since then no save, Save As or reload recorded a file for
    *  the document, and no read of the file that was begun after it found one.
+   *  The file is read on each report of the watcher and each time the tab
+   *  comes to the front.
    *  Copy file is not offered meanwhile, since it has no file to copy and its
    *  save writes only over a version the document recorded. */
   isFileGone(tabId: string): boolean {
@@ -301,14 +303,16 @@ export class DesktopEventBindings {
    *  and size tell first whether it can have changed. A tab with an
    *  unresolved change is always read, since another program can replace the
    *  file again, or put its earlier text back, with the time and size of the
-   *  change. A recovered document has no file version of its own to compare
-   *  with, so only a report of the watcher, a refused save or an unresolved
-   *  change makes it read. */
+   *  change, and so is one whose file was gone, since only a read tells that
+   *  the file is back, also with the time and size the document recorded. A
+   *  recovered document has no file version of its own to compare with, so
+   *  only a report of the watcher, a refused save, an unresolved change or a
+   *  file that was gone makes it read. */
   private async compareWithDisk(read: boolean): Promise<void> {
     const { files, store } = this.dependencies;
     const { activeTabId: tabId, doc } = store.get();
     if (!tabId || !doc.filePath) return;
-    const reads = read || this.pendingChanges.has(tabId);
+    const reads = read || this.pendingChanges.has(tabId) || this.gone.has(tabId);
     if (!reads && isRecoveredDocument(doc)) return;
     const path = doc.filePath;
     // A save, reload or Keep mine that records another file version

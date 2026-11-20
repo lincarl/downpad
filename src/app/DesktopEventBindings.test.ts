@@ -686,6 +686,23 @@ describe("a file that changed on disk", () => {
     expect(bindings.isFileGone(tabId)).toBe(false);
   });
 
+  it.each([
+    { document: "a document that recorded its file", recorded: { fileSize: 0 } },
+    { document: "a recovered document", recorded: { fileSize: undefined } },
+  ])("reads the file of $document that was gone when its tab comes to the front", async ({ recorded }) => {
+    const tabId = store.get().activeTabId!;
+    store.patchDoc({ ...recorded, isDirty: true, savedMarkdown: null });
+    bindings.fileGone(tabId);
+    // The file is put back with the time and size the document recorded,
+    // as from a backup, while another tab is in front, so no report of the
+    // watcher tells of it.
+    const reads = disk.readFile.mock.calls.length;
+    bindings.activeDocChanged();
+    await bindings.settled(tabId);
+    expect(disk.readFile.mock.calls.length).toBe(reads + 1);
+    expect(bindings.isFileGone(tabId)).toBe(false);
+  });
+
   it("does not use a read that a save made out of date", async () => {
     let finishRead!: (payload: FilePayload) => void;
     disk.fileStamp.mockResolvedValueOnce(stamp(200));
