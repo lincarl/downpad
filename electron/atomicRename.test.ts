@@ -66,7 +66,10 @@ it("reports the time of the file it wrote, not of one another program put there 
   expect(modifiedMs).toBeLessThan(Math.floor((await stat(destination)).mtimeMs) - 30_000);
 });
 
-it("reads a file's text and time from one open file, so a replacement right after the read does not mix them", async () => {
+// On the Windows CI runner, the rename of the replacement over note.md failed with
+// EPERM while the read still held note.md open, so the two tests that replace the
+// file during the read are skipped on Windows.
+it.skipIf(nativePlatform === "win32")("reads a file's text and time from one open file, so a replacement right after the read does not mix them", async () => {
   const { directory, destination } = await fixture();
   await utimes(destination, new Date(), new Date(Date.now() - 60_000));
   const original = Math.floor((await stat(destination)).mtimeMs);
@@ -114,7 +117,7 @@ it("checks again before a Windows rename retry, and leaves a file changed meanwh
   expect(await readdir(directory)).toEqual(["note.md"]);
 });
 
-it("refuses an automatic write when another program replaces the file while the check reads it", async () => {
+it.skipIf(nativePlatform === "win32")("refuses an automatic write when another program replaces the file while the check reads it", async () => {
   const { directory, destination } = await fixture();
   const originalOpen = filesystem.open;
   vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
