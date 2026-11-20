@@ -486,10 +486,18 @@ describe("GitSync checks", () => {
 
     await sync.openDiscardedCopy(PATH, copy.path);
     expect(deps.files.openPath).toHaveBeenCalledExactlyOnceWith(copy.path);
+    // A listing that fails, as on a drive that does not answer, says nothing
+    // about the copies, so the menu keeps them and the copy opens.
+    git.listCopies.mockRejectedValue(new Error("EIO: i/o error"));
+    await sync.check();
+    expect(store.get().git?.discardedCopies).toEqual([copy]);
+    await sync.openDiscardedCopy(PATH, copy.path);
+    expect(deps.files.openPath).toHaveBeenCalledTimes(2);
+    expect(store.get().banner).toBeNull();
     // A copy can go meanwhile, as after 30 days, also while the menu shows it.
     git.listCopies.mockResolvedValue([]);
     await sync.openDiscardedCopy(PATH, copy.path);
-    expect(deps.files.openPath).toHaveBeenCalledTimes(1);
+    expect(deps.files.openPath).toHaveBeenCalledTimes(2);
     expect(store.get().banner?.message).toBe("This copy of your discarded changes is gone. Downpad keeps such copies for 30 days.");
     expect(store.get().git?.discardedCopies).toEqual([]);
   });

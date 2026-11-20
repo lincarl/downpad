@@ -218,7 +218,9 @@ export interface GitFileStatus {
 /** A copy of a document's changes that Discard my changes kept (Git, spec). */
 export interface DiscardedCopy {
   path: string;
-  /** When the copy was kept, as the file's modification time. */
+  /** When the copy was kept, from the time in the copy's name, which a save
+   *  of the opened copy leaves alone, or the file's modification time for a
+   *  name without one. */
   keptMs: number;
 }
 

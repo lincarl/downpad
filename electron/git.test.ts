@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink,
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, listDiscardedCopies, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
+import { discardChanges, discardedCopyName, getLatest, gitStatus, keepDiscardedCopy, keptTimeOf, linkedPaths, listDiscardedCopies, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -438,6 +438,48 @@ describe("discarded copies", () => {
     expect(await readFile(second, "utf8")).toBe("Second\n");
     expect((await listDiscardedCopies(data, notes())).map((copy) => copy.path)).toEqual([second, first]);
     expect(await listDiscardedCopies(data, join(mine, "other.md"))).toEqual([]);
+  });
+
+  it("reads the time a copy was kept from its name, which a later save of the copy keeps", async () => {
+    for (const date of [new Date(2026, 0, 2, 3, 4, 5, 6), new Date(2026, 11, 31, 23, 59, 59, 999)]) {
+      expect(keptTimeOf(discardedCopyName(date, notes()))).toBe(date.getTime());
+    }
+    expect(discardedCopyName(new Date(2026, 10, 20, 9, 5, 41, 7), notes())).toBe("2026-11-20 09.05.41.007 notes.md");
+    expect(keptTimeOf("notes.md")).toBeNull();
+    expect(keptTimeOf("2026-13-01 09.05.41.007 notes.md")).toBeNull();
+
+    const data = join(root, "profile");
+    const older = await keepDiscardedCopy(data, notes(), "Older\n");
+    const keptAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = await keepDiscardedCopy(data, notes(), "Newer\n");
+    // The user opened the older copy and saved it, which dates the file now.
+    await utimes(older, new Date(), new Date(Date.now() + 60_000));
+    const [first, second] = await listDiscardedCopies(data, notes());
+    expect([first.path, second.path]).toEqual([newer, older]);
+    expect(second.keptMs).toBeLessThanOrEqual(keptAt);
+    expect(second.keptMs).toBeGreaterThan(keptAt - 5_000);
+    // A copy without a time in its name is dated by its file.
+    const unnamed = join(older, "..", "notes.md");
+    await writeFile(unnamed, "Unnamed\n");
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    await utimes(unnamed, yesterday, yesterday);
+    expect((await listDiscardedCopies(data, notes())).at(-1)).toEqual({ path: unnamed, keptMs: yesterday.getTime() });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fails to list the copies when their folder cannot be read, which is not the same as having none", async () => {
+    const data = join(root, "profile");
+    const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
+    const folder = join(copy, "..");
+    try {
+      // The names can be read, but not the files' details.
+      await chmod(folder, 0o600);
+      await expect(listDiscardedCopies(data, notes())).rejects.toThrow("EACCES");
+      await chmod(folder, 0o000);
+      await expect(listDiscardedCopies(data, notes())).rejects.toThrow("EACCES");
+    } finally {
+      await chmod(folder, 0o700);
+    }
   });
 
   it("lists no copy older than 30 days, and deletes such copies when it keeps the next one", async () => {

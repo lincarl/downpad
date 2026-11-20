@@ -764,35 +764,68 @@ export async function keepDiscardedCopy(userData: string, path: string, content:
   await deleteExpiredCopies(join(userData, "discarded-changes"));
   const folder = discardedCopyFolder(userData, path);
   await mkdir(folder, { recursive: true });
-  // The local time, which the tab of an opened copy shows as Upload's menu
-  // does, with milliseconds so that copies kept one after another keep apart.
-  const now = new Date();
-  const digits = (value: number, length = 2): string => String(value).padStart(length, "0");
-  const stamp = `${now.getFullYear()}-${digits(now.getMonth() + 1)}-${digits(now.getDate())} `
-    + `${digits(now.getHours())}.${digits(now.getMinutes())}.${digits(now.getSeconds())}.${digits(now.getMilliseconds(), 3)}`;
-  const copy = join(folder, `${stamp} ${basename(path)}`);
+  const copy = join(folder, discardedCopyName(new Date(), path));
   await writeAtomic(copy, content);
   return copy;
 }
 
+/** The time a copy was kept at the start of its name, in local time, as in
+ *  "2026-11-20 09.05.41.007 notes.md". */
+const KEPT_TIME = /^(\d{4})-(\d{2})-(\d{2}) (\d{2})\.(\d{2})\.(\d{2})\.(\d{3}) /;
+
+/** The name of a copy of the document at `path` that is kept at `kept`. It
+ *  starts with the local time, which the tab of an opened copy shows as
+ *  Upload's menu does, with milliseconds so that copies kept one after
+ *  another keep apart. `keptTimeOf` reads the time back. */
+export function discardedCopyName(kept: Date, path: string): string {
+  const digits = (value: number, length = 2): string => String(value).padStart(length, "0");
+  return `${kept.getFullYear()}-${digits(kept.getMonth() + 1)}-${digits(kept.getDate())} `
+    + `${digits(kept.getHours())}.${digits(kept.getMinutes())}.${digits(kept.getSeconds())}.${digits(kept.getMilliseconds(), 3)} ${basename(path)}`;
+}
+
+/** When the copy named `name` was kept, from the time that
+ *  `discardedCopyName` puts in the name, or null for a name without one. */
+export function keptTimeOf(name: string): number | null {
+  const match = KEPT_TIME.exec(name);
+  if (!match) return null;
+  const [year, month, day, hours, minutes, seconds, milliseconds] = match.slice(1).map(Number);
+  const kept = new Date(year, month - 1, day, hours, minutes, seconds, milliseconds);
+  // A date that does not exist, such as a 13th month, rolls over.
+  return kept.getMonth() === month - 1 && kept.getDate() === day ? kept.getTime() : null;
+}
+
 /**
  * The copies of the document's discarded changes that are kept, newest
- * first. A copy older than DISCARDED_COPY_DAYS is left out, also before the
- * next copy deletes it. The copies that Downpad 0.3.14 and earlier kept
- * directly in `discarded-changes` name only the document's file name, so
- * they belong to no document here.
+ * first by the time in their names, which a save of an opened copy leaves
+ * alone. A copy whose file is older than DISCARDED_COPY_DAYS is left out,
+ * also before the next copy deletes it, so a copy the user still edits stays.
+ * The copies that Downpad 0.3.14 and earlier kept directly in
+ * `discarded-changes` name only the document's file name, so they belong to
+ * no document here. Only a folder or copy that is not there counts as none.
+ * Any other failure, as of a drive that does not answer, rejects, so that a
+ * passing error never takes a copy out of Upload's menu.
  */
 export async function listDiscardedCopies(userData: string, path: string): Promise<DiscardedCopy[]> {
   const folder = discardedCopyFolder(userData, path);
   const cutoff = copyCutoff();
-  const copies = await Promise.all((await readdir(folder).catch(() => [])).map(async (name): Promise<DiscardedCopy | null> => {
+  const copies = await Promise.all((await readdir(folder).catch(unlessMissing([]))).map(async (name): Promise<DiscardedCopy | null> => {
     // A copy that is still being written is a hidden temporary file.
     if (name.startsWith(".")) return null;
     const copy = join(folder, name);
-    const info = await stat(copy).catch(() => null);
-    return info?.isFile() && info.mtimeMs >= cutoff ? { path: copy, keptMs: info.mtimeMs } : null;
+    const info = await stat(copy).catch(unlessMissing(null));
+    if (!info?.isFile() || info.mtimeMs < cutoff) return null;
+    return { path: copy, keptMs: keptTimeOf(name) ?? info.mtimeMs };
   }));
   return copies.filter((copy) => copy !== null).sort((a, b) => b.keptMs - a.keptMs);
+}
+
+/** A rejection handler that gives `value` for a file or folder that is not
+ *  there, and rethrows any other error. */
+function unlessMissing<T>(value: T): (error: unknown) => T {
+  return (error) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return value;
+    throw error;
+  };
 }
 
 /** The name of a folder that keeps one document's copies (`discardedCopyFolder`). */
