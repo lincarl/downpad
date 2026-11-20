@@ -425,7 +425,21 @@ describe("pushWasOutrun", () => {
 });
 
 describe("discarded copies", () => {
-  const past = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+  const day = 24 * 60 * 60 * 1000;
+  const past = new Date(Date.now() - 31 * day);
+
+  /** Keep a copy as Discard my changes did at `when`. */
+  async function keepAt(when: Date, data: string, path: string, content: string): Promise<string> {
+    vi.useFakeTimers({ toFake: ["Date"], now: when });
+    try {
+      return await keepDiscardedCopy(data, path, content);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  /** The name of a copy that Downpad 0.3.14 or earlier kept at `when`. */
+  const earlierName = (when: Date): string => `${when.toISOString().replace(/[:.]/g, "-")} notes.md`;
 
   it("keeps each document's copies apart and lists them newest first", async () => {
     const data = join(root, "profile");
@@ -461,42 +475,52 @@ describe("discarded copies", () => {
     expect(second.keptMs).toBeGreaterThan(keptAt - 5_000);
   });
 
-  it("deletes and lists only the files it kept as copies, so a file the user saved among them stays", async () => {
+  it("keeps for good every file written since it was kept, and lists only the document's copies", async () => {
     const data = join(root, "profile");
     const kept = join(data, "discarded-changes");
-    const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
-    const folder = join(copy, "..");
-    // The user opened a copy and saved it as a document of their own in the
-    // folder that Save as showed. Downpad 0.3.14 and earlier kept the copies
+    const minute = 60_000;
+    // The user opened copies and saved them in place: one kept 31 days ago,
+    // a minute later, and one kept 20 days ago, now.
+    const savedOld = await keepAt(past, data, notes(), "Old\n");
+    await writeFile(savedOld, "Saved\n");
+    await utimes(savedOld, past, new Date(past.getTime() + minute));
+    const recentKept = new Date(Date.now() - 20 * day);
+    const savedRecent = await keepAt(recentKept, data, notes(), "Recent\n");
+    await writeFile(savedRecent, "Saved\n");
+    // Save as from an opened copy suggests the copy's folder and name. The
+    // user kept the time in the name, of a copy kept 31 days ago, saved a
+    // minute later, and of the one kept 20 days ago.
+    const folder = join(savedOld, "..");
+    const savedAs = [basename(savedOld), basename(savedRecent)].map((name) => join(folder, name.replace(/ notes\.md$/, " notes final.md")));
+    await writeFile(savedAs[0], "Final\n");
+    await utimes(savedAs[0], past, new Date(past.getTime() + minute));
+    await writeFile(savedAs[1], "Final\n");
+    // Files of the user's without a copy's time, also a hidden one that ends
+    // as a temporary file does. Downpad 0.3.14 and earlier kept the copies
     // directly in discarded-changes, so Save as showed that folder then.
-    const own = [join(folder, "Project plan.md"), join(kept, "Project plan.md")];
-    // A copy that Downpad 0.3.14 or earlier kept.
-    const earlier = join(kept, "2026-01-01T00-00-00-000Z notes.md");
-    // The temporary file that a write of a copy left when it never finished,
-    // and a hidden file of the user's that only ends the same way.
-    const leftover = join(folder, `.${basename(copy)}.0b0e5c1e-6c0f-4b53-9a4e-0d0f6a1b2c3d.tmp`);
-    own.push(join(folder, ".Project plan.md.tmp"));
-    for (const file of [...own, earlier, copy, leftover]) {
+    const own = [join(folder, "Project plan.md"), join(folder, ".Project plan.md.tmp"), join(kept, "Project plan.md")];
+    // A copy that Downpad 0.3.14 or earlier kept 31 days ago and the user saved a minute later.
+    const earlierSaved = join(kept, earlierName(new Date(past.getTime() - minute)));
+    for (const file of [...own, earlierSaved]) {
       await writeFile(file, "Text\n");
       await utimes(file, past, past);
     }
-    // Another document whose folder holds only a file of the user's.
-    const otherCopy = await keepDiscardedCopy(data, join(theirs, "notes.md"), "Other\n");
+    // Another document whose folder holds a file of the user's beside a copy.
+    const otherCopy = await keepAt(past, data, join(theirs, "notes.md"), "Other\n");
     const otherOwn = join(otherCopy, "..", "Plan.md");
-    for (const file of [otherCopy, otherOwn]) {
-      await writeFile(file, "Text\n");
-      await utimes(file, past, past);
-    }
+    await writeFile(otherOwn, "Text\n");
+    await utimes(otherOwn, past, past);
+
     const next = await keepDiscardedCopy(data, notes(), "Next\n");
-    for (const file of [...own, otherOwn]) expect(await readFile(file, "utf8")).toBe("Text\n");
-    await expect(readFile(earlier)).rejects.toThrow("ENOENT");
-    await expect(readFile(copy)).rejects.toThrow("ENOENT");
-    await expect(readFile(leftover)).rejects.toThrow("ENOENT");
+    for (const file of [savedOld, savedRecent, ...savedAs, ...own, earlierSaved, otherOwn]) expect((await lstat(file)).isFile()).toBe(true);
     await expect(readFile(otherCopy)).rejects.toThrow("ENOENT");
-    // A file of the user's is never offered as a copy, also while it is new.
-    const now = new Date();
-    await utimes(own[0], now, now);
-    expect(await listDiscardedCopies(data, notes())).toEqual([{ path: next, keptMs: expect.any(Number) }]);
+    // A copy saved in place stays listed under the time it was kept, for
+    // that time's 30 days, and a file of the user's is never listed, also
+    // with a copy's time in its name.
+    expect(await listDiscardedCopies(data, notes())).toEqual([
+      { path: next, keptMs: expect.any(Number) },
+      { path: savedRecent, keptMs: recentKept.getTime() },
+    ]);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fails to list the copies when their folder cannot be read, which is not the same as having none", async () => {
@@ -514,20 +538,24 @@ describe("discarded copies", () => {
     }
   });
 
-  it("lists no copy older than 30 days, and deletes such copies when it keeps the next one", async () => {
+  it("deletes the copies it kept more than 30 days ago that nobody wrote since, and lists none of them", async () => {
     const data = join(root, "profile");
-    const expired = await keepDiscardedCopy(data, notes(), "Old\n");
-    await utimes(expired, past, past);
+    const kept = join(data, "discarded-changes");
+    const expired = await keepAt(past, data, notes(), "Old\n");
     expect(await listDiscardedCopies(data, notes())).toEqual([]);
-    // A copy that an earlier version kept beside the documents' folders, and
-    // a document whose only copy expired.
-    const earlier = join(data, "discarded-changes", "2026-01-01T00-00-00-000Z notes.md");
-    await writeFile(earlier, "Earlier\n");
-    await utimes(earlier, past, past);
-    const other = await keepDiscardedCopy(data, join(theirs, "notes.md"), "Other\n");
-    await utimes(other, past, past);
+    // A copy that Downpad 0.3.14 or earlier kept beside the documents'
+    // folders, the temporary file of a copy whose write never finished, and a
+    // document whose only copy expired.
+    const earlier = join(kept, earlierName(past));
+    const leftover = join(expired, "..", `.${basename(expired)}.0b0e5c1e-6c0f-4b53-9a4e-0d0f6a1b2c3d.tmp`);
+    for (const file of [earlier, leftover]) {
+      await writeFile(file, "Earlier\n");
+      await utimes(file, past, past);
+    }
+    await keepAt(past, data, join(theirs, "notes.md"), "Other\n");
     const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
-    expect(await readdir(join(data, "discarded-changes"))).toEqual([copy.split(/[\\/]/).at(-2)]);
+    expect(await readdir(kept)).toEqual([copy.split(/[\\/]/).at(-2)]);
+    expect(await readdir(join(copy, ".."))).toEqual([basename(copy)]);
     expect((await listDiscardedCopies(data, notes())).map((entry) => entry.path)).toEqual([copy]);
   });
 

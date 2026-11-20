@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { GFM, parser as markdownParser } from "@lezer/markdown";
@@ -758,14 +758,22 @@ async function takeBack(context: GitContext, commit: string, paths: string[]): P
 /**
  * Keep a copy of changes that the user is about to discard, in the
  * document's own folder under `<userData>/discarded-changes`, and delete
- * copies older than DISCARDED_COPY_DAYS. Returns the copy's path.
+ * the copies that `deleteExpiredCopies` finds expired. Returns the copy's
+ * path. The copy's modification time is set to the time in its name, however
+ * long the write took, so a later write of the file, as when the user saves
+ * the opened copy, tells it apart from a copy nobody has touched.
  */
 export async function keepDiscardedCopy(userData: string, path: string, content: string): Promise<string> {
   await deleteExpiredCopies(join(userData, "discarded-changes"));
   const folder = discardedCopyFolder(userData, path);
   await mkdir(folder, { recursive: true });
-  const copy = join(folder, discardedCopyName(new Date(), path));
+  const kept = new Date();
+  const copy = join(folder, discardedCopyName(kept, path));
   await writeAtomic(copy, content);
+  // The copy is kept whether or not its time can be set. Its time is then
+  // that of the write, which is within UNTOUCHED_MS unless the write was
+  // slow, and otherwise the copy is never deleted.
+  await utimes(copy, kept, kept).catch(() => {});
   return copy;
 }
 
@@ -794,34 +802,60 @@ export function keptTimeOf(name: string): number | null {
   return kept.getMonth() === month - 1 && kept.getDate() === day ? kept.getTime() : null;
 }
 
-/** The name of a copy that Downpad 0.3.14 and earlier kept directly in
- *  `discarded-changes`: the UTC time with `:` and `.` replaced by `-`, as in
- *  "2026-11-20T15-28-30-687Z notes.md". */
-const EARLIER_COPY_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z /;
+/** The time at the start of the name of a copy that Downpad 0.3.14 and
+ *  earlier kept directly in `discarded-changes`: the UTC time with `:` and
+ *  `.` replaced by `-`, as in "2026-11-20T15-28-30-687Z notes.md". */
+const EARLIER_KEPT_TIME = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z /;
+
+/** When the copy named `name` was kept by Downpad 0.3.14 or earlier, from
+ *  the time in its name, or null for a name without one. */
+function earlierKeptTimeOf(name: string): number | null {
+  const match = EARLIER_KEPT_TIME.exec(name);
+  if (!match) return null;
+  const [, hour, minutes, seconds, milliseconds] = match;
+  const time = `${hour}:${minutes}:${seconds}.${milliseconds}Z`;
+  const kept = Date.parse(time);
+  // A date that does not exist, such as February 30, rolls over.
+  return !Number.isNaN(kept) && new Date(kept).toISOString() === time ? kept : null;
+}
+
+/**
+ * How far a copy's modification time may be from the time in its name for
+ * the copy to count as untouched since Downpad kept it. Some file systems
+ * keep the time coarsely, FAT in steps of 2 seconds, and Downpad 0.3.14 and
+ * earlier read the time for the name just before it wrote the copy. A save of
+ * an opened copy comes later than this, since the user can open a copy only
+ * once Git is done, from the notice or Upload's menu. A longer allowance
+ * would let such a save count as untouched, and a shorter one would keep a
+ * copy for good.
+ */
+const UNTOUCHED_MS = 3_000;
 
 /**
  * The copies of the document's discarded changes that are kept, newest
  * first by the time in their names, which a save of an opened copy leaves
- * alone. Only a file whose name starts with that time is a copy, so a file
- * that the user saved in the folder, and a hidden temporary file of a copy
- * that is still being written, are not listed. A copy whose file is older
- * than DISCARDED_COPY_DAYS is left out, also before the next copy deletes it,
- * so a copy the user still edits stays. The copies that Downpad 0.3.14 and
- * earlier kept directly in `discarded-changes` name only the document's file
- * name, so they belong to no document here. Only a folder or copy that is not
- * there counts as none. Any other failure, as of a drive that does not
- * answer, rejects, so that a passing error never takes a copy out of Upload's
- * menu.
+ * alone. Only a file named exactly as `discardedCopyName` names a copy of
+ * this document at the time in its name is a copy. So a file that the user
+ * saved in the folder is not listed, even when its name starts with a copy's
+ * time, and neither is a hidden temporary file of a copy that is still being
+ * written. A copy kept more than DISCARDED_COPY_DAYS ago by that time is left
+ * out. A copy that the user saved in place stays listed until then, and is
+ * never deleted, so the menu never offers a copy that cleanup took away. The
+ * copies that Downpad 0.3.14 and earlier kept directly in
+ * `discarded-changes` name only the document's file name, so they belong to
+ * no document here. Only a folder or copy that is not there counts as none.
+ * Any other failure, as of a drive that does not answer, rejects, so that a
+ * passing error never takes a copy out of Upload's menu.
  */
 export async function listDiscardedCopies(userData: string, path: string): Promise<DiscardedCopy[]> {
   const folder = discardedCopyFolder(userData, path);
   const cutoff = copyCutoff();
   const copies = await Promise.all((await readdir(folder).catch(unlessMissing([]))).map(async (name): Promise<DiscardedCopy | null> => {
     const keptMs = keptTimeOf(name);
-    if (keptMs === null) return null;
+    if (keptMs === null || keptMs < cutoff || !samePath(name, discardedCopyName(new Date(keptMs), path))) return null;
     const copy = join(folder, name);
     const info = await stat(copy).catch(unlessMissing(null));
-    return info?.isFile() && info.mtimeMs >= cutoff ? { path: copy, keptMs } : null;
+    return info?.isFile() ? { path: copy, keptMs } : null;
   }));
   return copies.filter((copy) => copy !== null).sort((a, b) => b.keptMs - a.keptMs);
 }
@@ -846,35 +880,45 @@ function discardedCopyFolder(userData: string, path: string): string {
   return join(userData, "discarded-changes", createHash("sha256").update(identity).digest("hex").slice(0, 16));
 }
 
-/** Delete the copies older than DISCARDED_COPY_DAYS in `root`, and in the
- *  documents' folders in it, which go once they are empty. Only regular files
- *  named as Downpad names its copies go: in a document's folder a name that
- *  starts with the time `discardedCopyName` writes, and directly in `root` the
- *  name of a copy that Downpad 0.3.14 or earlier kept there, and with either
- *  the temporary file that an unfinished write of such a copy left. Only Downpad's
- *  own folders are entered, never through a symbolic link. So a file that the
- *  user saved among the copies, as with Save as from an opened copy, and a
+/** Delete the copies in `root`, and in the documents' folders in it, that
+ *  Downpad kept more than DISCARDED_COPY_DAYS ago and nobody has written
+ *  since, and the documents' folders once they are empty. A copy's name
+ *  starts with the time it was kept: in a document's folder the time that
+ *  `discardedCopyName` writes, and directly in `root` the time that Downpad
+ *  0.3.14 and earlier wrote. A copy is untouched while its modification time
+ *  is within UNTOUCHED_MS of that time, which `keepDiscardedCopy` sets. Names
+ *  cannot tell Downpad's files from the user's, since Save as from an opened
+ *  copy suggests the copy's folder and name, so a file the user saved, in
+ *  place or under another name, has a later time and stays for good. The
+ *  temporary file that an unfinished write of a copy left, named as the copy
+ *  with a dot before it and a `.tmp` ending (`writeAtomic`), goes once its
+ *  own modification time is that old. Only regular files go, and only
+ *  Downpad's own folders are entered, never through a symbolic link, so a
  *  folder that is not Downpad's, such as one an opened copy got for its
- *  attachments, stay, and so does a document's folder that holds such a file. */
+ *  attachments, keeps its files, and a document's folder that holds a file
+ *  that stays stays too. */
 async function deleteExpiredCopies(root: string): Promise<void> {
   const cutoff = copyCutoff();
-  const deleteOldCopies = async (folder: string, isCopy: (name: string) => boolean): Promise<void> => {
+  const deleteOldCopies = async (folder: string, keptTime: (name: string) => number | null): Promise<void> => {
     for (const name of await readdir(folder).catch(() => [])) {
-      // A write of a copy that never finished, as after a crash, leaves its
-      // temporary file: the copy's name with a dot before it and `.tmp` last
-      // (`writeAtomic`).
-      const leftover = /^\..*\.tmp$/.test(name) && isCopy(name.slice(1));
-      if (!isCopy(name) && !leftover) continue;
+      // A write of a copy that never finished, as after a crash.
+      const leftover = /^\..*\.tmp$/.test(name) && keptTime(name.slice(1)) !== null;
+      const kept = keptTime(name);
+      if (kept === null && !leftover) continue;
       const entry = join(folder, name);
       const info = await lstat(entry).catch(() => null);
-      if (info?.isFile() && info.mtimeMs < cutoff) await unlink(entry).catch(() => {});
+      if (!info?.isFile()) continue;
+      const expired = kept === null
+        ? info.mtimeMs < cutoff
+        : kept < cutoff && Math.abs(info.mtimeMs - kept) <= UNTOUCHED_MS;
+      if (expired) await unlink(entry).catch(() => {});
     }
   };
-  await deleteOldCopies(root, (name) => EARLIER_COPY_NAME.test(name));
+  await deleteOldCopies(root, earlierKeptTimeOf);
   for (const name of await readdir(root).catch(() => [])) {
     const folder = join(root, name);
     if (!COPY_FOLDER_NAME.test(name) || !(await lstat(folder).catch(() => null))?.isDirectory()) continue;
-    await deleteOldCopies(folder, (copy) => keptTimeOf(copy) !== null);
+    await deleteOldCopies(folder, keptTimeOf);
     // Fails, as it should, while the folder still holds anything.
     await rmdir(folder).catch(() => {});
   }
