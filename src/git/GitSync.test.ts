@@ -657,6 +657,22 @@ describe("GitSync conflicts", () => {
     expect(store.get().banner?.message).toBe(message);
   });
 
+  it("offers the copy when Git took the file away but could not get the latest version", async () => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockResolvedValue({ kind: "failed", message: "No connection.", changedOpenFiles: [PATH] });
+    git.pathExists.mockResolvedValue(false);
+    await sync.check({ force: true });
+    // Upload's menu needs the file, so only the notice can offer the copy.
+    expect(store.get().banner).toEqual({
+      kind: "error",
+      message: "“notes.md” is no longer on disk, and Downpad kept a copy of your changes. Get latest failed. No connection.",
+      actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }],
+    });
+    sync.handleBannerAction(GIT_OPEN_COPY);
+    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md"));
+  });
+
   it("keeps a newer copy when the user typed while Git ran", async () => {
     deps.askConflict.mockResolvedValue("discard");
     git.keepCopy.mockResolvedValueOnce("/profile/discarded-changes/first.md");

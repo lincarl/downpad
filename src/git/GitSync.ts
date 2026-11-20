@@ -32,6 +32,9 @@ export const GIT_GET_LATEST = "git-get-latest";
 export const GIT_RESOLVE = "git-resolve";
 export const GIT_OPEN_COPY = "git-open-copy";
 
+/** The notice action that opens the kept copy of discarded changes. */
+const OPEN_COPY = { id: GIT_OPEN_COPY, label: "Open copy" };
+
 /** How often Downpad looks for remote changes while a document is open. */
 const CHECK_INTERVAL_MS = 2 * 60_000;
 /** A check from a tab switch or window focus asks the remote at most this often. */
@@ -364,8 +367,15 @@ export class GitSync {
 
   /** Report the outcome of an Upload or Get latest, after reloading the open
    *  documents it changed, however it ended. `lead` goes before a failure,
-   *  to say what happened before it. */
-  private async finish(path: string, result: GitSyncResult, action: Action, fromSave: boolean, generation: number, lead = ""): Promise<void> {
+   *  to say what happened before it, and `actions` go with it. */
+  private async finish(
+    path: string,
+    result: GitSyncResult,
+    action: Action,
+    fromSave: boolean,
+    generation: number,
+    { lead = "", actions }: { lead?: string; actions?: BannerState["actions"] } = {},
+  ): Promise<void> {
     const name = fileName(path);
     await this.reloadChanged(result.changedOpenFiles);
     if (!this.isCurrent(generation)) return;
@@ -392,7 +402,7 @@ export class GitSync {
         break;
       case "conflict":
         if (active) this.followUp = () => this.resolveConflict(path, result);
-        else this.showError(`“${name}” is not uploaded, because ${result.author} changed the same parts of it. Show it to choose what to keep.`);
+        else this.showError(`“${name}” is not uploaded, because ${result.author} changed the same parts of it. Show it to choose what to keep.`, actions);
         break;
       case "blocked":
         if (result.files.some((file) => sameFilePath(file, path))) {
@@ -403,10 +413,11 @@ export class GitSync {
         }
         this.showError(
           `${lead}${action === "upload" ? "Downpad cannot upload yet" : "Downpad cannot get the latest version"}, because the latest version would replace changes in ${listFiles(result.files)} that are not uploaded. Upload those changes or discard them first.`,
+          actions,
         );
         break;
       case "failed":
-        this.showError(`${lead}${action === "upload" ? "Upload failed" : "Get latest failed"}. ${result.message}`);
+        this.showError(`${lead}${action === "upload" ? "Upload failed" : "Get latest failed"}. ${result.message}`, actions);
         break;
     }
     await this.refresh(generation);
@@ -534,8 +545,12 @@ export class GitSync {
       // Git takes a file away here only when the last commit lacks it, to
       // make room for the latest version.
       let lead = discarded ? `Your changes to “${name}” are discarded, and Upload's menu offers a copy of them for 30 days. ` : "";
-      if (missing) lead = `“${name}” is no longer on disk, and Downpad kept a copy of your changes. `;
-      await this.finish(path, rest, "get-latest", false, generation, lead);
+      if (missing) {
+        // Upload's menu needs the file, so the notice offers the copy.
+        lead = `“${name}” is no longer on disk, and Downpad kept a copy of your changes. `;
+        this.discardedCopy = { document: path, copy };
+      }
+      await this.finish(path, rest, "get-latest", false, generation, { lead, actions: missing ? [OPEN_COPY] : undefined });
       return;
     }
     await this.reloadChanged(rest.changedOpenFiles);
@@ -557,7 +572,7 @@ export class GitSync {
     } else if (tookFile && holder) {
       message = `Your changes to “${name}” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`;
     }
-    this.showNotice({ kind: "info", message, actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });
+    this.showNotice({ kind: "info", message, actions: [OPEN_COPY] });
     await this.refresh(generation);
   }
 
@@ -732,9 +747,9 @@ export class GitSync {
     this.deps.store.set({ banner });
   }
 
-  private showError(message: string): void {
+  private showError(message: string, actions?: BannerState["actions"]): void {
     if (!this.enabled()) return;
-    this.notice = { kind: "error", message };
+    this.notice = actions ? { kind: "error", message, actions } : { kind: "error", message };
     this.deps.store.set({ banner: this.notice });
   }
 
