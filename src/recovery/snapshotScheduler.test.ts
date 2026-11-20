@@ -344,6 +344,22 @@ it("waits with autosave while a change on disk is unresolved", async () => {
   expect(saving).toHaveBeenCalledOnce();
 });
 
+it("adds no autosave behind a save of the document that does not end, and autosaves again once it ends", async () => {
+  const { files } = scheduledDocument({}, { autosaveEnabled: true });
+  // A save that waits, as one whose check waits for a file on a drive that
+  // went away.
+  const check = deferred();
+  const stuck = files.save({ automatic: () => check.promise.then(() => true) });
+  const saving = vi.spyOn(files, "save");
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(saving).not.toHaveBeenCalled();
+
+  check.resolve();
+  expect(await stuck).toBe(false);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(saving).toHaveBeenCalledOnce();
+});
+
 it("follows changed intervals without a restart or an extra save", async () => {
   const { store } = scheduledDocument({}, {
     autosaveEnabled: true, autosaveIntervalSeconds: 30, recoverySnapshotIntervalSeconds: 10,

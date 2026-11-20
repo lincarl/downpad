@@ -197,14 +197,41 @@ describe("native close decisions", () => {
     await eventually(() => expect(disk.writeFile).toHaveBeenCalledWith("/docs/closing.md", "Unsaved text\n", "lf"));
     expect(bridge.closeWindow).not.toHaveBeenCalled();
     expect(scheduler.clear).not.toHaveBeenCalled();
-    // Repeated native close events share the pending close instead of prompting again.
-    events.closeRequested!();
     finishWrite({ modifiedMs: 200 });
     await closing;
 
     expect(bridge.confirmSaveChanges).toHaveBeenCalledOnce();
     expect(scheduler.clear).toHaveBeenCalledOnce();
     expect(bridge.closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { choice: "discard", closes: true },
+    { choice: "cancel", closes: false },
+  ] as const)("asks again when the window is closed again while a save does not return, and $choice then decides", async ({ choice, closes }) => {
+    vi.mocked(files.confirmCloseAll).mockRestore();
+    bridge.confirmSaveChanges.mockResolvedValueOnce("save").mockResolvedValueOnce(choice);
+    store.addTab({ ...blankDoc(), filePath: "/docs/closing.md", markdown: "Unsaved text\n", isDirty: true });
+    let finishWrite!: (meta: FileMeta) => void;
+    disk.writeFile.mockImplementationOnce(() => new Promise((resolve) => { finishWrite = resolve; }));
+    events.closeRequested!();
+    const first = current;
+    await eventually(() => expect(disk.writeFile).toHaveBeenCalledOnce());
+
+    events.closeRequested!();
+    await current;
+    expect(bridge.confirmSaveChanges).toHaveBeenCalledTimes(2);
+    expect(bridge.closeWindow).toHaveBeenCalledTimes(closes ? 1 : 0);
+    // The close that took over decides about the quit intent, not the first.
+    expect(bridge.cancelWindowClose).toHaveBeenCalledTimes(closes ? 0 : 1);
+    await first;
+
+    // A write that ends later does not close the window that the user kept.
+    finishWrite({ modifiedMs: 200 });
+    await eventually(() => expect(store.get().doc.isDirty).toBe(false));
+    await Promise.resolve();
+    expect(bridge.closeWindow).toHaveBeenCalledTimes(closes ? 1 : 0);
+    expect(scheduler.clear).toHaveBeenCalledTimes(closes ? 1 : 0);
   });
 
   it("cancels native close and retains recovery when Save fails", async () => {

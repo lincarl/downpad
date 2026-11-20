@@ -33,6 +33,8 @@ import { copyActiveFile } from "./copyFile";
 import { keepingPlace, PlacesBehindRecent } from "./keepingPlace";
 import { clearNoticesOfOtherDocuments } from "./noticeScope";
 import { SaveFailureNotice } from "./saveFailureNotice";
+import { SlowSaveNotice } from "./slowSaveNotice";
+import { CloseRequests } from "./closeRequests";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
 import { GitSync } from "../git/GitSync";
 
@@ -66,13 +68,16 @@ export class AppRuntime {
    *  runs, also while the switch waits for EditorHost to finish another change
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
-  private closingTabs = false;
+  /** Closes of tabs, one at a time (`CloseRequests`). */
+  private readonly closeRequests = new CloseRequests();
   /** The element the document's editors show in, which the Recent view hides. */
   private readonly editorArea: HTMLElement;
   /** Where the documents were scrolled that the Recent view came over. */
   private readonly placesBehindRecent = new PlacesBehindRecent();
   /** The error notice of a save the user asked for that failed. */
   private readonly saveFailure: SaveFailureNotice;
+  /** The notice of a write that has not answered for a while. */
+  private readonly slowSave: SlowSaveNotice;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -97,8 +102,16 @@ export class AppRuntime {
       reloadActiveDoc: (options) => this.reloadActiveDoc(options),
     };
     this.saveFailure = new SaveFailureNotice(store);
+    this.slowSave = new SlowSaveNotice(store);
     this.cleanups.push(clearNoticesOfOtherDocuments(store));
-    this.files = new FileService(store, presenter, (tabId) => this.saveFailure.saved(tabId));
+    this.files = new FileService(store, presenter, {
+      saved: (tabId) => this.saveFailure.saved(tabId),
+      slowWrite: (tabId) => {
+        const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+        if (tab && !this.disposed) this.slowSave.show(tabId, tabLabel(tab));
+      },
+      slowWriteEnded: (tabId) => this.slowSave.ended(tabId),
+    });
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).
     this.editorHost.setSaveHandler(() => this.files.save());
@@ -573,17 +586,17 @@ export class AppRuntime {
   }
 
   /** Close a tab (§5.19), prompting if it has unsaved changes. When the last tab
-   *  closes the editor is torn down and the Recent view is shown. */
-  private async closeTab(id: string): Promise<void> {
-    if (this.closingTabs) return;
-    this.closingTabs = true;
-    try {
+   *  closes the editor is torn down and the Recent view is shown. A close of
+   *  tabs asked for meanwhile takes over from this one while it waits for a
+   *  save, and the tab then stays open (`CloseRequests`). */
+  private closeTab(id: string): Promise<void> {
+    return this.closeRequests.run(async (signal) => {
       // Collect typing the document view has not reported yet, so the unsaved
       // check below sees it.
       this.editorHost.flush();
       const tab = this.store.get().tabs.find((t) => t.id === id);
       if (!tab) return;
-      const decision = await this.files.confirmCloseTab(id, tabLabel(tab));
+      const decision = await this.files.confirmCloseTab(id, tabLabel(tab), signal);
       if (this.disposed || decision === "cancel" || (decision !== "discard" && !this.files.canCloseTabs([id]))) return;
       const wasActive = this.store.get().activeTabId === id;
       const nextActive = this.store.closeTab(id);
@@ -597,20 +610,19 @@ export class AppRuntime {
       } else if (wasActive) {
         await this.showActiveDoc();
       }
-    } finally {
-      this.closingTabs = false;
-    }
+    });
   }
 
   /** Close every open tab (tab context menu, §5.19). Prompts once if any tab has
-   *  unsaved changes, then tears the editor down and shows the Recent view. */
-  private async closeAllTabs(): Promise<void> {
-    if (this.closingTabs || this.store.get().tabs.length === 0) return;
-    this.closingTabs = true;
-    try {
+   *  unsaved changes, then tears the editor down and shows the Recent view.
+   *  Like closeTab, a close asked for meanwhile takes over while it waits for
+   *  a save. */
+  private closeAllTabs(): Promise<void> {
+    return this.closeRequests.run(async (signal) => {
+      if (this.store.get().tabs.length === 0) return;
       // Capture in-progress edits so the dirty check reflects the latest typing.
       this.editorHost.flush();
-      const decision = await this.files.confirmCloseAll();
+      const decision = await this.files.confirmCloseAll(signal);
       if (this.disposed || decision === "cancel" || (decision !== "discard" && !this.files.canCloseTabs())) return;
       const tabs = [...this.store.get().tabs];
       // Remove the approved documents together before asynchronous editor cleanup
@@ -620,9 +632,7 @@ export class AppRuntime {
       if (this.findBar.isOpen()) this.findBar.close();
       await this.editorHost.unmount();
       await this.showRecent();
-    } finally {
-      this.closingTabs = false;
-    }
+    });
   }
 
   /** Show the Recent view (§5.8), refreshing its history list. */

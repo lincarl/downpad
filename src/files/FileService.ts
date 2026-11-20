@@ -45,10 +45,29 @@ interface SaveRequest {
   choice: SaveAsChoice;
   /** Marks a save nobody asked for as such, with the check that holds it. */
   automatic?: (tabId: string) => boolean | Promise<boolean>;
+  /** Once its dialog closed: the file that the save chose, which no other tab
+   *  may choose until the save ends. */
+  chosen?: string;
   /** Once the write starts: the file it writes, and the saved text it replaces. */
   write?: { path: string; replaced: string | null };
+  /** Set once the write has run for SLOW_WRITE_MS without an answer. */
+  slow?: boolean;
   /** Whether the save wrote the document, once it ends. A save that threw did not. */
   outcome?: Promise<boolean>;
+}
+
+/** How long a write runs without an answer before the app says so (`SaveEvents.slowWrite`). */
+export const SLOW_WRITE_MS = 10_000;
+
+/** What FileService tells about saves, apart from the answer of each save. */
+export interface SaveEvents {
+  /** A write of the tab's document worked, whoever asked for the save. */
+  saved?(tabId: string): void;
+  /** A write of the tab's document has run for SLOW_WRITE_MS without an
+   *  answer, or a save of the tab was asked for while such a write runs. */
+  slowWrite?(tabId: string): void;
+  /** A write that `slowWrite` told about has ended, written or not. */
+  slowWriteEnded?(tabId: string): void;
 }
 
 /** The suggested path of a Save As, and paths it must not write. */
@@ -61,18 +80,22 @@ interface SaveAsChoice {
 export type CloseDecision = "close" | "discard" | "cancel";
 
 export class FileService {
-  private saveQueue: Promise<void> = Promise.resolve();
+  /** By tab, the end of the last save asked for. A tab's saves run one at a
+   *  time in the order asked for, and never wait for another tab's, so a write
+   *  that does not return, as to a network drive that went away, holds up
+   *  only the saves of its own document. */
+  private saveQueues = new Map<string, Promise<void>>();
+  /** The end of the last turn for a Save As dialog. One shows at a time. */
+  private dialogTurn: Promise<void> = Promise.resolve();
   private pendingSaves = new Set<SaveRequest>();
   /** By tab, how many saves that were to give its document another file ended
    *  without doing so (`failedMoves`). */
   private unmoved = new Map<string, number>();
 
-  /** `onSaved` is called with a tab each time a write of its document
-   *  worked, whoever asked for the save. */
   constructor(
     private readonly store: Store,
     private readonly present: EditorPresenter,
-    private readonly onSaved: (tabId: string) => void = () => {},
+    private readonly events: SaveEvents = {},
   ) {}
 
   /** Open a new untitled buffer in its own tab (§5.19). */
@@ -293,6 +316,10 @@ export class FileService {
   }
 
   /** Save to the current path, or fall back to Save As for an untitled buffer.
+   *  The save runs after the saves of the same tab asked for before it, and
+   *  never waits for another tab's saves. A save that asks where to save
+   *  waits until no other tab's Save As dialog shows.
+   *
    *  `keepTypedMark` is for a save nobody asked for, such as autosave. It
    *  writes a typed closing `$` or `~` that still waits for the next character
    *  as Save would, but leaves it waiting in the editor, so the save never
@@ -301,14 +328,14 @@ export class FileService {
    *
    *  `automatic` marks a save nobody asked for as such, such as autosave or
    *  the save before Copy file, with a check that holds it, given the tab. It
-   *  runs first when the save's turn comes, after the saves queued before it,
-   *  and the save waits for its answer. A held save writes nothing. Otherwise
-   *  the save writes the document as it is then, and does nothing when nothing
-   *  is unsaved any more, as after a reload. It writes only while the file
-   *  still holds the text the document last saved, so a change on disk the app
-   *  has not seen yet stays, and the save reports failure then, as for a held
-   *  one. A document whose saved text is unknown, such as a recovered one, is
-   *  left to a save the user asks for. */
+   *  runs first when the save's turn comes, after the tab's saves queued
+   *  before it, and the save waits for its answer. A held save writes
+   *  nothing. Otherwise the save writes the document as it is then, and does
+   *  nothing when nothing is unsaved any more, as after a reload. It writes
+   *  only while the file still holds the text the document last saved, so a
+   *  change on disk the app has not seen yet stays, and the save reports
+   *  failure then, as for a held one. A document whose saved text is
+   *  unknown, such as a recovered one, is left to a save the user asks for. */
   save(options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean | Promise<boolean> } = {}): Promise<boolean> {
     return this.queueSave(this.store.get().activeTabId, false, options);
   }
@@ -325,9 +352,10 @@ export class FileService {
     );
   }
 
-  /** Save the active document under a path the user chooses. `defaultPath`
-   *  is the dialog's suggestion. A path for which `refuse` returns true is not
-   *  written, and the save reports failure. */
+  /** Save the active document under a path the user chooses, in the order
+   *  `save` describes. `defaultPath` is the dialog's suggestion. A path for
+   *  which `refuse` returns true is not written, and the save reports
+   *  failure. */
   saveAs(options: { defaultPath?: string; refuse?: (path: string) => boolean } = {}): Promise<boolean> {
     return this.queueSave(this.store.get().activeTabId, true, {}, options);
   }
@@ -338,9 +366,7 @@ export class FileService {
    *  or dropped into the document waits for this before it is written beside
    *  it (§5.4, §5.5, `storeBesideDocument`). */
   async untilPathSettled(tabId: string): Promise<void> {
-    const moves = (request: SaveRequest): boolean =>
-      request.tabId === tabId && (request.saveAs || request.expectedPath === null);
-    while ([...this.pendingSaves].some(moves)) await this.saveQueue;
+    await this.untilEnded((request) => request.tabId === tabId && (request.saveAs || request.expectedPath === null));
   }
 
   /** Whether a save of the tab is under way, waiting for its turn or being
@@ -352,10 +378,18 @@ export class FileService {
   /** Resolve once no save of the tab is under way, so the document shows what
    *  its last save recorded. Saves of other tabs are not waited for. */
   async untilSaved(tabId: string): Promise<void> {
+    await this.untilEnded((request) => request.tabId === tabId);
+  }
+
+  /** Resolve once no save that `matches` is under way, also one asked for
+   *  while this waits, or once `signal` aborts. Resolves with whether it
+   *  aborted. Saves that do not match are not waited for. */
+  private async untilEnded(matches: (request: SaveRequest) => boolean, signal?: AbortSignal): Promise<boolean> {
     for (;;) {
-      const requests = [...this.pendingSaves].filter((request) => request.tabId === tabId);
-      if (requests.length === 0) return;
-      for (const request of requests) await request.outcome;
+      if (signal?.aborted) return true;
+      const requests = [...this.pendingSaves].filter(matches);
+      if (requests.length === 0) return false;
+      if (await unlessAborted(Promise.all(requests.map((request) => request.outcome)), signal) === ABORTED) return true;
     }
   }
 
@@ -367,7 +401,8 @@ export class FileService {
     return this.unmoved.get(tabId) ?? 0;
   }
 
-  /** Capture the requested buffer now, then order saves and Save As dialogs. */
+  /** Capture the requested buffer now, then run the save after the tab's
+   *  saves before it. */
   private queueSave(
     tabId: string | null,
     saveAs: boolean,
@@ -380,6 +415,8 @@ export class FileService {
     this.present.flush(flushOptions);
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!tabId || !doc) return Promise.resolve(false);
+    // This save waits for that write, so the user learns why nothing happens.
+    if ([...this.pendingSaves].some((pending) => pending.tabId === tabId && pending.slow)) this.events.slowWrite?.(tabId);
     const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, automatic };
     this.pendingSaves.add(request);
     // The save leaves the pending ones and counts as a failed move in one
@@ -390,7 +427,7 @@ export class FileService {
       this.pendingSaves.delete(request);
       if (!saved && (request.saveAs || request.expectedPath === null)) this.countFailedMove(tabId);
     };
-    const operation = this.saveQueue.then(() => this.saveSnapshot(request)).then(
+    const operation = (this.saveQueues.get(tabId) ?? Promise.resolve()).then(() => this.saveSnapshot(request)).then(
       (saved) => {
         end(saved);
         return saved;
@@ -402,8 +439,43 @@ export class FileService {
     );
     request.outcome = operation.catch(() => false);
     // A failed or cancelled operation must not prevent a subsequent save.
-    this.saveQueue = operation.then(() => {}, () => {});
+    const tail = operation.then(() => {}, () => {});
+    this.saveQueues.set(tabId, tail);
+    void tail.then(() => {
+      if (this.saveQueues.get(tabId) === tail) this.saveQueues.delete(tabId);
+    });
     return operation;
+  }
+
+  /** Show the Save As dialog for a save once no other one shows, and return
+   *  the path chosen, which the save then claims (`chosen`). Null when the
+   *  user cancels, the tab is gone or has another file by then, or `refuse`
+   *  turns the path down. Throws for a path that another tab has, or that
+   *  another tab's save chose and is still saving, since two tabs with one
+   *  file would each take the other's reload, notice and saves for its own. */
+  private choosePath(request: SaveRequest, originalPath: string | null): Promise<string | null> {
+    const { tabId, choice } = request;
+    const turn = this.dialogTurn.then(async () => {
+      const picked = await saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
+      // A JSON or YAML file keeps its kind under a name chosen without an
+      // extension, which can ask about replacing a file of the full name.
+      const path = picked ? await this.withOwnExtension(picked, originalPath) : null;
+      const { tabs } = this.store.get();
+      const afterDialog = tabs.find((tab) => tab.id === tabId)?.doc;
+      if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return null;
+      const name = path.split(/[\\/]/).pop();
+      if (tabs.some((tab) => tab.id !== tabId && samePath(tab.doc.filePath, path))) {
+        throw new Error(`“${name}” is open in another tab. Close that tab, or choose another name.`);
+      }
+      const open = new Set(tabs.map((tab) => tab.id));
+      if ([...this.pendingSaves].some((other) => other.tabId !== tabId && open.has(other.tabId) && samePath(other.chosen ?? null, path))) {
+        throw new Error(`“${name}” is being saved from another tab. Choose another name.`);
+      }
+      request.chosen = path;
+      return path;
+    });
+    this.dialogTurn = turn.then(() => {}, () => {});
+    return turn;
   }
 
   /** Count a save of the tab that did not move its document, and forget the
@@ -417,24 +489,13 @@ export class FileService {
   }
 
   private async saveSnapshot(request: SaveRequest): Promise<boolean> {
-    const { tabId, expectedPath, saveAs, choice, automatic } = request;
+    const { tabId, expectedPath, saveAs, automatic } = request;
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== expectedPath) return false;
     const originalPath = current.filePath;
     let path = originalPath;
     const choosePath = saveAs || !path;
-    if (choosePath) {
-      path = await saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
-      if (path) path = await this.withOwnExtension(path, originalPath);
-      const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-      if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
-      // Two tabs with one file would each take the other's reload, notice
-      // and saves for its own.
-      const chosen = path;
-      if (this.store.get().tabs.some((tab) => tab.id !== tabId && samePath(tab.doc.filePath, chosen))) {
-        throw new Error(`“${chosen.split(/[\\/]/).pop()}” is open in another tab. Close that tab, or choose another name.`);
-      }
-    }
+    if (choosePath) path = await this.choosePath(request, originalPath);
     if (!path) return false;
     let expectedContent: string | undefined;
     if (automatic) {
@@ -458,6 +519,12 @@ export class FileService {
     const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
     request.write = { path, replaced: previous };
     if (samePath(path, originalPath)) this.store.patchDocById(tabId, { savedMarkdown: null });
+    // A write that does not answer, as on a network drive that went away,
+    // cannot be cancelled, so the user is told that it is slow instead.
+    const slow = setTimeout(() => {
+      request.slow = true;
+      this.events.slowWrite?.(tabId);
+    }, SLOW_WRITE_MS);
     let meta: FileMeta;
     try {
       meta = await (expectedContent === undefined
@@ -468,9 +535,15 @@ export class FileService {
       // Another program changed the file, which the watcher reports.
       if (expectedContent !== undefined && error instanceof Error && error.message.includes(FILE_CHANGED_ON_DISK)) return false;
       throw error;
+    } finally {
+      clearTimeout(slow);
+      if (request.slow) {
+        request.slow = false;
+        this.events.slowWriteEnded?.(tabId);
+      }
     }
     this.markSaved(tabId, snapshot, originalPath, path, meta);
-    this.onSaved(tabId);
+    this.events.saved?.(tabId);
     if (choosePath) this.recordOpened(path);
     return true;
   }
@@ -541,17 +614,26 @@ export class FileService {
     return this.store.get().tabs.some(hasUnsavedChanges);
   }
 
-  /** Save or discard one tab without activating it or redirecting its save. */
-  confirmCloseTab(tabId: string, label: string): Promise<CloseDecision> {
-    return this.prepareClose([tabId], `"${label}" has unsaved changes. Save before closing?`);
+  /** Save or discard one tab without activating it or redirecting its save.
+   *  `signal` ends the wait for saves (`prepareClose`). */
+  confirmCloseTab(tabId: string, label: string, signal?: AbortSignal): Promise<CloseDecision> {
+    return this.prepareClose([tabId], `"${label}" has unsaved changes. Save before closing?`, signal);
   }
 
-  /** Prompt once and save each unsaved tab before closing all tabs or the window. */
-  confirmCloseAll(): Promise<CloseDecision> {
+  /** Prompt once and save each unsaved tab before closing all tabs or the
+   *  window. `signal` ends the wait for saves (`prepareClose`). */
+  confirmCloseAll(signal?: AbortSignal): Promise<CloseDecision> {
     this.present.flush();
-    const n = this.store.get().tabs.filter(hasUnsavedChanges).length;
+    const n = this.store.get().tabs.filter((tab) => this.unsavedForClose(tab)).length;
     const what = n === 1 ? "1 document has" : `${n} documents have`;
-    return this.prepareClose(this.store.get().tabs.map((tab) => tab.id), `${what} unsaved changes. Save before closing?`);
+    return this.prepareClose(this.store.get().tabs.map((tab) => tab.id), `${what} unsaved changes. Save before closing?`, signal);
+  }
+
+  /** Whether closing the tab asks first: while it has unsaved changes, and
+   *  while a save of it is under way, which the file may not hold yet and
+   *  which may never end, so the user can choose Discard. */
+  private unsavedForClose(tab: Tab): boolean {
+    return hasUnsavedChanges(tab) || this.isSaving(tab.id);
   }
 
   /** Recheck after asynchronous work, including unreported typing, dropped
@@ -563,24 +645,30 @@ export class FileService {
       && ![...this.pendingSaves].some((request) => owners.has(request.tabId));
   }
 
-  /** Keep close saves in the ordinary queue, then verify every requested tab.
-   *  Cancellation or failure leaves all tabs open, including those saved first. */
-  private async prepareClose(tabIds: string[], message: string): Promise<CloseDecision> {
+  /** Keep close saves in each tab's ordinary queue, then verify every
+   *  requested tab. Cancellation or failure leaves all tabs open, including
+   *  those saved first. The close waits for every save of the tabs, which
+   *  never ends for a write that does not return. Once `signal` aborts, as
+   *  for a newer close that the user asked for, it stops waiting and keeps
+   *  the tabs ("cancel"), and the saves go on. */
+  private async prepareClose(tabIds: string[], message: string, signal?: AbortSignal): Promise<CloseDecision> {
     this.present.flush();
     const owners = new Set(tabIds);
-    const unsaved = () => this.store.get().tabs.filter((tab) => owners.has(tab.id) && hasUnsavedChanges(tab));
-    if (unsaved().length > 0) {
+    const ownTabs = () => this.store.get().tabs.filter((tab) => owners.has(tab.id));
+    if (ownTabs().some((tab) => this.unsavedForClose(tab))) {
       const choice = await confirmSaveChanges(message);
       if (choice === "cancel" || choice === "discard") return choice;
       // The native prompt can remain open while editor updates are pending.
       this.present.flush();
-      for (const tab of unsaved()) {
-        if (!(await this.queueSave(tab.id, false))) return "cancel";
+      for (const tab of ownTabs().filter(hasUnsavedChanges)) {
+        if (signal?.aborted) return "cancel";
+        const saved = await unlessAborted(this.queueSave(tab.id, false), signal);
+        if (saved !== true) return "cancel";
       }
     }
     // Another queued save may still overwrite the file after our write. Wait
     // for it as well, and reject any newer edits or pending dropped assets.
-    while ([...this.pendingSaves].some((request) => owners.has(request.tabId))) await this.saveQueue;
+    if (await this.untilEnded((request) => owners.has(request.tabId), signal)) return "cancel";
     return this.canCloseTabs(tabIds) ? "close" : "cancel";
   }
 
@@ -607,6 +695,20 @@ function fileDocument(path: string, payload: FilePayload, frontmatterCollapsed =
     savedMarkdown: payload.content,
     frontmatterCollapsed,
   };
+}
+
+const ABORTED = Symbol("aborted");
+
+/** `promise`'s value, or ABORTED once `signal` aborts first. A rejection of
+ *  `promise` before that rejects. */
+function unlessAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | typeof ABORTED> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  return new Promise((resolve, reject) => {
+    const abort = (): void => resolve(ABORTED);
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 /** Compare saved paths without merging distinct files on POSIX filesystems. */

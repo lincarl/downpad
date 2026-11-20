@@ -22,6 +22,7 @@ import type { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Store } from "../state/store";
 import { isRecoveredDocument, type DocumentState } from "../state/types";
 import type { SessionKeeper } from "./SessionKeeper";
+import { CloseRequests } from "./closeRequests";
 
 export interface DesktopEventDependencies {
   store: Store;
@@ -69,7 +70,11 @@ export class DesktopEventBindings {
   private recording = false;
   private started = false;
   private disposed = false;
-  private closing = false;
+  /** Closes of the window, one at a time (`CloseRequests`). */
+  private readonly closeRequests = new CloseRequests();
+  /** Set once this window's close was approved, so a close asked for after it
+   *  does nothing. */
+  private closeApproved = false;
   private readonly cleanups: Array<() => void> = [];
 
   constructor(private readonly dependencies: DesktopEventDependencies) {}
@@ -406,38 +411,44 @@ export class DesktopEventBindings {
     return onCloseRequested(() => this.dependencies.run(() => this.handleCloseRequested(), "Downpad could not close."));
   }
 
-  private async handleCloseRequested(): Promise<void> {
-    if (this.disposed || this.closing) return;
-    this.closing = true;
-    let accepted = false;
-    try {
-      const { editorHost, files, scheduler, session } = this.dependencies;
-      editorHost.flush();
-      const decision = await files.confirmCloseAll();
-      if (decision === "cancel" || this.disposed) return;
-      await scheduler.clear();
-      // The next start reopens the documents open now, also one that Save
-      // just gave a file.
-      await session.flush();
-      // Recovery cleanup and the session record await disk I/O. Typing, a
-      // queued save or a dropped file that arrived meanwhile must keep a Save
-      // close from losing work.
-      if (!this.disposed && decision !== "discard" && !files.canCloseTabs()) {
-        scheduler.start();
-        return;
-      }
-      if (!this.disposed) {
-        accepted = true;
-        await desktopBridge().closeWindow();
-      }
-    } finally {
+  /** Ask about unsaved documents and close the window. A close of the window
+   *  asked for again while this one waits for a save takes over: this one
+   *  keeps the window and leaves the quit intent to the newer one, which asks
+   *  again, so Discard closes the window even when a save never returns. */
+  private handleCloseRequested(): Promise<void> {
+    return this.closeRequests.run(async (signal) => {
+      if (this.disposed || this.closeApproved) return;
+      let accepted = false;
       try {
-        // Clear the main process's quit intent when this close was declined.
-        if (!accepted && !this.disposed) await desktopBridge().cancelWindowClose();
+        const { editorHost, files, scheduler, session } = this.dependencies;
+        editorHost.flush();
+        const decision = await files.confirmCloseAll(signal);
+        if (decision === "cancel" || this.disposed) return;
+        await scheduler.clear();
+        // The next start reopens the documents open now, also one that Save
+        // just gave a file.
+        await session.flush();
+        // Recovery cleanup and the session record await disk I/O. Typing, a
+        // queued save or a dropped file that arrived meanwhile must keep a Save
+        // close from losing work.
+        if (!this.disposed && decision !== "discard" && !files.canCloseTabs()) {
+          scheduler.start();
+          return;
+        }
+        if (!this.disposed) {
+          accepted = true;
+          this.closeApproved = true;
+          await desktopBridge().closeWindow().catch((error: unknown) => {
+            this.closeApproved = false;
+            throw error;
+          });
+        }
       } finally {
-        this.closing = false;
+        // Clear the main process's quit intent when this close was declined,
+        // unless a newer close took over, which then decides.
+        if (!accepted && !this.disposed && !signal.aborted) await desktopBridge().cancelWindowClose();
       }
-    }
+    });
   }
 
   private captureCleanup(promise: Promise<() => void>): void {

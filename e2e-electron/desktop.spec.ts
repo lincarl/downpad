@@ -5414,6 +5414,68 @@ test("Save on window close awaits saved named and untitled tabs before exiting",
   expect(await readFile(untitled, "utf8")).toBe("Window untitled.\n");
 });
 
+/** Make the main process's writes of files whose path holds `marker` never
+ *  answer, as on a network drive that went away. The new file that a write
+ *  stages its text in is never created. `goneAsked` counts the writes that
+ *  got stuck. */
+async function hangWritesUnder(marker: string): Promise<void> {
+  await app!.evaluate((_electron, part) => {
+    const filesystem = process.getBuiltinModule("node:fs/promises");
+    const original = filesystem.open.bind(filesystem) as (...args: unknown[]) => Promise<unknown>;
+    Reflect.set(filesystem, "open", async (target: unknown, flags: unknown, ...rest: unknown[]) => {
+      if (String(target).includes(part) && flags === "wx") {
+        Reflect.set(globalThis, "goneAsked", Number(Reflect.get(globalThis, "goneAsked") ?? 0) + 1);
+        await new Promise(() => {});
+      }
+      return original(target, flags, ...rest);
+    });
+    process.getBuiltinModule("node:module").syncBuiltinESMExports();
+  }, marker);
+}
+
+test("a save that never returns holds up no other document, and closing its document again with Discard closes it", async () => {
+  const gone = path.join(directory, "gone-drive");
+  await mkdir(gone);
+  const stuck = path.join(gone, "remote.md");
+  const local = path.join(directory, "local.md");
+  await writeFile(stuck, "Remote document.\n");
+  await writeFile(local, "Local document.\n");
+  await launch(stuck);
+  await chooseOpen(local);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(paragraph).toHaveText("Local document.");
+  await hangWritesUnder("gone-drive");
+  const stuckTab = page.getByRole("tab", { name: /remote\.md/ });
+  const localTab = page.getByRole("tab", { name: /local\.md/ });
+  await stuckTab.click();
+  await expect(paragraph).toHaveText("Remote document.");
+  await typeAtEnd(paragraph, " Never written.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "goneAsked"))).toBe(1);
+
+  // Another document saves, and closes, meanwhile.
+  await localTab.click();
+  await expect(paragraph).toHaveText("Local document.");
+  await typeAtEnd(paragraph, " Saved.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(local, "utf8")).toBe("Local document. Saved.\n");
+  await localTab.locator(".tab-close").click();
+  await expect(localTab).toHaveCount(0);
+
+  // Save on close waits for the stuck write, and closing again asks again.
+  await chooseCloseAction("Save");
+  await stuckTab.locator(".tab-close").click();
+  await expect.poll(() => app!.evaluate(() => (Reflect.get(globalThis, "closePrompts") as unknown[]).length)).toBe(1);
+  await expect(stuckTab).toBeVisible();
+  await chooseCloseAction("Discard");
+  await stuckTab.locator(".tab-close").click();
+  await expect(stuckTab).toHaveCount(0);
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "closePrompts"))).toEqual([
+    { message: '"remote.md" has unsaved changes. Save before closing?', buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
+  ]);
+  expect(await readFile(stuck, "utf8")).toBe("Remote document.\n");
+});
+
 test("Tab leaves the document view without typing spaces, and still nests a list item", async () => {
   const file = path.join(directory, "tab.md");
   await writeFile(file, "First line.\n\n- One\n- Two\n\n```js\nlet x = 1;\n```\n");
