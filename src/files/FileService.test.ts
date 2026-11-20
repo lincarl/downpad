@@ -1040,6 +1040,29 @@ describe("saving before close", () => {
     expect(native.saveDialog).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { what: "with unsaved changes", dirty: true },
+    { what: "without unsaved changes", dirty: false },
+  ])("never writes the file that a Save As failing during the close was leaving, nor closes, for a document $what", async ({ dirty }) => {
+    const { store, files } = setup(dirty);
+    const tabId = store.get().activeTabId!;
+    // A Save As to a slow drive, after which the user goes on typing.
+    native.saveDialog.mockResolvedValueOnce("/slow/report.md");
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saveAs = files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    if (dirty) store.patchDoc({ markdown: "# Typed during the Save As\n", isDirty: true });
+    const closing = files.confirmCloseTab(tabId, "notes.md");
+    await eventually(() => expect(native.confirmSaveChanges).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    write.reject(new Error("Disk unavailable"));
+    await expect(saveAs).rejects.toThrow("Disk unavailable");
+    expect(await closing).toBe("cancel");
+    expect(native.writeFile).toHaveBeenCalledOnce();
+    expect(store.get().doc.filePath).toBe(filePath);
+  });
+
   it("asks before closing a document whose save does not return, and stops waiting once a newer close takes over", async () => {
     const { store, files } = setup();
     const tabId = store.get().activeTabId!;

@@ -45,6 +45,11 @@ interface SaveRequest {
   choice: SaveAsChoice;
   /** Marks a save nobody asked for as such, with the check that holds it. */
   automatic?: (tabId: string) => boolean | Promise<boolean>;
+  /** For a save that a close asked for: the tab's `failedMoves` count when
+   *  the close began. A higher count by the save's turn means that a Save As
+   *  of the tab failed or was cancelled meanwhile, so the document still has
+   *  the file the user was leaving, and the save writes nothing. */
+  failedMovesBefore?: number;
   /** Once its dialog closed: the file that the save chose, which no other tab
    *  may choose until the save ends. */
   chosen?: string;
@@ -406,18 +411,18 @@ export class FileService {
   private queueSave(
     tabId: string | null,
     saveAs: boolean,
-    options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean | Promise<boolean> } = {},
+    options: { keepTypedMark?: boolean; automatic?: (tabId: string) => boolean | Promise<boolean>; failedMovesBefore?: number } = {},
     choice: SaveAsChoice = {},
   ): Promise<boolean> {
     // The document view reports typing after a short delay. Collect it first so
     // a save right after typing writes the latest text.
-    const { automatic, ...flushOptions } = options;
+    const { automatic, failedMovesBefore, ...flushOptions } = options;
     this.present.flush(flushOptions);
     const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!tabId || !doc) return Promise.resolve(false);
     // This save waits for that write, so the user learns why nothing happens.
     if ([...this.pendingSaves].some((pending) => pending.tabId === tabId && pending.slow)) this.events.slowWrite?.(tabId);
-    const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, automatic };
+    const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, automatic, failedMovesBefore };
     this.pendingSaves.add(request);
     // The save leaves the pending ones and counts as a failed move in one
     // step, so a caller that sees no save under way sees the count too. A
@@ -498,7 +503,8 @@ export class FileService {
   }
 
   private async saveSnapshot(request: SaveRequest): Promise<boolean> {
-    const { tabId, expectedPath, saveAs, automatic } = request;
+    const { tabId, expectedPath, saveAs, automatic, failedMovesBefore } = request;
+    if (failedMovesBefore !== undefined && this.failedMoves(tabId) !== failedMovesBefore) return false;
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== expectedPath) return false;
     const originalPath = current.filePath;
@@ -659,14 +665,22 @@ export class FileService {
    *  requested tab. The saves of documents with a file are asked for
    *  together, then those of untitled documents one after another, since each
    *  shows a dialog. Cancellation or failure leaves all tabs open, including
-   *  those saved first, and a failed save rejects. The close waits for every
-   *  save of the tabs, which never ends for a write that does not return.
+   *  those saved first, and a failed save rejects. A Save As of a tab that
+   *  fails or is cancelled while the close is under way leaves them open too
+   *  ("cancel"), and the close's save of that tab then writes nothing. The
+   *  close waits for every save of the tabs, which never ends for a write that
+   *  does not return.
    *  Once `signal` aborts, as for a newer close that the user asked for, it
    *  stops waiting and keeps the tabs ("cancel"), and the saves go on. */
   private async prepareClose(tabIds: string[], message: string, signal?: AbortSignal): Promise<CloseDecision> {
     this.present.flush();
     const owners = new Set(tabIds);
     const ownTabs = () => this.store.get().tabs.filter((tab) => owners.has(tab.id));
+    // A Save As of a tab that fails or is cancelled while the close is under
+    // way leaves the document with the file the user was leaving. The close
+    // then writes nothing to that file and closes nothing, as Copy file does.
+    // The failed Save As shows its own error notice.
+    const failedMoves = new Map(tabIds.map((id) => [id, this.failedMoves(id)]));
     if (ownTabs().some((tab) => this.unsavedForClose(tab))) {
       const choice = await confirmSaveChanges(message);
       if (choice === "cancel" || choice === "discard") return choice;
@@ -676,7 +690,8 @@ export class FileService {
       // The saves of documents with a file start together, so one that does
       // not return, as to a network drive that went away, holds up no other.
       let failed = false;
-      const filed = Promise.all(unsaved.filter((tab) => tab.doc.filePath !== null).map((tab) => this.queueSave(tab.id, false).then(
+      const closeSave = (tabId: string): Promise<boolean> => this.queueSave(tabId, false, { failedMovesBefore: failedMoves.get(tabId) });
+      const filed = Promise.all(unsaved.filter((tab) => tab.doc.filePath !== null).map((tab) => closeSave(tab.id).then(
         (saved) => {
           if (!saved) failed = true;
           return saved;
@@ -693,7 +708,7 @@ export class FileService {
       // until one is cancelled or a save fails.
       for (const tab of unsaved.filter((tab) => tab.doc.filePath === null)) {
         if (signal?.aborted || failed) break;
-        const saved = await unlessAborted(this.queueSave(tab.id, false), signal);
+        const saved = await unlessAborted(closeSave(tab.id), signal);
         if (saved !== true) return "cancel";
       }
       const saved = await unlessAborted(filed, signal);
@@ -702,6 +717,7 @@ export class FileService {
     // Another queued save may still overwrite the file after our write. Wait
     // for it as well, and reject any newer edits or pending dropped assets.
     if (await this.untilEnded((request) => owners.has(request.tabId), signal)) return "cancel";
+    if (tabIds.some((id) => this.failedMoves(id) !== failedMoves.get(id))) return "cancel";
     return this.canCloseTabs(tabIds) ? "close" : "cancel";
   }
 
