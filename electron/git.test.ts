@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as childProcess from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discardChanges, discardedCopyName, getLatest, gitStatus, keepDiscardedCopy, keptTimeOf, linkedPaths, listDiscardedCopies, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
 
@@ -472,7 +472,11 @@ describe("discarded copies", () => {
     const own = [join(folder, "Project plan.md"), join(kept, "Project plan.md")];
     // A copy that Downpad 0.3.14 or earlier kept.
     const earlier = join(kept, "2026-01-01T00-00-00-000Z notes.md");
-    for (const file of [...own, earlier, copy]) {
+    // The temporary file that a write of a copy left when it never finished,
+    // and a hidden file of the user's that only ends the same way.
+    const leftover = join(folder, `.${basename(copy)}.0b0e5c1e-6c0f-4b53-9a4e-0d0f6a1b2c3d.tmp`);
+    own.push(join(folder, ".Project plan.md.tmp"));
+    for (const file of [...own, earlier, copy, leftover]) {
       await writeFile(file, "Text\n");
       await utimes(file, past, past);
     }
@@ -487,6 +491,7 @@ describe("discarded copies", () => {
     for (const file of [...own, otherOwn]) expect(await readFile(file, "utf8")).toBe("Text\n");
     await expect(readFile(earlier)).rejects.toThrow("ENOENT");
     await expect(readFile(copy)).rejects.toThrow("ENOENT");
+    await expect(readFile(leftover)).rejects.toThrow("ENOENT");
     await expect(readFile(otherCopy)).rejects.toThrow("ENOENT");
     // A file of the user's is never offered as a copy, also while it is new.
     const now = new Date();

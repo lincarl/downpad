@@ -850,7 +850,8 @@ function discardedCopyFolder(userData: string, path: string): string {
  *  documents' folders in it, which go once they are empty. Only regular files
  *  named as Downpad names its copies go: in a document's folder a name that
  *  starts with the time `discardedCopyName` writes, and directly in `root` the
- *  name of a copy that Downpad 0.3.14 or earlier kept there. Only Downpad's
+ *  name of a copy that Downpad 0.3.14 or earlier kept there, and with either
+ *  the temporary file that an unfinished write of such a copy left. Only Downpad's
  *  own folders are entered, never through a symbolic link. So a file that the
  *  user saved among the copies, as with Save as from an opened copy, and a
  *  folder that is not Downpad's, such as one an opened copy got for its
@@ -859,7 +860,11 @@ async function deleteExpiredCopies(root: string): Promise<void> {
   const cutoff = copyCutoff();
   const deleteOldCopies = async (folder: string, isCopy: (name: string) => boolean): Promise<void> => {
     for (const name of await readdir(folder).catch(() => [])) {
-      if (!isCopy(name)) continue;
+      // A write of a copy that never finished, as after a crash, leaves its
+      // temporary file: the copy's name with a dot before it and `.tmp` last
+      // (`writeAtomic`).
+      const leftover = /^\..*\.tmp$/.test(name) && isCopy(name.slice(1));
+      if (!isCopy(name) && !leftover) continue;
       const entry = join(folder, name);
       const info = await lstat(entry).catch(() => null);
       if (info?.isFile() && info.mtimeMs < cutoff) await unlink(entry).catch(() => {});
