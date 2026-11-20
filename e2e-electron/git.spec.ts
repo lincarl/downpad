@@ -1,5 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -280,6 +281,26 @@ test("keeps the user's text in its tab when the latest version has no such file,
   await banner.getByRole("button", { name: "Open copy" }).click();
   await expect(page.getByRole("tab", { name: /^\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d\.\d{3} notes\.md$/ })).toHaveAttribute("aria-selected", "true");
   await expect(shownDocument()).toContainText("My second paragraph.");
+});
+
+test("lets Upload's menu scroll to every copy in a short window", async () => {
+  // Twelve copies of the document's discarded changes, kept a minute apart.
+  const notes = path.join(mine, "notes.md");
+  const folder = path.join(directory, "profile", "discarded-changes", createHash("sha256").update(path.resolve(notes)).digest("hex").slice(0, 16));
+  await mkdir(folder, { recursive: true });
+  const digits = (value: number): string => String(value).padStart(2, "0");
+  for (let minute = 0; minute < 12; minute++) {
+    await writeFile(path.join(folder, `2026-11-20 09.${digits(minute)}.00.000 notes.md`), `Copy from 09:${digits(minute)}.\n`);
+  }
+  await launch(notes);
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(480, 360));
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(360);
+  await page.getByRole("button", { name: "Upload options" }).click();
+  const oldest = page.getByRole("menuitem", { name: "Open copy from 20 Nov, 09:00" });
+  await oldest.scrollIntoViewIfNeeded();
+  await expect(oldest).toBeInViewport({ ratio: 1 });
+  await oldest.click();
+  await expect(shownDocument()).toContainText("Copy from 09:00.");
 });
 
 test("saves the user's version as a new file when the changes overlap", async () => {

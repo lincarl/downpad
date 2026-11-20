@@ -407,6 +407,14 @@ function focusCheckedMenuRow(event: Event): void {
   menu?.querySelector<HTMLButtonElement>(".md-context-menu-item[aria-checked='true']")?.focus();
 }
 
+/** The classes of a toolbar menu's PopoverContent. The menu is no taller than
+ *  the room below its button, which Radix measures, and scrolls, so every row
+ *  can be reached in a short window, such as Upload's menu with many copies. */
+const toolbarMenuClassName = cn(
+  "z-[100] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto",
+  menuSurfaceClassName,
+);
+
 /**
  * Open state for a toolbar popover menu and the activation that closes it,
  * returns focus to its button and then runs the item. Radix returns focus on
@@ -476,7 +484,7 @@ function ToolbarMenu({ className, label, icon: Icon, disabled, items }: {
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn("z-[100]", menuSurfaceClassName)}
+        className={toolbarMenuClassName}
         role="menu"
         aria-label={label}
         {...menuProps}
@@ -610,7 +618,7 @@ function SplitButton({
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn("z-[100]", menuSurfaceClassName)}
+        className={toolbarMenuClassName}
         role="menu"
         aria-label={menuLabel}
         {...menuProps}
@@ -669,7 +677,7 @@ function TextSizeControl({
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn(menuSurfaceClassName, "z-[100] w-[var(--radix-popover-trigger-width)] min-w-0")}
+        className={cn(toolbarMenuClassName, "w-[var(--radix-popover-trigger-width)] min-w-0")}
         role="menu"
         aria-label="Document text size"
         {...menuProps}
