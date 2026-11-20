@@ -19,6 +19,7 @@ import {
   gitUpload,
   keepDiscardedCopy,
   listDiscardedCopies,
+  pathExists,
 } from "../ipc/commands";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "../files/pathIdentity";
@@ -448,7 +449,9 @@ export class GitSync {
   /** Keep a copy of the user's changes, then replace the document with the
    *  latest version. The notice then says where the latest version is as it
    *  shows, since another tab can be in front by then, and that Upload's menu
-   *  offers the copy. */
+   *  offers the copy. A latest version without the document's file, as after
+   *  a collaborator deleted or renamed it, leaves the user's text in the tab,
+   *  and the notice says so. */
   private async discardMine(path: string, generation: number): Promise<void> {
     this.deps.flush();
     const tab = this.activeTab();
@@ -465,10 +468,15 @@ export class GitSync {
     if (!result) return;
     const name = fileName(path);
     const discarded = result.changedOpenFiles.some((file) => sameFilePath(file, path));
+    // When a collaborator deleted or renamed the file, the latest version has
+    // no such file, so nothing can take the place of the user's text, and the
+    // tab keeps it. A look that fails counts as a file, whose read then says
+    // what is wrong.
+    const missing = discarded && !(await pathExists(path).catch(() => true));
     // Whether the document's tab took the file that Git put back. It did not
     // when the tab was closed or got another file meanwhile.
     let tookFile = false;
-    if (discarded) {
+    if (discarded && !missing) {
       // The file is put back, so the tab gets it too. Text typed since the
       // last copy was kept gets a newer copy first, so no typing is lost.
       let kept = tab.doc.markdown;
@@ -498,7 +506,10 @@ export class GitSync {
     if (rest.kind !== "done") {
       // Git put the file back to its last commit but could not get the
       // latest version, so the failure says that the changes are gone too.
-      const lead = discarded ? `Your changes to “${name}” are discarded, and Upload's menu offers a copy of them for 30 days. ` : "";
+      // Git takes a file away here only when the last commit lacks it, to
+      // make room for the latest version.
+      let lead = discarded ? `Your changes to “${name}” are discarded, and Upload's menu offers a copy of them for 30 days. ` : "";
+      if (missing) lead = `“${name}” is no longer on disk, and Downpad kept a copy of your changes. `;
       await this.finish(path, rest, "get-latest", false, generation, lead);
       return;
     }
@@ -509,11 +520,16 @@ export class GitSync {
     // Where the latest version is now, since the user can have shown another
     // tab, or the document's tab again, while the other documents reloaded.
     const { tabs, activeTabId, view } = this.deps.store.get();
-    const holder = tookFile ? tabs.find((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path)) : undefined;
+    const holder = tabs.find((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
     let message = `Your changes to “${name}” are discarded. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`;
-    if (holder && activeTabId === holder.id && view !== "recent") {
+    if (missing) {
+      // Upload's menu needs the file, so the notice offers the copy alone.
+      message = holder
+        ? `“${name}” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.`
+        : `“${name}” is not in the latest version, because someone deleted or renamed it. Open copy shows the copy of your changes that Downpad kept.`;
+    } else if (tookFile && holder && activeTabId === holder.id && view !== "recent") {
       message = `Your changes to “${name}” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.`;
-    } else if (holder) {
+    } else if (tookFile && holder) {
       message = `Your changes to “${name}” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`;
     }
     this.showNotice({ kind: "info", message, actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });

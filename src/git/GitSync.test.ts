@@ -19,6 +19,7 @@ const git = vi.hoisted(() => ({
   discard: vi.fn<(path: string, openFiles: GitOpenFile[]) => Promise<GitSyncResult>>(),
   keepCopy: vi.fn<(path: string, content: string) => Promise<string>>(),
   listCopies: vi.fn<(path: string) => Promise<DiscardedCopy[]>>(),
+  pathExists: vi.fn<(path: string) => Promise<boolean>>(),
 }));
 
 vi.mock("../ipc/commands", () => ({
@@ -29,6 +30,7 @@ vi.mock("../ipc/commands", () => ({
   gitDiscard: git.discard,
   keepDiscardedCopy: git.keepCopy,
   listDiscardedCopies: git.listCopies,
+  pathExists: git.pathExists,
 }));
 
 const PATH = "/work/notes.md";
@@ -95,6 +97,7 @@ beforeEach(() => {
   window.downpadDesktop = { platform: "linux" } as unknown as NonNullable<typeof window.downpadDesktop>;
   for (const mock of Object.values(git)) mock.mockReset();
   git.listCopies.mockResolvedValue([]);
+  git.pathExists.mockResolvedValue(true);
   store = createAppStore();
   deps = {
     store,
@@ -589,7 +592,38 @@ describe("GitSync conflicts", () => {
   });
 
   it.each([
-    { put: "put the file back", changed: [PATH], message:"Your changes to “notes.md” are discarded, and Upload's menu offers a copy of them for 30 days. Get latest failed. No connection." },
+    {
+      when: "its tab is open",
+      act: () => {},
+      message: "“notes.md” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.",
+    },
+    {
+      when: "its tab is closed",
+      act: () => store.closeTab(store.get().activeTabId!),
+      message: "“notes.md” is not in the latest version, because someone deleted or renamed it. Open copy shows the copy of your changes that Downpad kept.",
+    },
+  ])("says that the latest version has no such file when someone deleted or renamed it, and $when", async ({ act, message }) => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockImplementation(async () => {
+      act();
+      return done([PATH]);
+    });
+    // Git put the latest version in place, which has no such file.
+    git.pathExists.mockResolvedValue(false);
+    deps.files.replaceFromDisk.mockRejectedValue(new Error("Error invoking remote method 'downpad:invoke': Error: ENOENT: no such file or directory, open '/work/notes.md'"));
+    const tabs = store.get().tabs.length;
+    await sync.check({ force: true });
+    expect(store.get().banner).toEqual({ kind: "info", message, actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });
+    expect(git.pathExists).toHaveBeenCalledWith(PATH);
+    // An open tab keeps the user's text.
+    if (store.get().tabs.length === tabs) expect(store.get().doc).toMatchObject({ filePath: PATH, markdown: "# Notes\n\nMine\n" });
+    sync.handleBannerAction(GIT_OPEN_COPY);
+    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md"));
+  });
+
+  it.each([
+    { put: "put the file back", changed: [PATH], message: "Your changes to “notes.md” are discarded, and Upload's menu offers a copy of them for 30 days. Get latest failed. No connection." },
     { put: "changed nothing", changed: [], message: "Get latest failed. No connection." },
   ])("says whether the changes are discarded when Git $put but could not get the latest version", async ({ changed, message }) => {
     deps.askConflict.mockResolvedValue("discard");

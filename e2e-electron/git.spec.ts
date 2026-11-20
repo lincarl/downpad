@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 // Upload and Get latest against real Git repositories: a bare remote, the
@@ -260,6 +260,26 @@ test("offers the copy of discarded changes in Upload's menu after its notice is 
   await launch(path.join(mine, "notes.md"));
   await expect(shownDocument()).toContainText("Their second paragraph.");
   await openCopy();
+});
+
+test("keeps the user's text in its tab when the latest version has no such file, and offers the copy", async () => {
+  await writeFile(path.join(mine, "notes.md"), NOTES.replace("Second paragraph.", "My second paragraph."));
+  // Someone else deletes the document.
+  git(theirs, "pull", "--quiet", "--ff-only");
+  git(theirs, "rm", "--quiet", "notes.md");
+  git(theirs, "commit", "--quiet", "-m", "Remove notes");
+  git(theirs, "push", "--quiet");
+  await launch(path.join(mine, "notes.md"));
+  await page.getByRole("dialog", { name: "Someone else changed this document" }).getByRole("button", { name: "Discard my changes" }).click();
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText(
+    "“notes.md” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.",
+  );
+  await expect(shownDocument()).toContainText("My second paragraph.");
+  await expect(access(path.join(mine, "notes.md"))).rejects.toThrow("ENOENT");
+  await banner.getByRole("button", { name: "Open copy" }).click();
+  await expect(page.getByRole("tab", { name: /^\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d\.\d{3} notes\.md$/ })).toHaveAttribute("aria-selected", "true");
+  await expect(shownDocument()).toContainText("My second paragraph.");
 });
 
 test("saves the user's version as a new file when the changes overlap", async () => {
