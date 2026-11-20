@@ -15,6 +15,7 @@ import {
   Columns2,
   Copy,
   File,
+  FileClock,
   FileCode2,
   FilePlus2,
   FileText,
@@ -64,7 +65,8 @@ import { showContextMenu } from "@/shell/contextMenu";
 import { MENU_ICONS } from "@/shell/menuIcons";
 import { EditorIsland } from "@/editor/EditorIsland";
 import { middleTruncate } from "@/editor/wysiwyg/linkView";
-import { gitStatusText } from "@/git/gitText";
+import { gitStatusText, keptTimes } from "@/git/gitText";
+import { sameFilePath } from "@/files/pathIdentity";
 import type { EditorHost } from "@/editor/EditorHost";
 
 export interface AppProps {
@@ -193,6 +195,10 @@ function Toolbar() {
   const language = inEditor ? documentLanguage(doc.filePath) : "markdown";
   const isMarkdown = language === "markdown";
   const sourceName = LANGUAGE_NAMES[language];
+  // Upload's menu offers the kept copies of the discarded changes of the
+  // document in front. Git's state names its document, since it is replaced
+  // only once Git has answered for the next one after a tab switch.
+  const copies = git && doc.filePath && sameFilePath(git.path, doc.filePath) ? git.discardedCopies : [];
   const documentIsDark =
     settings.editorTheme === "dark" ||
     (settings.editorTheme === "follow-ui" &&
@@ -263,6 +269,12 @@ function Toolbar() {
           items={[
             { label: "Upload", icon: CloudUpload, run: () => runtime?.uploadDocument() },
             { label: "Get latest", icon: CloudDownload, run: () => runtime?.getLatestDocument() },
+            ...keptTimes(copies.map((copy) => copy.keptMs)).map((time, index): MenuItem => ({
+              label: `Open copy from ${time}`,
+              icon: FileClock,
+              run: () => runtime?.openDiscardedCopy(git.path, copies[index].path),
+              ...(index === 0 ? { separatorBefore: true, section: "Discarded changes" } : {}),
+            })),
           ]}
         />
       )}
@@ -395,6 +407,14 @@ function focusCheckedMenuRow(event: Event): void {
   menu?.querySelector<HTMLButtonElement>(".md-context-menu-item[aria-checked='true']")?.focus();
 }
 
+/** The classes of a toolbar menu's PopoverContent. The menu is no taller than
+ *  the room below its button, which Radix measures, and scrolls, so every row
+ *  can be reached in a short window, such as Upload's menu with many copies. */
+const toolbarMenuClassName = cn(
+  "z-[100] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto",
+  menuSurfaceClassName,
+);
+
 /**
  * Open state for a toolbar popover menu and the activation that closes it,
  * returns focus to its button and then runs the item. Radix returns focus on
@@ -464,7 +484,7 @@ function ToolbarMenu({ className, label, icon: Icon, disabled, items }: {
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn("z-[100]", menuSurfaceClassName)}
+        className={toolbarMenuClassName}
         role="menu"
         aria-label={label}
         {...menuProps}
@@ -598,7 +618,7 @@ function SplitButton({
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn("z-[100]", menuSurfaceClassName)}
+        className={toolbarMenuClassName}
         role="menu"
         aria-label={menuLabel}
         {...menuProps}
@@ -657,7 +677,7 @@ function TextSizeControl({
       <PopoverContent
         align="start"
         sideOffset={0}
-        className={cn(menuSurfaceClassName, "z-[100] w-[var(--radix-popover-trigger-width)] min-w-0")}
+        className={cn(toolbarMenuClassName, "w-[var(--radix-popover-trigger-width)] min-w-0")}
         role="menu"
         aria-label="Document text size"
         {...menuProps}

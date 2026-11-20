@@ -197,14 +197,41 @@ describe("native close decisions", () => {
     await eventually(() => expect(disk.writeFile).toHaveBeenCalledWith("/docs/closing.md", "Unsaved text\n", "lf"));
     expect(bridge.closeWindow).not.toHaveBeenCalled();
     expect(scheduler.clear).not.toHaveBeenCalled();
-    // Repeated native close events share the pending close instead of prompting again.
-    events.closeRequested!();
     finishWrite({ modifiedMs: 200 });
     await closing;
 
     expect(bridge.confirmSaveChanges).toHaveBeenCalledOnce();
     expect(scheduler.clear).toHaveBeenCalledOnce();
     expect(bridge.closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { choice: "discard", closes: true },
+    { choice: "cancel", closes: false },
+  ] as const)("asks again when the window is closed again while a save does not return, and $choice then decides", async ({ choice, closes }) => {
+    vi.mocked(files.confirmCloseAll).mockRestore();
+    bridge.confirmSaveChanges.mockResolvedValueOnce("save").mockResolvedValueOnce(choice);
+    store.addTab({ ...blankDoc(), filePath: "/docs/closing.md", markdown: "Unsaved text\n", isDirty: true });
+    let finishWrite!: (meta: FileMeta) => void;
+    disk.writeFile.mockImplementationOnce(() => new Promise((resolve) => { finishWrite = resolve; }));
+    events.closeRequested!();
+    const first = current;
+    await eventually(() => expect(disk.writeFile).toHaveBeenCalledOnce());
+
+    events.closeRequested!();
+    await current;
+    expect(bridge.confirmSaveChanges).toHaveBeenCalledTimes(2);
+    expect(bridge.closeWindow).toHaveBeenCalledTimes(closes ? 1 : 0);
+    // The close that took over decides about the quit intent, not the first.
+    expect(bridge.cancelWindowClose).toHaveBeenCalledTimes(closes ? 0 : 1);
+    await first;
+
+    // A write that ends later does not close the window that the user kept.
+    finishWrite({ modifiedMs: 200 });
+    await eventually(() => expect(store.get().doc.isDirty).toBe(false));
+    await Promise.resolve();
+    expect(bridge.closeWindow).toHaveBeenCalledTimes(closes ? 1 : 0);
+    expect(scheduler.clear).toHaveBeenCalledTimes(closes ? 1 : 0);
   });
 
   it("cancels native close and retains recovery when Save fails", async () => {
@@ -214,7 +241,9 @@ describe("native close decisions", () => {
     disk.writeFile.mockRejectedValueOnce(new Error("Disk full"));
     events.closeRequested!();
 
-    await expect(current).rejects.toThrow("Disk full");
+    // The failed save tells the user itself (`SaveEvents.closeSaveFailed`),
+    // so the close keeps the window without failing.
+    await expect(current).resolves.toBeUndefined();
     expect(scheduler.clear).not.toHaveBeenCalled();
     expect(bridge.closeWindow).not.toHaveBeenCalled();
     expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
@@ -584,6 +613,91 @@ describe("a file that changed on disk", () => {
     answer(stamp(100));
     await settled;
     expect(bindings.holdSave(second)).toBe(false);
+  });
+
+  /** Report a change of the file whose read ends when the returned function
+   *  is called with what the file held. */
+  async function reportWithHeldRead(modifiedMs: number): Promise<(payload: FilePayload) => void> {
+    let finishRead!: (payload: FilePayload) => void;
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    const reads = disk.readFile.mock.calls.length;
+    events.fileChanged!({ path: filePath, modifiedMs });
+    await eventually(() => expect(disk.readFile.mock.calls.length).toBe(reads + 1));
+    return finishRead;
+  }
+
+  const noSuchFile = new Error("ENOENT: no such file or directory");
+
+  it("forgets the change on disk of a file that is gone", async () => {
+    const tabId = store.get().activeTabId!;
+    await changeOnDisk("# Theirs\n");
+    expect(store.get().banner?.kind).toBe("file-changed");
+    expect(bindings.holdSave(tabId)).toBe(true);
+
+    bindings.fileGone(tabId);
+    expect(store.get().banner).toBeNull();
+    expect(bindings.showPendingChange()).toBe(false);
+  });
+
+  it("uses no read of a file that began before the file went", async () => {
+    const tabId = store.get().activeTabId!;
+    const finishRead = await reportWithHeldRead(300);
+    bindings.fileGone(tabId);
+    disk.readFile.mockRejectedValue(noSuchFile);
+    finishRead({ content: "# Put back\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 11 });
+    await bindings.settled(tabId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get().banner).toBeNull();
+    expect(bindings.showPendingChange()).toBe(false);
+    expect(bindings.isFileGone(tabId)).toBe(true);
+  });
+
+  it("keeps the file marked gone until the document records a saved version", async () => {
+    const tabId = store.get().activeTabId!;
+    expect(bindings.isFileGone(tabId)).toBe(false);
+    store.patchDoc({ isDirty: true, savedMarkdown: null });
+    bindings.fileGone(tabId);
+    expect(bindings.isFileGone(tabId)).toBe(true);
+    store.patchDoc({ savedMarkdown: null });
+    expect(bindings.isFileGone(tabId)).toBe(true);
+    store.patchDoc({ modifiedMs: 300, savedMarkdown: "# Mine\n", isDirty: false });
+    expect(bindings.isFileGone(tabId)).toBe(false);
+  });
+
+  it("counts a file as back once a read finds it, with its change still to resolve", async () => {
+    const tabId = store.get().activeTabId!;
+    store.patchDoc({ isDirty: true, savedMarkdown: null });
+    bindings.fileGone(tabId);
+    disk.readFile.mockRejectedValueOnce(noSuchFile);
+    events.fileChanged!({ path: filePath, modifiedMs: 300 });
+    await bindings.settled(tabId);
+    expect(bindings.isFileGone(tabId)).toBe(true);
+
+    await changeOnDisk("# Theirs\n", 400);
+    expect(bindings.isFileGone(tabId)).toBe(false);
+    expect(bindings.holdSave(tabId)).toBe(true);
+  });
+
+  it("forgets the gone file of a closed tab", () => {
+    const tabId = store.get().activeTabId!;
+    bindings.fileGone(tabId);
+    store.set({ tabs: [], activeTabId: null });
+    expect(bindings.isFileGone(tabId)).toBe(false);
+  });
+
+  it.each([
+    { document: "a document that recorded its file", recorded: { fileSize: 7 } },
+    { document: "a recovered document", recorded: { fileSize: undefined } },
+  ])("reads the file of $document that was gone when its tab comes to the front, without a report of the watcher", async ({ recorded }) => {
+    const tabId = store.get().activeTabId!;
+    store.patchDoc({ ...recorded, isDirty: true, savedMarkdown: null });
+    bindings.fileGone(tabId);
+    disk.fileStamp.mockResolvedValue({ modifiedMs: 100, sizeBytes: 7 });
+    const reads = disk.readFile.mock.calls.length;
+    bindings.activeDocChanged();
+    await bindings.settled(tabId);
+    expect(disk.readFile.mock.calls.length).toBe(reads + 1);
+    expect(bindings.isFileGone(tabId)).toBe(false);
   });
 
   it("does not use a read that a save made out of date", async () => {

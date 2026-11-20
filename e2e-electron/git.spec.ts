@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 // Upload and Get latest against real Git repositories: a bare remote, the
@@ -231,6 +231,89 @@ test("shows the document again when its changes are discarded while the Recent v
   await expect(banner).toContainText("Your changes to “notes.md” are discarded");
   await banner.getByRole("button", { name: "Open copy" }).click();
   await expect(shownDocument()).toContainText("My second paragraph.");
+});
+
+test("offers the copy of discarded changes in Upload's menu after its notice is gone, also after a restart", async () => {
+  await writeFile(path.join(mine, "notes.md"), NOTES.replace("Second paragraph.", "My second paragraph."));
+  await pushTheirs(NOTES.replace("Second paragraph.", "Their second paragraph."));
+  const loose = path.join(directory, "loose.md");
+  await writeFile(loose, "# Loose\n");
+  await launch(path.join(mine, "notes.md"));
+  await page.getByRole("dialog", { name: "Someone else changed this document" }).getByRole("button", { name: "Discard my changes" }).click();
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText("Your changes to “notes.md” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.");
+  // Another tab takes the notice down for good.
+  await open(loose);
+  await expect(shownDocument().locator("h1")).toHaveText("Loose");
+  await expect(banner).toBeHidden();
+  await page.getByRole("tab", { name: "notes.md", exact: true }).click();
+  await expect(shownDocument()).toContainText("Their second paragraph.");
+  await expect(banner).toBeHidden();
+  const openCopy = async (): Promise<void> => {
+    await page.getByRole("button", { name: "Upload options" }).click();
+    await page.getByRole("menuitem", { name: /^Open copy from \d+ \w{3}, \d\d:\d\d$/ }).click();
+    await expect(shownDocument()).toContainText("My second paragraph.");
+  };
+  await openCopy();
+  await app!.close();
+  app = undefined;
+  await launch(path.join(mine, "notes.md"));
+  await expect(shownDocument()).toContainText("Their second paragraph.");
+  await openCopy();
+});
+
+test("keeps the user's text in its tab when the latest version has no such file, and offers the copy", async () => {
+  await writeFile(path.join(mine, "notes.md"), NOTES.replace("Second paragraph.", "My second paragraph."));
+  // Someone else deletes the document.
+  git(theirs, "pull", "--quiet", "--ff-only");
+  git(theirs, "rm", "--quiet", "notes.md");
+  git(theirs, "commit", "--quiet", "-m", "Remove notes");
+  git(theirs, "push", "--quiet");
+  await launch(path.join(mine, "notes.md"));
+  await page.getByRole("dialog", { name: "Someone else changed this document" }).getByRole("button", { name: "Discard my changes" }).click();
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText(
+    "“notes.md” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.",
+  );
+  await expect(shownDocument()).toContainText("My second paragraph.");
+  await expect(access(path.join(mine, "notes.md"))).rejects.toThrow("ENOENT");
+  const copyFile = page.getByRole("menuitem", { name: "Copy file", exact: true });
+  await shownDocument().click({ button: "right" });
+  await expect(copyFile).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: "notes.md", exact: true }).click({ button: "right" });
+  await expect(copyFile).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await banner.getByRole("button", { name: "Open copy" }).click();
+  await expect(page.getByRole("tab", { name: /^\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d\.\d{3} notes\.md$/ })).toHaveAttribute("aria-selected", "true");
+  await expect(shownDocument()).toContainText("My second paragraph.");
+});
+
+test("lets Upload's menu scroll to every copy in a short window", async () => {
+  // Twelve copies of the document's discarded changes, which the app keeps
+  // as Discard my changes does, so that no test repeats where they go.
+  const notes = path.join(mine, "notes.md");
+  await launch();
+  await page.evaluate(async (file) => {
+    for (let copy = 1; copy <= 12; copy++) {
+      await window.downpadDesktop!.invoke("keep_discarded_copy", { path: file, content: `Copy ${copy}.\n` });
+      // Copies are named by the millisecond they were kept.
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+  }, notes);
+  await open(notes);
+  await expect(shownDocument()).toContainText("First paragraph.");
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(480, 360));
+  await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(360);
+  await page.getByRole("button", { name: "Upload options" }).click();
+  // The menu lists the copies newest first, so the oldest is the last.
+  const copies = page.getByRole("menuitem", { name: /^Open copy from / });
+  await expect(copies).toHaveCount(12);
+  const oldest = copies.last();
+  await oldest.scrollIntoViewIfNeeded();
+  await expect(oldest).toBeInViewport({ ratio: 1 });
+  await oldest.click();
+  await expect(shownDocument()).toContainText("Copy 1.");
 });
 
 test("saves the user's version as a new file when the changes overlap", async () => {

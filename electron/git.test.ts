@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import * as childProcess from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
+import { discardChanges, discardedCopyName, getLatest, gitStatus, keepDiscardedCopy, keptTimeOf, linkedPaths, listDiscardedCopies, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -424,16 +424,160 @@ describe("pushWasOutrun", () => {
   });
 });
 
-describe("keepDiscardedCopy", () => {
-  it("keeps a copy and deletes copies older than 30 days", async () => {
+describe("discarded copies", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const past = new Date(Date.now() - 31 * day);
+
+  /** Keep a copy as Discard my changes did at `when`. */
+  async function keepAt(when: Date, data: string, path: string, content: string): Promise<string> {
+    vi.useFakeTimers({ toFake: ["Date"], now: when });
+    try {
+      return await keepDiscardedCopy(data, path, content);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  /** The name of a copy that Downpad 0.3.14 or earlier kept at `when`. */
+  const earlierName = (when: Date): string => `${when.toISOString().replace(/[:.]/g, "-")} notes.md`;
+
+  it("keeps each document's copies apart and lists them newest first", async () => {
     const data = join(root, "profile");
-    const old = join(data, "discarded-changes", "old notes.md");
-    await mkdir(join(data, "discarded-changes"), { recursive: true });
-    await writeFile(old, "Old\n");
-    const past = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
-    await utimes(old, past, past);
+    const first = await keepDiscardedCopy(data, notes(), "First\n");
+    await utimes(first, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    const second = await keepDiscardedCopy(data, notes(), "Second\n");
+    // Another document with the same file name, and one being written.
+    await keepDiscardedCopy(data, join(theirs, "notes.md"), "Theirs\n");
+    await writeFile(join(first, "..", ".notes.md.1234.tmp"), "Half");
+    expect(await readFile(second, "utf8")).toBe("Second\n");
+    expect((await listDiscardedCopies(data, notes())).map((copy) => copy.path)).toEqual([second, first]);
+    expect(await listDiscardedCopies(data, join(mine, "other.md"))).toEqual([]);
+  });
+
+  it("reads the time a copy was kept from its name, which a later save of the copy keeps", async () => {
+    for (const date of [new Date(2026, 0, 2, 3, 4, 5, 6), new Date(2026, 11, 31, 23, 59, 59, 999)]) {
+      expect(keptTimeOf(discardedCopyName(date, notes()))).toBe(date.getTime());
+    }
+    expect(discardedCopyName(new Date(2026, 10, 20, 9, 5, 41, 7), notes())).toBe("2026-11-20 09.05.41.007 notes.md");
+    expect(keptTimeOf("notes.md")).toBeNull();
+    expect(keptTimeOf("2026-13-01 09.05.41.007 notes.md")).toBeNull();
+
+    const data = join(root, "profile");
+    const older = await keepDiscardedCopy(data, notes(), "Older\n");
+    const keptAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = await keepDiscardedCopy(data, notes(), "Newer\n");
+    // The user opened the older copy and saved it, which dates the file now.
+    await utimes(older, new Date(), new Date(Date.now() + 60_000));
+    const [first, second] = await listDiscardedCopies(data, notes());
+    expect([first.path, second.path]).toEqual([newer, older]);
+    expect(second.keptMs).toBeLessThanOrEqual(keptAt);
+    expect(second.keptMs).toBeGreaterThan(keptAt - 5_000);
+  });
+
+  it("keeps for good every file written since it was kept, and lists only the document's copies", async () => {
+    const data = join(root, "profile");
+    const kept = join(data, "discarded-changes");
+    const minute = 60_000;
+    // The user opened copies and saved them in place: one kept 31 days ago,
+    // a minute later, and one kept 20 days ago, now.
+    const savedOld = await keepAt(past, data, notes(), "Old\n");
+    await writeFile(savedOld, "Saved\n");
+    await utimes(savedOld, past, new Date(past.getTime() + minute));
+    const recentKept = new Date(Date.now() - 20 * day);
+    const savedRecent = await keepAt(recentKept, data, notes(), "Recent\n");
+    await writeFile(savedRecent, "Saved\n");
+    // Save as from an opened copy suggests the copy's folder and name. The
+    // user kept the time in the name, of a copy kept 31 days ago, saved a
+    // minute later, and of the one kept 20 days ago.
+    const folder = join(savedOld, "..");
+    const savedAs = [basename(savedOld), basename(savedRecent)].map((name) => join(folder, name.replace(/ notes\.md$/, " notes final.md")));
+    await writeFile(savedAs[0], "Final\n");
+    await utimes(savedAs[0], past, new Date(past.getTime() + minute));
+    await writeFile(savedAs[1], "Final\n");
+    // Files of the user's without a copy's time, also a hidden one that ends
+    // as a temporary file does. Downpad 0.3.14 and earlier kept the copies
+    // directly in discarded-changes, so Save as showed that folder then.
+    const own = [join(folder, "Project plan.md"), join(folder, ".Project plan.md.tmp"), join(kept, "Project plan.md")];
+    // A copy that Downpad 0.3.14 or earlier kept 31 days ago and the user saved a minute later.
+    const earlierSaved = join(kept, earlierName(new Date(past.getTime() - minute)));
+    for (const file of [...own, earlierSaved]) {
+      await writeFile(file, "Text\n");
+      await utimes(file, past, past);
+    }
+    // Another document whose folder holds a file of the user's beside a copy.
+    const otherCopy = await keepAt(past, data, join(theirs, "notes.md"), "Other\n");
+    const otherOwn = join(otherCopy, "..", "Plan.md");
+    await writeFile(otherOwn, "Text\n");
+    await utimes(otherOwn, past, past);
+
+    const next = await keepDiscardedCopy(data, notes(), "Next\n");
+    for (const file of [savedOld, savedRecent, ...savedAs, ...own, earlierSaved, otherOwn]) expect((await lstat(file)).isFile()).toBe(true);
+    await expect(readFile(otherCopy)).rejects.toThrow("ENOENT");
+    // A copy saved in place stays listed under the time it was kept, for
+    // that time's 30 days, and a file of the user's is never listed, also
+    // with a copy's time in its name.
+    expect(await listDiscardedCopies(data, notes())).toEqual([
+      { path: next, keptMs: expect.any(Number) },
+      { path: savedRecent, keptMs: recentKept.getTime() },
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fails to list the copies when their folder cannot be read, which is not the same as having none", async () => {
+    const data = join(root, "profile");
     const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
-    expect(await readFile(copy, "utf8")).toBe("Mine\n");
-    expect(await readdir(join(data, "discarded-changes"))).toEqual([copy.split(/[\\/]/).pop()]);
+    const folder = join(copy, "..");
+    try {
+      // The names can be read, but not the files' details.
+      await chmod(folder, 0o600);
+      await expect(listDiscardedCopies(data, notes())).rejects.toThrow("EACCES");
+      await chmod(folder, 0o000);
+      await expect(listDiscardedCopies(data, notes())).rejects.toThrow("EACCES");
+    } finally {
+      await chmod(folder, 0o700);
+    }
+  });
+
+  it("deletes the copies it kept more than 30 days ago that nobody wrote since, and lists none of them", async () => {
+    const data = join(root, "profile");
+    const kept = join(data, "discarded-changes");
+    const expired = await keepAt(past, data, notes(), "Old\n");
+    expect(await listDiscardedCopies(data, notes())).toEqual([]);
+    // A copy that Downpad 0.3.14 or earlier kept beside the documents'
+    // folders, the temporary file of a copy whose write never finished, and a
+    // document whose only copy expired.
+    const earlier = join(kept, earlierName(past));
+    const leftover = join(expired, "..", `.${basename(expired)}.0b0e5c1e-6c0f-4b53-9a4e-0d0f6a1b2c3d.tmp`);
+    for (const file of [earlier, leftover]) {
+      await writeFile(file, "Earlier\n");
+      await utimes(file, past, past);
+    }
+    await keepAt(past, data, join(theirs, "notes.md"), "Other\n");
+    const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
+    expect(await readdir(kept)).toEqual([copy.split(/[\\/]/).at(-2)]);
+    expect(await readdir(join(copy, ".."))).toEqual([basename(copy)]);
+    expect((await listDiscardedCopies(data, notes())).map((entry) => entry.path)).toEqual([copy]);
+  });
+
+  it.skipIf(process.platform === "win32")("deletes old files only in its own folders, and follows no symbolic link", async () => {
+    const data = join(root, "profile");
+    const kept = join(data, "discarded-changes");
+    // A folder that is not Downpad's, as one an opened copy got for its
+    // attachments, and a folder outside with a link to it under a copy
+    // folder's name, and a link to a file outside.
+    const outside = join(root, "outside");
+    await mkdir(join(kept, "attachments"), { recursive: true });
+    await mkdir(outside);
+    const files = [join(kept, "attachments", "image.png"), join(outside, "keep.md")];
+    for (const file of files) {
+      await writeFile(file, "Keep\n");
+      await utimes(file, past, past);
+    }
+    await symlink(outside, join(kept, "0123456789abcdef"));
+    await symlink(join(outside, "keep.md"), join(kept, "linked.md"));
+    await keepDiscardedCopy(data, notes(), "Mine\n");
+    for (const file of files) expect(await readFile(file, "utf8")).toBe("Keep\n");
+    expect((await lstat(join(kept, "0123456789abcdef"))).isSymbolicLink()).toBe(true);
+    expect((await lstat(join(kept, "linked.md"))).isSymbolicLink()).toBe(true);
   });
 });

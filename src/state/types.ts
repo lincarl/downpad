@@ -6,7 +6,7 @@
 // against the current string (spec §8.3).
 
 import type { MarginPreset, Orientation, PaperSize, PrintVersion } from "../print/paper";
-import type { GitFileStatus } from "../ipc/contracts";
+import type { DiscardedCopy, GitFileStatus } from "../ipc/contracts";
 import { documentLanguage } from "../files/documentLanguage";
 
 export type ViewMode = "recent" | "wysiwyg" | "raw";
@@ -184,6 +184,9 @@ export interface GitState {
   activity: "uploading" | "getting-latest" | null;
   /** Why the last check for changes failed, or null. */
   problem: string | null;
+  /** The kept copies of the document's discarded changes, newest first,
+   *  which Upload's menu offers to open. */
+  discardedCopies: DiscardedCopy[];
 }
 
 // ── Settings (mirror of settings.toml; see spec §5.9 and ipc/contracts) ──

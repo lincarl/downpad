@@ -22,6 +22,7 @@ import type { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { Store } from "../state/store";
 import { isRecoveredDocument, type DocumentState } from "../state/types";
 import type { SessionKeeper } from "./SessionKeeper";
+import { CloseRequests } from "./closeRequests";
 
 export interface DesktopEventDependencies {
   store: Store;
@@ -67,9 +68,14 @@ export class DesktopEventBindings {
   /** Set while this class records a file version itself, which makes no read
    *  out of date. */
   private recording = false;
+  private readonly tabsWithFileGone = new Set<string>();
   private started = false;
   private disposed = false;
-  private closing = false;
+  /** Closes of the window, one at a time (`CloseRequests`). */
+  private readonly closeRequests = new CloseRequests();
+  /** Set once this window's close was approved, so a close asked for after it
+   *  does nothing. */
+  private closeApproved = false;
   private readonly cleanups: Array<() => void> = [];
 
   constructor(private readonly dependencies: DesktopEventDependencies) {}
@@ -118,6 +124,25 @@ export class DesktopEventBindings {
     const tabId = this.dependencies.store.get().activeTabId;
     await this.compareWithDisk(true);
     if (tabId) await this.settled(tabId);
+  }
+
+  /** Also forgets the tab's unresolved change on disk, takes its bar down
+   *  and makes a comparison under way out of date, since that one may have
+   *  read the file before it went. */
+  fileGone(tabId: string): void {
+    this.revisions.set(tabId, (this.revisions.get(tabId) ?? 0) + 1);
+    this.resolve(tabId);
+    this.tabsWithFileGone.add(tabId);
+  }
+
+  /** True from `fileGone` until a save, Save As or reload records a file for
+   *  the tab's document, or a read begun after it finds the file. */
+  isFileGone(tabId: string): boolean {
+    const { tabs } = this.dependencies.store.get();
+    for (const id of this.tabsWithFileGone) {
+      if (!tabs.some((tab) => tab.id === id)) this.tabsWithFileGone.delete(id);
+    }
+    return this.tabsWithFileGone.has(tabId);
   }
 
   /** As holdSave, once the comparisons of the tab that run have ended. */
@@ -200,13 +225,13 @@ export class DesktopEventBindings {
       last = state;
       // Every tab's records count, also those of a tab in back, such as a
       // save that ends after the user switched tabs.
-      if (state.tabs !== before.tabs && !this.recording) {
+      if (state.tabs !== before.tabs) {
         const earlier = new Map(before.tabs.map((tab) => [tab.id, tab.doc]));
         for (const tab of state.tabs) {
           const previous = earlier.get(tab.id);
-          if (previous && previous !== tab.doc && recordsVersion(previous, tab.doc)) {
-            this.revisions.set(tab.id, (this.revisions.get(tab.id) ?? 0) + 1);
-          }
+          if (!previous || previous === tab.doc || !recordsVersion(previous, tab.doc)) continue;
+          this.tabsWithFileGone.delete(tab.id);
+          if (!this.recording) this.revisions.set(tab.id, (this.revisions.get(tab.id) ?? 0) + 1);
         }
       }
       const tabId = state.activeTabId;
@@ -269,14 +294,16 @@ export class DesktopEventBindings {
    *  and size tell first whether it can have changed. A tab with an
    *  unresolved change is always read, since another program can replace the
    *  file again, or put its earlier text back, with the time and size of the
-   *  change. A recovered document has no file version of its own to compare
-   *  with, so only a report of the watcher, a refused save or an unresolved
-   *  change makes it read. */
+   *  change, and so is one whose file was gone, since only a read tells that
+   *  the file is back, also with the time and size the document recorded. A
+   *  recovered document has no file version of its own to compare with, so
+   *  only a report of the watcher, a refused save, an unresolved change or a
+   *  file that was gone makes it read. */
   private async compareWithDisk(read: boolean): Promise<void> {
     const { files, store } = this.dependencies;
     const { activeTabId: tabId, doc } = store.get();
     if (!tabId || !doc.filePath) return;
-    const reads = read || this.pendingChanges.has(tabId);
+    const reads = read || this.pendingChanges.has(tabId) || this.tabsWithFileGone.has(tabId);
     if (!reads && isRecoveredDocument(doc)) return;
     const path = doc.filePath;
     // A save, reload or Keep mine that records another file version
@@ -311,6 +338,7 @@ export class DesktopEventBindings {
       // A later comparison already told what the file holds.
       if ((this.lastUsed.get(tabId) ?? 0) > comparison) return;
       this.lastUsed.set(tabId, comparison);
+      this.tabsWithFileGone.delete(tabId);
       const current = state.doc;
       if (files.isOwnWrite(tabId, onDisk.content)) return;
       if (onDisk.content === current.savedMarkdown || onDisk.content === current.markdown) {
@@ -406,38 +434,44 @@ export class DesktopEventBindings {
     return onCloseRequested(() => this.dependencies.run(() => this.handleCloseRequested(), "Downpad could not close."));
   }
 
-  private async handleCloseRequested(): Promise<void> {
-    if (this.disposed || this.closing) return;
-    this.closing = true;
-    let accepted = false;
-    try {
-      const { editorHost, files, scheduler, session } = this.dependencies;
-      editorHost.flush();
-      const decision = await files.confirmCloseAll();
-      if (decision === "cancel" || this.disposed) return;
-      await scheduler.clear();
-      // The next start reopens the documents open now, also one that Save
-      // just gave a file.
-      await session.flush();
-      // Recovery cleanup and the session record await disk I/O. Typing, a
-      // queued save or a dropped file that arrived meanwhile must keep a Save
-      // close from losing work.
-      if (!this.disposed && decision !== "discard" && !files.canCloseTabs()) {
-        scheduler.start();
-        return;
-      }
-      if (!this.disposed) {
-        accepted = true;
-        await desktopBridge().closeWindow();
-      }
-    } finally {
+  /** Ask about unsaved documents and close the window. A close of the window
+   *  asked for again while this one waits for a save takes over: this one
+   *  keeps the window and leaves the quit intent to the newer one, which asks
+   *  again, so Discard closes the window even when a save never returns. */
+  private handleCloseRequested(): Promise<void> {
+    return this.closeRequests.run(async (signal) => {
+      if (this.disposed || this.closeApproved) return;
+      let accepted = false;
       try {
-        // Clear the main process's quit intent when this close was declined.
-        if (!accepted && !this.disposed) await desktopBridge().cancelWindowClose();
+        const { editorHost, files, scheduler, session } = this.dependencies;
+        editorHost.flush();
+        const decision = await files.confirmCloseAll(signal);
+        if (decision === "cancel" || this.disposed) return;
+        await scheduler.clear();
+        // The next start reopens the documents open now, also one that Save
+        // just gave a file.
+        await session.flush();
+        // Recovery cleanup and the session record await disk I/O. Typing, a
+        // queued save or a dropped file that arrived meanwhile must keep a Save
+        // close from losing work.
+        if (!this.disposed && decision !== "discard" && !files.canCloseTabs()) {
+          scheduler.start();
+          return;
+        }
+        if (!this.disposed) {
+          accepted = true;
+          this.closeApproved = true;
+          await desktopBridge().closeWindow().catch((error: unknown) => {
+            this.closeApproved = false;
+            throw error;
+          });
+        }
       } finally {
-        this.closing = false;
+        // Clear the main process's quit intent when this close was declined,
+        // unless a newer close took over, which then decides.
+        if (!accepted && !this.disposed && !signal.aborted) await desktopBridge().cancelWindowClose();
       }
-    }
+    });
   }
 
   private captureCleanup(promise: Promise<() => void>): void {

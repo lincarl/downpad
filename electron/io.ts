@@ -44,16 +44,22 @@ export class ReplaceDeclinedError extends Error {
   }
 }
 
+/** Runs a write of the real file `target` once that may start, and resolves as the write does. */
+type Exclusive = (target: string, write: () => Promise<number>) => Promise<number>;
+
 /** Replace the real target after its complete replacement reaches disk, preserving symlinks
  *  and an existing target's permissions. A new file gets the default mode for the umask.
  *  Resolves with the modification time of the file written, which the rename keeps, so a
  *  write by another program right after it is not taken for this one. `beforeReplace` runs
  *  just before the rename, and again before a retry of it, with the real file the rename
- *  replaces, and a false answer leaves the target as it is and throws ReplaceDeclinedError. */
+ *  replaces, and a false answer leaves the target as it is and throws ReplaceDeclinedError.
+ *  `exclusive` gets everything after the path's resolution, from the replacement's staging
+ *  to the rename, with the real file it replaces, to run when no other write of that file
+ *  runs. */
 export async function writeAtomic(
   destination: string,
   bytes: Uint8Array | string,
-  { beforeReplace }: { beforeReplace?: BeforeReplace } = {},
+  { beforeReplace, exclusive }: { beforeReplace?: BeforeReplace; exclusive?: Exclusive } = {},
 ): Promise<number> {
   const requested = absolutePath(destination);
   const path = await realpath(requested).catch(async (error: unknown) => {
@@ -65,23 +71,26 @@ export async function writeAtomic(
     if (info?.isSymbolicLink()) throw new Error("The symbolic link's target does not exist.");
     return requested;
   });
-  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-  const mode = await stat(path).then((info) => info.mode, () => undefined);
-  const file = await open(temporary, "wx", mode);
-  try {
-    // The umask strips bits from the mode given to open. Windows has no umask.
-    if (mode !== undefined && process.platform !== "win32") await file.chmod(mode & 0o7777);
-    await file.writeFile(bytes);
-    await file.sync();
-    await file.close();
-    const { mtimeMs } = await stat(temporary);
-    await renameAtomic(temporary, path, beforeReplace);
-    return mtimeMs;
-  } catch (error) {
-    await file.close().catch(() => {});
-    await unlink(temporary).catch(() => {});
-    throw error;
-  }
+  const write = async (): Promise<number> => {
+    const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+    const mode = await stat(path).then((info) => info.mode, () => undefined);
+    const file = await open(temporary, "wx", mode);
+    try {
+      // The umask strips bits from the mode given to open. Windows has no umask.
+      if (mode !== undefined && process.platform !== "win32") await file.chmod(mode & 0o7777);
+      await file.writeFile(bytes);
+      await file.sync();
+      await file.close();
+      const { mtimeMs } = await stat(temporary);
+      await renameAtomic(temporary, path, beforeReplace);
+      return mtimeMs;
+    } catch (error) {
+      await file.close().catch(() => {});
+      await unlink(temporary).catch(() => {});
+      throw error;
+    }
+  };
+  return exclusive ? exclusive(path, write) : write();
 }
 
 /** A file's bytes with the metadata of the very file they came from. */
@@ -186,9 +195,40 @@ export async function fileStamp(path: string): Promise<FileStamp> {
   }
 }
 
-let pendingMarkdownWrite: Promise<void> = Promise.resolve();
+/** Run `task` once the tasks queued under `key` before it have ended, and resolve as it
+ *  does. Tasks under other keys do not wait for it. A key leaves `queues` once its last
+ *  task ends. */
+function queued<T>(queues: Map<string, Promise<void>>, key: string, task: () => Promise<T>): Promise<T> {
+  const result = (queues.get(key) ?? Promise.resolve()).then(task);
+  const tail = result.then(() => {}, () => {});
+  queues.set(key, tail);
+  void tail.then(() => {
+    if (queues.get(key) === tail) queues.delete(key);
+  });
+  return result;
+}
 
-/** Serialize document saves before path resolution so aliases cannot reorder writes.
+/** A path as a key that spellings of one file share without a look at the disk. Windows
+ *  and macOS file systems ignore case by default, so case does not count there. Merging
+ *  two files of a volume that minds case only makes their writes wait for each other. */
+function fileKey(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" || process.platform === "darwin" ? resolved.toLowerCase() : resolved;
+}
+
+/** Document writes under way, by the path as the caller spelled it (`fileKey`). */
+const writesByPath = new Map<string, Promise<void>>();
+/** Document writes under way, by the real file they replace (`fileKey`). */
+const writesByFile = new Map<string, Promise<void>>();
+
+/** Write a document's text to `path`. Writes of one file keep apart, and writes of
+ *  other files never wait for them, so a write that does not return, as to a network
+ *  drive that went away, holds up only later writes of its own file:
+ *  - Writes through one spelling of a path run one at a time, in the order asked for.
+ *    They wait before the path is resolved, which can itself hang on such a drive.
+ *  - Writes that resolve to one real file, also through a symbolic link or another
+ *    letter case, never run at the same time. From the path's resolution to the rename
+ *    they run one at a time, in the order their paths resolved.
  *  With `expectedContent`, the write replaces the file only while it still holds that
  *  text, as its LF form without a BOM, or is gone, and otherwise throws
  *  FILE_CHANGED_ON_DISK and leaves the file as it is. The text tells also a replacement
@@ -197,23 +237,22 @@ let pendingMarkdownWrite: Promise<void> = Promise.resolve();
  *  symbolic link that changes or goes meanwhile cannot point it at another file
  *  (`mayReplace`). */
 export function writeMarkdown(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
-  const result = pendingMarkdownWrite.then(async () => {
+  return queued(writesByPath, fileKey(path), async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
     const beforeReplace = expectedContent === undefined
       ? undefined
       : (target: string) => mayReplace(target, (bytes) => holdsMarkdown(bytes, expectedContent));
+    const exclusive: Exclusive = (target, write) => queued(writesByFile, fileKey(target), write);
     try {
-      const modifiedMs = await writeAtomic(path, text, { beforeReplace });
+      const modifiedMs = await writeAtomic(path, text, { beforeReplace, exclusive });
       return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };
     } catch (error) {
       if (error instanceof ReplaceDeclinedError) throw new Error(FILE_CHANGED_ON_DISK);
       throw error;
     }
   });
-  pendingMarkdownWrite = result.then(() => {}, () => {});
-  return result;
 }
 
 /** Whether the path names something, by its metadata alone, so also a file that cannot
@@ -246,56 +285,82 @@ export async function ensureAttachmentsDirectory(docPath: string, folderName: st
   return directory;
 }
 
-let pendingAttachmentWrite: Promise<void> = Promise.resolve();
+/** Attachment writes under way, by the folder as the caller spelled it (`fileKey`). */
+const attachmentWritesByPath = new Map<string, Promise<void>>();
+/** Attachment writes under way, by the real folder they write to (`fileKey`). */
+const attachmentWritesByFolder = new Map<string, Promise<void>>();
 const UNSUPPORTED_LINK_ERRORS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
 
-/** Stage complete attachments, then publish without replacing existing names when hard links are supported. */
+/** Stage complete attachments, then publish without replacing existing names when hard links are supported.
+ *  Writes to one attachments folder keep apart, which the name check of the fallback
+ *  without hard links needs, and writes to other folders never wait for them, so a write
+ *  that does not return, as to a network drive that went away, holds up only later writes
+ *  to its own folder. As for `writeMarkdown`, in two steps:
+ *  - Writes through one spelling of the folder's path run one at a time, in the order
+ *    asked for. They wait before the folder is made and resolved, which can itself hang
+ *    on such a drive.
+ *  - Writes that resolve to one real folder, also through a symbolic link, another letter
+ *    case or a mapped drive and its network path, run their staging and publication one
+ *    at a time, in the order their folders resolved, so two of them never claim one
+ *    name. */
 export function writeAttachment(
   docPath: string,
   folderName: string,
   fileName: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  const result = pendingAttachmentWrite.then(async () => {
+  let folder: string;
+  try {
+    folder = attachmentsDirectory(docPath, folderName);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return queued(attachmentWritesByPath, fileKey(folder), async () => {
     if (!fileName || fileName === "." || fileName === ".." || /[\\/\0]/.test(fileName)) {
       throw new Error("An attachment name must be a file name.");
     }
     const directory = await ensureAttachmentsDirectory(docPath, folderName);
-    const extension = extname(fileName);
-    const stem = basename(fileName, extension);
-    const temporary = join(directory, `.attachment-${randomUUID()}.tmp`);
-    const file = await open(temporary, "wx");
-    try {
-      await file.writeFile(bytes);
-      await file.sync();
-      await file.close();
-      for (let suffix = 0; ; suffix++) {
-        const name = suffix === 0 ? fileName : `${stem}-${suffix}${extension}`;
-        const destination = join(directory, name);
-        try {
-          await link(temporary, destination);
-        } catch (error: unknown) {
-          if (!(error instanceof Error && "code" in error)) throw error;
-          if (error.code === "EEXIST") continue;
-          if (typeof error.code !== "string" || !UNSUPPORTED_LINK_ERRORS.has(error.code)) throw error;
-          // FAT/exFAT lack hard links. Serialize application writers and recheck
-          // the name before rename. A separate process can still create it here.
-          const occupied = await lstat(destination).then(() => true, (statError: unknown) => {
-            if (statError instanceof Error && "code" in statError && statError.code === "ENOENT") return false;
-            throw statError;
-          });
-          if (occupied) continue;
-          await rename(temporary, destination);
-        }
-        return `${folderName.replace(/\\/g, "/")}/${name}`;
-      }
-    } finally {
-      await file.close().catch(() => {});
-      await unlink(temporary).catch(() => {});
-    }
+    const real = await realpath(directory);
+    return queued(attachmentWritesByFolder, fileKey(real), () => publishAttachment(directory, folderName, fileName, bytes));
   });
-  pendingAttachmentWrite = result.then(() => {}, () => {});
-  return result;
+}
+
+/** Stage `bytes` in `directory`, the attachments folder `folderName`, and publish them
+ *  under `fileName` or, while that name is taken, the first free `name-N` form of it.
+ *  Resolves with the attachment's path relative to the document. */
+async function publishAttachment(directory: string, folderName: string, fileName: string, bytes: Uint8Array): Promise<string> {
+  const extension = extname(fileName);
+  const stem = basename(fileName, extension);
+  const temporary = join(directory, `.attachment-${randomUUID()}.tmp`);
+  const file = await open(temporary, "wx");
+  try {
+    await file.writeFile(bytes);
+    await file.sync();
+    await file.close();
+    for (let suffix = 0; ; suffix++) {
+      const name = suffix === 0 ? fileName : `${stem}-${suffix}${extension}`;
+      const destination = join(directory, name);
+      try {
+        await link(temporary, destination);
+      } catch (error: unknown) {
+        if (!(error instanceof Error && "code" in error)) throw error;
+        if (error.code === "EEXIST") continue;
+        if (typeof error.code !== "string" || !UNSUPPORTED_LINK_ERRORS.has(error.code)) throw error;
+        // FAT/exFAT lack hard links. Serialize application writers and recheck
+        // the name before rename. A separate process can still create it here.
+        const occupied = await lstat(destination).then(() => true, (statError: unknown) => {
+          if (statError instanceof Error && "code" in statError && statError.code === "ENOENT") return false;
+          throw statError;
+        });
+        if (occupied) continue;
+        await rename(temporary, destination);
+      }
+      return `${folderName.replace(/\\/g, "/")}/${name}`;
+    }
+  } finally {
+    await file.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
 }
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {

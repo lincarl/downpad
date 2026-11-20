@@ -1,3 +1,4 @@
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { markdownSource } from "./markdownSource";
@@ -8,6 +9,10 @@ import type { OutlineBlock } from "../splitAlign";
  *  with children indented below their block. */
 function outline(text: string): string[] {
   const state = EditorState.create({ doc: text, extensions: [markdownSource()] });
+  // The outline waits only 25 ms for the parser, and covers what the parser
+  // has read by then. On a busy machine the first parse of a test run can
+  // take longer, so the parse is finished here before the outline is read.
+  if (!ensureSyntaxTree(state, state.doc.length, 30_000)) throw new Error("The parser did not reach the end of the text.");
   const lines: string[] = [];
   const visit = (blocks: readonly OutlineBlock[], depth: number): void => {
     for (const block of blocks) {

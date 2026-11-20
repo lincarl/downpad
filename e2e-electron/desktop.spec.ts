@@ -4904,7 +4904,9 @@ test("undoing every edit marks the document saved again, and an undo right after
   const savedColor = await icon.evaluate((element) => getComputedStyle(element).color);
   await paragraph.click();
   await page.keyboard.press("End");
-  await page.keyboard.type(" Typed.");
+  // Each edit is one key, which one undo takes back. A pause of half a second
+  // between keys starts a new undo step, and a busy machine can make one.
+  await page.keyboard.type("!");
   await expect(page).toHaveTitle("undo.md — Downpad");
   await expect(dirtyIcon).toBeVisible();
   // The icon of an unsaved document is drawn in the danger color.
@@ -4924,14 +4926,14 @@ test("undoing every edit marks the document saved again, and an undo right after
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await expect(icon).toHaveCSS("color", savedColor);
 
-  await page.keyboard.type(" Undone.");
+  await page.keyboard.type("?");
   await page.keyboard.press("ControlOrMeta+s");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
-  // The file has the typed words but the document no longer does.
+  // The file has the typed key but the document no longer does.
   await expect(page).toHaveTitle("undo.md — Downpad");
   await expect(dirtyIcon).toBeVisible();
-  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Undone.\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.?\n");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
   await expect(page).toHaveTitle("undo.md — Downpad");
@@ -5295,8 +5297,8 @@ test("Save on close keeps an untitled tab after cancellation or write failure", 
   await failure;
   await expect(tab).toBeVisible();
   await expect(editor).toHaveText("Keep this document.");
-  // The notice says what failed and why.
-  await expect(page.getByRole("alert")).toHaveText("Downpad could not close the document. The file or folder does not exist.");
+  // The notice says what failed and why, as for a failed Save.
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “Untitled”. The file or folder does not exist.");
 
   const saved = path.join(directory, "retry.md");
   await chooseSave(saved);
@@ -5412,6 +5414,132 @@ test("Save on window close awaits saved named and untitled tabs before exiting",
 
   expect(await readFile(named, "utf8")).toBe("Window document. Saved.\n");
   expect(await readFile(untitled, "utf8")).toBe("Window untitled.\n");
+});
+
+/** Make the main process's writes of files whose path holds `marker` never
+ *  answer, as on a network drive that went away. The new file that a write
+ *  stages its text in is never created. `goneAsked` counts the writes that
+ *  got stuck, and `failGoneWrite` makes the last of them fail as on a full
+ *  disk. */
+async function hangWritesUnder(marker: string): Promise<void> {
+  await app!.evaluate((_electron, part) => {
+    const filesystem = process.getBuiltinModule("node:fs/promises");
+    const original = filesystem.open.bind(filesystem) as (...args: unknown[]) => Promise<unknown>;
+    Reflect.set(filesystem, "open", async (target: unknown, flags: unknown, ...rest: unknown[]) => {
+      if (String(target).includes(part) && flags === "wx") {
+        Reflect.set(globalThis, "goneAsked", Number(Reflect.get(globalThis, "goneAsked") ?? 0) + 1);
+        await new Promise((_resolve, reject) => {
+          Reflect.set(globalThis, "failGoneWrite", () => reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" })));
+        });
+      }
+      return original(target, flags, ...rest);
+    });
+    process.getBuiltinModule("node:module").syncBuiltinESMExports();
+  }, marker);
+}
+
+test("the notice of a save that has not finished goes when its document's tab closes from behind another tab", async () => {
+  const gone = path.join(directory, "gone-drive");
+  await mkdir(gone);
+  const stuck = path.join(gone, "remote.md");
+  const local = path.join(directory, "local.md");
+  await writeFile(stuck, "Remote document.\n");
+  await writeFile(local, "Local document.\n");
+  await launch(stuck);
+  await chooseOpen(local);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(paragraph).toHaveText("Local document.");
+  await hangWritesUnder("gone-drive");
+  const stuckTab = page.getByRole("tab", { name: /remote\.md/ });
+  await stuckTab.click();
+  await expect(paragraph).toHaveText("Remote document.");
+  await typeAtEnd(paragraph, " Never written.");
+  // The renderer's clock, which the notice waits on, goes ahead on request.
+  await page.clock.install();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "goneAsked"))).toBe(1);
+  await page.getByRole("tab", { name: /local\.md/ }).click();
+  await expect(paragraph).toHaveText("Local document.");
+  await page.clock.fastForward(10_000);
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText("Saving “remote.md” has not finished after 10 seconds.");
+
+  await chooseCloseAction("Discard");
+  await stuckTab.locator(".tab-close").click();
+  await expect(stuckTab).toHaveCount(0);
+  await expect(banner).toBeHidden();
+});
+
+test("a save that never returns holds up no other document, and closing its document again with Discard closes it", async () => {
+  const gone = path.join(directory, "gone-drive");
+  await mkdir(gone);
+  const stuck = path.join(gone, "remote.md");
+  const local = path.join(directory, "local.md");
+  await writeFile(stuck, "Remote document.\n");
+  await writeFile(local, "Local document.\n");
+  await launch(stuck);
+  await chooseOpen(local);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(paragraph).toHaveText("Local document.");
+  await hangWritesUnder("gone-drive");
+  const stuckTab = page.getByRole("tab", { name: /remote\.md/ });
+  const localTab = page.getByRole("tab", { name: /local\.md/ });
+  await stuckTab.click();
+  await expect(paragraph).toHaveText("Remote document.");
+  await typeAtEnd(paragraph, " Never written.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "goneAsked"))).toBe(1);
+
+  // Another document saves, and closes, meanwhile.
+  await localTab.click();
+  await expect(paragraph).toHaveText("Local document.");
+  await typeAtEnd(paragraph, " Saved.");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(local, "utf8")).toBe("Local document. Saved.\n");
+  await localTab.locator(".tab-close").click();
+  await expect(localTab).toHaveCount(0);
+
+  // Save on close waits for the stuck write, and closing again asks again.
+  await chooseCloseAction("Save");
+  await stuckTab.locator(".tab-close").click();
+  await expect.poll(() => app!.evaluate(() => (Reflect.get(globalThis, "closePrompts") as unknown[]).length)).toBe(1);
+  await expect(stuckTab).toBeVisible();
+  await chooseCloseAction("Discard");
+  await stuckTab.locator(".tab-close").click();
+  await expect(stuckTab).toHaveCount(0);
+  expect(await app!.evaluate(() => Reflect.get(globalThis, "closePrompts"))).toEqual([
+    { message: '"remote.md" has unsaved changes. Save before closing?', buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
+  ]);
+  expect(await readFile(stuck, "utf8")).toBe("Remote document.\n");
+});
+
+test("a save of a close that fails after another close discarded its document names the document", async () => {
+  const gone = path.join(directory, "gone-drive");
+  await mkdir(gone);
+  const stuck = path.join(gone, "remote.md");
+  const local = path.join(directory, "local.md");
+  await writeFile(stuck, "Remote document.\n");
+  await writeFile(local, "Local document.\n");
+  await launch(local);
+  await chooseOpen(stuck);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(paragraph).toHaveText("Remote document.");
+  await hangWritesUnder("gone-drive");
+  await typeAtEnd(paragraph, " Never written.");
+  const stuckTab = page.getByRole("tab", { name: /remote\.md/ });
+  // Save on close waits for the write, which does not answer, and closing
+  // again with Discard closes the document.
+  await chooseCloseAction("Save");
+  await stuckTab.locator(".tab-close").click();
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "goneAsked"))).toBe(1);
+  await chooseCloseAction("Discard");
+  await stuckTab.locator(".tab-close").click();
+  await expect(stuckTab).toHaveCount(0);
+  await expect(paragraph).toHaveText("Local document.");
+  // The write fails at last, and the notice names the closed document.
+  await app!.evaluate(() => (Reflect.get(globalThis, "failGoneWrite") as () => void)());
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “remote.md”. The disk is full.");
+  expect(await readFile(stuck, "utf8")).toBe("Remote document.\n");
 });
 
 test("Tab leaves the document view without typing spaces, and still nests a list item", async () => {
@@ -7642,6 +7770,29 @@ test("a click in the split's Markdown pane closes the slash menu and leaves Ente
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\nTyped.\n\n/\n");
 });
 
+/** Click a cell of the frontmatter table, go to its end and type `text` there
+ *  as one run of keys. A pause of half a second between keys starts a new
+ *  undo step, in the table as in the document, and a busy machine can deliver
+ *  keys that far apart. The renderer's clock stands still while they are
+ *  typed, as for a user who types without a pause. Only undo grouping reads
+ *  the clock on the way from a key in the table to its edit. The document and
+ *  Markdown editors read it to handle input too, so their tests type one key
+ *  per undo step. */
+async function typeInCell(cell: Locator, text: string): Promise<void> {
+  await cell.click();
+  await page.keyboard.press("End");
+  await page.evaluate(() => {
+    const now = Date.now();
+    Reflect.set(globalThis, "dateNow", Date.now);
+    Date.now = () => now;
+  });
+  await page.keyboard.type(text);
+  await page.evaluate(() => {
+    const dateNow: () => number = Reflect.get(globalThis, "dateNow");
+    Date.now = dateNow;
+  });
+}
+
 test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed the table", async () => {
   const file = path.join(directory, "frontmatter-undo.md");
   await writeFile(file, "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n");
@@ -7651,7 +7802,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) })
     .locator(".frontmatter-value-edit");
   const body = page.locator(".milkdown .ProseMirror p").first();
-  await typeAtEnd(title, " v2");
+  await typeInCell(title, " v2");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
   await expect(page.getByRole("tab", { name: "frontmatter-undo.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   // The caret stays in the cell, so typing goes on there.
@@ -7711,8 +7862,8 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
   const cell = (key: string) =>
     page.locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) }).locator(".frontmatter-value-edit");
 
-  await typeAtEnd(cell("title"), " v2");
-  await typeAtEnd(cell("status"), " b");
+  await typeInCell(cell("title"), " v2");
+  await typeInCell(cell("status"), " b");
   await choose(cell("status"), "Undo");
   await expect(cell("status")).toHaveText("draft");
   await choose(cell("status"), "Undo");
@@ -7723,13 +7874,14 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
 
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const line = page.locator(".cm-line", { hasText: "The draft body." });
-  await typeAtEnd(line, " Typed.");
+  // One key, which one undo takes back however slowly the machine runs.
+  await typeAtEnd(line, "!");
   await choose(line, "Undo");
   await expect(line).toHaveText("The draft body.");
   await choose(line, "Redo");
-  await expect(line).toHaveText("The draft body. Typed.");
+  await expect(line).toHaveText("The draft body.!");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(original.replace("# keep", "# keep v2").replace("body.", "body. Typed."));
+  await expect.poll(() => readFile(file, "utf8")).toBe(original.replace("# keep", "# keep v2").replace("body.", "body.!"));
 });
 
 test("pasting a copy of the whole document preserves source spacing without adding an empty paragraph", async () => {

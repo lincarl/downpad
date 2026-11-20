@@ -137,12 +137,16 @@ export class SnapshotScheduler {
 
   /** Save the active document if autosave is on and nothing holds it. A
    *  recovered document, whose saved text is unknown, waits for a save the
-   *  user asks for. A typed closing `$` or `~` that still waits for the next
-   *  character is saved as Save would write it, but keeps waiting in the
-   *  editor, so a pause in typing never decides it there. */
+   *  user asks for. So does a document whose save is under way, such as a
+   *  Save As, which the autosave would only wait behind, so a write that
+   *  never returns does not collect an autosave at every tick. A typed
+   *  closing `$` or `~` that still waits for the next character is saved as
+   *  Save would write it, but keeps waiting in the editor, so a pause in
+   *  typing never decides it there. */
   private async tickAutosave(): Promise<void> {
     const { activeTabId, doc, settings } = this.store.get();
-    if (settings.autosaveEnabled && activeTabId && doc.filePath && doc.isDirty && doc.savedMarkdown !== null && !this.holdAutosave(activeTabId)) {
+    if (settings.autosaveEnabled && activeTabId && doc.filePath && doc.isDirty && doc.savedMarkdown !== null
+      && !this.files.isSaving(activeTabId) && !this.holdAutosave(activeTabId)) {
       await this.files.save({ keepTypedMark: true, automatic: this.holdAutosave }).catch(() => {});
     }
   }

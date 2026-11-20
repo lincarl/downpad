@@ -5,7 +5,7 @@ import { createAppStore } from "../app/createAppStore";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
 import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload } from "../ipc/contracts";
 import { blankDoc, type Eol } from "../state/types";
-import { FileService } from "./FileService";
+import { FileService, SLOW_WRITE_MS, type SaveEvents } from "./FileService";
 
 const native = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<FilePayload>>(),
@@ -37,7 +37,7 @@ const onDisk: FilePayload = {
   sizeBytes: 28,
 };
 
-function setup(dirty = false, onSaved?: (tabId: string) => void) {
+function setup(dirty = false, events?: SaveEvents) {
   const store = createAppStore();
   store.addTab({
     ...blankDoc(),
@@ -53,7 +53,7 @@ function setup(dirty = false, onSaved?: (tabId: string) => void) {
     showActiveDoc: vi.fn(async () => {}),
     reloadActiveDoc: vi.fn(async () => {}),
   };
-  return { store, presenter, files: new FileService(store, presenter, onSaved) };
+  return { store, presenter, files: new FileService(store, presenter, events) };
 }
 
 beforeEach(() => {
@@ -385,7 +385,7 @@ describe("saving document snapshots", () => {
     expect(store.get().doc).toEqual(replacement);
   });
 
-  it("tells when no save of a tab is under way, also one behind another tab's save or queued during the wait", async () => {
+  it("tells when no save of a tab is under way, also one queued during the wait", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;
     await files.untilSaved(tabId);
@@ -413,6 +413,107 @@ describe("saving document snapshots", () => {
     await eventually(() => expect(saved).toHaveBeenCalledOnce());
     expect(await later).toBe(true);
     expect(files.isSaving(tabId)).toBe(false);
+  });
+
+  it("saves, saves as and closes another tab's document while a write of one does not return", async () => {
+    const { store, files } = setup(true);
+    const stuckTab = store.get().activeTabId!;
+    // A write to a network drive that went away never answers.
+    native.writeFile.mockImplementation((path) => path === filePath ? new Promise(() => {}) : Promise.resolve({ modifiedMs: 300 }));
+    const stuck = files.save();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    const other = store.addTab({ ...blankDoc(), filePath: "/local/other.md", markdown: "# Other\n", isDirty: true });
+
+    expect(await files.save()).toBe(true);
+    store.patchDoc({ markdown: "# Other, moved\n", isDirty: true });
+    native.saveDialog.mockResolvedValueOnce("/local/moved.md");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc).toMatchObject({ filePath: "/local/moved.md", isDirty: false });
+    await files.untilSaved(other);
+    await files.untilPathSettled(other);
+    expect(await files.confirmCloseTab(other, "moved.md")).toBe("close");
+
+    // Saves of the document whose write hangs wait for it.
+    expect(files.isSaving(stuckTab)).toBe(true);
+    store.activateTab(stuckTab);
+    store.patchDoc({ markdown: "# Later\n", isDirty: true });
+    const waiting = vi.fn();
+    void files.save().then(waiting);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(waiting).not.toHaveBeenCalled();
+    expect(native.writeFile).toHaveBeenCalledTimes(3);
+    void stuck;
+  });
+
+  it("shows one Save As dialog at a time, and refuses a file that another tab's Save As is still writing", async () => {
+    const { store, files } = setup(true);
+    const first = store.get().activeTabId!;
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise).mockResolvedValueOnce("/docs/target.md");
+    native.writeFile.mockReturnValueOnce(new Promise(() => {}));
+    const firstSave = files.saveAs();
+    await eventually(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    store.addTab({ ...blankDoc(), filePath: "/docs/second.md", markdown: "# Second\n", isDirty: true });
+    const secondSave = files.saveAs();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(native.saveDialog).toHaveBeenCalledOnce();
+
+    dialog.resolve("/docs/target.md");
+    await expect(secondSave).rejects.toThrow("“target.md” is being saved from another tab. Choose another name.");
+    expect(native.writeFile).toHaveBeenCalledExactlyOnceWith("/docs/target.md", "# Original content\n", "lf");
+    expect(files.isSaving(first)).toBe(true);
+    void firstSave;
+  });
+
+  it("lets another tab's Save As show its dialog while a look for a file does not answer, and lets one tab claim the name", async () => {
+    const { store, files } = setup();
+    const first = store.get().activeTabId!;
+    store.patchDoc({ filePath: "/share/settings.json" });
+    // The share stops answering the look for a file of the full name.
+    const look = deferred<boolean>();
+    native.pathExists.mockReturnValueOnce(look.promise);
+    native.saveDialog.mockResolvedValueOnce("/share/backup").mockResolvedValueOnce("/share/backup.json");
+    native.writeFile.mockReturnValueOnce(new Promise(() => {}));
+    const firstSave = files.saveAs();
+    await eventually(() => expect(native.pathExists).toHaveBeenCalledOnce());
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.json", markdown: "{}\n", isDirty: true });
+    void files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledExactlyOnceWith("/share/backup.json", "{}\n", "lf"));
+    // The first Save As finds the name claimed once its look answers.
+    look.resolve(false);
+    await expect(firstSave).rejects.toThrow("“backup.json” is being saved from another tab. Choose another name.");
+    expect(files.isSaving(first)).toBe(false);
+  });
+
+  it("tells about a write that has run for a while without an answer, and once it ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const events = { slowWrite: vi.fn<(tabId: string) => void>(), slowWriteEnded: vi.fn<(tabId: string) => void>() };
+      const { store, files } = setup(true, events);
+      const tabId = store.get().activeTabId!;
+      // A write that answers in time says nothing.
+      expect(await files.save()).toBe(true);
+      const write = deferred<FileMeta>();
+      native.writeFile.mockReturnValueOnce(write.promise);
+      store.patchDoc({ markdown: "# Slow\n", isDirty: true });
+      const saving = files.save();
+      await vi.advanceTimersByTimeAsync(SLOW_WRITE_MS - 1);
+      expect(events.slowWrite).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events.slowWrite).toHaveBeenCalledExactlyOnceWith(tabId);
+
+      // Another save asked for meanwhile waits for it, so it tells again.
+      const later = files.save();
+      expect(events.slowWrite).toHaveBeenCalledTimes(2);
+      expect(events.slowWriteEnded).not.toHaveBeenCalled();
+      write.resolve({ modifiedMs: 300 });
+      expect(await saving).toBe(true);
+      expect(events.slowWriteEnded).toHaveBeenCalledExactlyOnceWith(tabId);
+      expect(await later).toBe(true);
+      expect(events.slowWrite).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not wait for a later save of another tab", async () => {
@@ -577,7 +678,7 @@ describe("saving document snapshots", () => {
 
   it("tells each write of a tab's document that worked, and no save that wrote nothing", async () => {
     const onSaved = vi.fn<(tabId: string) => void>();
-    const { store, files } = setup(true, onSaved);
+    const { store, files } = setup(true, { saved: onSaved });
     const tabId = store.get().activeTabId!;
     native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
     await expect(files.save()).rejects.toThrow("Disk unavailable");
@@ -838,17 +939,149 @@ describe("saving before close", () => {
     store.addTab({ ...blankDoc(), filePath: "/docs/last.md", markdown: "Last edits\n", isDirty: true });
 
     expect(await files.confirmCloseAll()).toBe("cancel");
-    expect(native.writeFile).toHaveBeenCalledTimes(1);
+    // The documents with a file were saved before the dialog showed.
+    expect(native.writeFile).toHaveBeenCalledTimes(2);
     expect(store.get().tabs).toHaveLength(4);
     expect(store.get().tabs[1]!.doc.isDirty).toBe(false);
     expect(store.get().tabs[2]!.doc.isDirty).toBe(true);
+    expect(store.get().tabs[3]!.doc.isDirty).toBe(false);
   });
 
-  it("keeps every tab when a close save fails", async () => {
+  it("asks for the saves of all documents with a file at once, so one that does not return holds up no other", async () => {
     const { store, files } = setup(true);
-    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+    store.addTab({ ...blankDoc(), filePath: "/local/other.md", markdown: "# Other\n", isDirty: true });
+    // The first document is on a network drive that went away.
+    native.writeFile.mockImplementation((path) => path === filePath ? new Promise(() => {}) : Promise.resolve({ modifiedMs: 300 }));
+    void files.confirmCloseAll();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledWith("/local/other.md", "# Other\n", "lf"));
+    expect(store.get().doc).toMatchObject({ filePath: "/local/other.md", isDirty: false });
+  });
 
-    await expect(files.confirmCloseAll()).rejects.toThrow("Disk unavailable");
+  it("stops asking where to save untitled documents once a save fails, and tells the failure after the last dialog", async () => {
+    // The file each untitled document has when the failure is told.
+    const filesWhenTold: (string | null)[] = [];
+    const closeSaveFailed = vi.fn(() => {
+      filesWhenTold.push(...untitled.map((id) => store.get().tabs.find((tab) => tab.id === id)!.doc.filePath));
+    });
+    const { store, files } = setup(true, { closeSaveFailed });
+    const filed = store.get().activeTabId!;
+    const untitled = [
+      store.addTab({ ...blankDoc(), markdown: "First untitled\n", isDirty: true }),
+      store.addTab({ ...blankDoc(), markdown: "Second untitled\n", isDirty: true }),
+    ];
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const closing = files.confirmCloseAll();
+    await eventually(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    // The document with a file fails while the first dialog shows, which
+    // would cover its notice.
+    const failure = new Error("Disk unavailable");
+    write.reject(failure);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closeSaveFailed).not.toHaveBeenCalled();
+    dialog.resolve("/docs/first.md");
+    expect(await closing).toBe("cancel");
+    expect(native.writeFile).toHaveBeenLastCalledWith("/docs/first.md", "First untitled\n", "lf");
+    expect(native.saveDialog).toHaveBeenCalledOnce();
+    // Told once the first untitled document has its file, which takes down
+    // the notice that shows then (`noticeScope`).
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
+    expect(filesWhenTold).toEqual(["/docs/first.md", null]);
+  });
+
+  it("reports a save that fails while an untitled document's dialog shows, also when the user cancels that dialog", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const filed = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), markdown: "Untitled\n", isDirty: true });
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const closing = files.confirmCloseAll();
+    await eventually(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    const failure = new Error("Disk unavailable");
+    write.reject(failure);
+    dialog.resolve(null);
+    expect(await closing).toBe("cancel");
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
+  });
+
+  it("tells no failure of a close's save for a document that a later save wrote before the close ended", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const filed = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), markdown: "Untitled\n", isDirty: true });
+    store.activateTab(filed);
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const closing = files.confirmCloseAll();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The drive answers again, and a save of the document works while the
+    // untitled document's dialog still shows.
+    expect(await files.save()).toBe(true);
+    // Typing after that write does not bring the failure back.
+    store.patchDoc({ markdown: "# Typed since\n", isDirty: true });
+    dialog.resolve(null);
+    expect(await closing).toBe("cancel");
+    expect(closeSaveFailed).not.toHaveBeenCalled();
+  });
+
+  it("tells the failure of a close's save for a document whose text has no unsaved changes, when no write of it worked since", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(false, { closeSaveFailed });
+    const filed = store.get().activeTabId!;
+    // A file dropped on the document is still on its way in, so the document
+    // counts as unsaved though its text is the saved text.
+    store.setFilesPending(filed, true);
+    const failure = new Error("EROFS: read-only file system");
+    native.writeFile.mockRejectedValueOnce(failure);
+    expect(await files.confirmCloseTab(filed, "notes.md")).toBe("cancel");
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
+  });
+
+  it("reports a close save that fails after the close stopped waiting for it", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const tabId = store.get().activeTabId!;
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const stop = new AbortController();
+    const closing = files.confirmCloseTab(tabId, "notes.md", stop.signal);
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    stop.abort();
+    expect(await closing).toBe("cancel");
+    // The file the document had names it once its tab is closed.
+    store.closeTab(tabId);
+    const failure = new Error("Disk unavailable");
+    write.reject(failure);
+    await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(tabId, filePath, failure));
+  });
+
+  it("keeps the tabs as soon as one save fails, without waiting for one that does not return", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const failing = store.addTab({ ...blankDoc(), filePath: "/local/other.md", markdown: "# Other\n", isDirty: true });
+    // The first document is on a network drive that went away.
+    const failure = new Error("Disk full");
+    native.writeFile.mockImplementation((path) => (path === filePath ? new Promise(() => {}) : Promise.reject(failure)));
+    expect(await files.confirmCloseAll()).toBe("cancel");
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(failing, "/local/other.md", failure);
+    expect(store.get().tabs).toHaveLength(3);
+  });
+
+  it("keeps every tab when a close save fails, and reports the failure", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const failure = new Error("Disk unavailable");
+    native.writeFile.mockRejectedValueOnce(failure);
+
+    expect(await files.confirmCloseAll()).toBe("cancel");
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, filePath, failure);
     expect(store.get().tabs).toHaveLength(2);
     expect(store.get().doc).toMatchObject({ isDirty: true, savedMarkdown: "# Saved before\n" });
   });
@@ -906,6 +1139,62 @@ describe("saving before close", () => {
     expect(await closing).toBe("close");
     expect(native.writeFile).toHaveBeenNthCalledWith(2, "/docs/moved.md", "Latest edits\n", "lf");
     expect(native.saveDialog).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { what: "with unsaved changes", dirty: true },
+    { what: "without unsaved changes", dirty: false },
+  ])("never writes the file that a Save As failing during the close was leaving, nor closes, for a document $what", async ({ dirty }) => {
+    const { store, files } = setup(dirty);
+    const tabId = store.get().activeTabId!;
+    // A Save As to a slow drive, after which the user goes on typing.
+    native.saveDialog.mockResolvedValueOnce("/slow/report.md");
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saveAs = files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    if (dirty) store.patchDoc({ markdown: "# Typed during the Save As\n", isDirty: true });
+    const closing = files.confirmCloseTab(tabId, "notes.md");
+    await eventually(() => expect(native.confirmSaveChanges).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    write.reject(new Error("Disk unavailable"));
+    await expect(saveAs).rejects.toThrow("Disk unavailable");
+    expect(await closing).toBe("cancel");
+    expect(native.writeFile).toHaveBeenCalledOnce();
+    expect(store.get().doc.filePath).toBe(filePath);
+  });
+
+  it("asks before closing a document whose save does not return, and stops waiting once a newer close takes over", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    // Save without an edit, to a drive that went away.
+    native.writeFile.mockReturnValueOnce(new Promise(() => {}));
+    void files.save();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    expect(store.get().doc.isDirty).toBe(false);
+
+    const first = new AbortController();
+    const closing = files.confirmCloseTab(tabId, "notes.md", first.signal);
+    await eventually(() => expect(native.confirmSaveChanges).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(files.canCloseTabs([tabId])).toBe(false);
+    first.abort();
+    expect(await closing).toBe("cancel");
+
+    native.confirmSaveChanges.mockResolvedValueOnce("discard");
+    expect(await files.confirmCloseTab(tabId, "notes.md")).toBe("discard");
+    expect(native.confirmSaveChanges).toHaveBeenLastCalledWith('"notes.md" has unsaved changes. Save before closing?');
+    expect(native.writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("closes a tab while another tab's write does not return", async () => {
+    const { store, files } = setup(true);
+    native.writeFile.mockReturnValueOnce(new Promise(() => {}));
+    void files.save();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    const other = store.addTab({ ...blankDoc(), filePath: "/local/other.md", markdown: "# Other\n", isDirty: true });
+    expect(await files.confirmCloseTab(other, "other.md")).toBe("close");
+    expect(native.writeFile).toHaveBeenLastCalledWith("/local/other.md", "# Other\n", "lf");
   });
 
   it("waits for writes queued after the close save before approving close", async () => {
