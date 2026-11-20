@@ -277,6 +277,16 @@ test("keeps the user's text in its tab when the latest version has no such file,
   );
   await expect(shownDocument()).toContainText("My second paragraph.");
   await expect(access(path.join(mine, "notes.md"))).rejects.toThrow("ENOENT");
+  // Copy file has no file to copy, and its save writes only over a version
+  // the document recorded, so it waits for the user's own save and leaves
+  // the notice with Open copy in place.
+  const copyFile = page.getByRole("menuitem", { name: "Copy file", exact: true });
+  await shownDocument().click({ button: "right" });
+  await expect(copyFile).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: "notes.md", exact: true }).click({ button: "right" });
+  await expect(copyFile).toBeDisabled();
+  await page.keyboard.press("Escape");
   await banner.getByRole("button", { name: "Open copy" }).click();
   await expect(page.getByRole("tab", { name: /^\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d\.\d{3} notes\.md$/ })).toHaveAttribute("aria-selected", "true");
   await expect(shownDocument()).toContainText("My second paragraph.");

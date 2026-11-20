@@ -18,7 +18,7 @@ import { desktopBridge } from "../ipc/bridge";
 import { failureReason } from "../ipc/failureReason";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
 import type { BannerState, Tab, EditorLayout } from "../state/types";
-import { layoutFromDefaultView, shownLayout } from "../state/types";
+import { lacksSavedText, layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "../shell/pagePresses";
 import { preparePrintJob } from "../print/printDocument";
@@ -356,7 +356,18 @@ export class AppRuntime {
    *  it as the document that shows. */
   canCopyTabFile(tabId: string): boolean {
     const { activeTabId, banner } = this.store.get();
-    return isElectron() && (tabId !== activeTabId || banner?.kind !== "file-changed");
+    return isElectron() && (tabId !== activeTabId || banner?.kind !== "file-changed") && !this.fileIsGone(tabId);
+  }
+
+  /** Whether the file of the tab's document is known to be gone, as after
+   *  Discard my changes when the latest version has no such file. Copy file's
+   *  save writes only over a version the document recorded, so it could
+   *  neither save the document nor copy a file, and its error would take the
+   *  place of the notice that offers the kept copy. A save of the tab under
+   *  way lacks the saved text too, and is not that. */
+  private fileIsGone(tabId: string | null): boolean {
+    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+    return tab !== undefined && lacksSavedText(tab.doc) && !this.files.isSaving(tab.id);
   }
 
   /** Copy file in the tab's menu (see copyFileOfTab). */
@@ -750,9 +761,11 @@ export class AppRuntime {
   /** Whether Copy file can run. It needs the desktop app and a document that
    *  shows. It also waits while the bar for a change on disk asks for Reload
    *  or Keep mine, since its save would replace the other version without
-   *  asking. */
+   *  asking, and until the user saves a document whose file is gone
+   *  (`fileIsGone`). */
   private canCopyFile(): boolean {
-    return isElectron() && this.documentShows() && this.store.get().banner?.kind !== "file-changed";
+    const { activeTabId, banner } = this.store.get();
+    return isElectron() && this.documentShows() && banner?.kind !== "file-changed" && !this.fileIsGone(activeTabId);
   }
 
   /** Run Copy file on the active document (see copyActiveFile). */
