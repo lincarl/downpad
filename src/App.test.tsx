@@ -25,6 +25,8 @@ const runtime = vi.hoisted(() => ({
   activateDocumentTab: vi.fn(),
   closeDocumentTab: vi.fn(),
   closeEveryTab: vi.fn(),
+  canCopyTabFile: vi.fn(),
+  copyTabFile: vi.fn(),
   handleBannerAction: vi.fn(),
   dismissBanner: vi.fn(),
   revealPath: vi.fn(),
@@ -302,9 +304,10 @@ describe("App shell", () => {
 });
 
 describe("Document tab menu", () => {
-  it("lists its four items and gives the runtime the file's exact path or folder", async () => {
+  it("lists its items and gives the runtime the file's exact path or folder, or its tab for Copy file", async () => {
     const store = makeStore();
     store.patchDoc({ filePath: "C:\\notes\\draft.md" });
+    runtime.canCopyTabFile.mockReturnValue(true);
     render(<App store={store} />);
     const user = userEvent.setup();
     const tab = screen.getByRole("tab", { name: "draft.md" });
@@ -316,12 +319,14 @@ describe("Document tab menu", () => {
     fireEvent.contextMenu(tab);
     expect(screen.getByRole("menu", { name: "Tab" })).toBeTruthy();
     expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-      "Open folder", "Copy file path", "Copy folder path", "Close all tabs",
+      "Open folder", "Copy file", "Copy file path", "Copy folder path", "Close all tabs",
     ]);
     closeContextMenu();
 
     await choose("Open folder");
     expect(runtime.revealPath).toHaveBeenCalledExactlyOnceWith("C:\\notes\\draft.md");
+    await choose("Copy file");
+    expect(runtime.copyTabFile).toHaveBeenCalledExactlyOnceWith("tab-1");
     await choose("Copy file path");
     expect(runtime.copyText).toHaveBeenLastCalledWith("C:\\notes\\draft.md");
     await choose("Copy folder path");
@@ -331,12 +336,36 @@ describe("Document tab menu", () => {
     expect(runtime.copyText).toHaveBeenCalledTimes(2);
   });
 
-  it("disables the path items for an untitled tab", () => {
+  it("copies the file of the tab right-clicked, also one in back, and offers it only when the runtime can", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/notes/front.md" });
+    const back = store.addTab({ ...store.get().doc, filePath: "/notes/back.md" });
+    store.activateTab("tab-1");
+    runtime.canCopyTabFile.mockImplementation((id: string) => id === back);
+    render(<App store={store} />);
+    const user = userEvent.setup();
+    const copyFile = () => screen.getByRole("menuitem", { name: "Copy file" });
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "front.md" }));
+    expect(runtime.canCopyTabFile).toHaveBeenLastCalledWith("tab-1");
+    expect(copyFile().hasAttribute("disabled")).toBe(true);
+    closeContextMenu();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "back.md" }));
+    expect(copyFile().hasAttribute("disabled")).toBe(false);
+    await user.click(copyFile());
+    expect(runtime.copyTabFile).toHaveBeenCalledExactlyOnceWith(back);
+    expect(runtime.activateDocumentTab).not.toHaveBeenCalled();
+  });
+
+  it("disables the path items for an untitled tab, and leaves Copy file to the runtime", () => {
+    runtime.canCopyTabFile.mockReturnValue(true);
     render(<App store={makeStore()} />);
     fireEvent.contextMenu(screen.getByRole("tab", { name: "Untitled" }));
 
     const disabled = (label: string) => screen.getByRole("menuitem", { name: label }).hasAttribute("disabled");
     expect(disabled("Open folder")).toBe(true);
+    expect(disabled("Copy file")).toBe(false);
     expect(disabled("Copy file path")).toBe(true);
     expect(disabled("Copy folder path")).toBe(true);
     expect(disabled("Close all tabs")).toBe(false);

@@ -333,6 +333,70 @@ test("the document menu's Copy file saves the document and copies its file as th
   await expect(page.getByText("This file changed on disk.")).toBeHidden();
 });
 
+test("a tab's Copy file brings its document to the front, also from Recent, and then saves and copies it", async () => {
+  const first = path.join(directory, "tab-copy-first.md");
+  const second = path.join(directory, "tab-copy-second.md");
+  await writeFile(first, "# First\n\nMine.\n");
+  await writeFile(second, "# Second\n\nOurs.\n");
+  await launch(first);
+  // The tab in back keeps its editor in the page, hidden, and the Recent view
+  // hides the panel around every editor, so only what shows counts.
+  const shown = (selector: string) => page.locator(`.editor-pane:visible .ProseMirror ${selector}`);
+  const notice = page.getByText("This file changed on disk.");
+  const copied = () => app!.evaluate(async ({ clipboard }) => {
+    const [item] = await clipboard.read();
+    return item?.types.includes("text/uri-list") ? (await item.getType("text/uri-list")).text() : null;
+  });
+  const copyFileOf = async (name: string) => {
+    await page.getByRole("tab", { name, exact: true }).click({ button: "right" });
+    return page.getByRole("menuitem", { name: "Copy file", exact: true });
+  };
+  const type = async (paragraph: string, text: string) => {
+    await shown("p").filter({ hasText: paragraph }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(text);
+  };
+  await type("Mine.", " Unsaved.");
+  await chooseOpen(second);
+  await expect(shown("h1")).toHaveText("Second");
+
+  // The tab in front waits while the notice for a change on disk to its file
+  // asks for Reload or Keep mine. The tab in back comes to the front, and its
+  // unsaved edit goes into its file before it is copied.
+  await type("Ours.", " Typed.");
+  await writeFile(second, "# Second\n\nTheirs.\n");
+  await expect(notice).toBeVisible();
+  await expect(await copyFileOf("tab-copy-second.md")).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await (await copyFileOf("tab-copy-first.md")).click();
+  await expect(page.getByRole("tab", { name: "tab-copy-first.md", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(shown("h1")).toHaveText("First");
+  await expect.poll(() => readFile(first, "utf8")).toBe("# First\n\nMine. Unsaved.\n");
+  await expect.poll(async () => (await copied())?.trim()).toBe(pathToFileURL(first).href);
+  await expect(notice).toBeHidden();
+
+  // Behind the Recent view, the tab's document shows again before it is
+  // saved and copied.
+  await type("Unsaved.", " Again.");
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await expect(page.getByPlaceholder("Search file names")).toBeVisible();
+  await app!.evaluate(({ clipboard }) => clipboard.clear());
+  await (await copyFileOf("tab-copy-first.md")).click();
+  await expect(shown("h1")).toHaveText("First");
+  await expect.poll(() => readFile(first, "utf8")).toBe("# First\n\nMine. Unsaved. Again.\n");
+  await expect.poll(async () => (await copied())?.trim()).toBe(pathToFileURL(first).href);
+
+  // A tab whose change on disk is not resolved shows its notice when it comes
+  // to the front, and nothing is saved or copied.
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await app!.evaluate(({ clipboard }) => clipboard.clear());
+  await (await copyFileOf("tab-copy-second.md")).click();
+  await expect(shown("h1")).toHaveText("Second");
+  await expect(notice).toBeVisible();
+  expect(await readFile(second, "utf8")).toBe("# Second\n\nTheirs.\n");
+  expect(await copied()).toBeNull();
+});
+
 test("Recent offers no document actions for the document it hides", async () => {
   const file = path.join(directory, "hidden-by-recent.md");
   await writeFile(file, "# Hidden by Recent\n");
