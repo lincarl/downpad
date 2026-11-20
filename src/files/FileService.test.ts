@@ -373,7 +373,8 @@ describe("saving document snapshots", () => {
   it("tells when no save of a tab is under way, also one behind another tab's save or queued during the wait", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;
-    await files.untilSaved(tabId);
+    expect(await files.untilSaved(tabId)).toBe(true);
+    expect(files.isSaving(tabId)).toBe(false);
 
     const writes = [deferred<FileMeta>(), deferred<FileMeta>(), deferred<FileMeta>()];
     for (const write of writes) native.writeFile.mockReturnValueOnce(write.promise);
@@ -392,9 +393,49 @@ describe("saving document snapshots", () => {
     expect(await save).toBe(true);
     await eventually(() => expect(native.writeFile).toHaveBeenCalledTimes(3));
     expect(saved).not.toHaveBeenCalled();
+    expect(files.isSaving(tabId)).toBe(true);
     writes[2].resolve({ modifiedMs: 500 });
-    await eventually(() => expect(saved).toHaveBeenCalledOnce());
+    await eventually(() => expect(saved).toHaveBeenCalledExactlyOnceWith(true));
     expect(await later).toBe(true);
+    expect(files.isSaving(tabId)).toBe(false);
+  });
+
+  it("does not wait for a later save of another tab", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    const slow = deferred<FileMeta>();
+    native.writeFile.mockResolvedValueOnce({ modifiedMs: 300 }).mockReturnValueOnce(slow.promise);
+    const save = files.save();
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.md", markdown: "# Other\n", isDirty: true });
+    const other = files.save();
+    expect(await files.untilSaved(tabId)).toBe(true);
+    expect(await save).toBe(true);
+    slow.resolve({ modifiedMs: 400 });
+    expect(await other).toBe(true);
+  });
+
+  it("tells when a Save As under way fails, or the save of an untitled document is cancelled, but not when a plain save fails", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    native.saveDialog.mockResolvedValueOnce("/moved/notes.md");
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+    const saveAs = files.saveAs();
+    const moved = files.untilSaved(tabId);
+    await expect(saveAs).rejects.toThrow("Disk unavailable");
+    expect(await moved).toBe(false);
+    expect(store.get().doc.filePath).toBe(filePath);
+
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+    const save = files.save();
+    const kept = files.untilSaved(tabId);
+    await expect(save).rejects.toThrow("Disk unavailable");
+    expect(await kept).toBe(true);
+
+    store.patchDoc({ filePath: null });
+    native.saveDialog.mockResolvedValueOnce(null);
+    const untitled = files.save();
+    expect(await files.untilSaved(tabId)).toBe(false);
+    expect(await untitled).toBe(false);
   });
 
   it("tells when no save that can move a document is under way, through the Save As dialog and its write", async () => {

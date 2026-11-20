@@ -394,11 +394,34 @@ describe("a file that changed on disk", () => {
     expect(bindings.holdSave()).toBe(false);
     expect(store.get().banner).toBeNull();
 
+    // The tab's return reads the file, which still holds the change.
+    disk.readFile.mockResolvedValueOnce({ content: "# Theirs\n", eol: "lf", hadBom: false, modifiedMs: 200, sizeBytes: 9 });
     store.activateTab(first);
     bindings.activeDocChanged();
     expect(store.get().banner?.kind).toBe("file-changed");
     expect(bindings.holdSave()).toBe(true);
-    expect(disk.readFile).toHaveBeenCalledOnce();
+    await eventually(() => expect(disk.readFile).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get().banner?.kind).toBe("file-changed");
+    expect(bindings.holdSave()).toBe(true);
+  });
+
+  it("drops a notice once the file holds the saved text again, also with the change's time and size", async () => {
+    store.patchDoc({ fileSize: 7 });
+    await changeOnDisk("# Peer\n", 100);
+    const first = store.get().activeTabId!;
+    expect(bindings.holdSave()).toBe(true);
+
+    // While another tab is in front, a sync tool puts the earlier text back
+    // and keeps the file's time and size.
+    store.addTab({ ...blankDoc(), markdown: "# Other\n" });
+    store.set({ banner: null });
+    bindings.activeDocChanged();
+    disk.fileStamp.mockResolvedValue({ modifiedMs: 100, sizeBytes: 7 });
+    store.activateTab(first);
+    bindings.activeDocChanged();
+    await eventually(() => expect(store.get().banner).toBeNull());
+    expect(bindings.holdSave()).toBe(false);
   });
 
   it("notices a change made while another tab was in front, also in a file dated 1970, but not for a recovered document", async () => {

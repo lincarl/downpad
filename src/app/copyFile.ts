@@ -12,7 +12,7 @@ import type { DesktopEventBindings } from "./DesktopEventBindings";
 
 export interface CopyFileDependencies {
   store: Store;
-  files: Pick<FileService, "save" | "untilSaved">;
+  files: Pick<FileService, "save" | "untilSaved" | "isSaving">;
   editorHost: Pick<EditorHost, "flush">;
   desktopEvents: Pick<DesktopEventBindings, "settled" | "showPendingChange" | "holdSaveAfterChecks" | "recheck">;
   /** Whether Copy file can run now, as the menu asks. */
@@ -24,7 +24,8 @@ export interface CopyFileDependencies {
  *  copies it, to paste into a folder or as an attachment. Unsaved changes are
  *  saved first, and an untitled document asks where to save it, so the file
  *  holds what the editor shows. Cancelling that Save As copies nothing. Copy
- *  file first waits for a save of the tab under way. A recovered document
+ *  file first waits for a save of the tab under way, and does nothing when a
+ *  Save As among them failed or was cancelled. A recovered document
  *  that no save has recorded, whose file may have changed while Downpad was
  *  closed, asks the user to save it first, and a change on disk that is not
  *  resolved shows its notice instead. Failures show as an error notice. */
@@ -39,9 +40,15 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   // A save of the tab under way records its file first, so a recovered
   // document that the user is saving counts as saved. A comparison of the
   // document with its file that runs, as after a switch of tabs, then tells
-  // whether the file changed.
-  await files.untilSaved(tabId);
-  await desktopEvents.settled(tabId);
+  // whether the file changed. Each can start while Copy file waits for the
+  // other, so it waits until neither runs.
+  do {
+    // After a Save As that failed, the document still has the file the user
+    // was leaving, which Copy file's own save must not write then. The
+    // failed save has told the user.
+    if (!(await files.untilSaved(tabId))) return;
+    await desktopEvents.settled(tabId);
+  } while (files.isSaving(tabId));
   if (!stillInFront() || !canCopyFile()) return;
   // A change on disk whose bar was dismissed or replaced is still unresolved,
   // so the bar asks again and nothing is saved or copied.

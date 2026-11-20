@@ -49,6 +49,8 @@ interface SaveRequest {
   automatic?: (tabId: string) => boolean | Promise<boolean>;
   /** The saved text the write replaces, once the write starts. */
   replaced?: string | null;
+  /** Whether the save wrote the document, once it ends. A save that threw did not. */
+  outcome?: Promise<boolean>;
 }
 
 /** The suggested path of a Save As, and paths it must not write. */
@@ -277,10 +279,26 @@ export class FileService {
     while ([...this.pendingSaves].some(moves)) await this.saveQueue;
   }
 
-  /** Resolve once no save of the tab is under way, waiting for its turn or
-   *  being written, so the document shows what its last save recorded. */
-  async untilSaved(tabId: string): Promise<void> {
-    while ([...this.pendingSaves].some((request) => request.tabId === tabId)) await this.saveQueue;
+  /** Whether a save of the tab is under way, waiting for its turn or being
+   *  written. */
+  isSaving(tabId: string): boolean {
+    return [...this.pendingSaves].some((request) => request.tabId === tabId);
+  }
+
+  /** Resolve once no save of the tab is under way, so the document shows what
+   *  its last save recorded. Saves of other tabs are not waited for. Resolves
+   *  with false when a save that was to give the document another file, a
+   *  Save As or the save of an untitled document, failed or was cancelled
+   *  meanwhile, so the document kept a file the user was leaving. */
+  async untilSaved(tabId: string): Promise<boolean> {
+    let moved = true;
+    for (;;) {
+      const requests = [...this.pendingSaves].filter((request) => request.tabId === tabId);
+      if (requests.length === 0) return moved;
+      for (const request of requests) {
+        if (!(await request.outcome) && (request.saveAs || request.expectedPath === null)) moved = false;
+      }
+    }
   }
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
@@ -300,6 +318,7 @@ export class FileService {
     this.pendingSaves.add(request);
     const operation = this.saveQueue.then(() => this.saveSnapshot(request))
       .finally(() => this.pendingSaves.delete(request));
+    request.outcome = operation.catch(() => false);
     // A failed or cancelled operation must not prevent a subsequent save.
     this.saveQueue = operation.then(() => {}, () => {});
     return operation;

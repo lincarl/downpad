@@ -217,9 +217,7 @@ export class DesktopEventBindings {
       if (!recordsVersion(before.doc, state.doc)) return;
       if (!this.pendingChanges.has(tabId)) return;
       if (!this.changeOf(tabId)) this.resolve(tabId);
-      // The file's time and size cannot tell here, as a reload can record a
-      // third text with the time and size of the change.
-      else void this.compareWithDisk(true);
+      else void this.compareWithDisk(false);
     });
   }
 
@@ -267,13 +265,18 @@ export class DesktopEventBindings {
   /** Read the active document's file, and offer to reload it when its text
    *  differs from what the document last read or wrote and from the open
    *  text. Without `read`, as when a tab comes to the front, the file's time
-   *  and size tell first whether it can have changed. A recovered document
-   *  has no file version of its own to compare with, so only a report of the
-   *  watcher or a refused save makes it read. */
+   *  and size tell first whether it can have changed. A tab with an
+   *  unresolved change is always read, since another program can replace the
+   *  file again, or put its earlier text back, with the time and size of the
+   *  change. A recovered document has no file version of its own to compare
+   *  with, so only a report of the watcher, a refused save or an unresolved
+   *  change makes it read. */
   private async compareWithDisk(read: boolean): Promise<void> {
     const { files, store } = this.dependencies;
     const { activeTabId: tabId, doc } = store.get();
-    if (!tabId || !doc.filePath || (!read && isRecoveredDocument(doc))) return;
+    if (!tabId || !doc.filePath) return;
+    const reads = read || this.pendingChanges.has(tabId);
+    if (!reads && isRecoveredDocument(doc)) return;
     const path = doc.filePath;
     // A save, reload or Keep mine that records another file version
     // meanwhile makes this read out of date, and the app compares again then.
@@ -282,12 +285,10 @@ export class DesktopEventBindings {
     const comparison = ++this.comparisons;
     this.checks.set(tabId, (this.checks.get(tabId) ?? 0) + 1);
     try {
-      if (!read) {
+      if (!reads) {
         const stamp = await fileStamp(path).catch(() => null);
         if (stamp === null || this.disposed) return;
-        const pending = this.pendingChanges.get(tabId);
-        const known = pending ?? { modifiedMs: doc.modifiedMs, sizeBytes: doc.fileSize };
-        if (stamp.modifiedMs === known.modifiedMs && (known.sizeBytes === undefined || stamp.sizeBytes === known.sizeBytes)) return;
+        if (stamp.modifiedMs === doc.modifiedMs && (doc.fileSize === undefined || stamp.sizeBytes === doc.fileSize)) return;
       }
 
       let onDisk: FilePayload;

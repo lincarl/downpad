@@ -21,7 +21,8 @@ function setup(doc: Partial<DocumentState>, saved = true) {
   const tabId = store.get().activeTabId!;
   const files = {
     save: vi.fn<CopyFileDependencies["files"]["save"]>(async () => saved),
-    untilSaved: vi.fn<CopyFileDependencies["files"]["untilSaved"]>(async () => {}),
+    untilSaved: vi.fn<CopyFileDependencies["files"]["untilSaved"]>(async () => true),
+    isSaving: vi.fn<CopyFileDependencies["files"]["isSaving"]>(() => false),
   };
   const desktopEvents = {
     settled: vi.fn(async () => {}),
@@ -44,21 +45,55 @@ describe("Copy file", () => {
   it("asks to save a recovered document first, and saves and copies nothing", async () => {
     const { store, files, copy } = setup({ modifiedMs: 0, fileSize: undefined, savedMarkdown: null, isDirty: true });
     await copy();
+    expect(files.untilSaved).toHaveBeenCalledOnce();
     expect(store.get().banner).toEqual({ kind: "info", message: "Save this recovered document first. Its file may have changed while Downpad was closed." });
     expect(files.save).not.toHaveBeenCalled();
     expect(clipboard.copy).not.toHaveBeenCalled();
   });
 
+  const recovered = { modifiedMs: 0, fileSize: undefined, savedMarkdown: null, isDirty: true };
+  const recorded = { modifiedMs: 100, fileSize: 7, savedMarkdown: "# Mine\n", isDirty: false };
+
   it("waits for a save of the tab under way, and copies a recovered document that the save recorded", async () => {
-    const { store, tabId, files, copy } = setup({ modifiedMs: 0, fileSize: undefined, savedMarkdown: null, isDirty: true });
-    files.untilSaved.mockImplementationOnce(async () => {
-      // The save that the user asked for ends and records the file.
-      store.patchDoc({ modifiedMs: 100, fileSize: 7, savedMarkdown: "# Mine\n", isDirty: false });
-    });
-    await copy();
+    const { store, tabId, files, copy } = setup(recovered);
+    let end!: (moved: boolean) => void;
+    files.untilSaved.mockReturnValueOnce(new Promise((resolve) => { end = resolve; }));
+    const copying = copy();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(files.untilSaved).toHaveBeenCalledWith(tabId);
+    expect(store.get().banner).toBeNull();
+    expect(clipboard.copy).not.toHaveBeenCalled();
+
+    // The save that the user asked for ends and records the file.
+    store.patchDoc(recorded);
+    end(true);
+    await copying;
     expect(files.save).not.toHaveBeenCalled();
     expect(clipboard.copy).toHaveBeenCalledWith(filePath);
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("waits again for a save that starts while a comparison of the file runs", async () => {
+    const { store, files, desktopEvents, copy } = setup(recovered);
+    // The user saves the recovered document while Copy file waits for the
+    // comparison, and the second wait ends once that save recorded the file.
+    desktopEvents.settled.mockImplementationOnce(async () => { files.isSaving.mockReturnValueOnce(true); });
+    files.untilSaved.mockResolvedValueOnce(true).mockImplementationOnce(async () => {
+      store.patchDoc(recorded);
+      return true;
+    });
+    await copy();
+    expect(files.untilSaved).toHaveBeenCalledTimes(2);
+    expect(clipboard.copy).toHaveBeenCalledWith(filePath);
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("saves and copies nothing after a Save As under way that failed or was cancelled", async () => {
+    const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
+    files.untilSaved.mockResolvedValueOnce(false);
+    await copy();
+    expect(files.save).not.toHaveBeenCalled();
+    expect(clipboard.copy).not.toHaveBeenCalled();
     expect(store.get().banner).toBeNull();
   });
 
