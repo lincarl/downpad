@@ -652,7 +652,7 @@ describe("a file that changed on disk", () => {
     expect(bindings.isFileGone(tabId)).toBe(true);
   });
 
-  it("counts a file as gone until a save records it, not while a save is under way or after one failed", async () => {
+  it("keeps the file marked gone until the document records a saved version", async () => {
     const tabId = store.get().activeTabId!;
     expect(bindings.isFileGone(tabId)).toBe(false);
     store.patchDoc({ isDirty: true, savedMarkdown: null });
@@ -686,12 +686,13 @@ describe("a file that changed on disk", () => {
   });
 
   it.each([
-    { document: "a document that recorded its file", recorded: { fileSize: 0 } },
+    { document: "a document that recorded its file", recorded: { fileSize: 7 } },
     { document: "a recovered document", recorded: { fileSize: undefined } },
   ])("reads the file of $document that was gone when its tab comes to the front, without a report of the watcher", async ({ recorded }) => {
     const tabId = store.get().activeTabId!;
     store.patchDoc({ ...recorded, isDirty: true, savedMarkdown: null });
     bindings.fileGone(tabId);
+    disk.fileStamp.mockResolvedValue({ modifiedMs: 100, sizeBytes: 7 });
     const reads = disk.readFile.mock.calls.length;
     bindings.activeDocChanged();
     await bindings.settled(tabId);
