@@ -113,9 +113,9 @@ export function collapseDotSegments(joined: string): string {
  * mailto, data, file, …), a protocol-relative URL or other network path
  * (isNetworkPath), an in-document anchor (`#heading`), a non-markdown file, or
  * a relative link with no saved document to anchor it. Any query/fragment is
- * stripped, so `notes.md#section` still targets `notes.md`; a relative result
- * has its `./`/`..` segments collapsed so it dedupes against the same file
- * opened by other means (§5.19).
+ * stripped, so `notes.md#section` still targets `notes.md`; the result has
+ * its `./`/`..` segments collapsed, also for an absolute link, so it dedupes
+ * against the same file opened by other means (§5.19).
  */
 export function resolveMarkdownLinkTarget(href: string, docPath: string | null): string | null {
   if (!href) return null;
@@ -131,7 +131,8 @@ export function resolveMarkdownLinkTarget(href: string, docPath: string | null):
   if (isNetworkPath(href) || isNetworkPath(target)) return null;
   const path = safeDecode(target);
   if (!path || !MARKDOWN_LINK_EXT.test(path)) return null;
-  if (isAbsolutePath(path)) return path;
+  // An absolute path stays as written, unless it has `./` or `../` segments.
+  if (isAbsolutePath(path)) return /(^|[\\/])\.{1,2}(?=[\\/]|$)/.test(path) ? collapseDotSegments(path) : path;
   if (!docPath) return null;
   const dir = dirName(docPath);
   if (!dir) return null;

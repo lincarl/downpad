@@ -873,6 +873,23 @@ describe("reloading an open file", () => {
     expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
   });
 
+  it("keeps text typed into an empty untitled tab while a file is read, which the editor reports only in its flush", async () => {
+    const { store, presenter, files } = setup();
+    store.addTab(blankDoc());
+    const untitled = store.get().activeTabId!;
+    const tabs = store.get().tabs.length;
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const opening = files.openPath("/docs/other.md");
+    await eventually(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith("/docs/other.md"));
+    presenter.flush.mockImplementationOnce(() => { store.patchDocById(untitled, { markdown: "A draft\n", isDirty: true }); });
+    read.resolve(onDisk);
+    await opening;
+    expect(store.get().tabs).toHaveLength(tabs + 1);
+    expect(store.get().tabs.find((tab) => tab.id === untitled)?.doc.markdown).toBe("A draft\n");
+    expect(store.get().doc.filePath).toBe("/docs/other.md");
+  });
+
   it("gives a file one tab when it is opened twice before the first read ends", async () => {
     const { store, presenter, files } = setup();
     const tabs = store.get().tabs.length;

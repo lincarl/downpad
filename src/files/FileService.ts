@@ -144,8 +144,13 @@ export class FileService {
     if (existing) {
       this.store.activateTab(existing.id);
       this.store.replaceActiveDoc(doc);
-    } else if (this.activeIsReusable()) this.store.replaceActiveDoc(doc);
-    else this.store.addTab(doc);
+    } else {
+      // Text typed into an empty untitled tab while the file was read is
+      // still with the editor, which reports typing after a short delay.
+      this.present.flush();
+      if (this.activeIsReusable()) this.store.replaceActiveDoc(doc);
+      else this.store.addTab(doc);
+    }
 
     await this.present.reloadActiveDoc(); // fresh content → fresh editor
     this.recordOpened(path);

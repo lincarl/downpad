@@ -13,7 +13,7 @@ import type { Store } from "../state/store";
  *  unsubscribe function. */
 export function clearNoticesOfOtherDocuments(store: Pick<Store, "get" | "set" | "select">): () => void {
   return store.select(
-    (state) => (state.view === "recent" ? "recent" : `${state.activeTabId ?? ""}\n${state.doc.filePath ?? ""}`),
+    (state) => `${state.view === "recent" ? "recent" : "document"}\n${state.activeTabId ?? ""}\n${state.doc.filePath ?? ""}`,
     () => {
       if (store.get().banner) store.set({ banner: null });
     },

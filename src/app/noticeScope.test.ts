@@ -47,10 +47,18 @@ describe("the document a notice is about", () => {
     expect(store.get().banner).toBeNull();
     const failed: BannerState = { kind: "error", message: "Downpad could not open the file." };
     store.set({ banner: failed });
-    // Other tabs can come and go behind the Recent view.
+    // The document behind the Recent view can change meanwhile.
     store.patchDoc({ modifiedMs: 300 });
     expect(store.get().banner).toBe(failed);
     store.set({ view: "wysiwyg" });
+    expect(store.get().banner).toBeNull();
+  });
+
+  it("clears a notice on the Recent view when the last tab closes behind it", () => {
+    const { store } = setup();
+    store.set({ view: "recent" });
+    store.set({ banner: notice });
+    store.closeTab(store.get().activeTabId!);
     expect(store.get().banner).toBeNull();
   });
 

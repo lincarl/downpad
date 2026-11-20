@@ -358,8 +358,11 @@ export class DesktopEventBindings {
     }
   }
 
-  /** The bar that asks whether to reload a file that changed on disk. */
+  /** The bar that asks whether to reload a file that changed on disk. It
+   *  waits while the Recent view is in front, where the document does not
+   *  show, and comes when the document does (`activeDocChanged`). */
   private showChangeBanner(): void {
+    if (this.dependencies.store.get().view === "recent") return;
     this.dependencies.store.set({
       banner: {
         kind: "file-changed",

@@ -575,7 +575,13 @@ export class GitSync {
     const { store, files } = this.deps;
     for (const path of paths) {
       const tab = store.get().tabs.find((entry) => entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
-      if (!tab || hasUnsavedChanges(tab)) continue;
+      if (!tab) continue;
+      if (hasUnsavedChanges(tab)) {
+        // Text typed after Git checked the documents keeps the document, and
+        // the notice for a change on disk asks about the file at once.
+        if (tab.id === store.get().activeTabId) await this.deps.compareWithDisk().catch(() => {});
+        continue;
+      }
       try {
         if (tab.id === store.get().activeTabId) {
           const text = tab.doc.markdown;

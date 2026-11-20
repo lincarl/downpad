@@ -135,6 +135,13 @@ describe("resolveMarkdownLinkTarget", () => {
     expect(resolveMarkdownLinkTarget("C:/other/a.md", null)).toBe("C:/other/a.md");
     expect(resolveMarkdownLinkTarget("C:\\other\\a.md", null)).toBe("C:\\other\\a.md");
     expect(resolveMarkdownLinkTarget("/home/me/a.md", null)).toBe("/home/me/a.md");
+    expect(resolveMarkdownLinkTarget("/home/me/.config/a.md", null)).toBe("/home/me/.config/a.md");
+  });
+
+  it("gives an absolute link with ./ or ../ segments the spelling the file has when opened by other means", () => {
+    expect(resolveMarkdownLinkTarget("/work/./notes.md", null)).toBe("/work/notes.md");
+    expect(resolveMarkdownLinkTarget("/work/sub/../notes.md", "/elsewhere/doc.md")).toBe("/work/notes.md");
+    expect(resolveMarkdownLinkTarget("C:\\work\\sub\\..\\notes.md", null)).toBe("C:/work/notes.md");
   });
 
   it.each([

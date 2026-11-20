@@ -381,6 +381,18 @@ describe("a file that changed on disk", () => {
     expect(store.get().banner).toBeNull();
   });
 
+  it("keeps the notice for a change on disk back while the Recent view is in front, and shows it with the document", async () => {
+    store.set({ view: "recent" });
+    await changeOnDisk("# Theirs\n");
+    expect(store.get().banner).toBeNull();
+    // The change is unresolved all the same, so automatic saves wait.
+    expect(bindings.holdSave()).toBe(true);
+    expect(store.get().banner).toBeNull();
+    store.set({ view: "wysiwyg" });
+    bindings.activeDocChanged();
+    expect(store.get().banner?.kind).toBe("file-changed");
+  });
+
   it("shows a dismissed change again once its tab is in front again, and holds autosave for it", async () => {
     await changeOnDisk("# Theirs\n");
     disk.fileStamp.mockResolvedValue(stamp(200));

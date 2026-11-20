@@ -386,6 +386,20 @@ describe("GitSync checks", () => {
     expect(deps.compareWithDisk).toHaveBeenCalledOnce();
   });
 
+  it("asks about the file at once when the document in front got unsaved text while Get latest ran", async () => {
+    openDocument();
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockImplementation(async () => {
+      // The user types after Git checked the documents.
+      store.patchDoc({ markdown: "# Notes\n\nTyped meanwhile\n", isDirty: true });
+      return done([PATH]);
+    });
+    await sync.check({ force: true });
+    expect(deps.files.replaceFromDisk).not.toHaveBeenCalled();
+    expect(store.get().doc.markdown).toBe("# Notes\n\nTyped meanwhile\n");
+    expect(deps.compareWithDisk).toHaveBeenCalledOnce();
+  });
+
   it("drops the editors of a tab that went behind another one while Get latest read its file", async () => {
     openDocument();
     const tabId = store.get().activeTabId!;

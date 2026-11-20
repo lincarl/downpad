@@ -16,26 +16,36 @@ function area(): { editorArea: HTMLElement; wysiwyg: HTMLElement; raw: HTMLEleme
   return { editorArea, wysiwyg, raw };
 }
 
-/** As a reload does: the panes start again at the top. */
-const scrollToTop = (...panes: HTMLElement[]) => async () => {
-  for (const pane of panes) pane.scrollTop = 0;
-};
+/** As a reload does: the area starts again at the top, with new panes in
+ *  place of the old ones. Returns the new panes. */
+function rebuild(editorArea: HTMLElement): { wysiwyg: HTMLElement; raw: HTMLElement } {
+  editorArea.scrollTop = 0;
+  const panes = [...editorArea.querySelectorAll<HTMLElement>(".editor-pane")].map((old) => {
+    const pane = document.createElement("div");
+    pane.className = old.className;
+    old.replaceWith(pane);
+    return pane;
+  });
+  return { wysiwyg: panes[0], raw: panes[1] };
+}
 
 describe("keeping a reloaded document in place", () => {
   it("scrolls the new editors to where the old ones were", async () => {
-    const { editorArea, wysiwyg, raw } = area();
-    await keepingPlace(editorArea, () => "tab", scrollToTop(editorArea, wysiwyg, raw));
-    expect([editorArea.scrollTop, wysiwyg.scrollTop, raw.scrollTop]).toEqual([10, 200, 300]);
+    const { editorArea } = area();
+    let built!: ReturnType<typeof rebuild>;
+    await keepingPlace(editorArea, () => "tab", async () => { built = rebuild(editorArea); });
+    expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([10, 200, 300]);
   });
 
   it("scrolls nothing when another tab is in front once the reload ends", async () => {
-    const { editorArea, wysiwyg, raw } = area();
+    const { editorArea } = area();
     let inFront = "tab";
+    let built!: ReturnType<typeof rebuild>;
     await keepingPlace(editorArea, () => inFront, async () => {
       // The user shows another tab during the reload, whose panes are at the top.
       inFront = "other";
-      await scrollToTop(editorArea, wysiwyg, raw)();
+      built = rebuild(editorArea);
     });
-    expect([editorArea.scrollTop, wysiwyg.scrollTop, raw.scrollTop]).toEqual([0, 0, 0]);
+    expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([0, 0, 0]);
   });
 });
