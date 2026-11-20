@@ -57,7 +57,7 @@ import {
 import { TooltipLabel, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { countWords } from "@/document/wordcount";
-import { byteLength, formatSize } from "@/document/docSize";
+import { documentSize, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
 import { documentLanguage, LANGUAGE_NAMES } from "@/files/documentLanguage";
 import { showContextMenu } from "@/shell/contextMenu";
@@ -993,7 +993,7 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
           </>
         )}
         {words !== null && `${words.toLocaleString()} ${words === 1 ? "word" : "words"} · `}
-        {formatSize(byteLength(doc.markdown))}
+        {formatSize(documentSize(doc))}
       </span>
     </footer>
   );
