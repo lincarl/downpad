@@ -112,13 +112,16 @@ export class AppRuntime {
         if (tab && !this.disposed) this.slowSave.show(tabId, tabLabel(tab));
       },
       slowWriteEnded: (tabId) => this.slowSave.takeDown(tabId),
-      // A failed save of a close shows as a failed Save does, by the name
-      // the document has then, and only here, since the close then keeps
-      // its tabs without failing.
-      closeSaveFailed: (tabId, error) => {
+      // A failed save of a close shows as a failed Save does, and only here,
+      // since the close then keeps its tabs without failing. The notice
+      // names the document by the name it has then, or, once its tab is
+      // closed, as after a newer close with Discard, by the file it had when
+      // the save was asked for, as `saveByUser` does.
+      closeSaveFailed: (tabId, path, error) => {
         console.error("Downpad: file action failed", error);
+        if (this.disposed) return;
         const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
-        if (tab && !this.disposed) this.saveFailure.show(tabId, tabLabel(tab), error);
+        this.saveFailure.show(tabId, tab ? tabLabel(tab) : fileLabel(path), error);
       },
     });
     // Image storage in the WYSIWYG view may need to save an untitled buffer

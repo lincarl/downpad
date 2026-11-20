@@ -74,9 +74,11 @@ export interface SaveEvents {
   /** A write that `slowWrite` told about has ended, written or not. */
   slowWriteEnded?(tabId: string): void;
   /** A save of the tab that a close asked for failed with `error`, also
-   *  after the close stopped waiting for it. The close keeps its tabs open
-   *  and leaves telling the user to this event, as a failed Save does. */
-  closeSaveFailed?(tabId: string, error: unknown): void;
+   *  after the close stopped waiting for it. `path` is the document's file
+   *  when the save was asked for, null for an untitled document, which names
+   *  the document once its tab is closed. The close keeps its tabs open and
+   *  leaves telling the user to this event, as a failed Save does. */
+  closeSaveFailed?(tabId: string, path: string | null, error: unknown): void;
 }
 
 /** The suggested path of a Save As, and paths it must not write. */
@@ -696,10 +698,13 @@ export class FileService {
       const unsaved = ownTabs().filter(hasUnsavedChanges);
       // A save that fails tells the user itself, also while a dialog below
       // shows or after the close stopped waiting, and counts as not saved.
-      const closeSave = (tabId: string): Promise<boolean> => this.queueSave(tabId, false, { failedMovesBefore: failedMoves.get(tabId) }).catch((error: unknown) => {
-        this.events.closeSaveFailed?.(tabId, error);
-        return false;
-      });
+      const closeSave = (tabId: string): Promise<boolean> => {
+        const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
+        return this.queueSave(tabId, false, { failedMovesBefore: failedMoves.get(tabId) }).catch((error: unknown) => {
+          this.events.closeSaveFailed?.(tabId, path, error);
+          return false;
+        });
+      };
       // The saves of documents with a file start together, so one that does
       // not return, as to a network drive that went away, holds up no other.
       let failed = false;

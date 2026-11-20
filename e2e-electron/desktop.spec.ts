@@ -5419,7 +5419,8 @@ test("Save on window close awaits saved named and untitled tabs before exiting",
 /** Make the main process's writes of files whose path holds `marker` never
  *  answer, as on a network drive that went away. The new file that a write
  *  stages its text in is never created. `goneAsked` counts the writes that
- *  got stuck. */
+ *  got stuck, and `failGoneWrite` makes the last of them fail as on a full
+ *  disk. */
 async function hangWritesUnder(marker: string): Promise<void> {
   await app!.evaluate((_electron, part) => {
     const filesystem = process.getBuiltinModule("node:fs/promises");
@@ -5427,7 +5428,9 @@ async function hangWritesUnder(marker: string): Promise<void> {
     Reflect.set(filesystem, "open", async (target: unknown, flags: unknown, ...rest: unknown[]) => {
       if (String(target).includes(part) && flags === "wx") {
         Reflect.set(globalThis, "goneAsked", Number(Reflect.get(globalThis, "goneAsked") ?? 0) + 1);
-        await new Promise(() => {});
+        await new Promise((_resolve, reject) => {
+          Reflect.set(globalThis, "failGoneWrite", () => reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" })));
+        });
       }
       return original(target, flags, ...rest);
     });
@@ -5507,6 +5510,35 @@ test("a save that never returns holds up no other document, and closing its docu
   expect(await app!.evaluate(() => Reflect.get(globalThis, "closePrompts"))).toEqual([
     { message: '"remote.md" has unsaved changes. Save before closing?', buttons: ["Save", "Cancel", "Discard"], defaultId: 0, cancelId: 1 },
   ]);
+  expect(await readFile(stuck, "utf8")).toBe("Remote document.\n");
+});
+
+test("a save of a close that fails after another close discarded its document names the document", async () => {
+  const gone = path.join(directory, "gone-drive");
+  await mkdir(gone);
+  const stuck = path.join(gone, "remote.md");
+  const local = path.join(directory, "local.md");
+  await writeFile(stuck, "Remote document.\n");
+  await writeFile(local, "Local document.\n");
+  await launch(local);
+  await chooseOpen(stuck);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(paragraph).toHaveText("Remote document.");
+  await hangWritesUnder("gone-drive");
+  await typeAtEnd(paragraph, " Never written.");
+  const stuckTab = page.getByRole("tab", { name: /remote\.md/ });
+  // Save on close waits for the write, which does not answer, and closing
+  // again with Discard closes the document.
+  await chooseCloseAction("Save");
+  await stuckTab.locator(".tab-close").click();
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "goneAsked"))).toBe(1);
+  await chooseCloseAction("Discard");
+  await stuckTab.locator(".tab-close").click();
+  await expect(stuckTab).toHaveCount(0);
+  await expect(paragraph).toHaveText("Local document.");
+  // The write fails at last, and the notice names the closed document.
+  await app!.evaluate(() => (Reflect.get(globalThis, "failGoneWrite") as () => void)());
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “remote.md”. The disk is full.");
   expect(await readFile(stuck, "utf8")).toBe("Remote document.\n");
 });
 

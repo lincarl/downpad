@@ -972,7 +972,7 @@ describe("saving before close", () => {
     // The document with a file fails while the first dialog shows.
     const failure = new Error("Disk unavailable");
     write.reject(failure);
-    await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, failure));
+    await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure));
     dialog.resolve("/docs/first.md");
     expect(await closing).toBe("cancel");
     expect(native.writeFile).toHaveBeenLastCalledWith("/docs/first.md", "First untitled\n", "lf");
@@ -995,7 +995,7 @@ describe("saving before close", () => {
     write.reject(failure);
     dialog.resolve(null);
     expect(await closing).toBe("cancel");
-    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, failure);
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
   });
 
   it("reports a close save that fails after the close stopped waiting for it", async () => {
@@ -1009,9 +1009,11 @@ describe("saving before close", () => {
     await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
     stop.abort();
     expect(await closing).toBe("cancel");
+    // The file the document had names it once its tab is closed.
+    store.closeTab(tabId);
     const failure = new Error("Disk unavailable");
     write.reject(failure);
-    await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(tabId, failure));
+    await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(tabId, filePath, failure));
   });
 
   it("keeps every tab when a close save fails, and reports the failure", async () => {
@@ -1021,7 +1023,7 @@ describe("saving before close", () => {
     native.writeFile.mockRejectedValueOnce(failure);
 
     expect(await files.confirmCloseAll()).toBe("cancel");
-    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, failure);
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, filePath, failure);
     expect(store.get().tabs).toHaveLength(2);
     expect(store.get().doc).toMatchObject({ isDirty: true, savedMarkdown: "# Saved before\n" });
   });
