@@ -4904,7 +4904,9 @@ test("undoing every edit marks the document saved again, and an undo right after
   const savedColor = await icon.evaluate((element) => getComputedStyle(element).color);
   await paragraph.click();
   await page.keyboard.press("End");
-  await page.keyboard.type(" Typed.");
+  // Each edit is one key, which one undo takes back. A pause of half a second
+  // between keys starts a new undo step, and a busy machine can make one.
+  await page.keyboard.type("!");
   await expect(page).toHaveTitle("undo.md — Downpad");
   await expect(dirtyIcon).toBeVisible();
   // The icon of an unsaved document is drawn in the danger color.
@@ -4924,14 +4926,14 @@ test("undoing every edit marks the document saved again, and an undo right after
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await expect(icon).toHaveCSS("color", savedColor);
 
-  await page.keyboard.type(" Undone.");
+  await page.keyboard.type("?");
   await page.keyboard.press("ControlOrMeta+s");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph).toHaveText("First line.");
-  // The file has the typed words but the document no longer does.
+  // The file has the typed key but the document no longer does.
   await expect(page).toHaveTitle("undo.md — Downpad");
   await expect(dirtyIcon).toBeVisible();
-  await expect.poll(() => readFile(file, "utf8")).toBe("First line. Undone.\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("First line.?\n");
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\n");
   await expect(page).toHaveTitle("undo.md — Downpad");
@@ -7704,6 +7706,29 @@ test("a click in the split's Markdown pane closes the slash menu and leaves Ente
   await expect.poll(() => readFile(file, "utf8")).toBe("First line.\nTyped.\n\n/\n");
 });
 
+/** Click a cell of the frontmatter table, go to its end and type `text` there
+ *  as one run of keys. A pause of half a second between keys starts a new
+ *  undo step, in the table as in the document, and a busy machine can deliver
+ *  keys that far apart. The renderer's clock stands still while they are
+ *  typed, as for a user who types without a pause. Only undo grouping reads
+ *  the clock on the way from a key in the table to its edit. The document and
+ *  Markdown editors read it to handle input too, so their tests type one key
+ *  per undo step. */
+async function typeInCell(cell: Locator, text: string): Promise<void> {
+  await cell.click();
+  await page.keyboard.press("End");
+  await page.evaluate(() => {
+    const now = Date.now();
+    Reflect.set(globalThis, "dateNow", Date.now);
+    Date.now = () => now;
+  });
+  await page.keyboard.type(text);
+  await page.evaluate(() => {
+    const dateNow: () => number = Reflect.get(globalThis, "dateNow");
+    Date.now = dateNow;
+  });
+}
+
 test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed the table", async () => {
   const file = path.join(directory, "frontmatter-undo.md");
   await writeFile(file, "---\ntitle: Draft notes # keep\nstatus: draft\n---\n\nThe draft body.\n");
@@ -7713,7 +7738,7 @@ test("Ctrl+Z takes back frontmatter table edits and a Replace all that changed t
     .locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: "title", exact: true }) })
     .locator(".frontmatter-value-edit");
   const body = page.locator(".milkdown .ProseMirror p").first();
-  await typeAtEnd(title, " v2");
+  await typeInCell(title, " v2");
   await expect(page).toHaveTitle("frontmatter-undo.md — Downpad");
   await expect(page.getByRole("tab", { name: "frontmatter-undo.md", exact: true }).locator(".tab-file-icon.is-dirty")).toBeVisible();
   // The caret stays in the cell, so typing goes on there.
@@ -7773,8 +7798,8 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
   const cell = (key: string) =>
     page.locator(".frontmatter-table tr", { has: page.getByRole("rowheader", { name: key, exact: true }) }).locator(".frontmatter-value-edit");
 
-  await typeAtEnd(cell("title"), " v2");
-  await typeAtEnd(cell("status"), " b");
+  await typeInCell(cell("title"), " v2");
+  await typeInCell(cell("status"), " b");
   await choose(cell("status"), "Undo");
   await expect(cell("status")).toHaveText("draft");
   await choose(cell("status"), "Undo");
@@ -7785,13 +7810,14 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
 
   await page.getByRole("radio", { name: "Markdown", exact: true }).click();
   const line = page.locator(".cm-line", { hasText: "The draft body." });
-  await typeAtEnd(line, " Typed.");
+  // One key, which one undo takes back however slowly the machine runs.
+  await typeAtEnd(line, "!");
   await choose(line, "Undo");
   await expect(line).toHaveText("The draft body.");
   await choose(line, "Redo");
-  await expect(line).toHaveText("The draft body. Typed.");
+  await expect(line).toHaveText("The draft body.!");
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe(original.replace("# keep", "# keep v2").replace("body.", "body. Typed."));
+  await expect.poll(() => readFile(file, "utf8")).toBe(original.replace("# keep", "# keep v2").replace("body.", "body.!"));
 });
 
 test("pasting a copy of the whole document preserves source spacing without adding an empty paragraph", async () => {

@@ -27,8 +27,10 @@ test("opening then closing the split preserves the document's undo history", asy
   const before = await text();
   await doc.click();
   await page.keyboard.press("ControlOrMeta+End");
-  await page.keyboard.type(" zzundomarker");
-  await expect.poll(text).toContain("zzundomarker");
+  // One key, which one undo takes back. A pause of half a second between keys
+  // starts a new undo step, and a busy machine can make one.
+  await page.keyboard.type("!");
+  await expect.poll(text).toBe(`${before}!`);
 
   // The split keeps the same document editor, so its undo history survives.
   await page.locator(splitSeg).click();
