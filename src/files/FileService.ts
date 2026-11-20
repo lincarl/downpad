@@ -677,7 +677,9 @@ export class FileService {
    *  itself through `SaveEvents.closeSaveFailed`, so the close never rejects
    *  for it. A failure while the close is under way is reported once the
    *  close ends, so its notice shows after the close's last dialog, and a
-   *  later one at once. A Save As of a tab that fails or is cancelled while the
+   *  later one at once. A failure is not reported when a later save of the
+   *  document has worked by then, as an autosave once its drive answers
+   *  again. A Save As of a tab that fails or is cancelled while the
    *  close is under way leaves them open too ("cancel"), and the close's save
    *  of that tab then writes nothing. The close waits for every save of the
    *  tabs until one is known not to have saved, and then keeps them without
@@ -707,7 +709,7 @@ export class FileService {
       // close's last dialog. Until then a dialog can cover it, and the save of
       // an untitled document that works gives a tab another file, which
       // clears the notice bar.
-      const held: (() => void)[] = [];
+      const held: Array<{ tabId: string; tell: () => void }> = [];
       let holding = true;
       let failed = false;
       let notSaved!: () => void;
@@ -716,7 +718,7 @@ export class FileService {
         const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
         return this.queueSave(tabId, false, { failedMovesBefore: failedMoves.get(tabId) }).catch((error: unknown) => {
           const tell = (): void => this.events.closeSaveFailed?.(tabId, path, error);
-          if (holding) held.push(tell);
+          if (holding) held.push({ tabId, tell });
           else tell();
           return false;
         }).then((saved) => {
@@ -746,7 +748,13 @@ export class FileService {
         if (saved !== true) return "cancel";
       } finally {
         holding = false;
-        for (const tell of held) tell();
+        for (const { tabId, tell } of held) {
+          // A later save of the document that worked meanwhile, such as an
+          // autosave once its drive answered again, leaves nothing to tell.
+          const tab = this.store.get().tabs.find((entry) => entry.id === tabId);
+          if (tab && !tab.doc.isDirty && tab.doc.savedMarkdown !== null) continue;
+          tell();
+        }
       }
     }
     // Another queued save may still overwrite the file after our write. Wait

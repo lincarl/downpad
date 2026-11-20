@@ -1009,6 +1009,27 @@ describe("saving before close", () => {
     expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
   });
 
+  it("tells no failure of a close's save for a document that a later save wrote before the close ended", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const filed = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), markdown: "Untitled\n", isDirty: true });
+    store.activateTab(filed);
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const closing = files.confirmCloseAll();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The drive answers again, and a save of the document works while the
+    // untitled document's dialog still shows.
+    expect(await files.save()).toBe(true);
+    dialog.resolve(null);
+    expect(await closing).toBe("cancel");
+    expect(closeSaveFailed).not.toHaveBeenCalled();
+    expect(store.get().doc.isDirty).toBe(false);
+  });
+
   it("reports a close save that fails after the close stopped waiting for it", async () => {
     const closeSaveFailed = vi.fn();
     const { store, files } = setup(true, { closeSaveFailed });
