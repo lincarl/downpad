@@ -347,7 +347,7 @@ describe("Existing settings and history compatibility", () => {
   it.skipIf(process.platform === "win32").each([
     { moment: "stage", when: "stages its file" },
     { moment: "last read", when: "reads the file a last time" },
-  ] as const)("puts the changes onto the file settings.toml leads to when its link changes while the write $when", async ({ moment }) => {
+  ] as const)("puts the changes onto the file the write read, and none onto another, when settings.toml's link changes while the write $when", async ({ moment }) => {
     const directory = await fixtureDirectory();
     const first = join(directory, "first.toml");
     const second = join(directory, "second.toml");
@@ -361,13 +361,13 @@ describe("Existing settings and history compatibility", () => {
         synchronousFilesystem.rmSync(path);
         synchronousFilesystem.symlinkSync(second, path);
       });
-      expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: 900 });
+      expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: DEFAULT_SETTINGS.editorWidthPx });
     } finally {
       vi.restoreAllMocks();
       syncBuiltinESMExports();
     }
-    expect(await readFile(first, "utf8")).toBe('theme = "light"\n');
-    expect(parse(await readFile(second, "utf8"))).toMatchObject({ theme: "dark", editorWidthPx: 900 });
+    expect(parse(await readFile(first, "utf8"))).toMatchObject({ theme: "dark" });
+    expect(await readFile(second, "utf8")).toBe('theme = "light"\neditorWidthPx = 900\n');
   });
 
   it("puts changes onto settings.toml as it is when written and returns the settings it then holds", async () => {

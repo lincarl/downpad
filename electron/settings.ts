@@ -185,9 +185,8 @@ export async function updateSettingsFile(path: string, changes: unknown, expecte
       await writeAtomic(path, patchSettingsToml(existing, next), {
         // The real file that the rename replaces, also when settings.toml is a
         // symbolic link, only while it still holds the text the changes went
-        // onto and settings.toml still leads to it, with the checks of an
-        // automatic save of a document.
-        beforeReplace: (target) => mayReplace(path, target, (bytes) => (bytes === null ? "" : decodeSettings(bytes)) === existing),
+        // onto, with the checks of an automatic save of a document.
+        beforeReplace: (target) => mayReplace(target, (bytes) => (bytes === null ? "" : decodeSettings(bytes)) === existing),
       });
       return next;
     } catch (error) {

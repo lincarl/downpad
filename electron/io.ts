@@ -142,37 +142,20 @@ function nullIfMissing(error: unknown): null {
   throw error;
 }
 
-/** Whether `path` still leads to `target`, the real file that a write resolved it to,
- *  so the write replaces the file the path names. A symbolic link that another program
- *  pointed at another file does not. A file that was missing when the write resolved
- *  the path, and so kept its folders and spelling as given, counts as `target` once it
- *  is back. A path that names nothing leads to `target` when the write resolved it as
- *  itself or its folder still leads to the folder of `target`, so a file that another
- *  program removes meanwhile is written again where it was. A symbolic link to a
- *  missing file in the file's place passes here, and the last look of `mayReplace`
- *  refuses it. */
-async function leadsTo(path: string, target: string): Promise<boolean> {
-  const requested = absolutePath(path);
-  const now = await realpath(requested).catch(nullIfMissing);
-  if (now !== null) return now === target || now === (await realpath(target).catch(nullIfMissing));
-  if (requested === target) return true;
-  const folder = await realpath(dirname(requested)).catch(nullIfMissing);
-  return folder !== null && join(folder, basename(requested)) === target;
-}
-
-/** Whether a guarded write may replace `target`, the real file that `path` led to when
- *  the write resolved it. `holds` answers whether the file's bytes, or null for a file
- *  that is gone, are still the version the write was made over, and `path` must still
- *  lead to the file. The last step, as close to the rename as it can be, looks at the
- *  directory entry that the rename replaces without following a symbolic link. It must
- *  still be the very file read, with the time and size it had then, or still be absent,
- *  so a program that replaced the file during the read, the comparison or the path
- *  lookup, also with a symbolic link, is noticed. An error that `holds` throws ends the
- *  check with that error. */
-export async function mayReplace(path: string, target: string, holds: (bytes: Buffer | null) => boolean): Promise<boolean> {
+/** Whether a guarded write may replace `target`, the real file that the write resolved
+ *  its path to. `holds` answers whether the file's bytes, or null for a file that is
+ *  gone, are still the version the write was made over. The check reads the real file,
+ *  so a symbolic link that another program points elsewhere meanwhile does not change
+ *  which file the write checks and replaces. The last step, as close to the rename as
+ *  it can be, looks at the directory entry that the rename replaces without following
+ *  a symbolic link. It must still be the very file read, with the time and size it had
+ *  then, or still be absent, so a program that replaced the file during the read or the
+ *  comparison, also with a symbolic link, is noticed. The rename cannot check the file
+ *  itself, so a replacement after that last look goes unnoticed. An error that `holds`
+ *  throws ends the check with that error. */
+export async function mayReplace(target: string, holds: (bytes: Buffer | null) => boolean): Promise<boolean> {
   const version = await readVersion(target).catch(nullIfMissing);
   if (!holds(version?.bytes ?? null)) return false;
-  if (!(await leadsTo(path, target))) return false;
   const now = await lstat(target).catch(nullIfMissing);
   if (!version || !now) return !version && !now;
   return now.dev === version.info.dev && now.ino === version.info.ino
@@ -211,8 +194,8 @@ let pendingMarkdownWrite: Promise<void> = Promise.resolve();
  *  FILE_CHANGED_ON_DISK and leaves the file as it is. The text tells also a replacement
  *  that kept the file's time, and reading it revalidates a network file system's
  *  cached attributes. The check reads the real file that the write replaces, so a
- *  symbolic link that changes or goes meanwhile cannot point it at another file, and
- *  it refuses the write when `path` leads to another file by then (`mayReplace`). */
+ *  symbolic link that changes or goes meanwhile cannot point it at another file
+ *  (`mayReplace`). */
 export function writeMarkdown(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
@@ -220,7 +203,7 @@ export function writeMarkdown(path: string, content: string, eol: Eol, expectedC
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
     const beforeReplace = expectedContent === undefined
       ? undefined
-      : (target: string) => mayReplace(path, target, (bytes) => holdsMarkdown(bytes, expectedContent));
+      : (target: string) => mayReplace(target, (bytes) => holdsMarkdown(bytes, expectedContent));
     try {
       const modifiedMs = await writeAtomic(path, text, { beforeReplace });
       return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };
