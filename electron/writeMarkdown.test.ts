@@ -20,45 +20,117 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-const aliases = process.platform === "win32" ? ["same path", "Windows case alias"] : ["same path", "symlink alias"];
+/** A promise and the function that settles it, for a step a test holds. */
+function barrier(): { reached: Promise<void>; enter: () => void; passed: Promise<void>; release: () => void } {
+  let enter!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => { enter = resolve; });
+  const passed = new Promise<void>((resolve) => { release = resolve; });
+  return { reached, enter, passed, release };
+}
 
-it.each(aliases)("preserves save order through a %s while the older path lookup is blocked", async (alias) => {
+/** Whether `promise` settles within `ms`. */
+async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+  try {
+    return await Promise.race([promise.then(() => true, () => true), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Windows and macOS ignore case by default, so another letter case is the same file there.
+const spellings = process.platform === "win32" || process.platform === "darwin" ? ["same path", "case alias"] : ["same path"];
+
+it.each(spellings)("keeps the order of writes through the %s while the older one's path does not resolve", async (spelling) => {
   const directory = await fixtureDirectory();
   const target = join(directory, "note.md");
   await writeFile(target, "Original text\n");
-  let olderPath = target;
-  if (alias === "symlink alias") {
-    olderPath = join(directory, "linked.md");
-    await symlink("note.md", olderPath);
-  } else if (alias === "Windows case alias") {
-    olderPath = target.toUpperCase();
-  }
+  const olderPath = spelling === "case alias" ? target.toUpperCase() : target;
 
-  let entered: (() => void) | undefined;
-  let release: (() => void) | undefined;
-  const started = new Promise<void>((resolve) => { entered = resolve; });
-  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  const lookup = barrier();
   const originalRealpath = filesystem.realpath;
-  const lookup = vi.spyOn(filesystem, "realpath").mockImplementationOnce(async (path, options) => {
-    entered!();
-    await barrier;
+  const resolveSpy = vi.spyOn(filesystem, "realpath").mockImplementationOnce(async (path, options) => {
+    lookup.enter();
+    await lookup.passed;
     return originalRealpath(path, options);
   });
   syncBuiltinESMExports();
 
   const older = writeMarkdown(olderPath, "Older snapshot\n", "lf");
-  await started;
+  await lookup.reached;
   const newer = writeMarkdown(target, "Newer snapshot\n", "lf");
   try {
-    // The second save must wait before resolving its path, including aliases.
-    expect(lookup).toHaveBeenCalledTimes(1);
+    // The second save must wait before resolving its path.
+    expect(await settlesWithin(newer, 50)).toBe(false);
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
   } finally {
-    release!();
+    lookup.release();
     await Promise.allSettled([older, newer]);
   }
   await Promise.all([older, newer]);
   expect(await readFile(target, "utf8")).toBe("Newer snapshot\n");
-  if (alias === "symlink alias") expect((await lstat(olderPath)).isSymbolicLink()).toBe(true);
+});
+
+it("holds up no write of another file while a write's path does not resolve, as on a drive that went away", async () => {
+  const gone = await fixtureDirectory();
+  const local = join(await fixtureDirectory(), "local.md");
+  const lookup = barrier();
+  const originalRealpath = filesystem.realpath;
+  vi.spyOn(filesystem, "realpath").mockImplementation(async (path, options) => {
+    if (String(path).startsWith(gone)) {
+      lookup.enter();
+      await lookup.passed;
+    }
+    return originalRealpath(path, options);
+  });
+  syncBuiltinESMExports();
+
+  const stuck = writeMarkdown(join(gone, "remote.md"), "Remote text\n", "lf");
+  await lookup.reached;
+  try {
+    expect(await settlesWithin(writeMarkdown(local, "First local text\n", "lf"), 2000)).toBe(true);
+    expect(await settlesWithin(writeMarkdown(local, "Second local text\n", "crlf"), 2000)).toBe(true);
+    expect(await readFile(local, "utf8")).toBe("Second local text\r\n");
+    expect(await settlesWithin(stuck, 50)).toBe(false);
+  } finally {
+    lookup.release();
+    await stuck.catch(() => {});
+  }
+  expect(await readFile(join(gone, "remote.md"), "utf8")).toBe("Remote text\n");
+});
+
+it.skipIf(process.platform === "win32")("never writes one file through two spellings at the same time", async () => {
+  const directory = await fixtureDirectory();
+  const target = join(directory, "note.md");
+  const linked = join(directory, "linked.md");
+  await writeFile(target, "Original text\n");
+  await symlink("note.md", linked);
+
+  // The older write holds the file once its path resolved, in its staging.
+  const staging = barrier();
+  const originalOpen = filesystem.open;
+  const openSpy = vi.spyOn(filesystem, "open").mockImplementationOnce(async (...args) => {
+    staging.enter();
+    await staging.passed;
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  const older = writeMarkdown(linked, "Older snapshot\n", "lf");
+  await staging.reached;
+  const newer = writeMarkdown(target, "Newer snapshot\n", "lf");
+  try {
+    expect(await settlesWithin(newer, 50)).toBe(false);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    staging.release();
+    await Promise.allSettled([older, newer]);
+  }
+  await Promise.all([older, newer]);
+  expect(await readFile(target, "utf8")).toBe("Newer snapshot\n");
+  expect((await lstat(linked)).isSymbolicLink()).toBe(true);
 });
 
 it("keeps a newer short save after an older 16 MiB save to the actual filesystem", async () => {
