@@ -5297,8 +5297,8 @@ test("Save on close keeps an untitled tab after cancellation or write failure", 
   await failure;
   await expect(tab).toBeVisible();
   await expect(editor).toHaveText("Keep this document.");
-  // The notice says what failed and why.
-  await expect(page.getByRole("alert")).toHaveText("Downpad could not close the document. The file or folder does not exist.");
+  // The notice says what failed and why, as for a failed Save.
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “Untitled”. The file or folder does not exist.");
 
   const saved = path.join(directory, "retry.md");
   await chooseSave(saved);

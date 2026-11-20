@@ -74,7 +74,8 @@ export class AppRuntime {
   private readonly editorArea: HTMLElement;
   /** Where the documents were scrolled that the Recent view came over. */
   private readonly placesBehindRecent = new PlacesBehindRecent();
-  /** The error notice of a save the user asked for that failed. */
+  /** The error notice of a failed save that the user asked for, with Save,
+   *  Save as or the Save of a close prompt. */
   private readonly saveFailure: SaveFailureNotice;
   /** The notice of a write that has not answered for a while. */
   private readonly slowSave: SlowSaveNotice;
@@ -111,6 +112,14 @@ export class AppRuntime {
         if (tab && !this.disposed) this.slowSave.show(tabId, tabLabel(tab));
       },
       slowWriteEnded: (tabId) => this.slowSave.takeDown(tabId),
+      // A failed save of a close shows as a failed Save does, by the name
+      // the document has then, and only here, since the close then keeps
+      // its tabs without failing.
+      closeSaveFailed: (tabId, error) => {
+        console.error("Downpad: file action failed", error);
+        const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+        if (tab && !this.disposed) this.saveFailure.show(tabId, tabLabel(tab), error);
+      },
     });
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).

@@ -241,7 +241,9 @@ describe("native close decisions", () => {
     disk.writeFile.mockRejectedValueOnce(new Error("Disk full"));
     events.closeRequested!();
 
-    await expect(current).rejects.toThrow("Disk full");
+    // The failed save tells the user itself (`SaveEvents.closeSaveFailed`),
+    // so the close keeps the window without failing.
+    await expect(current).resolves.toBeUndefined();
     expect(scheduler.clear).not.toHaveBeenCalled();
     expect(bridge.closeWindow).not.toHaveBeenCalled();
     expect(bridge.cancelWindowClose).toHaveBeenCalledOnce();
