@@ -462,7 +462,8 @@ export class GitSync {
    *  shows, since another tab can be in front by then, and that Upload's menu
    *  offers the copy. A latest version without the document's file, as after
    *  a collaborator deleted or renamed it, leaves the user's text in the tab,
-   *  and the notice says so. */
+   *  and the notice says so, and how to keep it: with Save, or with Save as
+   *  when the file's folder is gone too. */
   private async discardMine(path: string, generation: number): Promise<void> {
     this.deps.flush();
     const tab = this.activeTab();
@@ -555,6 +556,11 @@ export class GitSync {
     }
     await this.reloadChanged(rest.changedOpenFiles);
     if (!this.isCurrent(generation)) return;
+    // Save cannot put the file back in a folder that is gone too, as after a
+    // collaborator renamed the folder. A look that fails counts as a folder
+    // that exists.
+    const folderGone = missing && !(await pathExists(path.slice(0, path.length - name.length)).catch(() => true));
+    if (!this.isCurrent(generation)) return;
     this.conflict = null;
     this.discardedCopy = { document: path, copy };
     // Where the latest version is now, since the user can have shown another
@@ -564,9 +570,12 @@ export class GitSync {
     let message = `Your changes to “${name}” are discarded. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`;
     if (missing) {
       // Upload's menu needs the file, so the notice offers the copy alone.
-      message = holder
-        ? `“${name}” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.`
-        : `“${name}” is not in the latest version, because someone deleted or renamed it. Open copy shows the copy of your changes that Downpad kept.`;
+      message = `“${name}” is not in the latest version, because someone deleted or renamed it. Open copy shows the copy of your changes that Downpad kept.`;
+      if (holder && folderGone) {
+        message = `“${name}” and its folder are not in the latest version, because someone deleted or renamed them. Its tab still has your changes, which no file holds now. Use Save as to keep them in a file, or close the tab to leave them out. Open copy shows the copy that Downpad kept.`;
+      } else if (holder) {
+        message = `“${name}” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.`;
+      }
     } else if (tookFile && holder && activeTabId === holder.id && view !== "recent") {
       message = `Your changes to “${name}” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.`;
     } else if (tookFile && holder) {

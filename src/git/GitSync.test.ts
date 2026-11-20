@@ -591,18 +591,28 @@ describe("GitSync conflicts", () => {
     expect(store.get().banner?.message).toBe(message);
   });
 
+  const saveToPutBack = "“notes.md” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.";
   it.each([
+    { when: "its tab is open", act: () => {}, folder: async () => true, message: saveToPutBack },
     {
-      when: "its tab is open",
+      when: "its folder is gone too, as after someone renamed the folder",
       act: () => {},
-      message: "“notes.md” is not in the latest version, because someone deleted or renamed it. Its tab still has your changes, which no file holds now. Save to put the file back with them, or close the tab to leave it out. Open copy shows the copy that Downpad kept.",
+      folder: async () => false,
+      message: "“notes.md” and its folder are not in the latest version, because someone deleted or renamed them. Its tab still has your changes, which no file holds now. Use Save as to keep them in a file, or close the tab to leave them out. Open copy shows the copy that Downpad kept.",
+    },
+    {
+      when: "the look at its folder fails",
+      act: () => {},
+      folder: async () => { throw new Error("The share went away."); },
+      message: saveToPutBack,
     },
     {
       when: "its tab is closed",
       act: () => store.closeTab(store.get().activeTabId!),
+      folder: async () => true,
       message: "“notes.md” is not in the latest version, because someone deleted or renamed it. Open copy shows the copy of your changes that Downpad kept.",
     },
-  ])("says that the latest version has no such file when someone deleted or renamed it, and $when", async ({ act, message }) => {
+  ])("says that the latest version has no such file when someone deleted or renamed it, and $when", async ({ act, folder, message }) => {
     deps.askConflict.mockResolvedValue("discard");
     git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
     git.discard.mockImplementation(async () => {
@@ -610,7 +620,7 @@ describe("GitSync conflicts", () => {
       return done([PATH]);
     });
     // Git put the latest version in place, which has no such file.
-    git.pathExists.mockResolvedValue(false);
+    git.pathExists.mockImplementation(async (path) => (path === PATH ? false : folder()));
     deps.files.replaceFromDisk.mockRejectedValue(new Error("Error invoking remote method 'downpad:invoke': Error: ENOENT: no such file or directory, open '/work/notes.md'"));
     const tabs = store.get().tabs.length;
     await sync.check({ force: true });
