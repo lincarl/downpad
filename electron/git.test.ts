@@ -459,12 +459,39 @@ describe("discarded copies", () => {
     expect([first.path, second.path]).toEqual([newer, older]);
     expect(second.keptMs).toBeLessThanOrEqual(keptAt);
     expect(second.keptMs).toBeGreaterThan(keptAt - 5_000);
-    // A copy without a time in its name is dated by its file.
-    const unnamed = join(older, "..", "notes.md");
-    await writeFile(unnamed, "Unnamed\n");
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    await utimes(unnamed, yesterday, yesterday);
-    expect((await listDiscardedCopies(data, notes())).at(-1)).toEqual({ path: unnamed, keptMs: yesterday.getTime() });
+  });
+
+  it("deletes and lists only the files it kept as copies, so a file the user saved among them stays", async () => {
+    const data = join(root, "profile");
+    const kept = join(data, "discarded-changes");
+    const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
+    const folder = join(copy, "..");
+    // The user opened a copy and saved it as a document of their own in the
+    // folder that Save as showed. Downpad 0.3.14 and earlier kept the copies
+    // directly in discarded-changes, so Save as showed that folder then.
+    const own = [join(folder, "Project plan.md"), join(kept, "Project plan.md")];
+    // A copy that Downpad 0.3.14 or earlier kept.
+    const earlier = join(kept, "2026-01-01T00-00-00-000Z notes.md");
+    for (const file of [...own, earlier, copy]) {
+      await writeFile(file, "Text\n");
+      await utimes(file, past, past);
+    }
+    // Another document whose folder holds only a file of the user's.
+    const otherCopy = await keepDiscardedCopy(data, join(theirs, "notes.md"), "Other\n");
+    const otherOwn = join(otherCopy, "..", "Plan.md");
+    for (const file of [otherCopy, otherOwn]) {
+      await writeFile(file, "Text\n");
+      await utimes(file, past, past);
+    }
+    const next = await keepDiscardedCopy(data, notes(), "Next\n");
+    for (const file of [...own, otherOwn]) expect(await readFile(file, "utf8")).toBe("Text\n");
+    await expect(readFile(earlier)).rejects.toThrow("ENOENT");
+    await expect(readFile(copy)).rejects.toThrow("ENOENT");
+    await expect(readFile(otherCopy)).rejects.toThrow("ENOENT");
+    // A file of the user's is never offered as a copy, also while it is new.
+    const now = new Date();
+    await utimes(own[0], now, now);
+    expect(await listDiscardedCopies(data, notes())).toEqual([{ path: next, keptMs: expect.any(Number) }]);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fails to list the copies when their folder cannot be read, which is not the same as having none", async () => {

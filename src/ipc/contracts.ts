@@ -219,8 +219,7 @@ export interface GitFileStatus {
 export interface DiscardedCopy {
   path: string;
   /** When the copy was kept, from the time in the copy's name, which a save
-   *  of the opened copy leaves alone, or the file's modification time for a
-   *  name without one. */
+   *  of the opened copy leaves alone. */
   keptMs: number;
 }
 
