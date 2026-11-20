@@ -641,6 +641,51 @@ describe("a file that changed on disk", () => {
     expect(bindings.showPendingChange()).toBe(false);
   });
 
+  it("knows a file as gone until a save records it or a read finds it again", async () => {
+    const tabId = store.get().activeTabId!;
+    expect(bindings.isFileGone(tabId)).toBe(false);
+    // Git took the file away, which leaves the document unsaved with no
+    // saved text known.
+    store.patchDoc({ isDirty: true, savedMarkdown: null });
+    bindings.fileGone(tabId);
+    expect(bindings.isFileGone(tabId)).toBe(true);
+    // A save under way, or one that failed, records nothing.
+    store.patchDoc({ savedMarkdown: null });
+    expect(bindings.isFileGone(tabId)).toBe(true);
+    // The user's save puts the file back.
+    store.patchDoc({ modifiedMs: 300, savedMarkdown: "# Mine\n", isDirty: false });
+    expect(bindings.isFileGone(tabId)).toBe(false);
+
+    // Another program puts another version back, which the watcher reports.
+    // The file is there then, and its change is still to be resolved.
+    store.patchDoc({ isDirty: true, savedMarkdown: null });
+    bindings.fileGone(tabId);
+    disk.readFile.mockRejectedValueOnce(new Error("ENOENT: no such file or directory"));
+    events.fileChanged!({ path: filePath, modifiedMs: 300 });
+    await bindings.settled(tabId);
+    expect(bindings.isFileGone(tabId)).toBe(true);
+    await changeOnDisk("# Theirs\n", 400);
+    expect(bindings.isFileGone(tabId)).toBe(false);
+    expect(bindings.holdSave(tabId)).toBe(true);
+
+    // A read begun while the file was still there says nothing of it now.
+    let finishRead!: (payload: FilePayload) => void;
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    const reads = disk.readFile.mock.calls.length;
+    events.fileChanged!({ path: filePath, modifiedMs: 500 });
+    await eventually(() => expect(disk.readFile.mock.calls.length).toBe(reads + 1));
+    bindings.fileGone(tabId);
+    disk.readFile.mockRejectedValue(new Error("ENOENT: no such file or directory"));
+    finishRead({ content: "# Put back\n", eol: "lf", hadBom: false, modifiedMs: 500, sizeBytes: 11 });
+    await bindings.settled(tabId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(bindings.isFileGone(tabId)).toBe(true);
+
+    // A closed tab is forgotten.
+    store.set({ tabs: [], activeTabId: null });
+    expect(bindings.isFileGone(tabId)).toBe(false);
+  });
+
   it("does not use a read that a save made out of date", async () => {
     let finishRead!: (payload: FilePayload) => void;
     disk.fileStamp.mockResolvedValueOnce(stamp(200));

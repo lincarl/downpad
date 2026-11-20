@@ -68,6 +68,8 @@ export class DesktopEventBindings {
   /** Set while this class records a file version itself, which makes no read
    *  out of date. */
   private recording = false;
+  /** The tabs whose file is known to be gone (`fileGone`). */
+  private readonly gone = new Set<string>();
   private started = false;
   private disposed = false;
   /** Closes of the window, one at a time (`CloseRequests`). */
@@ -133,6 +135,20 @@ export class DesktopEventBindings {
   fileGone(tabId: string): void {
     this.revisions.set(tabId, (this.revisions.get(tabId) ?? 0) + 1);
     this.resolve(tabId);
+    this.gone.add(tabId);
+  }
+
+  /** Whether the file of the tab's document is known to be gone: `fileGone`
+   *  said so, and since then no save, Save As or reload recorded a file for
+   *  the document, and no read of the file that was begun after it found one.
+   *  Copy file is not offered meanwhile, since it has no file to copy and its
+   *  save writes only over a version the document recorded. */
+  isFileGone(tabId: string): boolean {
+    const { tabs } = this.dependencies.store.get();
+    for (const id of this.gone) {
+      if (!tabs.some((tab) => tab.id === id)) this.gone.delete(id);
+    }
+    return this.gone.has(tabId);
   }
 
   /** As holdSave, once the comparisons of the tab that run have ended. */
@@ -215,13 +231,14 @@ export class DesktopEventBindings {
       last = state;
       // Every tab's records count, also those of a tab in back, such as a
       // save that ends after the user switched tabs.
-      if (state.tabs !== before.tabs && !this.recording) {
+      if (state.tabs !== before.tabs) {
         const earlier = new Map(before.tabs.map((tab) => [tab.id, tab.doc]));
         for (const tab of state.tabs) {
           const previous = earlier.get(tab.id);
-          if (previous && previous !== tab.doc && recordsVersion(previous, tab.doc)) {
-            this.revisions.set(tab.id, (this.revisions.get(tab.id) ?? 0) + 1);
-          }
+          if (!previous || previous === tab.doc || !recordsVersion(previous, tab.doc)) continue;
+          // A version that is recorded is of a file that is there.
+          this.gone.delete(tab.id);
+          if (!this.recording) this.revisions.set(tab.id, (this.revisions.get(tab.id) ?? 0) + 1);
         }
       }
       const tabId = state.activeTabId;
@@ -326,6 +343,8 @@ export class DesktopEventBindings {
       // A later comparison already told what the file holds.
       if ((this.lastUsed.get(tabId) ?? 0) > comparison) return;
       this.lastUsed.set(tabId, comparison);
+      // The file is there again, as when another program put it back.
+      this.gone.delete(tabId);
       const current = state.doc;
       if (files.isOwnWrite(tabId, onDisk.content)) return;
       if (onDisk.content === current.savedMarkdown || onDisk.content === current.markdown) {

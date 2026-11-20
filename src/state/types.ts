@@ -107,15 +107,6 @@ export function isRecoveredDocument(doc: DocumentState): boolean {
   return doc.filePath !== null && doc.savedMarkdown === null && doc.fileSize === undefined;
 }
 
-/** Whether `doc` has unsaved text and a file that Downpad read or wrote, but
- *  no saved text. That holds while a save writes the document's own file, and
- *  otherwise for a document whose file is gone, as when the latest version
- *  from Git has no such file (`GitSync.discardMine`). Only a save the user
- *  asks for writes such a document. */
-export function lacksSavedText(doc: DocumentState): boolean {
-  return doc.filePath !== null && doc.isDirty && doc.savedMarkdown === null && !isRecoveredDocument(doc);
-}
-
 /** A fresh, empty untitled document buffer. */
 export function blankDoc(): DocumentState {
   return {
