@@ -84,6 +84,11 @@ describe("buildItems", () => {
     expect(byLabel(items, "Print…").shortcut).toBe("Ctrl+P");
   });
 
+  it("names the source of a JSON or YAML file in its copy action", () => {
+    expect(labels(buildItems(null, actions({ sourceName: () => "JSON" })))[0]).toBe("Copy as JSON");
+    expect(labels(buildItems(null, actions({ sourceName: () => "YAML" })))[0]).toBe("Copy as YAML");
+  });
+
   it("disables the document actions when nothing is open", () => {
     const items = buildItems(null, actions({ hasDocument: () => false }));
     expect(byLabel(items, "Print…").disabled).toBe(true);

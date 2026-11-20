@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { byteLength, formatSize } from "./docSize";
+import { byteLength, documentSize, formatSize } from "./docSize";
 
 describe("byteLength", () => {
   it("counts ASCII as one byte each", () => {
@@ -11,6 +11,27 @@ describe("byteLength", () => {
   });
   it("is zero for the empty string", () => {
     expect(byteLength("")).toBe(0);
+  });
+});
+
+describe("documentSize", () => {
+  const lines = "- a\n".repeat(1024);
+
+  it("is the recorded size of the file while the document has no unsaved changes", () => {
+    // A file with Windows line endings and a byte order mark, as read.
+    expect(documentSize({ markdown: lines, eol: "crlf", isDirty: false, fileSize: 5123 })).toBe(5123);
+    expect(formatSize(documentSize({ markdown: lines, eol: "crlf", isDirty: false, fileSize: 5120 }))).toBe("5.0 KB");
+  });
+
+  it("is the size a save would write once the document has unsaved changes, with its line endings", () => {
+    expect(documentSize({ markdown: lines, eol: "lf", isDirty: true, fileSize: 9 })).toBe(4096);
+    expect(documentSize({ markdown: lines, eol: "crlf", isDirty: true, fileSize: 9 })).toBe(5120);
+    expect(documentSize({ markdown: "é\n", eol: "crlf", isDirty: true })).toBe(4);
+  });
+
+  it("is the size of the text for a document with no file", () => {
+    expect(documentSize({ markdown: "abc", eol: "lf", isDirty: false })).toBe(3);
+    expect(documentSize({ markdown: "", eol: "crlf", isDirty: false })).toBe(0);
   });
 });
 

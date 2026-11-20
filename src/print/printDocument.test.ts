@@ -14,6 +14,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it("prints a JSON or YAML file as its source, building no document for it", async () => {
+  const { WysiwygEditor } = await import("../editor/wysiwyg/WysiwygEditor");
+  const context = { getSettings: () => DEFAULT_SETTINGS, getFilePath: () => "/data/a.json", requestSave: async () => false };
+  for (const language of ["json", "yaml"] as const) {
+    const job = await preparePrintJob({ markdown: "# not a heading\n", liveNode: null, settings: DEFAULT_SETTINGS, context, docTitle: "a.json", language });
+    expect(job).toEqual({ markdown: "# not a heading\n", documentNode: null, docTitle: "a.json", language });
+  }
+  expect(WysiwygEditor).not.toHaveBeenCalled();
+});
+
 /**
  * Model the browser's finite argument limit on every DOM method that takes
  * nodes as arguments, without building a huge fixture.

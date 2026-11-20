@@ -7,6 +7,7 @@ import type { EditorHost } from "../editor/EditorHost";
 import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
+import { documentLanguage, fileFilters, LANGUAGE_NAMES } from "../files/documentLanguage";
 import { isElectron } from "../ipc/env";
 import type { ImageStoreContext } from "../images/imageStore";
 import { FindBar } from "../editor/wysiwyg/findBar";
@@ -123,6 +124,7 @@ export class AppRuntime {
       hasDocument: () => this.documentShows(),
       print: () => void this.printActiveDocument(),
       copyMarkdown: () => void this.copyMarkdown(),
+      sourceName: () => LANGUAGE_NAMES[documentLanguage(this.store.get().doc.filePath)],
       canCopyFile: () => this.canCopyFile(),
       copyFile: () => void this.copyFile(),
       canCheckSpelling: () => this.editorHost.canCheckSpelling(),
@@ -398,6 +400,15 @@ export class AppRuntime {
       () => this.editorHost.applySpellcheck(),
     ));
 
+    // A Save As can give the active document a file of another kind, such as
+    // a Markdown document saved as JSON. Its editors then show it as that
+    // kind: a JSON or YAML file as its source alone, with its own colours.
+    this.cleanups.push(this.store.subscribe((state, previous) => {
+      if (state.activeTabId === null || state.activeTabId !== previous.activeTabId) return;
+      if (documentLanguage(state.doc.filePath) === documentLanguage(previous.doc.filePath)) return;
+      void this.showAsItsKind();
+    }));
+
     // Lowering the retained-editors limit (§5.19) evicts the now-excess panes.
     this.cleanups.push(this.store.select(
       (s) => s.settings.maxRetainedTabEditors,
@@ -462,16 +473,27 @@ export class AppRuntime {
    *  only (§6.1). A no-op with no document open or on the Recent view (the toolbar
    *  disables the control there) and when the tab already shows that layout.
    *  A tab shown in Markdown because its Document view failed tries that view
-   *  again when the document or the split is chosen. */
+   *  again when the document or the split is chosen. A JSON or YAML file has
+   *  its source view alone, so there the choice does nothing. */
   private async setLayout(layout: EditorLayout): Promise<void> {
     if (this.switchingView) return;
     if (!this.store.get().activeTabId) return; // nothing to show
     if (this.store.get().view === "recent") return; // handled in the editor only
+    if (documentLanguage(this.store.get().doc.filePath) !== "markdown") return;
     if (shownLayout(this.store.get()) === layout) return;
     await this.changePanes(async () => {
       this.store.set({ editorLayout: layout });
       await this.editorHost.setLayout(layout);
     });
+  }
+
+  /** Show the active tab again after its document became a file of another
+   *  kind. An open find card then searches the editor shown afterwards. */
+  private async showAsItsKind(): Promise<void> {
+    const searching = this.findBar.isOpen();
+    if (searching) this.editorHost.clear();
+    await this.editorHost.showActiveDoc();
+    if (searching && !this.disposed && this.findBar.isOpen()) this.findBar.refresh();
   }
 
   /** Try the active tab's Document view again (the notice's Try again). */
@@ -515,6 +537,7 @@ export class AppRuntime {
       settings: this.store.get().settings,
       context: this.imageStoreContext(),
       docTitle: fileLabel(this.store.get().doc.filePath),
+      language: documentLanguage(this.store.get().doc.filePath),
     });
     if (job) this.printWorkspace.open(job);
   }
@@ -698,8 +721,10 @@ export class AppRuntime {
     });
   }
 
-  /** Flush the source pane too, so every layout copies the latest document. */
+  /** Flush the source pane too, so every layout copies the latest document.
+   *  A JSON or YAML file has no formatted form, so nothing is copied. */
   private async copyFormatted(): Promise<void> {
+    if (documentLanguage(this.store.get().doc.filePath) !== "markdown") return;
     try {
       this.editorHost.flush();
       const { markdown, filePath } = this.store.get().doc;
@@ -717,7 +742,7 @@ export class AppRuntime {
     if (!isElectron()) return null;
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+      filters: fileFilters(),
     }).catch(() => null);
     return typeof selected === "string" ? selected : null;
   }

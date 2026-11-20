@@ -2,6 +2,7 @@
 // framework-free and `now`-injectable so they're straightforward to unit-test.
 
 import type { RecentEntry } from "../state/types";
+import { documentLanguage } from "../files/documentLanguage";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -73,6 +74,21 @@ export function filterByName(entries: RecentEntry[], query: string): RecentEntry
   const q = query.trim().toLowerCase();
   if (!q) return entries;
   return entries.filter((e) => fileName(e.path).toLowerCase().includes(q));
+}
+
+/**
+ * The snippet of a content-search hit in the file at `path`, as the Recent
+ * view shows it. A Markdown file's snippet reads as plain text
+ * (`plainSnippet`), unless the query itself contains Markdown markup, since
+ * the match would then vanish with it, or nothing readable would remain. A
+ * JSON or YAML file has no Markdown markers, and what looks like one, such as
+ * the `-` of a YAML list or a `#` comment, is part of what was searched for,
+ * so its snippet keeps every character, without the space around it.
+ */
+export function snippetText(snippet: string, query: string, path: string): string {
+  if (documentLanguage(path) !== "markdown") return snippet.trim() || snippet;
+  if (/[|#*_`>[\]]/.test(query)) return snippet;
+  return plainSnippet(snippet) || snippet;
 }
 
 /**

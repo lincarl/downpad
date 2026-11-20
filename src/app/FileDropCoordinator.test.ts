@@ -5,6 +5,7 @@ import { blankDoc } from "../state/types";
 import { forgetImageAnswers } from "../editor/wysiwyg/imageView";
 import { createAppStore } from "./createAppStore";
 import { FileDropCoordinator, type FileDropDependencies } from "./FileDropCoordinator";
+import { takesNoFiles } from "../files/documentLanguage";
 
 const disk = vi.hoisted(() => ({
   readImageBytes: vi.fn<(path: string) => Promise<ImageBytes>>(),
@@ -73,6 +74,9 @@ function setup() {
     }),
     insertDropped: async (drop: FileDrop, markdown: string) => {
       if (!(await untilActive(drop.tabId))) return false;
+      // As EditorHost does, refuse a document that is a JSON or YAML file by now.
+      const refusal = takesNoFiles(store.get().tabs.find((t) => t.id === drop.tabId)?.doc.filePath ?? null);
+      if (refusal) throw refusal;
       log.push(`insert ${markdown} into ${tab(drop.tabId)} with ${tab(store.get().activeTabId)} in front`);
       return true;
     },
@@ -317,6 +321,100 @@ describe("FileDropCoordinator", () => {
     logged.mockRestore();
     expect(log).toEqual(["open /drop/a.md"]);
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not add “pic.png”, “data.csv”. No document was ready to take the file. Try again.");
+  });
+
+  it("opens a dropped JSON or YAML file in a tab, as a Markdown file, and stores no copy of it", async () => {
+    const { store, log, coordinator, reportFailure } = setup();
+    await coordinator.handle(["/drop/package.json", "/drop/compose.yaml", "/drop/ci.yml"], point);
+    expect(log).toEqual(["open /drop/package.json", "open /drop/compose.yaml", "open /drop/ci.yml"]);
+    expect(store.get().tabs.map((t) => t.doc.filePath)).toEqual(["/docs/notes.md", "/drop/package.json", "/drop/compose.yaml", "/drop/ci.yml"]);
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("puts no file into a JSON or YAML file, says why, and still opens the drop's documents", async () => {
+    for (const [path, kind] of [["/data/settings.json", "JSON"], ["/data/compose.yml", "YAML"]]) {
+      const { store, log, editorHost, coordinator, reportFailure } = setup();
+      store.patchDoc({ filePath: path });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      await coordinator.handle(["/drop/pic.png", "/drop/data.csv", "/drop/a.md"], point);
+      logged.mockRestore();
+      // Nothing is aimed, read or stored for a document that takes no files.
+      expect(log).toEqual(["open /drop/a.md"]);
+      expect(editorHost.aimDrop).not.toHaveBeenCalled();
+      expect(disk.readImageBytes).not.toHaveBeenCalled();
+      expect(disk.writeAttachment).not.toHaveBeenCalled();
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+        `Downpad could not add “pic.png”, “data.csv”. A ${kind} file takes no dropped files. Drop them on a Markdown document.`,
+      );
+    }
+  });
+
+  it("puts no file into an untitled document that the drop's own save made a JSON file, and stores no copy beside it", async () => {
+    const { store, log, files, coordinator, reportFailure } = setup();
+    store.patchDoc({ filePath: null, markdown: "{}" });
+    // The drop asks where to save the untitled document, and the user names it config.json.
+    files.save = async () => {
+      store.patchDoc({ filePath: "/docs/config.json" });
+      return true;
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await coordinator.handle(["/drop/report.pdf", "/drop/photo.png"], point);
+    logged.mockRestore();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    // Neither file is read or stored for a document that takes none, also
+    // not the image that follows the file whose save made it one.
+    expect(disk.readImageBytes).not.toHaveBeenCalled();
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “report.pdf”, “photo.png”. A JSON file takes no dropped files. Drop them on a Markdown document.",
+    );
+  });
+
+  it("stores no copy of an image beside an untitled document that the drop's own save made a JSON file", async () => {
+    const { store, log, files, coordinator, reportFailure } = setup();
+    store.set((state) => ({ settings: { ...state.settings, embedImagesAsBase64: false } }));
+    store.patchDoc({ filePath: null, markdown: "{}" });
+    files.save = async () => {
+      store.patchDoc({ filePath: "/docs/config.json" });
+      return true;
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await coordinator.handle(["/drop/pic.png"], point);
+    logged.mockRestore();
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “pic.png”. A JSON file takes no dropped files. Drop them on a Markdown document.",
+    );
+  });
+
+  it("puts no image into a document that was saved as YAML while the image was read", async () => {
+    const { store, log, coordinator, reportFailure } = setup();
+    const read = held<ImageBytes>();
+    disk.readImageBytes.mockReturnValueOnce(read.promise);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handled = coordinator.handle(["/drop/pic.png"], point);
+    await settle();
+    store.patchDoc({ filePath: "/docs/notes.yaml" });
+    read.resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "image/png" });
+    await handled;
+    logged.mockRestore();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “pic.png”. A YAML file takes no dropped files. Drop them on a Markdown document.",
+    );
+  });
+
+  it("puts a file dropped on the Recent view into no JSON file behind it", async () => {
+    const { store, log, coordinator, reportFailure } = setup();
+    store.patchDoc({ filePath: "/data/settings.json" });
+    store.set({ view: "recent" });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await coordinator.handle(["/drop/pic.png"], point);
+    logged.mockRestore();
+    expect(log).toEqual([]);
+    expect(reportFailure).toHaveBeenCalledOnce();
   });
 
   it("shows no notice for a drop whose files all open and go in", async () => {

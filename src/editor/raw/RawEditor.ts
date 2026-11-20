@@ -1,10 +1,11 @@
-// Raw view: CodeMirror 6 with VS Code's Markdown colours. A *view* over the
-// canonical markdown string; raw edits are written back verbatim (spec §5.16).
+// Raw view: CodeMirror 6 with VS Code's colours for Markdown, or for JSON or
+// YAML when the document is such a file. A *view* over the canonical markdown
+// string; raw edits are written back verbatim (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
 import { isolateHistory } from "@codemirror/commands";
-import { ChangeSet, Compartment, EditorSelection, EditorState, type Text } from "@codemirror/state";
-import { syntaxTree } from "@codemirror/language";
+import { ChangeSet, Compartment, EditorSelection, EditorState, type Extension, type Text } from "@codemirror/state";
+import { syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import {
   SearchQuery,
   findNext as findNextMatch,
@@ -19,7 +20,9 @@ import { base64Collapse, dropOutsidePayload, inBase64Payload, paragraphPlace } f
 import { differingRuns, type Run } from "../differingRuns";
 import { codeMirrorPresses } from "../codeMirrorPresses";
 import { specialDashHighlight } from "./specialDash";
-import { markdownSource, markdownSourceStyle } from "./markdownSource";
+import { markdownSource, sourceHighlightStyle, sourceViewStyle } from "./markdownSource";
+import { dataHighlightStyle, dataSource } from "./dataSource";
+import { LANGUAGE_NAMES, type DocumentLanguage } from "../../files/documentLanguage";
 import { rawAlignedPane, rowSpacers } from "./rowAlignment";
 import type { AlignedPane } from "../splitAlign";
 import { sourceCodeSpellcheck } from "./spellcheck";
@@ -46,6 +49,23 @@ export interface RawCallbacks {
 export interface RawOptions {
   /** Collapse base64 data URIs in the view (§5.3). */
   collapseBase64?: boolean;
+  /** The language of the text. Markdown without one. */
+  language?: DocumentLanguage;
+}
+
+/** The parser and syntax colours of `language`, and the name a screen reader
+ *  gives the editor. */
+function languageExtensions(language: DocumentLanguage): Extension {
+  const label = EditorView.contentAttributes.of({ "aria-label": `${LANGUAGE_NAMES[language]} source editor` });
+  if (language === "markdown") return [label, markdownSource(), syntaxHighlighting(sourceHighlightStyle)];
+  return [label, dataSource(language), syntaxHighlighting(dataHighlightStyle)];
+}
+
+/** What checks the spelling of a text in `language`. Markdown keeps its code
+ *  out of the check and checks its prose with `spelling`. A JSON or YAML file
+ *  is data, whose spelling is never checked. */
+function spellingExtensions(language: DocumentLanguage, spelling: Extension): Extension {
+  return language === "markdown" ? [sourceCodeSpellcheck(), spelling] : [];
 }
 
 /** Search test that skips the base64 data of data: URIs, so Replace all cannot corrupt an image. */
@@ -353,6 +373,13 @@ export class RawEditor {
   /** The source content's explicit preference, separate from code exclusions. */
   private readonly spellcheck = new Compartment();
   private readonly liveSpelling = sourceSpelling();
+  /** The parser and colours of the text's language, and what checks its
+   *  spelling (`setLanguage`). */
+  private readonly languageSupport = new Compartment();
+  private readonly languageSpelling = new Compartment();
+  private language: DocumentLanguage = "markdown";
+  /** Whether the spelling of prose is checked, in a Markdown document. */
+  private spellcheckEnabled = false;
   /** Set while `setText` replaces the doc programmatically (split-view mirror
    *  sync, §6.1) so the resulting transaction doesn't echo back through onChange
    *  and clobber the pane that authored the change. */
@@ -376,6 +403,7 @@ export class RawEditor {
 
   mount(root: HTMLElement, initial: string, cb: RawCallbacks, opts: RawOptions = {}): void {
     this.root = root;
+    this.language = opts.language ?? "markdown";
     const updateListener = EditorView.updateListener.of((u) => {
       if (u.docChanged) for (const target of this.dropTargets) target.pos = u.changes.mapPos(target.pos, 1);
       if (this.layoutListeners.size) {
@@ -394,16 +422,14 @@ export class RawEditor {
         doc: initial,
         extensions: [
           basicSetup,
-          markdownSource(),
-          markdownSourceStyle(),
+          this.languageSupport.of(languageExtensions(this.language)),
+          sourceViewStyle(),
           EditorView.lineWrapping,
-          EditorView.contentAttributes.of({ "aria-label": "Markdown source editor" }),
           this.spellcheck.of(EditorView.contentAttributes.of({ spellcheck: "false" })),
-          sourceCodeSpellcheck(),
-          this.liveSpelling.extension,
+          this.languageSpelling.of(spellingExtensions(this.language, this.liveSpelling.extension)),
           // Install CodeMirror's search state without exposing its own panel.
           // The app-level capture handler owns Ctrl+F/Ctrl+H and drives this
-          // state through the find card; markdownSourceStyle paints the matches.
+          // state through the find card; sourceViewStyle paints the matches.
           search({ top: true }),
           ...(opts.collapseBase64 ? [base64Collapse()] : []),
           // Make non-hyphen dashes (em/en dash, …) unmistakable in the source: a
@@ -436,19 +462,43 @@ export class RawEditor {
     return this.aligned;
   }
 
-  /** Change prose spelling without rebuilding the editor or enabling code. */
+  /** Read the text as `language` from now on, with its syntax colours, as
+   *  after a Save As gave the document a file of another kind. The text, the
+   *  caret and the undo history stay. */
+  setLanguage(language: DocumentLanguage): void {
+    if (!this.view || this.language === language) return;
+    this.language = language;
+    this.view.dispatch({
+      effects: [
+        this.languageSupport.reconfigure(languageExtensions(language)),
+        this.languageSpelling.reconfigure(spellingExtensions(language, this.liveSpelling.extension)),
+      ],
+    });
+    this.setSpellcheck(this.spellcheckEnabled);
+  }
+
+  /** Change prose spelling without rebuilding the editor or enabling code.
+   *  Only a Markdown document has prose to check. */
   setSpellcheck(enabled: boolean): void {
+    this.spellcheckEnabled = enabled;
+    const checked = enabled && this.language === "markdown";
     const managed = this.liveSpelling.controller();
     if (managed) {
-      managed.setEnabled(enabled);
+      managed.setEnabled(checked);
       return;
     }
-    if (!this.view || this.view.contentDOM.getAttribute("spellcheck") === String(enabled)) return;
-    this.view.dispatch({ effects: this.spellcheck.reconfigure(EditorView.contentAttributes.of({ spellcheck: String(enabled) })) });
+    if (!this.view || this.view.contentDOM.getAttribute("spellcheck") === String(checked)) return;
+    this.view.dispatch({ effects: this.spellcheck.reconfigure(EditorView.contentAttributes.of({ spellcheck: String(checked) })) });
+  }
+
+  /** Whether the text has prose whose spelling can be checked. */
+  hasProse(): boolean {
+    return this.language === "markdown";
   }
 
   /** Recheck every prose word in the Markdown model without editing it. */
   checkSpelling(): Promise<number> {
+    if (!this.hasProse()) return Promise.reject(new Error("Only a Markdown document has spelling to check."));
     return this.liveSpelling.controller()?.scan() ?? Promise.reject(new Error("Spell check needs the installed Downpad app."));
   }
 

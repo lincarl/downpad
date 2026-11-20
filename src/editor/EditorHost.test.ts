@@ -45,6 +45,8 @@ const fakeEditors = vi.hoisted(() => ({
   rawChange: null as ((text: string) => void) | null,
   /** The Markdown pane's current text. */
   rawText: null as string | null,
+  /** The language the Markdown pane reads its text as. */
+  rawLanguage: null as string | null,
   /** Whether each reveal of a Markdown pane asked it to take focus. */
   rawShowFocus: [] as boolean[],
   /** Each pane's find change callback, to simulate an edit with the card open. */
@@ -236,16 +238,25 @@ vi.mock("./raw/RawEditor", () => ({
       return 3;
     }
 
-    mount(root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }): void {
+    mount(root: HTMLElement, text: string, cb: { onChange(text: string): void; onFindChange?(): void }, options: { language?: string } = {}): void {
       this.root = root;
       this.onChange = cb.onChange;
       fakeEditors.rawText = text;
+      fakeEditors.rawLanguage = options.language ?? "markdown";
       fakeEditors.rawChange = cb.onChange;
       fakeEditors.rawFindChange = cb.onFindChange ?? null;
     }
 
     getText(): string {
       return fakeEditors.rawText ?? "";
+    }
+
+    setLanguage(language: string): void {
+      fakeEditors.rawLanguage = language;
+    }
+
+    hasProse(): boolean {
+      return fakeEditors.rawLanguage === "markdown";
     }
 
     alignedPane() {
@@ -375,6 +386,7 @@ beforeEach(() => {
   fakeEditors.wysiwygChange = null;
   fakeEditors.rawChange = null;
   fakeEditors.rawText = null;
+  fakeEditors.rawLanguage = null;
   fakeEditors.rawShowFocus = [];
   fakeEditors.wysiwygFindChange = null;
   fakeEditors.rawFindChange = null;
@@ -673,6 +685,166 @@ describe("EditorHost document view failure", () => {
     expect(shown(root)).toEqual(["editor-pane editor-pane-wysiwyg"]);
     expect(failureOf(store, "tab-1")).toBeUndefined();
     await host.dispose();
+  });
+});
+
+describe("EditorHost JSON and YAML files", () => {
+  /** The classes of the split's two panes, in the order of their names. */
+  const BOTH_PANES = ["editor-pane editor-pane-raw", "editor-pane editor-pane-wysiwyg"];
+  /** A store whose one tab holds the file at `path`. */
+  const storeWithFile = (path: string | null): Store => {
+    const store = makeStore();
+    store.patchDocById("tab-1", { filePath: path });
+    return store;
+  };
+
+  it("shows a JSON file as its source alone in every layout, and builds no document pane for it", async () => {
+    for (const layout of ["document", "split", "markdown"] as const) {
+      const root = document.createElement("div");
+      const host = new EditorHost(root, storeWithFile("/data/settings.json"));
+      host.initLayout(layout);
+
+      await host.reloadActiveDoc();
+
+      expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+      expect(root.classList.contains("split")).toBe(false);
+      expect(fakeEditors.rawLanguage).toBe("json");
+      // Find and typing go to the source.
+      expect(host.counts()).toEqual(MARKDOWN_COUNTS);
+      await host.dispose();
+    }
+    expect(fakeEditors.mountCalls).toBe(0);
+  });
+
+  it("keeps a YAML file's source view when another layout is chosen, and gives a Markdown tab that layout", async () => {
+    const root = document.createElement("div");
+    const store = storeWithFile("/data/compose.yml");
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    expect(fakeEditors.rawLanguage).toBe("yaml");
+
+    await host.setLayout("split");
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(fakeEditors.mountCalls).toBe(0);
+
+    store.addTab({ ...store.get().doc, filePath: "/notes/a.md", markdown: "# A" });
+    await host.reloadActiveDoc();
+    expect(shown(root).sort()).toEqual(BOTH_PANES);
+    expect(fakeEditors.rawLanguage).toBe("markdown");
+    await host.dispose();
+  });
+
+  it("shows a document saved as JSON as its source alone, and one saved as Markdown again in the window's layout", async () => {
+    const root = document.createElement("div");
+    const store = storeWithFile(null);
+    const host = new EditorHost(root, store);
+    host.initLayout("split");
+    await host.reloadActiveDoc();
+    expect(shown(root).sort()).toEqual(BOTH_PANES);
+
+    // A Save As gives the untitled document a JSON file.
+    store.patchDocById("tab-1", { filePath: "/data/a.json" });
+    await host.showActiveDoc();
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(root.classList.contains("split")).toBe(false);
+    expect(fakeEditors.rawLanguage).toBe("json");
+    // The source pane is the one from before, with its undo history.
+    expect(root.querySelectorAll(".editor-pane-raw")).toHaveLength(1);
+    // Typing there edits the tab.
+    fakeEditors.rawChange!('{"a": 1}');
+    expect(store.get().doc.markdown).toBe('{"a": 1}');
+
+    store.patchDocById("tab-1", { filePath: "/data/a.md" });
+    await host.showActiveDoc();
+    expect(shown(root).sort()).toEqual(BOTH_PANES);
+    expect(fakeEditors.rawLanguage).toBe("markdown");
+    // The document pane lagged the JSON typed meanwhile, so it was built again.
+    expect(fakeEditors.mounted.map((pane) => pane.markdown)).toEqual(["original markdown", '{"a": 1}']);
+    await host.dispose();
+  });
+
+  it("drops the notice of a failed Document view once the document is a JSON file", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const root = document.createElement("div");
+    const store = storeWithFile("/notes/deep.md");
+    const host = new EditorHost(root, store);
+    fakeEditors.mountPromise = Promise.reject(new Error("create failed"));
+    await host.reloadActiveDoc();
+    expect(failureOf(store, "tab-1")).toBeDefined();
+
+    store.patchDocById("tab-1", { filePath: "/notes/deep.json" });
+    await host.showActiveDoc();
+
+    expect(failureOf(store, "tab-1")).toBeUndefined();
+    expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+    expect(fakeEditors.mountCalls).toBe(1);
+    await host.dispose();
+    vi.restoreAllMocks();
+  });
+
+  it("puts no dropped file into a document that became a JSON file while the file waited for its turn", async () => {
+    const root = document.createElement("div");
+    const store = storeWithFile("/notes/a.md");
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    // A slow file of an earlier drop holds the second drop back.
+    const first = host.aimDrop()!;
+    const second = host.aimDrop()!;
+    const waiting = host.insertDropped(second, "![](b.png)");
+    // Meanwhile a Save As makes the document a JSON file.
+    store.patchDocById("tab-1", { filePath: "/notes/a.json" });
+    await host.showActiveDoc();
+    host.releaseDrop(first);
+
+    await expect(waiting).rejects.toThrow("A JSON file takes no dropped files.");
+    expect(fakeEditors.insertedAt).toBeNull();
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    expect(store.get().doc.markdown).toBe("original markdown");
+    host.releaseDrop(second);
+
+    // Saved as Markdown again, the document takes files.
+    store.patchDocById("tab-1", { filePath: "/notes/a.md" });
+    await host.showActiveDoc();
+    const third = host.aimDrop()!;
+    expect(await host.insertDropped(third, "![](c.png)")).toBe(true);
+    host.releaseDrop(third);
+    await host.dispose();
+  });
+
+  it("refuses a file for a JSON file at once, without waiting for its turn or for its tab to come to the front", async () => {
+    const root = document.createElement("div");
+    const store = storeWithFile("/notes/a.md");
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const earlier = host.aimDrop()!;
+    const drop = host.aimDrop()!;
+    // A Save As makes the document a JSON file, and another tab comes to the front.
+    store.patchDocById("tab-1", { filePath: "/notes/a.json" });
+    store.addTab({ ...store.get().doc, filePath: "/notes/b.md", markdown: "# B" });
+    await host.reloadActiveDoc();
+
+    // The earlier drop is still under way, and the tab is behind another one.
+    await expect(host.insertDropped(drop, "![](b.png)")).rejects.toThrow("A JSON file takes no dropped files.");
+    await expect(host.insertDropped(earlier, "![](a.png)")).rejects.toThrow("A JSON file takes no dropped files.");
+    host.releaseDrop(drop);
+    host.releaseDrop(earlier);
+    expect(hasUnsavedChanges(store.get().tabs[0])).toBe(false);
+    await host.dispose();
+  });
+
+  it("offers no spelling check for a JSON file", async () => {
+    const managed = vi.spyOn(await import("./spelling"), "managedSpellingAvailable").mockReturnValue(true);
+    const store = storeWithFile("/data/settings.json");
+    store.set({ settings: { ...DEFAULT_SETTINGS, spellCheckEnabled: true } });
+    const host = new EditorHost(document.createElement("div"), store);
+    await host.reloadActiveDoc();
+    expect(host.canCheckSpelling()).toBe(false);
+
+    store.patchDocById("tab-1", { filePath: "/data/settings.md" });
+    await host.showActiveDoc();
+    expect(host.canCheckSpelling()).toBe(true);
+    await host.dispose();
+    managed.mockRestore();
   });
 });
 

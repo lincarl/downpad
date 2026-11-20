@@ -1,15 +1,21 @@
 // Files dropped from the desktop (spec §5.4), and images pasted into the
-// document view (§5.5). Each dropped Markdown file opens in a tab. Other
+// document view (§5.5). Each dropped Markdown file opens in a tab, as does a
+// text, JSON or YAML file, which the code below counts as one. Other
 // dropped files go into the document they were dropped on, an image as an
 // image and any other file as a link to its copy in the attachments folder. A
 // pasted image goes in the same way, at the caret where it was pasted.
 // EditorHost decides where in that document each file goes, and holds a file
 // back while its document is behind another tab. A file that cannot be read
-// or stored is left out, and the drop's other files still go in.
+// or stored is left out, and the drop's other files still go in. Only a
+// Markdown document takes files, since a file goes in as a Markdown image or
+// link (`takesNoFiles`). A Save As can make the document a JSON or YAML file
+// while a file is on its way, so the editor refuses the file as it goes in
+// (`EditorHost.insertDropped`), and no copy is stored beside such a document.
 
 import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
 import { lookUpImages } from "../editor/wysiwyg/imageView";
 import type { FileService } from "../files/FileService";
+import { takesNoFiles } from "../files/documentLanguage";
 import { resolveImageSrc, storeBesideDocument, type ImageStoreContext } from "../images/imageStore";
 import { readImageBytes, writeAttachment } from "../ipc/commands";
 import type { ImageBytes } from "../ipc/contracts";
@@ -70,8 +76,8 @@ export class FileDropCoordinator {
    * awaits.
    */
   async handle(paths: string[], point: DropPoint): Promise<void> {
-    const markdown = paths.filter((path) => classifyDrop(path) === "md");
-    const others = paths.filter((path) => classifyDrop(path) !== "md");
+    const markdown = paths.filter((path) => classifyDrop(path) === "document");
+    const others = paths.filter((path) => classifyDrop(path) !== "document");
     let inserted: Promise<Failure[]> = Promise.resolve([]);
     try {
       const drop = others.length > 0 ? await this.aim(point) : null;
@@ -136,6 +142,7 @@ export class FileDropCoordinator {
     // create one first so the drop has somewhere to go, and from the Recent
     // view show the document. The files then go in at its caret.
     const { activeTabId, view } = store.get();
+    if (activeTabId) this.refuseDataFile(activeTabId);
     let drop: FileDrop | null = null;
     if (!activeTabId) await files.newDocument();
     else if (view === "recent") await this.dependencies.showActiveDoc();
@@ -150,6 +157,9 @@ export class FileDropCoordinator {
    *  with the files left out. */
   private insertFiles(paths: string[], drop: FileDrop): Promise<Failure[]> {
     return this.insertEach(drop, paths, baseName, async (path) => {
+      // An earlier file's save can have made the document a JSON or YAML
+      // file, which takes no file, so this one is not read either.
+      this.refuseDataFile(drop.tabId);
       if (classifyDrop(path) === "image") await this.embedImage(await readImageBytes(path), drop, baseName(path));
       else await this.attachDroppedFile(path, drop);
     });
@@ -231,6 +241,13 @@ export class FileDropCoordinator {
     }
   }
 
+  /** Throw the error that says why no file goes into a tab's document, if it
+   *  is a JSON or YAML file (`takesNoFiles`). */
+  private refuseDataFile(tabId: string): void {
+    const refusal = takesNoFiles(this.tabFilePath(tabId));
+    if (refusal) throw refusal;
+  }
+
   /** The saved path of an open tab's document, or null if it is untitled or closed. */
   private tabFilePath(tabId: string): string | null {
     return this.dependencies.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
@@ -265,11 +282,18 @@ export class FileDropCoordinator {
    *  stored again after a Save As to another folder, only once the files
    *  before it are in. After that, the file goes in at once, or waits while
    *  the document is behind another tab, where it cannot be saved. Either
-   *  way a link from its path still holds when the file goes in. */
+   *  way a link from its path still holds when the file goes in. The path is
+   *  read right before each write of a copy beside the document, so a
+   *  document that is a JSON or YAML file by then, as after the save that
+   *  the drop itself asked for, gets no copy, and the file counts as left
+   *  out. */
   private dropDocument(drop: FileDrop): Pick<ImageStoreContext, "getFilePath" | "untilPathSettled"> {
     const { editorHost, files } = this.dependencies;
     return {
-      getFilePath: () => this.tabFilePath(drop.tabId),
+      getFilePath: () => {
+        this.refuseDataFile(drop.tabId);
+        return this.tabFilePath(drop.tabId);
+      },
       untilPathSettled: async () => {
         await editorHost.untilTurn(drop);
         await files.untilPathSettled(drop.tabId);
@@ -307,6 +331,9 @@ export class FileDropCoordinator {
       if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
       return;
     }
+    // The save can have made the document a JSON or YAML file, which takes
+    // no file, so there is no need to read this one.
+    this.refuseDataFile(drop.tabId);
     const { bytes } = await readImageBytes(path);
     const link = await storeBesideDocument(this.dropDocument(drop), async (getFilePath) => {
       const filePath = getFilePath();
@@ -320,7 +347,9 @@ export class FileDropCoordinator {
   /** Insert a dropped or pasted file's Markdown into its document, once that
    *  document is in front. If the document is closed first, it gets nothing
    *  and no other document gets it instead. A copy in the attachments folder
-   *  stays there. */
+   *  stays there. A document that was saved as a JSON or YAML file while the
+   *  file was on its way takes nothing: the editor throws then, and the file
+   *  counts as left out. */
   private async insertDropped(drop: FileDrop, markdown: string, name: string): Promise<void> {
     if (!(await this.dependencies.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(name);
   }

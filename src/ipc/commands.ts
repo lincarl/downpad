@@ -39,6 +39,8 @@ export function writeFile(path: string, content: string, eol: Eol, expectedConte
   return invoke("write_file", expectedContent === undefined ? { path, content, eol } : { path, content, eol, expectedContent });
 }
 
+/** Whether the path names a file or folder, also one that cannot be read.
+ *  Rejects when the look itself fails, since something may be there then. */
 export function pathExists(path: string): Promise<boolean> {
   return invoke("path_exists", { path });
 }

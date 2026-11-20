@@ -57,8 +57,9 @@ import {
 import { TooltipLabel, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { countWords } from "@/document/wordcount";
-import { byteLength, formatSize } from "@/document/docSize";
+import { documentSize, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
+import { documentLanguage, LANGUAGE_NAMES } from "@/files/documentLanguage";
 import { showContextMenu } from "@/shell/contextMenu";
 import { EditorIsland } from "@/editor/EditorIsland";
 import { middleTruncate } from "@/editor/wysiwyg/linkView";
@@ -183,9 +184,14 @@ function AppContent({ store }: { store: Store }) {
 
 function Toolbar() {
   const runtime = useAppRuntime();
-  const { view, activeTabId, settings, find, git } = useAppState((state) => state);
+  const { view, activeTabId, settings, find, git, doc } = useAppState((state) => state);
   const editorLayout = useAppState(shownLayout);
   const inEditor = view !== "recent" && activeTabId !== null;
+  // A JSON or YAML file shows as its source alone, so the view control names
+  // that source and offers no other view.
+  const language = inEditor ? documentLanguage(doc.filePath) : "markdown";
+  const isMarkdown = language === "markdown";
+  const sourceName = LANGUAGE_NAMES[language];
   const documentIsDark =
     settings.editorTheme === "dark" ||
     (settings.editorTheme === "follow-ui" &&
@@ -193,7 +199,7 @@ function Toolbar() {
   const layouts: Array<{ value: EditorLayout; label: string; title: string }> = [
     { value: "document", label: "Document", title: "Show the document only" },
     { value: "split", label: "Split", title: "Show the document and Markdown source side by side" },
-    { value: "markdown", label: "Markdown", title: "Show the Markdown source only" },
+    { value: "markdown", label: sourceName, title: `Show the ${sourceName} source only` },
   ];
 
   return (
@@ -263,7 +269,7 @@ function Toolbar() {
       <ToggleGroup
         type="single"
         value={inEditor ? editorLayout : ""}
-        disabled={!inEditor}
+        disabled={!inEditor || !isMarkdown}
         className="toolbar-view inline-flex max-[660px]:hidden group-data-[git]/toolbar:max-[710px]:hidden"
         aria-label="Editor view"
         onValueChange={(value) => {
@@ -294,7 +300,7 @@ function Toolbar() {
         className="min-[660px]:hidden group-data-[git]/toolbar:max-[710px]:inline-flex"
         label="Editor view"
         icon={editorLayout === "markdown" ? Code : editorLayout === "split" ? Columns2 : FileText}
-        disabled={!inEditor}
+        disabled={!inEditor || !isMarkdown}
         items={layouts.map(({ value, label }) => ({
           label,
           checked: inEditor && editorLayout === value,
@@ -330,8 +336,8 @@ function Toolbar() {
         icon={Copy}
         disabled={!inEditor}
         items={[
-          { label: "Copy as markdown", icon: FileCode2, run: () => runtime?.copyDocumentMarkdown() },
-          { label: "Copy formatted text", icon: FileText, run: () => runtime?.copyDocumentFormatted() },
+          { label: isMarkdown ? "Copy as markdown" : `Copy as ${sourceName}`, icon: FileCode2, run: () => runtime?.copyDocumentMarkdown() },
+          { label: "Copy formatted text", icon: FileText, disabled: !isMarkdown, run: () => runtime?.copyDocumentFormatted() },
         ]}
       />
       <ToolButton label="Print" tooltip="Print (Ctrl+P)" disabled={!inEditor} onClick={() => runtime?.printDocument()}>
@@ -966,7 +972,8 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
     );
   }
   const path = doc.filePath ?? "Untitled";
-  const words = countWords(doc.markdown);
+  // Only prose has words to count. A JSON or YAML file shows its size alone.
+  const words = documentLanguage(doc.filePath) === "markdown" ? countWords(doc.markdown) : null;
   const gitText = git && activeTab ? gitStatusText(git, hasUnsavedChanges(activeTab)) : null;
   return (
     <footer className={STATUS_BAR_CLASS}>
@@ -985,7 +992,8 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
             {" · "}
           </>
         )}
-        {words.toLocaleString()} {words === 1 ? "word" : "words"} · {formatSize(byteLength(doc.markdown))}
+        {words !== null && `${words.toLocaleString()} ${words === 1 ? "word" : "words"} · `}
+        {formatSize(documentSize(doc))}
       </span>
     </footer>
   );

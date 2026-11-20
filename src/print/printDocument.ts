@@ -5,7 +5,8 @@
 // Markdown-only layout, or the Recent view) the canonical markdown is rendered
 // through a transient, off-screen WYSIWYG editor and cloned from there — so the
 // "Document" version always shows the rendered document, never raw markdown,
-// regardless of which view is on screen.
+// regardless of which view is on screen. A JSON or YAML file has no rendered
+// document, so only its source prints.
 //
 // The result is a detached, sanitized clone: the transient editor is torn down
 // immediately, and the workspace re-clones this node every time the user changes
@@ -17,6 +18,7 @@ import { serializerStyleFromSettings, type Settings } from "../state/types";
 import type { WysiwygContext } from "../editor/wysiwyg/context";
 import { sanitize } from "./printRender";
 import type { PrintJob } from "./PrintWorkspace";
+import type { DocumentLanguage } from "../files/documentLanguage";
 
 export interface PrintRequest {
   /** Canonical markdown of the active document (printed as-is for the Markdown
@@ -29,6 +31,8 @@ export interface PrintRequest {
   context: WysiwygContext;
   /** File name for the header bar and the running header ("Untitled" when unsaved). */
   docTitle: string;
+  /** The language of the document. Markdown without one. */
+  language?: DocumentLanguage;
 }
 
 /** Mermaid renders asynchronously (lazy import); give it a beat to paint its SVG
@@ -38,8 +42,9 @@ const MERMAID_SETTLE_MS = 350;
 /** Build the print job, or null when there is nothing to print. */
 export async function preparePrintJob(req: PrintRequest): Promise<PrintJob | null> {
   if (!req.liveNode && !req.markdown.trim()) return null;
-  const documentNode = await renderDocumentNode(req);
-  return { markdown: req.markdown, documentNode, docTitle: req.docTitle };
+  const language = req.language ?? "markdown";
+  const documentNode = language === "markdown" ? await renderDocumentNode(req) : null;
+  return { markdown: req.markdown, documentNode, docTitle: req.docTitle, language };
 }
 
 async function renderDocumentNode(req: PrintRequest): Promise<Element | null> {

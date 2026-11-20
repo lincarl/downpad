@@ -6,18 +6,13 @@
 // changes the EditorPresenter re-shows it in the editor.
 
 import { openDialog, saveDialog, ask, confirmSaveChanges } from "../ipc/dialogs";
-import { readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
+import { pathExists, readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
 import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
+import { documentLanguage, extensionOf, fileFilters } from "./documentLanguage";
 import { blankDoc, hasUnsavedChanges, type DocumentState, type Tab } from "../state/types";
 import type { Store } from "../state/store";
-
-const MD_FILTERS = [
-  { name: "Markdown", extensions: ["md", "markdown", "mdown", "mkd"] },
-  { name: "Text", extensions: ["txt"] },
-  { name: "All files", extensions: ["*"] },
-];
 
 /**
  * Presents the active document in the editor. Implemented by AppRuntime, which
@@ -291,7 +286,7 @@ export class FileService {
   }
 
   async openViaDialog(): Promise<void> {
-    const selected = await openDialog({ multiple: false, filters: MD_FILTERS });
+    const selected = await openDialog({ multiple: false, filters: fileFilters() });
     if (typeof selected === "string") {
       await this.openPath(selected);
     }
@@ -429,7 +424,8 @@ export class FileService {
     let path = originalPath;
     const choosePath = saveAs || !path;
     if (choosePath) {
-      path = await saveDialog({ filters: MD_FILTERS, defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
+      path = await saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
+      if (path) path = await this.withOwnExtension(path, originalPath);
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
       // Two tabs with one file would each take the other's reload, notice
@@ -477,6 +473,26 @@ export class FileService {
     this.onSaved(tabId);
     if (choosePath) this.recordOpened(path);
     return true;
+  }
+
+  /** The path to save a document under, from the path `chosen` in a save
+   *  dialog. A JSON or YAML file is told by its extension, so a name chosen
+   *  without one would make the document Markdown, and its Document view
+   *  would rewrite the data. Such a name gets the extension of the file the
+   *  document has now, `originalPath`. Windows adds it in the dialog, and
+   *  other systems return the name as typed. The dialog asked about replacing
+   *  the name as typed, so this asks about a file that has the full name.
+   *  Resolves null when the user keeps that file. Only a look that finds no
+   *  file lets the save go on without asking. A failure of the look itself,
+   *  as on a drive that does not answer, fails the save, since the file may
+   *  be there (`pathExists`). */
+  private async withOwnExtension(chosen: string, originalPath: string | null): Promise<string | null> {
+    if (!originalPath || documentLanguage(originalPath) === "markdown" || extensionOf(chosen) !== "") return chosen;
+    const path = `${chosen.replace(/\.$/, "")}.${extensionOf(originalPath)}`;
+    if (!(await pathExists(path))) return path;
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const replace = await ask(`“${name}” already exists. Replace it?`, { title: "Downpad", kind: "warning", okLabel: "Replace", cancelLabel: "Cancel" });
+    return replace ? path : null;
   }
 
   /** Apply saved metadata to its owner, keeping later edits dirty. A change on

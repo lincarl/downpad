@@ -38,6 +38,9 @@ export interface DocumentMenuActions {
   print: () => void;
   /** Copy the whole document's markdown to the clipboard (§5.10). */
   copyMarkdown: () => void;
+  /** What the document's source is called, "Markdown" unless it is a JSON or
+   *  YAML file. Markdown without it. */
+  sourceName?: () => string;
   /** Whether the active document's file can go on the clipboard, which takes
    *  the installed app. */
   canCopyFile: () => boolean;
@@ -183,7 +186,7 @@ export function buildItems(
   const hasDoc = actions.hasDocument();
   const documentItems: MenuItem[] = [
     {
-      label: "Copy as Markdown",
+      label: `Copy as ${actions.sourceName?.() ?? "Markdown"}`,
       icon: MENU_ICONS.markdown,
       disabled: !hasDoc,
       separatorBefore: target !== null,

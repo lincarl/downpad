@@ -7,6 +7,7 @@
 
 import type { MarginPreset, Orientation, PaperSize, PrintVersion } from "../print/paper";
 import type { GitFileStatus } from "../ipc/contracts";
+import { documentLanguage } from "../files/documentLanguage";
 
 export type ViewMode = "recent" | "wysiwyg" | "raw";
 
@@ -321,11 +322,13 @@ export function layoutFromDefaultView(s: Pick<Settings, "defaultView">): EditorL
   }
 }
 
-/** The layout the active tab is shown in: the window's layout, or the Markdown
- *  view alone while the tab's Document view cannot be built. */
+/** The layout the active tab is shown in: the window's layout, or the source
+ *  alone for a JSON or YAML file, and for a Markdown document while its
+ *  Document view cannot be built. */
 export function shownLayout(state: Pick<AppState, "tabs" | "activeTabId" | "editorLayout">): EditorLayout {
   const active = state.tabs.find((tab) => tab.id === state.activeTabId);
-  return active?.documentViewFailure ? "markdown" : state.editorLayout;
+  if (!active) return state.editorLayout;
+  return active.documentViewFailure || documentLanguage(active.doc.filePath) !== "markdown" ? "markdown" : state.editorLayout;
 }
 
 /** Derive the WYSIWYG serializer style from settings (spec §5.16). */

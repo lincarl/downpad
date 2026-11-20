@@ -7,6 +7,7 @@ import {
   formatDate,
   filterByName,
   plainSnippet,
+  snippetText,
 } from "./recentFormat";
 import type { RecentEntry } from "../state/types";
 
@@ -86,6 +87,23 @@ describe("filterByName", () => {
     // The folder "n" is in every path; matching by folder would return all 3.
     // Filename-only matching returns just "meeting-notes.md".
     expect(filterByName(entries, "n").map((e) => fileName(e.path))).toEqual(["meeting-notes.md"]);
+  });
+});
+
+describe("snippetText", () => {
+  it("reads a Markdown file's snippet as plain text, unless the query has Markdown markup", () => {
+    expect(snippetText("- Deploy the **site**", "site", "/notes/todo.md")).toBe("Deploy the site");
+    expect(snippetText("- Deploy the **site**", "**site", "/notes/todo.md")).toBe("- Deploy the **site**");
+    expect(snippetText("| --- |", "-", "/notes/todo.md")).toBe("| --- |");
+  });
+
+  it("leaves a JSON or YAML file's snippet as written, so the whole match shows", () => {
+    expect(snippetText("  - deploy", "- deploy", "/ci/steps.yml")).toBe("- deploy");
+    expect(snippetText("# build_number: 3", "build_number", "/ci/steps.yaml")).toBe("# build_number: 3");
+    expect(snippetText('  "glob": "*.md",', "glob", "/app/package.json")).toBe('"glob": "*.md",');
+    // The same lines read as Markdown lose their markers.
+    expect(snippetText("  - deploy", "deploy", "/ci/steps.md")).toBe("deploy");
+    expect(snippetText("# build number: 3", "number", "/ci/steps.txt")).toBe("build number: 3");
   });
 });
 
