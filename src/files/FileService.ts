@@ -145,6 +145,9 @@ export class FileService {
     }
     const doc = fileDocument(path, payload, existing?.doc.frontmatterCollapsed ?? false);
     if (existing) {
+      // Another tab can be in front by now, with typing that its editor has
+      // not reported yet.
+      this.present.flush();
       this.store.activateTab(existing.id);
       this.store.replaceActiveDoc(doc);
     } else {

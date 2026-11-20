@@ -31,6 +31,35 @@ export function restorePlace(editorArea: HTMLElement, place: Place, still: () =>
   requestAnimationFrame(restore);
 }
 
+/** Where the documents were scrolled that the Recent view came to the front
+ *  over. A hidden editor area can be neither measured nor scrolled, so a
+ *  document's place is taken as the Recent view comes, and put back the next
+ *  time the document shows, also after another tab was in front, and also in
+ *  editors built meanwhile, as when Get latest replaced the document. Editors
+ *  that were not rebuilt are at that place already. */
+export class PlacesBehindRecent {
+  private readonly places = new Map<string, Place>();
+
+  /** The Recent view comes to the front: take the place of the tab whose
+   *  editors the area shows, which is `shownTab`, and forget the tabs that
+   *  are not among `openTabs` any more. */
+  take(editorArea: HTMLElement, shownTab: string | null, openTabs: readonly string[]): void {
+    for (const tab of this.places.keys()) {
+      if (!openTabs.includes(tab)) this.places.delete(tab);
+    }
+    if (shownTab !== null) this.places.set(shownTab, capturePlace(editorArea));
+  }
+
+  /** The document of `tab` shows: put the place back that was taken for it,
+   *  once. `inFront` tells the tab in front in the next frame. */
+  giveBack(editorArea: HTMLElement, tab: string | null, inFront: () => string | null): void {
+    const place = tab === null ? undefined : this.places.get(tab);
+    if (tab === null || !place) return;
+    this.places.delete(tab);
+    restorePlace(editorArea, place, () => inFront() === tab);
+  }
+}
+
 /** Run a reload of the document in front and scroll its new editors to where
  *  the old ones were, so a document that Get latest changed stays in place.
  *  `inFront` tells the tab in front. If another tab is in front once the

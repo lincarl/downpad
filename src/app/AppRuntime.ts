@@ -29,7 +29,7 @@ import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
 import { copyActiveFile } from "./copyFile";
-import { capturePlace, keepingPlace, restorePlace, type Place } from "./keepingPlace";
+import { keepingPlace, PlacesBehindRecent } from "./keepingPlace";
 import { clearNoticesOfOtherDocuments } from "./noticeScope";
 import { SaveFailureNotice } from "./saveFailureNotice";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
@@ -68,10 +68,8 @@ export class AppRuntime {
   private closingTabs = false;
   /** The element the document's editors show in, which the Recent view hides. */
   private readonly editorArea: HTMLElement;
-  /** While the Recent view is in front: the tab behind it, and where its
-   *  document was scrolled when the view came. The document gets that place
-   *  when it shows again, also in editors built meanwhile. */
-  private behindRecent: { tabId: string | null; place: Place } | null = null;
+  /** Where the documents were scrolled that the Recent view came over. */
+  private readonly placesBehindRecent = new PlacesBehindRecent();
   /** The error notice of a save the user asked for that failed. */
   private readonly saveFailure: SaveFailureNotice;
   private disposed = false;
@@ -593,8 +591,9 @@ export class AppRuntime {
   private async showRecent(): Promise<void> {
     if (this.store.get().view === "recent") return;
     if (this.findBar.isOpen()) this.findBar.close();
-    // The hidden editor area measures as not scrolled, so its place is taken now.
-    this.behindRecent = { tabId: this.store.get().activeTabId, place: capturePlace(this.editorArea) };
+    // The hidden editor area measures as not scrolled, so its place is taken
+    // now, for the tab whose editors show, which can lag behind the active one.
+    this.placesBehindRecent.take(this.editorArea, this.editorHost.shownTabId, this.store.get().tabs.map((tab) => tab.id));
     this.store.set({ view: "recent" });
     await this.recentView.refresh();
   }
@@ -622,13 +621,8 @@ export class AppRuntime {
     // The find bar is bound to the editor we're about to (re)show; close it so it
     // doesn't linger with stale search state from the previous document.
     if (this.findBar.isOpen()) this.findBar.close();
-    let back: AppRuntime["behindRecent"] = null;
     if (!background || this.store.get().view !== "recent") {
-      if (this.store.get().view === "recent") {
-        this.recentView.onLeave();
-        back = this.behindRecent;
-        this.behindRecent = null;
-      }
+      if (this.store.get().view === "recent") this.recentView.onLeave();
       // Leaving Recent re-enters the editor; the editor host honours the persisted
       // `editorLayout` (document / split / Markdown only) when it presents.
       this.store.set({ view: "wysiwyg" });
@@ -639,11 +633,10 @@ export class AppRuntime {
     if (reload && this.store.get().banner) this.store.set({ banner: null });
     if (reload) await this.editorHost.reloadActiveDoc();
     else await this.editorHost.showActiveDoc();
-    // The document that was behind the Recent view shows again, where it was
-    // scrolled when that view came. Its editors can be new ones, built while
-    // the view was in front or just now, and the old ones are there already.
-    const tab = this.store.get().activeTabId;
-    if (back && back.tabId === tab) restorePlace(this.editorArea, back.place, () => this.store.get().activeTabId === tab);
+    // A document that was behind the Recent view shows again, where it was
+    // scrolled when that view came.
+    const inFront = (): string | null => this.store.get().activeTabId;
+    if (this.store.get().view !== "recent") this.placesBehindRecent.giveBack(this.editorArea, inFront(), inFront);
     this.afterActiveDocChanged();
   }
 

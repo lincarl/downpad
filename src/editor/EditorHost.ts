@@ -139,6 +139,13 @@ export class EditorHost implements FindController {
   private configEpoch = 0;
   private activeTabId: string | null = null;
   private currentView: View | null = null;
+
+  /** The tab whose panes show, which lags behind the store's active tab
+   *  while that tab's panes are built. */
+  get shownTabId(): string | null {
+    return this.activeTabId;
+  }
+
   /** The change of panes in progress (`runPaneChange`), such as a tab shown or
    *  a layout switched, or null. Only one runs at a time. */
   private changing: Promise<void> | null = null;

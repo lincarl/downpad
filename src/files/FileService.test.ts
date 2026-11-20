@@ -1049,9 +1049,15 @@ describe("reloading an open file", () => {
     await eventually(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
     const other = { ...blankDoc(), markdown: "# Other unsaved edits\n", isDirty: true };
     const otherId = store.addTab(other);
+    // The other tab's typing is collected before the reloaded one comes to the front.
+    const order: string[] = [];
+    presenter.flush.mockImplementation(() => { order.push("collect typing"); });
+    const stop = store.select((state) => state.activeTabId, () => { order.push("show another tab"); });
 
     read.resolve(onDisk);
     await loading;
+    stop();
+    expect(order).toEqual(["collect typing", "show another tab"]);
 
     expect(store.get().activeTabId).toBe(owner);
     expect(store.get().doc).toMatchObject({ filePath, markdown: onDisk.content, isDirty: false });
