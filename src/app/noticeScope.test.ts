@@ -41,6 +41,19 @@ describe("the document a notice is about", () => {
     expect(store.get().banner).toBeNull();
   });
 
+  it("clears the notice when the Recent view comes to the front, and one shown there when a document does", () => {
+    const { store } = setup();
+    store.set({ view: "recent" });
+    expect(store.get().banner).toBeNull();
+    const failed: BannerState = { kind: "error", message: "Downpad could not open the file." };
+    store.set({ banner: failed });
+    // Other tabs can come and go behind the Recent view.
+    store.patchDoc({ modifiedMs: 300 });
+    expect(store.get().banner).toBe(failed);
+    store.set({ view: "wysiwyg" });
+    expect(store.get().banner).toBeNull();
+  });
+
   it("leaves a notice that shows after the switch, as while the new document's editor is built", () => {
     const { store } = setup();
     store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sameFilePath } from "../files/pathIdentity";
 import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
 import { createAppStore } from "../app/createAppStore";
 import type { Store } from "../state/store";
@@ -90,13 +91,14 @@ beforeEach(() => {
       openPath: vi.fn(async () => {}),
       openBeside: vi.fn(async () => {}),
       refreshFromDisk: vi.fn(async () => true),
-      // As FileService does: the tab takes the file only if its text is the kept one.
+      // As FileService does: the tab takes the file only if its text is the
+      // kept one, and a tab in back takes it without its editors.
       replaceFromDisk: vi.fn(async (tabId: string, path: string, kept: (markdown: string) => boolean) => {
-        const tab = store.get().tabs.find((entry) => entry.id === tabId && entry.doc.filePath === path);
+        const tab = store.get().tabs.find((entry) => entry.id === tabId && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
         if (!tab) return "gone" as const;
         if (!kept(tab.doc.markdown)) return "changed" as const;
         store.patchDocById(tabId, { markdown: "# Theirs\n", savedMarkdown: "# Theirs\n", isDirty: false });
-        return "shown" as const;
+        return store.get().activeTabId === tabId ? ("shown" as const) : ("stored" as const);
       }),
     },
     flush: vi.fn(),
@@ -352,6 +354,8 @@ describe("GitSync checks", () => {
     expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], false);
     expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, PATH, expect.any(Function));
     expect(deps.keepingPlace).toHaveBeenCalledOnce();
+    // The document in front built its editors again as it took the file.
+    expect(deps.discardEditors).not.toHaveBeenCalled();
     expect(store.get().doc.markdown).toBe("# Theirs\n");
     expect(store.get().banner).toBeNull();
   });
@@ -369,6 +373,20 @@ describe("GitSync checks", () => {
     expect(deps.files.replaceFromDisk).toHaveBeenCalledOnce();
     expect(store.get().doc.markdown).toBe("# Notes\n\nTyped during the read\n");
     expect(deps.files.openPath).not.toHaveBeenCalled();
+  });
+
+  it("drops the editors of a tab that went behind another one while Get latest read its file", async () => {
+    openDocument();
+    const tabId = store.get().activeTabId!;
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done([PATH]));
+    vi.mocked(deps.keepingPlace).mockImplementationOnce(async (reload) => {
+      store.addTab({ ...store.get().doc, filePath: "/repo/other.md" });
+      await reload();
+    });
+    await sync.check({ force: true });
+    expect(store.get().tabs.find((tab) => tab.id === tabId)?.doc.markdown).toBe("# Theirs\n");
+    expect(deps.discardEditors).toHaveBeenCalledExactlyOnceWith(tabId);
   });
 
   it("finds the tab of a changed file also when Windows spells its path in another case", async () => {

@@ -580,9 +580,13 @@ export class GitSync {
       try {
         if (tab.id === store.get().activeTabId) {
           const text = tab.doc.markdown;
+          const reload: { outcome?: Awaited<ReturnType<typeof files.replaceFromDisk>> } = {};
           await this.deps.keepingPlace(async () => {
-            await files.replaceFromDisk(tab.id, path, (markdown) => markdown === text);
+            reload.outcome = await files.replaceFromDisk(tab.id, path, (markdown) => markdown === text);
           });
+          // A tab that went behind another one during the read took the file
+          // without its editors, which still show the old text.
+          if (reload.outcome === "stored") await this.deps.discardEditors(tab.id);
         } else if (await files.refreshFromDisk(tab.id)) {
           await this.deps.discardEditors(tab.id);
         }

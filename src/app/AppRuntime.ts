@@ -29,6 +29,7 @@ import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
 import { copyActiveFile } from "./copyFile";
+import { keepingPlace } from "./keepingPlace";
 import { clearNoticesOfOtherDocuments } from "./noticeScope";
 import { SaveFailureNotice } from "./saveFailureNotice";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
@@ -173,7 +174,7 @@ export class AppRuntime {
       files: this.files,
       flush: () => this.editorHost.flush(),
       discardEditors: (tabId) => this.editorHost.discardTab(tabId),
-      keepingPlace: (reload) => keepingPlace(hosts.editorArea, reload),
+      keepingPlace: (reload) => keepingPlace(hosts.editorArea, () => this.store.get().activeTabId, reload),
     });
 
     // Recent view (§5.8). Opening a file from it shows the editor first, then
@@ -726,26 +727,6 @@ export class AppRuntime {
 /** What the error notice of a failed file action says before the reason. */
 const OPEN_FAILED = "Downpad could not open the file.";
 const CLOSE_FAILED = "Downpad could not close the document.";
-
-/** Run a reload of the active document and scroll its new editors to where
- *  the old ones were, so a document that Get latest changed stays in place. */
-async function keepingPlace(editorArea: HTMLElement, reload: () => Promise<void>): Promise<void> {
-  const panes = (): HTMLElement[] => [editorArea, ...editorArea.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")];
-  const place = (element: HTMLElement): string =>
-    element === editorArea ? "area" : element.classList.contains("editor-pane-raw") ? "raw" : "wysiwyg";
-  const before = new Map(panes().map((element) => [place(element), element.scrollTop]));
-  await reload();
-  const restore = (): void => {
-    for (const element of panes()) {
-      const top = before.get(place(element));
-      if (top !== undefined) element.scrollTop = top;
-    }
-  };
-  restore();
-  // The new document view can still grow in the next frame, as its images
-  // and diagrams take their place.
-  requestAnimationFrame(restore);
-}
 
 /** Display label for a document: its file name, or "Untitled" when unsaved. */
 function fileLabel(filePath: string | null): string {

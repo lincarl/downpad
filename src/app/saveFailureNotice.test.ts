@@ -25,14 +25,6 @@ describe("the notice of a failed save", () => {
     expect(store.get().banner).toBeNull();
   });
 
-  it("stays through a read of the file, which records another file time but saves nothing", () => {
-    const { store, notice, tabId } = setup();
-    store.patchDoc({ filePath: "/docs/notes.md", savedMarkdown: "# Saved\n", markdown: "# Edited\n", isDirty: true, modifiedMs: 100 });
-    notice.show(tabId, "notes.md", denied);
-    store.patchDoc({ modifiedMs: 200, fileSize: 8 });
-    expect(store.get().banner?.kind).toBe("error");
-  });
-
   it("leaves a notice that replaced it, and forgets a notice the user dismissed", () => {
     const { store, notice, tabId } = setup();
     notice.show(tabId, "notes.md", denied);

@@ -204,6 +204,19 @@ describe("Copy file", () => {
     expect(clipboard.copy).not.toHaveBeenCalled();
   });
 
+  it("says why its save failed, and copies nothing", async () => {
+    const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    files.save.mockRejectedValueOnce(new Error("“other.md” is open in another tab. Close that tab, or choose another name."));
+    await copy();
+    logged.mockRestore();
+    expect(store.get().banner).toEqual({
+      kind: "error",
+      message: "Could not save the file before copying it. “other.md” is open in another tab. Close that tab, or choose another name.",
+    });
+    expect(clipboard.copy).not.toHaveBeenCalled();
+  });
+
   it("leaves a refused save alone once another tab is in front", async () => {
     const { store, files, desktopEvents, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
     files.save.mockImplementationOnce(async () => {

@@ -6,6 +6,7 @@
 import type { EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
 import { copyFileToClipboard } from "../ipc/commands";
+import { failureReason } from "../ipc/failureReason";
 import type { Store } from "../state/store";
 import { isRecoveredDocument } from "../state/types";
 import type { DesktopEventBindings } from "./DesktopEventBindings";
@@ -77,7 +78,14 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
     // too, and so does one the app has not seen yet.
     const saved = !doc.isDirty && doc.filePath
       ? true
-      : await files.save({ automatic: (id) => desktopEvents.holdSaveAfterChecks(id) });
+      : await files.save({ automatic: (id) => desktopEvents.holdSaveAfterChecks(id) }).catch((error: unknown) => {
+        // The reason tells what to do, such as for a file that is open in
+        // another tab.
+        console.error("Downpad: saving the file before copying it failed", error);
+        if (!isDisposed()) store.set({ banner: { kind: "error", message: `Could not save the file before copying it. ${failureReason(error)}`.trimEnd() } });
+        return null;
+      });
+    if (saved === null) return;
     if (!saved) {
       // An untitled document whose Save As the user cancelled copies nothing,
       // and a document no longer in front tells its change when it comes back.
