@@ -5,7 +5,7 @@ import { parseForESLint, type AST } from "toml-eslint-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { Settings } from "../src/state/types";
 import { SETTINGS_ENCODING_BROKEN, SETTINGS_SYNTAX_BROKEN } from "../src/ipc/contracts";
-import { leadsTo, ReplaceDeclinedError, writeAtomic } from "./io";
+import { mayReplace, ReplaceDeclinedError, writeAtomic } from "./io";
 
 const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
   theme: ["system", "light", "dark"], editorTheme: ["follow-ui", "light", "dark"],
@@ -111,7 +111,12 @@ export function patchSettingsToml(existing: string, settings: Settings): string 
 
 /** Reject invalid UTF-8 without replacing bytes, and retain a leading BOM. */
 async function readSettingsText(path: string): Promise<string> {
-  const bytes = await readFile(path);
+  return decodeSettings(await readFile(path));
+}
+
+/** settings.toml's text from its bytes, with a BOM kept. Bytes that are not valid
+ *  UTF-8 throw an error that says so. */
+function decodeSettings(bytes: Uint8Array): string {
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch (error) {
@@ -178,10 +183,11 @@ export async function updateSettingsFile(path: string, changes: unknown, expecte
     const next = normalizeSettings({ ...current, ...applied }, current);
     try {
       await writeAtomic(path, patchSettingsToml(existing, next), {
-        // The real file that the rename replaces, also when settings.toml is
-        // a symbolic link, and only while settings.toml still leads to it. The
-        // text is read last, as close to the rename as it can be.
-        beforeReplace: async (target) => await leadsTo(path, target) && (await existingSettingsText(target)) === existing,
+        // The real file that the rename replaces, also when settings.toml is a
+        // symbolic link, only while it still holds the text the changes went
+        // onto and settings.toml still leads to it, with the checks of an
+        // automatic save of a document.
+        beforeReplace: (target) => mayReplace(path, target, (bytes) => (bytes === null ? "" : decodeSettings(bytes)) === existing),
       });
       return next;
     } catch (error) {

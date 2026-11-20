@@ -291,6 +291,46 @@ it.skipIf(process.platform === "win32")("writes a file that is back with the exp
   expect(await readFile(real, "utf8")).toBe("Mine\n");
 });
 
+it.skipIf(process.platform === "win32")("writes a removed file again where it was, also through a folder that is a link, unless the folder leads elsewhere by then", async () => {
+  const { directory } = await fixture();
+  const folder = join(directory, "folder");
+  const otherFolder = join(directory, "other");
+  await mkdir(folder);
+  await mkdir(otherFolder);
+  const linkedFolder = join(directory, "linked");
+  await symlink(folder, linkedFolder);
+  const real = join(folder, "note.md");
+  const originalOpen = filesystem.open;
+  let staging: (() => Promise<void>) | null = null;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx" && staging) await staging();
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  // A sync tool removes the file while the write stages its file.
+  await writeFile(real, "Original text\n");
+  staging = () => rm(real);
+  await writeMarkdown(join(linkedFolder, "note.md"), "Mine\n", "lf", "Original text\n");
+  expect(await readFile(real, "utf8")).toBe("Mine\n");
+
+  // The file is gone from the start.
+  await rm(real);
+  staging = null;
+  await writeMarkdown(join(linkedFolder, "note.md"), "Mine\n", "lf", "Original text\n");
+  expect(await readFile(real, "utf8")).toBe("Mine\n");
+
+  // Another program also points the folder's link elsewhere meanwhile.
+  staging = async () => {
+    await rm(real);
+    await rm(linkedFolder);
+    await symlink(otherFolder, linkedFolder);
+  };
+  await expect(writeMarkdown(join(linkedFolder, "note.md"), "Mine\n", "lf", "Mine\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(existsSync(real)).toBe(false);
+  expect(await readdir(otherFolder)).toEqual([]);
+});
+
 it("retries a Windows sharing lock that the check before the rename meets", async () => {
   const { destination } = await fixture();
   simulatePlatform("win32");

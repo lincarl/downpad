@@ -146,39 +146,48 @@ function nullIfMissing(error: unknown): null {
  *  so the write replaces the file the path names. A symbolic link that another program
  *  pointed at another file does not. A file that was missing when the write resolved
  *  the path, and so kept its folders and spelling as given, counts as `target` once it
- *  is back. A path that names nothing leads to `target` only when the write resolved it
- *  as itself, and not when it is now a symbolic link to a missing file. */
-export async function leadsTo(path: string, target: string): Promise<boolean> {
+ *  is back. A path that names nothing leads to `target` when the write resolved it as
+ *  itself or its folder still leads to the folder of `target`, so a file that another
+ *  program removes meanwhile is written again where it was. A symbolic link to a
+ *  missing file in the file's place passes here, and the last look of `mayReplace`
+ *  refuses it. */
+async function leadsTo(path: string, target: string): Promise<boolean> {
   const requested = absolutePath(path);
   const now = await realpath(requested).catch(nullIfMissing);
   if (now !== null) return now === target || now === (await realpath(target).catch(nullIfMissing));
-  return requested === target && !(await lstat(requested).catch(nullIfMissing));
+  if (requested === target) return true;
+  const folder = await realpath(dirname(requested)).catch(nullIfMissing);
+  return folder !== null && join(folder, basename(requested)) === target;
 }
 
-/** Whether an automatic write may replace `target`, the real file that `path` led to
- *  when the write resolved it. The file must hold `text`, as its LF form without a BOM,
- *  or be gone, and `path` must still lead to it. A file that is not valid UTF-8 does not
- *  hold the text. The last step, as close to the rename as it can be, looks at the
+/** Whether a guarded write may replace `target`, the real file that `path` led to when
+ *  the write resolved it. `holds` answers whether the file's bytes, or null for a file
+ *  that is gone, are still the version the write was made over, and `path` must still
+ *  lead to the file. The last step, as close to the rename as it can be, looks at the
  *  directory entry that the rename replaces without following a symbolic link. It must
  *  still be the very file read, with the time and size it had then, or still be absent,
  *  so a program that replaced the file during the read, the comparison or the path
- *  lookup, also with a symbolic link, is noticed. */
-async function mayReplace(path: string, target: string, text: string): Promise<boolean> {
+ *  lookup, also with a symbolic link, is noticed. An error that `holds` throws ends the
+ *  check with that error. */
+export async function mayReplace(path: string, target: string, holds: (bytes: Buffer | null) => boolean): Promise<boolean> {
   const version = await readVersion(target).catch(nullIfMissing);
-  if (version) {
-    let content: string;
-    try {
-      ({ content } = decodeMarkdown(version.bytes));
-    } catch {
-      return false;
-    }
-    if (content !== text) return false;
-  }
+  if (!holds(version?.bytes ?? null)) return false;
   if (!(await leadsTo(path, target))) return false;
   const now = await lstat(target).catch(nullIfMissing);
   if (!version || !now) return !version && !now;
   return now.dev === version.info.dev && now.ino === version.info.ino
     && now.mtimeMs === version.info.mtimeMs && now.size === version.info.size;
+}
+
+/** Whether `bytes` hold `text`, as its LF form without a BOM, or the file is gone
+ *  (null). Bytes that are not valid UTF-8 do not hold the text. */
+function holdsMarkdown(bytes: Buffer | null, text: string): boolean {
+  if (bytes === null) return true;
+  try {
+    return decodeMarkdown(bytes).content === text;
+  } catch {
+    return false;
+  }
 }
 
 /** The file's modification time and size, which tell whether it changed without
@@ -211,7 +220,7 @@ export function writeMarkdown(path: string, content: string, eol: Eol, expectedC
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
     const beforeReplace = expectedContent === undefined
       ? undefined
-      : (target: string) => mayReplace(path, target, expectedContent);
+      : (target: string) => mayReplace(path, target, (bytes) => holdsMarkdown(bytes, expectedContent));
     try {
       const modifiedMs = await writeAtomic(path, text, { beforeReplace });
       return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };

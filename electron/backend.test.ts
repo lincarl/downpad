@@ -22,6 +22,33 @@ async function fixtureDirectory(): Promise<string> {
 }
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
+/** Runs `change` once during the next settings write, either while the write stages
+ *  its file or while it reads settings.toml a last time before the rename, after
+ *  the bytes are read. The caller restores the spies. */
+function changeDuringSettingsWrite(moment: "stage" | "last read", change: () => void): void {
+  let staged = false;
+  let changed = false;
+  const run = () => {
+    if (changed) return;
+    changed = true;
+    change();
+  };
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      staged = true;
+      if (moment === "stage") run();
+    }
+    return originalOpen(...args);
+  });
+  const decode = TextDecoder.prototype.decode;
+  vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: Parameters<TextDecoder["decode"]>) {
+    if (staged && moment === "last read") run();
+    return decode.apply(this, args);
+  });
+  syncBuiltinESMExports();
+}
+
 describe("Markdown file operations", () => {
   it("opens BOM/CRLF documents and saves full replacements with their original EOL", async () => {
     const directory = await fixtureDirectory();
@@ -271,23 +298,21 @@ describe("Existing settings and history compatibility", () => {
     await expect(updateSettingsFile(path, {}, ["editorFontScale"])).rejects.toThrow("Settings changes must be an object.");
   });
 
-  it("puts the changes onto a version that another program writes while the write runs", async () => {
+  it.each([
+    { moment: "stage", when: "stages its file" },
+    { moment: "last read", when: "reads the file a last time" },
+  ] as const)("puts the changes onto a version that another program saves while the write $when", async ({ moment }) => {
     const directory = await fixtureDirectory();
     const path = join(directory, "settings.toml");
+    const replacement = join(directory, "replacement.toml");
     await writeFile(path, 'theme = "light"\n');
-    const originalReadFile = filesystem.readFile;
-    let reads = 0;
-    const reading = vi.spyOn(filesystem, "readFile").mockImplementation(async (...args: Parameters<typeof filesystem.readFile>) => {
-      reads += 1;
-      // Another editor saves the file after the first read, before the rename.
-      if (reads === 2) await writeFile(path, 'theme = "light"\neditorWidthPx = 900\n');
-      return originalReadFile(...args);
-    });
-    syncBuiltinESMExports();
+    await writeFile(replacement, 'theme = "light"\neditorWidthPx = 900\n');
     try {
+      // Another editor saves the file by a rename, as editors do.
+      changeDuringSettingsWrite(moment, () => synchronousFilesystem.renameSync(replacement, path));
       expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: 900 });
     } finally {
-      reading.mockRestore();
+      vi.restoreAllMocks();
       syncBuiltinESMExports();
     }
     expect(parse(await readFile(path, "utf8"))).toMatchObject({ theme: "dark", editorWidthPx: 900 });
@@ -302,31 +327,27 @@ describe("Existing settings and history compatibility", () => {
     await writeFile(real, 'theme = "light"\n');
     await writeFile(decoy, 'theme = "light"\n');
     await symlink(real, path);
-    const originalReadFile = filesystem.readFile;
-    let reads = 0;
-    const reading = vi.spyOn(filesystem, "readFile").mockImplementation(async (...args: Parameters<typeof filesystem.readFile>) => {
-      reads += 1;
-      if (reads === 2) {
-        // Before the rename, another program edits the real file and points
-        // the link at a file with the text the write read first.
-        await writeFile(real, 'theme = "light"\neditorWidthPx = 900\n');
-        await rm(path);
-        await symlink(decoy, path);
-      }
-      return originalReadFile(...args);
-    });
-    syncBuiltinESMExports();
     try {
+      // Before the rename, another program edits the real file and points
+      // the link at a file with the text the write read first.
+      changeDuringSettingsWrite("stage", () => {
+        synchronousFilesystem.writeFileSync(real, 'theme = "light"\neditorWidthPx = 900\n');
+        synchronousFilesystem.rmSync(path);
+        synchronousFilesystem.symlinkSync(decoy, path);
+      });
       await updateSettingsFile(path, { theme: "dark" });
     } finally {
-      reading.mockRestore();
+      vi.restoreAllMocks();
       syncBuiltinESMExports();
     }
     expect(await readFile(real, "utf8")).toBe('theme = "light"\neditorWidthPx = 900\n');
     expect(parse(await readFile(decoy, "utf8"))).toMatchObject({ theme: "dark" });
   });
 
-  it.skipIf(process.platform === "win32")("puts the changes onto the file settings.toml leads to when its link changes during the write", async () => {
+  it.skipIf(process.platform === "win32").each([
+    { moment: "stage", when: "stages its file" },
+    { moment: "last read", when: "reads the file a last time" },
+  ] as const)("puts the changes onto the file settings.toml leads to when its link changes while the write $when", async ({ moment }) => {
     const directory = await fixtureDirectory();
     const first = join(directory, "first.toml");
     const second = join(directory, "second.toml");
@@ -334,23 +355,15 @@ describe("Existing settings and history compatibility", () => {
     await writeFile(first, 'theme = "light"\n');
     await writeFile(second, 'theme = "light"\neditorWidthPx = 900\n');
     await symlink(first, path);
-    const originalOpen = filesystem.open;
-    let moved = false;
-    const opening = vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
-      if (args[1] === "wx" && !moved) {
-        // While the write stages its file, another program points the link
-        // at another settings file.
-        moved = true;
-        await rm(path);
-        await symlink(second, path);
-      }
-      return originalOpen(...args);
-    });
-    syncBuiltinESMExports();
     try {
+      // Another program points the link at another settings file.
+      changeDuringSettingsWrite(moment, () => {
+        synchronousFilesystem.rmSync(path);
+        synchronousFilesystem.symlinkSync(second, path);
+      });
       expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: 900 });
     } finally {
-      opening.mockRestore();
+      vi.restoreAllMocks();
       syncBuiltinESMExports();
     }
     expect(await readFile(first, "utf8")).toBe('theme = "light"\n');
