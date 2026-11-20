@@ -104,8 +104,9 @@ function setup() {
     },
     save: async () => true,
   };
-  const coordinator = new FileDropCoordinator({ store, files, editorHost, showActiveDoc: async () => {} });
-  return { store, log, files, editorHost, coordinator, droppedOn, saveAs, turn };
+  const reportFailure = vi.fn<(message: string) => void>();
+  const coordinator = new FileDropCoordinator({ store, files, editorHost, showActiveDoc: async () => {}, reportFailure });
+  return { store, log, files, editorHost, coordinator, droppedOn, saveAs, turn, reportFailure };
 }
 
 /** A promise and the function that resolves it. */
@@ -199,22 +200,29 @@ describe("FileDropCoordinator", () => {
     ]);
   });
 
-  it("opens the other Markdown files of a drop when one cannot be opened", async () => {
-    const { log, files, coordinator } = setup();
+  it("opens the other Markdown files of a drop when some cannot be opened, and names those in one notice", async () => {
+    const { log, files, coordinator, reportFailure } = setup();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const open = files.openPath;
     files.openPath = async (path) => {
-      if (path === "/drop/gone.md") throw new Error("missing");
+      if (path.includes("gone")) throw new Error("Error invoking remote method 'command': Error: ENOENT: no such file or directory, open '/drop/gone.md'");
       await open(path);
     };
-    await coordinator.handle(["/drop/gone.md", "/drop/b.md"], point);
+    await coordinator.handle(["/drop/gone.md", "/drop/b.md", "/drop/gone too.md"], point);
     expect(log).toEqual(["open /drop/b.md"]);
     expect(logged).toHaveBeenCalledWith("Downpad: could not open gone.md", expect.any(Error));
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “gone.md”, “gone too.md”. The file or folder does not exist.");
     logged.mockRestore();
   });
 
-  it("puts the files after one that cannot be read into the document, then opens the Markdown files", async () => {
-    const { log, coordinator } = setup();
+  it("shows no notice for a drop whose files all open and go in", async () => {
+    const { coordinator, reportFailure } = setup();
+    await coordinator.handle(["/drop/pic.png", "/drop/a.md"], point);
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("puts the files after one that cannot be read into the document, names it in a notice, then opens the Markdown files", async () => {
+    const { log, coordinator, reportFailure } = setup();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const read = disk.readImageBytes.getMockImplementation()!;
     disk.readImageBytes.mockImplementation(async (path) => {
@@ -231,6 +239,7 @@ describe("FileDropCoordinator", () => {
     ]);
     expect(disk.writeAttachment).toHaveBeenCalledWith("/docs/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
     expect(logged).toHaveBeenCalledWith("Downpad: could not insert gone.png", expect.any(Error));
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not add “gone.png”. missing");
     logged.mockRestore();
   });
 

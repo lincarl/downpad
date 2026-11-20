@@ -21,9 +21,17 @@ export function fileClipboardEntries(path: string, platform: NodeJS.Platform): R
   return entries;
 }
 
+let pendingCopy: Promise<void> = Promise.resolve();
+
 /** Put the file at `path` on the clipboard as copied files. Throws when
- *  `path` is not a file. */
-export async function copyFileToClipboard(path: string): Promise<void> {
-  if (!(await stat(path)).isFile()) throw new Error("Only a file can be copied.");
-  await clipboard.write([new ClipboardItem(fileClipboardEntries(path, process.platform))]);
+ *  `path` is not a file. Copies run one at a time, in the order they were
+ *  asked for, so a slow look at one file, as on a network drive, cannot put
+ *  it on the clipboard after a file copied later. */
+export function copyFileToClipboard(path: string): Promise<void> {
+  const copy = pendingCopy.then(async () => {
+    if (!(await stat(path)).isFile()) throw new Error("Only a file can be copied.");
+    await clipboard.write([new ClipboardItem(fileClipboardEntries(path, process.platform))]);
+  });
+  pendingCopy = copy.then(() => {}, () => {});
+  return copy;
 }

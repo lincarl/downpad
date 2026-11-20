@@ -97,6 +97,9 @@ describe("Copy file", () => {
     if (during === "untilSaved") files.untilSaved.mockImplementationOnce(failMove);
     else desktopEvents.settled.mockImplementationOnce(failMove);
     await copy();
+    // Copy file went through both waits before it stopped.
+    expect(files.untilSaved).toHaveBeenCalledOnce();
+    expect(desktopEvents.settled).toHaveBeenCalledOnce();
     expect(files.save).not.toHaveBeenCalled();
     expect(clipboard.copy).not.toHaveBeenCalled();
     expect(store.get().banner).toBeNull();

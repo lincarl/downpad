@@ -388,10 +388,12 @@ export class FileService {
     }
     const { snapshot } = request;
     // Until the write settles, the file may hold the old saved text or the new
-    // one, so an edit back to either still counts as unsaved.
+    // one, so an edit back to either still counts as unsaved. A Save As to
+    // another file leaves the document's own file alone, so its saved text
+    // stays known, and a report of that file still compares with it.
     const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
     request.write = { path, replaced: previous };
-    this.store.patchDocById(tabId, { savedMarkdown: null });
+    if (path === originalPath) this.store.patchDocById(tabId, { savedMarkdown: null });
     let meta: FileMeta;
     try {
       meta = await (expectedContent === undefined

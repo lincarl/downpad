@@ -466,7 +466,8 @@ describe("saving document snapshots", () => {
   it("takes for its own write only a save that is writing the document's file", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;
-    const text = store.get().doc.markdown;
+    const { markdown: text, savedMarkdown: saved } = store.get().doc;
+    expect(saved).not.toBeNull();
     // A Save As waits for its dialog, and then writes another file.
     const dialog = deferred<string | null>();
     const write = deferred<FileMeta>();
@@ -478,8 +479,12 @@ describe("saving document snapshots", () => {
     dialog.resolve("/moved/notes.md");
     await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
     expect(files.isOwnWrite(tabId, text)).toBe(false);
+    // The document's own file is not written, so its saved text stays known
+    // and a report of that file still compares with it.
+    expect(store.get().doc.savedMarkdown).toBe(saved);
     write.resolve({ modifiedMs: 300 });
     expect(await saveAs).toBe(true);
+    expect(store.get().doc).toMatchObject({ filePath: "/moved/notes.md", savedMarkdown: text, isDirty: false });
   });
 
   it("tells when no save that can move a document is under way, through the Save As dialog and its write", async () => {

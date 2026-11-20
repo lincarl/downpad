@@ -16,7 +16,7 @@ import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
 import { failureReason } from "../ipc/failureReason";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
-import type { Tab, EditorLayout } from "../state/types";
+import type { BannerState, Tab, EditorLayout } from "../state/types";
 import { layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "../shell/pagePresses";
@@ -63,6 +63,9 @@ export class AppRuntime {
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
   private closingTabs = false;
+  /** The error notice of the last save the user asked for that failed, with
+   *  its tab, so that a later save of that tab that succeeds takes it down. */
+  private saveFailure: { tabId: string; banner: BannerState } | null = null;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -142,6 +145,9 @@ export class AppRuntime {
       files: this.files,
       editorHost: this.editorHost,
       showActiveDoc: () => this.showActiveDoc(),
+      reportFailure: (message) => {
+        if (!this.disposed) this.store.set({ banner: { kind: "error", message } });
+      },
     });
     // Images pasted into the document view go in as the files of a drop at
     // the caret, so one that waits for a Save As never goes into a hidden or
@@ -226,11 +232,11 @@ export class AppRuntime {
   }
 
   saveDocument(): void {
-    this.run(() => this.saveByUser(false), SAVE_FAILED);
+    this.run(() => this.saveByUser(false));
   }
 
   saveDocumentAs(): void {
-    this.run(() => this.saveByUser(true), SAVE_FAILED);
+    this.run(() => this.saveByUser(true));
   }
 
   /** Upload the active document (the toolbar's Upload). */
@@ -395,7 +401,7 @@ export class AppRuntime {
       findPrevious: () => this.findBar.prev(),
       showFind: (mode) => this.findBar.show(mode),
       focusRecentSearch: () => this.recentView.focusSearch(),
-      save: (saveAs) => this.run(() => this.saveByUser(saveAs), SAVE_FAILED),
+      save: (saveAs) => this.run(() => this.saveByUser(saveAs)),
       open: () => this.run(() => this.files.openViaDialog(), OPEN_FAILED),
       create: () => this.run(() => this.files.newDocument()),
       print: () => void this.printActiveDocument(),
@@ -413,11 +419,28 @@ export class AppRuntime {
    *  when saving is on. Autosave and the saves of a close prompt do not
    *  upload. */
   private async saveByUser(saveAs: boolean): Promise<void> {
-    const tabId = this.store.get().activeTabId;
-    const saved = await (saveAs ? this.files.saveAs() : this.files.save());
+    const { tabs, activeTabId } = this.store.get();
+    const tab = tabs.find((candidate) => candidate.id === activeTabId);
+    if (!tab) return;
+    let saved: boolean;
+    try {
+      saved = await (saveAs ? this.files.saveAs() : this.files.save());
+    } catch (error) {
+      console.error("Downpad: file action failed", error);
+      if (this.disposed) return;
+      // The notice names the document, as another tab can be in front by now.
+      const banner: BannerState = { kind: "error", message: `Downpad could not save “${tabLabel(tab)}”. ${failureReason(error)}`.trimEnd() };
+      this.saveFailure = { tabId: tab.id, banner };
+      this.store.set({ banner });
+      return;
+    }
+    if (!saved) return;
+    if (this.saveFailure?.tabId === tab.id) {
+      if (this.store.get().banner === this.saveFailure.banner) this.store.set({ banner: null });
+      this.saveFailure = null;
+    }
     // Upload the saved document, also if another tab became active meanwhile.
-    const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
-    if (saved) this.git.afterUserSave(path);
+    this.git.afterUserSave(this.store.get().tabs.find((candidate) => candidate.id === tab.id)?.doc.filePath ?? null);
   }
 
   /** Re-mount the WYSIWYG editor so changed serializer style (§5.16) or link
@@ -703,7 +726,6 @@ export class AppRuntime {
 
 /** What the error notice of a failed file action says before the reason. */
 const OPEN_FAILED = "Downpad could not open the file.";
-const SAVE_FAILED = "Downpad could not save the document.";
 const CLOSE_FAILED = "Downpad could not close the document.";
 
 /** Run a reload of the active document and scroll its new editors to where

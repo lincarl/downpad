@@ -13,6 +13,7 @@ import type { FileService } from "../files/FileService";
 import { resolveImageSrc, storeBesideDocument, type ImageStoreContext } from "../images/imageStore";
 import { readImageBytes, writeAttachment } from "../ipc/commands";
 import type { ImageBytes } from "../ipc/contracts";
+import { failureReason } from "../ipc/failureReason";
 import { baseName, classifyDrop } from "../paste/dropHandler";
 import { mdImage, mdLink } from "../paste/mdLink";
 import type { Store } from "../state/store";
@@ -23,6 +24,15 @@ export interface FileDropDependencies {
   editorHost: Pick<EditorHost, "aimDrop" | "aimPaste" | "insertDropped" | "releaseDrop" | "untilInFront" | "untilTurn">;
   /** Show the active tab's document in the editor, leaving the Recent view. */
   showActiveDoc(): Promise<void>;
+  /** Show the user an error notice. */
+  reportFailure(message: string): void;
+}
+
+/** A dropped or pasted file, by its name, that did not go in or open, with
+ *  the error that says why. */
+interface Failure {
+  name: string;
+  error: unknown;
 }
 
 /** Opens or inserts the files of each desktop drop. */
@@ -35,7 +45,8 @@ export class FileDropCoordinator {
    * into the document they were dropped on. Images embed where they were
    * dropped, or at the caret, and other files are copied into the attachments
    * folder and linked the same way. A file that cannot be read or stored is
-   * logged and left out, and the others still go in. A file only goes into
+   * left out, and the others still go in. An error notice then names the
+   * files left out, and another one the Markdown files that did not open. A file only goes into
    * the document in front, so those files go in first and the Markdown files
    * open once they are in. A new tab would otherwise put the document behind
    * it while they are read. Those files go in after the files of earlier
@@ -57,7 +68,12 @@ export class FileDropCoordinator {
         await this.untilInsertedOrBehind(inserted, drop.tabId);
       }
     } finally {
-      for (const path of markdown) await this.openMarkdown(path);
+      const failures: Failure[] = [];
+      for (const path of markdown) {
+        const error = await this.openMarkdown(path);
+        if (error !== null) failures.push({ name: baseName(path), error });
+      }
+      this.report("open", failures);
     }
     await inserted;
   }
@@ -113,19 +129,31 @@ export class FileDropCoordinator {
 
   /** Put each file of a drop or paste into its document with `insert`, in
    *  order, and end the drop. A file that cannot be read or stored is logged
-   *  by its `name` and left out, and the files after it still go in. */
+   *  by its `name` and left out, and the files after it still go in. One
+   *  error notice then names the files left out. */
   private async insertEach<T>(drop: FileDrop, files: readonly T[], name: (file: T) => string, insert: (file: T) => Promise<void>): Promise<void> {
+    const failures: Failure[] = [];
     try {
       for (const file of files) {
         try {
           await insert(file);
         } catch (error) {
           console.error(`Downpad: could not insert ${name(file)}`, error);
+          failures.push({ name: name(file), error });
         }
       }
     } finally {
       this.dependencies.editorHost.releaseDrop(drop);
+      this.report("add", failures);
     }
+  }
+
+  /** Tell the user in one error notice which files Downpad could not add to
+   *  the document, or open, with the reason of the first one. */
+  private report(action: "add" | "open", failures: readonly Failure[]): void {
+    if (failures.length === 0) return;
+    const names = failures.map(({ name }) => `“${name}”`).join(", ");
+    this.dependencies.reportFailure(`Downpad could not ${action} ${names}. ${failureReason(failures[0].error)}`.trimEnd());
   }
 
   /** Resolve once a drop's files are in, or once the document they were
@@ -153,12 +181,15 @@ export class FileDropCoordinator {
   /** Open a dropped Markdown file as `FileService.openPath` does (§5.19). It
    *  opens in a tab of its own, or in place of an empty untitled document, or
    *  shows its tab if it is open already. A file that cannot be opened leaves
-   *  the drop's other Markdown files to open. */
-  private async openMarkdown(path: string): Promise<void> {
+   *  the drop's other Markdown files to open. Resolves with the error of a
+   *  file that did not open, and null otherwise. */
+  private async openMarkdown(path: string): Promise<unknown> {
     try {
       await this.dependencies.files.openPath(path);
+      return null;
     } catch (error) {
       console.error(`Downpad: could not open ${baseName(path)}`, error);
+      return error ?? new Error("The file could not be opened.");
     }
   }
 

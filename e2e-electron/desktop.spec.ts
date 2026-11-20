@@ -5133,15 +5133,19 @@ test("a Save that cannot write says why, and the document stays open and unsaved
   // A nonexistent parent exercises the real write failure path.
   await chooseSave(path.join(directory, "missing-parent", "failed.md"));
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page.getByRole("alert")).toHaveText("Downpad could not save the document. The file or folder does not exist.");
-  await expect(page.getByRole("tab", { name: /Untitled/ })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “Untitled”. The file or folder does not exist.");
+  const untitled = page.getByRole("tab", { name: /Untitled/ });
+  await expect(untitled.locator(".tab-file-icon.is-dirty")).toBeVisible();
   await expect(editor).toHaveText("Keep this document.");
 
+  // A save of the document that works takes the notice down.
   const saved = path.join(directory, "saved-after-failure.md");
   await chooseSave(saved);
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(saved, "utf8").catch(() => null)).toBe("Keep this document.\n");
   await expect(page.getByRole("tab", { name: /saved-after-failure\.md/ })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
 test("Save on close keeps edits typed while the write is pending", async () => {
