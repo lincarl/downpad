@@ -1,8 +1,10 @@
 // The source view's language and syntax colours for a JSON or YAML file.
-// Token colours follow VS Code's default theming (Light+ and Dark+), as the
-// Markdown view's do. app.css supplies them per document theme as `--md-src-*`
-// variables, and a YAML file takes the colours of a Markdown file's
-// frontmatter.
+// app.css supplies the colours per document theme as `--md-src-*` variables.
+// JSON follows VS Code's default theming (Light+ and Dark+), as the Markdown
+// view does. A YAML file takes the colours of a Markdown file's frontmatter:
+// keys, quoted text, comments and anchors each have a colour, and every plain
+// value has one colour, because the parser does not tell a plain number,
+// `true` or `null` from other plain text. VS Code colours those apart.
 
 import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";

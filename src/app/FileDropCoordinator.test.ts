@@ -346,6 +346,41 @@ describe("FileDropCoordinator", () => {
     }
   });
 
+  it("puts no file into an untitled document that the drop's own save made a JSON file, and stores no copy beside it", async () => {
+    const { store, log, files, coordinator, reportFailure } = setup();
+    store.patchDoc({ filePath: null, markdown: "{}" });
+    // The drop asks where to save the untitled document, and the user names it config.json.
+    files.save = async () => {
+      store.patchDoc({ filePath: "/docs/config.json" });
+      return true;
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await coordinator.handle(["/drop/report.pdf"], point);
+    logged.mockRestore();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “report.pdf”. A JSON file takes no dropped files. Drop them on a Markdown document.",
+    );
+  });
+
+  it("puts no image into a document that was saved as YAML while the image was read", async () => {
+    const { store, log, coordinator, reportFailure } = setup();
+    const read = held<ImageBytes>();
+    disk.readImageBytes.mockReturnValueOnce(read.promise);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handled = coordinator.handle(["/drop/pic.png"], point);
+    await settle();
+    store.patchDoc({ filePath: "/docs/notes.yaml" });
+    read.resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "image/png" });
+    await handled;
+    logged.mockRestore();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “pic.png”. A YAML file takes no dropped files. Drop them on a Markdown document.",
+    );
+  });
+
   it("puts a file dropped on the Recent view into no JSON file behind it", async () => {
     const { store, log, coordinator, reportFailure } = setup();
     store.patchDoc({ filePath: "/data/settings.json" });

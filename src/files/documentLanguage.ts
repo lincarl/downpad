@@ -50,9 +50,10 @@ export function documentLanguage(path: string | null): DocumentLanguage {
   return "markdown";
 }
 
-/** The filters of an open or save dialog. A save dialog adds its first
- *  filter's extension to a name typed without one, so the filter of
- *  `language` comes first, and a JSON document is not saved as `name.md`. */
+/** The filters of an open or save dialog. On Windows a save dialog adds its
+ *  first filter's extension to a name typed without one, so the filter of
+ *  `language` comes first, and a JSON document is not saved as `name.md`.
+ *  Other systems return the name as typed (`FileService.withOwnExtension`). */
 export function fileFilters(language: DocumentLanguage = "markdown"): FileDialogFilter[] {
   const of = (name: DocumentLanguage): FileDialogFilter => ({ name: LANGUAGE_NAMES[name], extensions: [...EXTENSIONS[name]] });
   const filters = [of("markdown"), { name: "Text", extensions: [...TEXT_EXTENSIONS] }, of("json"), of("yaml")];

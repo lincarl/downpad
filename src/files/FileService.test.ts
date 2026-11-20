@@ -12,6 +12,7 @@ const native = vi.hoisted(() => ({
   writeFile: vi.fn<(path: string, content: string, eol: Eol, expectedContent?: string) => Promise<FileMeta>>(),
   watchFile: vi.fn<(path: string) => Promise<void>>(),
   recordFileOpened: vi.fn<(path: string, openedAtMs: number) => Promise<unknown>>(),
+  pathExists: vi.fn<(path: string) => Promise<boolean>>(),
   ask: vi.fn<(message: string) => Promise<boolean>>(),
   confirmSaveChanges: vi.fn<(message: string) => Promise<"save" | "discard" | "cancel">>(),
   saveDialog: vi.fn<(options: unknown) => Promise<string | null>>(),
@@ -23,6 +24,7 @@ vi.mock("../ipc/commands", () => ({
   writeFile: native.writeFile,
   watchFile: native.watchFile,
   recordFileOpened: native.recordFileOpened,
+  pathExists: native.pathExists,
 }));
 vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog, confirmSaveChanges: native.confirmSaveChanges }));
 
@@ -61,6 +63,7 @@ beforeEach(() => {
   native.watchFile.mockResolvedValue();
   native.recordFileOpened.mockResolvedValue({});
   native.ask.mockResolvedValue(true);
+  native.pathExists.mockResolvedValue(false);
   native.confirmSaveChanges.mockResolvedValue("save");
   native.saveDialog.mockResolvedValue(null);
 });
@@ -445,6 +448,63 @@ describe("saving document snapshots", () => {
     store.patchDoc({ filePath: null });
     await files.save();
     expect(offered()[0]).toBe("Markdown");
+  });
+
+  it("gives a name chosen without an extension the extension of a JSON or YAML file, so the file keeps its kind", async () => {
+    const { store, files } = setup();
+    store.patchDoc({ filePath: "/docs/settings.json" });
+    native.saveDialog.mockResolvedValueOnce("/docs/backup");
+    expect(await files.saveAs()).toBe(true);
+    expect(native.writeFile).toHaveBeenLastCalledWith("/docs/backup.json", "# Original content\n", "lf");
+    expect(store.get().doc.filePath).toBe("/docs/backup.json");
+    expect(native.ask).not.toHaveBeenCalled();
+
+    // A YAML file keeps the extension it has, and a dot typed last is not doubled.
+    store.patchDoc({ filePath: "/docs/compose.yml" });
+    native.saveDialog.mockResolvedValueOnce("C:\\docs\\copy.");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("C:\\docs\\copy.yml");
+
+    // A name with an extension is the user's choice of kind, and a Markdown
+    // document keeps a bare name, which reads as Markdown anyway.
+    native.saveDialog.mockResolvedValueOnce("/docs/notes.md");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/notes.md");
+    native.saveDialog.mockResolvedValueOnce("/docs/README");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/README");
+    expect(native.pathExists).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks before the name with the added extension replaces a file, which the dialog did not ask about", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    store.patchDoc({ filePath: "/docs/settings.json" });
+    native.pathExists.mockResolvedValue(true);
+
+    native.ask.mockResolvedValueOnce(false);
+    native.saveDialog.mockResolvedValueOnce("/docs/backup");
+    expect(await files.saveAs()).toBe(false);
+    expect(native.ask).toHaveBeenCalledExactlyOnceWith("“backup.json” already exists. Replace it?", expect.objectContaining({ okLabel: "Replace" }));
+    expect(native.pathExists).toHaveBeenCalledExactlyOnceWith("/docs/backup.json");
+    expect(native.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc.filePath).toBe("/docs/settings.json");
+    // A Save As the user backed out of, as one cancelled in its dialog.
+    expect(files.failedMoves(tabId)).toBe(1);
+
+    native.ask.mockResolvedValueOnce(true);
+    native.saveDialog.mockResolvedValueOnce("/docs/backup");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/backup.json");
+  });
+
+  it("refuses a name whose added extension makes it a file open in another tab", async () => {
+    const { store, files } = setup();
+    store.patchDoc({ filePath: "/docs/settings.json" });
+    store.addTab({ ...store.get().doc, filePath: "/docs/other.json" });
+    native.saveDialog.mockResolvedValueOnce("/docs/settings");
+    await expect(files.saveAs()).rejects.toThrow("“settings.json” is open in another tab");
+    expect(native.writeFile).not.toHaveBeenCalled();
   });
 
   it("counts a Save As that fails or is cancelled and a cancelled save of an untitled document, but not a plain save that fails", async () => {

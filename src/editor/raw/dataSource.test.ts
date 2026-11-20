@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { redo, undo } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 import { highlightTree, tags as t } from "@lezer/highlight";
@@ -41,7 +42,9 @@ describe("YAML colours", () => {
     const classes = ["# Settings", "name", "Downpad", '"Quoted"', "&base"].map((text) => map.get(text));
     for (const value of classes) expect(value).not.toBe("");
     expect(new Set(classes).size).toBe(5);
-    // A nested key is a key too, and a number is a plain value.
+    // A nested key is a key too. The parser does not tell a plain number
+    // from other plain text, so every plain value has the one value colour,
+    // as in a Markdown file's frontmatter.
     expect(map.get("port")).toBe(map.get("name"));
     expect(map.get("80")).toBe(map.get("Downpad"));
   });
@@ -103,9 +106,17 @@ describe("RawEditor languages", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(editor.hasProse()).toBe(false);
 
+    // The edit from before the switch is still an undo step.
+    undo(view);
+    expect(editor.getText()).toBe("a: 1\n");
+    redo(view);
+    expect(editor.getText()).toBe("b: 2\na: 1\n");
+
     editor.setLanguage("markdown");
     expect(topNode(view)).toBe("Document");
     expect(editor.hasProse()).toBe(true);
+    undo(view);
+    expect(editor.getText()).toBe("a: 1\n");
   });
 
   it("turns native spelling on again for a document that becomes Markdown, and off for one that becomes data", () => {

@@ -3,7 +3,7 @@ import { File, Star } from "lucide-react";
 import type { FileStat } from "@/ipc/contracts";
 import { cn } from "@/lib/utils";
 import { formatSize } from "@/document/docSize";
-import { fileName, formatDate, plainSnippet } from "./recentFormat";
+import { fileName, formatDate, snippetText } from "./recentFormat";
 import type { RecentRowModel } from "./recentListing";
 
 // Mervin's brand colours, the same in both themes.
@@ -94,7 +94,7 @@ export function RecentRow({
           </span>
           {hit && (
             <span className={cn("recent-snippet leading-[23px]", SMALL_TEXT, strongInk, SELECTED_INK)}>
-              <Highlighted text={snippetText(hit.snippet, snippetQuery)} query={snippetQuery} />
+              <Highlighted text={snippetText(hit.snippet, snippetQuery, entry.path)} query={snippetQuery} />
             </span>
           )}
           {/* Right-to-left with a leading LRM puts the ellipsis on the left, so the
@@ -154,13 +154,6 @@ export function RecentRow({
       </button>
     </div>
   );
-}
-
-/** The snippet as plain text, unless the query itself contains Markdown markup
- *  (the match would then vanish with it) or nothing readable would remain. */
-function snippetText(snippet: string, query: string): string {
-  if (/[|#*_`>[\]]/.test(query)) return snippet;
-  return plainSnippet(snippet) || snippet;
 }
 
 /** A section caption: "Favorites" on top, "Recent" between the sections. */

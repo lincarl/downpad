@@ -139,11 +139,8 @@ export class FileDropCoordinator {
     // file was dropped on. Reading the file comes after. With no document open,
     // create one first so the drop has somewhere to go, and from the Recent
     // view show the document. The files then go in at its caret.
-    const { activeTabId, view, doc } = store.get();
-    const language = documentLanguage(doc.filePath);
-    if (activeTabId && language !== "markdown") {
-      throw new Error(`A ${LANGUAGE_NAMES[language]} file takes no dropped files. Drop them on a Markdown document.`);
-    }
+    const { activeTabId, view } = store.get();
+    if (activeTabId) this.refuseDataFile(activeTabId);
     let drop: FileDrop | null = null;
     if (!activeTabId) await files.newDocument();
     else if (view === "recent") await this.dependencies.showActiveDoc();
@@ -239,6 +236,16 @@ export class FileDropCoordinator {
     }
   }
 
+  /** Throw the error that says why no file goes into a tab's document, if it
+   *  is a JSON or YAML file. A file goes in as a Markdown image or link,
+   *  which would break such a file. */
+  private refuseDataFile(tabId: string): void {
+    const language = documentLanguage(this.tabFilePath(tabId));
+    if (language !== "markdown") {
+      throw new Error(`A ${LANGUAGE_NAMES[language]} file takes no dropped files. Drop them on a Markdown document.`);
+    }
+  }
+
   /** The saved path of an open tab's document, or null if it is untitled or closed. */
   private tabFilePath(tabId: string): string | null {
     return this.dependencies.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
@@ -315,6 +322,9 @@ export class FileDropCoordinator {
       if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
       return;
     }
+    // The save can have made the document a JSON or YAML file, which gets
+    // no copy of the file beside it either.
+    this.refuseDataFile(drop.tabId);
     const { bytes } = await readImageBytes(path);
     const link = await storeBesideDocument(this.dropDocument(drop), async (getFilePath) => {
       const filePath = getFilePath();
@@ -328,8 +338,10 @@ export class FileDropCoordinator {
   /** Insert a dropped or pasted file's Markdown into its document, once that
    *  document is in front. If the document is closed first, it gets nothing
    *  and no other document gets it instead. A copy in the attachments folder
-   *  stays there. */
+   *  stays there. A document that was saved as a JSON or YAML file while the
+   *  file was on its way takes nothing, and the file counts as left out. */
   private async insertDropped(drop: FileDrop, markdown: string, name: string): Promise<void> {
+    this.refuseDataFile(drop.tabId);
     if (!(await this.dependencies.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(name);
   }
 }
