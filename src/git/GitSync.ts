@@ -586,7 +586,9 @@ export class GitSync {
   }
 
   /** Save the user's version as a new file in this tab, then put the latest
-   *  version of the original in the next tab. */
+   *  version of the original in the next tab. The notice says that the
+   *  version is saved, and whether the latest version is open, has no such
+   *  file or could not be opened. */
   private async saveMineAs(path: string, generation: number): Promise<void> {
     const tab = this.activeTab();
     if (!tab || tab.doc.filePath !== path) return;
@@ -611,16 +613,32 @@ export class GitSync {
       await this.finish(path, result, "get-latest", false, generation);
       return;
     }
-    await this.deps.files.openBeside(path, tab.id).catch((error: unknown) => {
-      if (this.isCurrent(generation)) this.showError(errorText(error));
-    });
+    // When a collaborator deleted or renamed the file, the latest version has
+    // none to open. A look that fails counts as a file, whose read then says
+    // what is wrong.
+    const missing = !(await pathExists(path).catch(() => true));
+    let openFailure: string | null = null;
+    if (!missing) {
+      try {
+        await this.deps.files.openBeside(path, tab.id);
+      } catch (error) {
+        openFailure = errorText(error);
+      }
+    }
     await this.reloadChanged(result.changedOpenFiles);
     if (!this.isCurrent(generation)) return;
     this.conflict = null;
-    this.showNotice({
-      kind: "info",
-      message: `Your version is saved as “${fileName(newPath)}”. The latest “${fileName(path)}” is open in the next tab.`,
-    });
+    const savedAs = `Your version is saved as “${fileName(newPath)}”`;
+    if (openFailure !== null) {
+      this.showError(`${savedAs}, but Downpad could not open the latest “${fileName(path)}”. ${openFailure}`);
+    } else {
+      this.showNotice({
+        kind: "info",
+        message: missing
+          ? `${savedAs}. “${fileName(path)}” is not in the latest version, because someone deleted or renamed it.`
+          : `${savedAs}. The latest “${fileName(path)}” is open in the next tab.`,
+      });
+    }
     await this.refresh(generation);
   }
 

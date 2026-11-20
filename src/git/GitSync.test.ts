@@ -742,6 +742,29 @@ describe("GitSync conflicts", () => {
     expect(deps.files.openBeside).toHaveBeenCalledWith(PATH, store.get().activeTabId);
     expect(store.get().banner?.message).toBe("Your version is saved as “notes (my version).md”. The latest “notes.md” is open in the next tab.");
   });
+
+  it.each([
+    {
+      when: "the latest version has no such file",
+      act: () => git.pathExists.mockResolvedValue(false),
+      banner: { kind: "info", message: "Your version is saved as “notes (my version).md”. “notes.md” is not in the latest version, because someone deleted or renamed it." },
+    },
+    {
+      when: "the latest version cannot be opened",
+      act: () => deps.files.openBeside.mockRejectedValue(new Error("Disk unavailable")),
+      banner: { kind: "error", message: "Your version is saved as “notes (my version).md”, but Downpad could not open the latest “notes.md”. Disk unavailable" },
+    },
+  ])("says that the user's version is saved, and what happened, when $when", async ({ act, banner }) => {
+    deps.askConflict.mockResolvedValue("save-as");
+    deps.files.saveAs.mockImplementation(async () => {
+      store.patchDoc({ filePath: "/work/notes (my version).md", isDirty: false });
+      return true;
+    });
+    git.discard.mockResolvedValue(done());
+    act();
+    await sync.check({ force: true });
+    expect(store.get().banner).toEqual(banner);
+  });
 });
 
 describe("GitSync upload", () => {
