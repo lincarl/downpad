@@ -104,9 +104,11 @@ function setup() {
     },
     save: async () => true,
   };
-  const reportFailure = vi.fn<(message: string) => void>();
+  /** Whether the last notice still shows, which a test can end. */
+  const notice = { shows: true };
+  const reportFailure = vi.fn<(message: string) => () => boolean>(() => () => notice.shows);
   const coordinator = new FileDropCoordinator({ store, files, editorHost, showActiveDoc: async () => {}, reportFailure });
-  return { store, log, files, editorHost, coordinator, droppedOn, saveAs, turn, reportFailure };
+  return { store, log, files, editorHost, coordinator, droppedOn, saveAs, turn, reportFailure, notice };
 }
 
 /** A promise and the function that resolves it. */
@@ -181,8 +183,11 @@ describe("FileDropCoordinator", () => {
     expect(store.get().activeTabId).toBe(droppedOn);
   });
 
-  it("names the Markdown files that did not open at once, and the files left out once they had their turn, when those wait for their tab", async () => {
-    const { store, files, coordinator, droppedOn, reportFailure } = setup();
+  it.each([
+    { first: "still shows", shows: true, later: "Downpad could not add “pic.png”. The file or folder does not exist. Downpad could not open “bad.md”. The file is not valid UTF-8." },
+    { first: "is gone", shows: false, later: "Downpad could not add “pic.png”. The file or folder does not exist." },
+  ])("names the Markdown files that did not open at once, and the files left out later, with the Markdown files again when the first notice $first", async ({ shows, later }) => {
+    const { store, files, coordinator, droppedOn, reportFailure, notice } = setup();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const otherTab = store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
     store.activateTab(droppedOn);
@@ -203,11 +208,39 @@ describe("FileDropCoordinator", () => {
     store.activateTab(otherTab);
     await settle();
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “bad.md”. The file is not valid UTF-8.");
+    notice.shows = shows;
     failRead();
     await handled;
     expect(reportFailure).toHaveBeenCalledTimes(2);
-    expect(reportFailure).toHaveBeenLastCalledWith("Downpad could not add “pic.png”. The file or folder does not exist.");
+    expect(reportFailure).toHaveBeenLastCalledWith(later);
     logged.mockRestore();
+  });
+
+  it("shows no second notice when the files that waited all went in", async () => {
+    const { store, files, coordinator, droppedOn, reportFailure } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const otherTab = store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    store.activateTab(droppedOn);
+    let finishRead = () => {};
+    disk.readImageBytes.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRead = () => resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "image/png" });
+      }),
+    );
+    const open = files.openPath;
+    files.openPath = async (path) => {
+      if (path === "/drop/bad.md") throw new Error("The file is not valid UTF-8.");
+      await open(path);
+    };
+    const handled = coordinator.handle(["/drop/pic.png", "/drop/bad.md"], point);
+    await settle();
+    store.activateTab(otherTab);
+    await settle();
+    finishRead();
+    store.activateTab(droppedOn);
+    await handled;
+    logged.mockRestore();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “bad.md”. The file is not valid UTF-8.");
   });
 
   it("opens every Markdown file of a drop of only Markdown files, aiming nothing", async () => {
@@ -246,7 +279,10 @@ describe("FileDropCoordinator", () => {
 
   it("names the files left out and the Markdown files that did not open in one notice, after the last file opened, each with its reason", async () => {
     const { log, files, coordinator, reportFailure } = setup();
-    reportFailure.mockImplementation(() => { log.push("notice"); });
+    reportFailure.mockImplementation(() => {
+      log.push("notice");
+      return () => true;
+    });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const read = disk.readImageBytes.getMockImplementation()!;
     disk.readImageBytes.mockImplementation(async (path) => {

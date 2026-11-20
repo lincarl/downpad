@@ -24,8 +24,9 @@ export interface FileDropDependencies {
   editorHost: Pick<EditorHost, "aimDrop" | "aimPaste" | "insertDropped" | "releaseDrop" | "untilInFront" | "untilTurn">;
   /** Show the active tab's document in the editor, leaving the Recent view. */
   showActiveDoc(): Promise<void>;
-  /** Show the user an error notice. */
-  reportFailure(message: string): void;
+  /** Show the user an error notice. Returns a function that tells whether
+   *  that notice still shows. */
+  reportFailure(message: string): () => boolean;
 }
 
 /** A dropped or pasted file, by its name, that Downpad could not add to the
@@ -54,9 +55,10 @@ export class FileDropCoordinator {
    * folder and linked the same way. A file that cannot be read or stored is
    * left out, and the others still go in. Once its Markdown files open, one
    * error notice names the files left out and the Markdown files that did
-   * not open, with the reason of each. Files that wait for their document
-   * to be in front again name the ones left out in a notice of their own
-   * then. A file only goes into
+   * not open, with the reason of each. Files that are not in by then, such
+   * as ones that wait for their document to be in front again, name the
+   * ones left out in a later notice, which names the Markdown files again
+   * while the first notice still shows. A file only goes into
    * the document in front, so those files go in first and the Markdown files
    * open once they are in. A new tab would otherwise put the document behind
    * it while they are read. Those files go in after the files of earlier
@@ -95,8 +97,11 @@ export class FileDropCoordinator {
     // so the Markdown files that did not open do not wait with them.
     if (await settledBy(inserted)) this.report([...(await inserted), ...unopened]);
     else {
-      this.report(unopened);
-      this.report(await inserted);
+      const stillShown = this.report(unopened);
+      const leftOut = await inserted;
+      // The later notice names the Markdown files again while the first one
+      // still shows, so it does not take them away before they were read.
+      if (leftOut.length > 0) this.report(stillShown?.() ? [...leftOut, ...unopened] : leftOut);
     }
   }
 
@@ -173,8 +178,9 @@ export class FileDropCoordinator {
 
   /** Tell the user in one error notice which files Downpad could not add to
    *  the document or open. Files that failed the same way share a sentence
-   *  with their reason. */
-  private report(failures: readonly Failure[]): void {
+   *  with their reason. Returns a function that tells whether the notice
+   *  still shows, or null when there was nothing to tell. */
+  private report(failures: readonly Failure[]): (() => boolean) | null {
     const groups = new Map<string, { action: string; reason: string; names: string[] }>();
     for (const { action, name, error } of failures) {
       const reason = failureReason(error);
@@ -183,9 +189,9 @@ export class FileDropCoordinator {
       group.names.push(`“${name}”`);
       groups.set(key, group);
     }
-    if (groups.size === 0) return;
+    if (groups.size === 0) return null;
     const sentences = [...groups.values()].map(({ action, reason, names }) => `Downpad could not ${action} ${names.join(", ")}. ${reason}`.trimEnd());
-    this.dependencies.reportFailure(sentences.join(" "));
+    return this.dependencies.reportFailure(sentences.join(" "));
   }
 
   /** Resolve once a drop's files are in, or once the document they were

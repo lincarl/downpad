@@ -29,6 +29,7 @@ import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
 import { copyActiveFile } from "./copyFile";
+import { SaveFailureNotice } from "./saveFailureNotice";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
 import { GitSync } from "../git/GitSync";
 
@@ -63,10 +64,8 @@ export class AppRuntime {
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
   private closingTabs = false;
-  /** The error notice of the last save the user asked for that failed, with
-   *  its tab, so that a later write of the document that works takes the
-   *  notice down (`clearSaveFailure`). */
-  private saveFailure: { tabId: string; banner: BannerState } | null = null;
+  /** The error notice of a save the user asked for that failed. */
+  private readonly saveFailure: SaveFailureNotice;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -89,7 +88,8 @@ export class AppRuntime {
       showActiveDoc: () => this.showActiveDoc(),
       reloadActiveDoc: () => this.reloadActiveDoc(),
     };
-    this.files = new FileService(store, presenter, (tabId) => this.clearSaveFailure(tabId));
+    this.saveFailure = new SaveFailureNotice(store);
+    this.files = new FileService(store, presenter, (tabId) => this.saveFailure.saved(tabId));
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).
     this.editorHost.setSaveHandler(() => this.files.save());
@@ -147,7 +147,9 @@ export class AppRuntime {
       editorHost: this.editorHost,
       showActiveDoc: () => this.showActiveDoc(),
       reportFailure: (message) => {
-        if (!this.disposed) this.store.set({ banner: { kind: "error", message } });
+        const banner: BannerState = { kind: "error", message };
+        if (!this.disposed) this.store.set({ banner });
+        return () => this.store.get().banner === banner;
       },
     });
     // Images pasted into the document view go in as the files of a drop at
@@ -416,17 +418,6 @@ export class AppRuntime {
     void this.startup.maybePromptDefaultHandler();
   }
 
-  /** Take the notice of a failed save down once a write of its document
-   *  worked: a save the user asks for, autosave or the save before Copy file
-   *  (`FileService`'s `onSaved`). A notice that was dismissed or replaced
-   *  stays as it is. */
-  private clearSaveFailure(tabId: string): void {
-    const failure = this.saveFailure;
-    if (failure?.tabId !== tabId) return;
-    this.saveFailure = null;
-    if (this.store.get().banner === failure.banner) this.store.set({ banner: null });
-  }
-
   /** Save the active document as the user asked, then upload it when Upload
    *  when saving is on. Autosave and the saves of a close prompt do not
    *  upload. */
@@ -440,13 +431,10 @@ export class AppRuntime {
     } catch (error) {
       console.error("Downpad: file action failed", error);
       if (this.disposed) return;
-      // The notice names the document, as another tab can be in front by
-      // now, and by the name it has now, as a Save As ahead of this save can
-      // have given it another file.
+      // The notice names the document by the name it has now, as a Save As
+      // ahead of this save can have given it another file.
       const now = this.store.get().tabs.find((candidate) => candidate.id === tab.id) ?? tab;
-      const banner: BannerState = { kind: "error", message: `Downpad could not save “${tabLabel(now)}”. ${failureReason(error)}`.trimEnd() };
-      this.saveFailure = { tabId: tab.id, banner };
-      this.store.set({ banner });
+      this.saveFailure.show(tab.id, tabLabel(now), error);
       return;
     }
     if (!saved) return;

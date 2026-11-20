@@ -443,13 +443,15 @@ export class FileService {
           },
     );
     // Requests queued during Save As follow the owner's new path, retaining
-    // the content each caller asked to save.
+    // the content each caller asked to save. A document that kept the newer
+    // version on disk kept its path too.
+    const kept = newerOnDisk ? originalPath : path;
     for (const pending of this.pendingSaves) {
-      if (pending.tabId === tabId && pending.expectedPath === originalPath) pending.expectedPath = path;
+      if (pending.tabId === tabId && pending.expectedPath === originalPath) pending.expectedPath = kept;
     }
     if (this.store.get().activeTabId === tabId) {
       this.store.set({ saveStatus: { lastSavedAt: Date.now(), autosaving: false } });
-      if (path !== originalPath) this.watch(path);
+      if (!newerOnDisk && path !== originalPath) this.watch(path);
     }
   }
 

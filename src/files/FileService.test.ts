@@ -523,9 +523,14 @@ describe("saving document snapshots", () => {
     // Another program writes the file after this save, and the app records
     // that version, which the save's answer must not replace.
     store.patchDocById(tabId, { savedMarkdown: "# Theirs\n", modifiedMs: 900, isDirty: true });
+    // A Save queued meanwhile still writes, to the path the document keeps.
+    const queued = files.save();
     write.resolve({ modifiedMs: 300 });
     expect(await saveAs).toBe(true);
-    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Theirs\n", modifiedMs: 900, isDirty: true });
+    expect(store.get().doc).toMatchObject({ filePath: "C:\\Docs\\notes.md", savedMarkdown: "# Theirs\n", modifiedMs: 900, isDirty: true });
+    expect(await queued).toBe(true);
+    expect(native.writeFile).toHaveBeenCalledTimes(2);
+    expect(native.writeFile.mock.calls[1][0]).toBe("C:\\Docs\\notes.md");
   });
 
   it("takes for its own write only a save that is writing the document's file", async () => {
