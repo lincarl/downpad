@@ -76,8 +76,8 @@ function ConflictDialog({ options, finish }: { options: ConflictDialogOptions; f
                 changes. Downpad cannot combine them.
               </p>
               <p className="m-0 text-ink-soft">
-                Discard your changes to get their version, or save your version as a new file. Downpad keeps a copy
-                of discarded changes for 30 days.
+                Discard your changes to get their version, or save your version as a new file. Upload&apos;s menu
+                offers a copy of discarded changes for 30 days.
               </p>
             </div>
           </DialogDescription>

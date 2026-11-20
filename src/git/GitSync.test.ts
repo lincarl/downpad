@@ -3,9 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileService } from "../files/FileService";
 import { sameFilePath } from "../files/pathIdentity";
-import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
+import type { DiscardedCopy, GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
 import { createAppStore } from "../app/createAppStore";
 import type { Store } from "../state/store";
+import { blankDoc } from "../state/types";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import type { ConflictChoice, ConflictDialogOptions } from "./ConflictDialog";
 import { GIT_GET_LATEST, GIT_OPEN_COPY, GIT_RESOLVE, GitSync, type GitSyncDependencies } from "./GitSync";
@@ -17,6 +18,7 @@ const git = vi.hoisted(() => ({
   upload: vi.fn<(path: string, openFiles: GitOpenFile[]) => Promise<GitSyncResult>>(),
   discard: vi.fn<(path: string, openFiles: GitOpenFile[]) => Promise<GitSyncResult>>(),
   keepCopy: vi.fn<(path: string, content: string) => Promise<string>>(),
+  listCopies: vi.fn<(path: string) => Promise<DiscardedCopy[]>>(),
 }));
 
 vi.mock("../ipc/commands", () => ({
@@ -26,6 +28,7 @@ vi.mock("../ipc/commands", () => ({
   gitUpload: git.upload,
   gitDiscard: git.discard,
   keepDiscardedCopy: git.keepCopy,
+  listDiscardedCopies: git.listCopies,
 }));
 
 const PATH = "/work/notes.md";
@@ -91,6 +94,7 @@ function enableGit(gitEnabled: boolean): void {
 beforeEach(() => {
   window.downpadDesktop = { platform: "linux" } as unknown as NonNullable<typeof window.downpadDesktop>;
   for (const mock of Object.values(git)) mock.mockReset();
+  git.listCopies.mockResolvedValue([]);
   store = createAppStore();
   deps = {
     store,
@@ -465,6 +469,30 @@ describe("GitSync checks", () => {
     expect(deps.askConflict).toHaveBeenCalledTimes(1);
     expect(store.get().banner).toMatchObject({ actions: [{ id: GIT_RESOLVE }] });
   });
+
+  it("lists the kept copies of the document in front, and opens one only while Downpad keeps it", async () => {
+    const copy = { path: "/profile/discarded-changes/a1/notes.md", keptMs: Date.now() };
+    git.status.mockResolvedValue(clean);
+    git.listCopies.mockImplementation(async (path) => (path === PATH ? [copy] : []));
+    openDocument();
+    await sync.check();
+    expect(store.get().git?.discardedCopies).toEqual([copy]);
+    store.addTab({ ...blankDoc(), filePath: "/work/other.md" });
+    await sync.check();
+    expect(store.get().git).toMatchObject({ path: "/work/other.md", discardedCopies: [] });
+    store.activateTab(store.get().tabs[0].id);
+    await sync.check();
+    expect(store.get().git?.discardedCopies).toEqual([copy]);
+
+    await sync.openDiscardedCopy(PATH, copy.path);
+    expect(deps.files.openPath).toHaveBeenCalledExactlyOnceWith(copy.path);
+    // A copy can go meanwhile, as after 30 days, also while the menu shows it.
+    git.listCopies.mockResolvedValue([]);
+    await sync.openDiscardedCopy(PATH, copy.path);
+    expect(deps.files.openPath).toHaveBeenCalledTimes(1);
+    expect(store.get().banner?.message).toBe("This copy of your discarded changes is gone. Downpad keeps such copies for 30 days.");
+    expect(store.get().git?.discardedCopies).toEqual([]);
+  });
 });
 
 describe("GitSync conflicts", () => {
@@ -472,9 +500,14 @@ describe("GitSync conflicts", () => {
     openDocument({ unsaved: true });
     git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
     git.preview.mockResolvedValue({ clean: false });
+    // The copies kept so far, newest first, as the main process lists them.
+    git.listCopies.mockImplementation(async () => {
+      const kept = await Promise.allSettled(git.keepCopy.mock.results.map((result) => result.value));
+      return kept.flatMap((entry) => (entry.status === "fulfilled" ? [{ path: entry.value, keptMs: 0 }] : [])).reverse();
+    });
   });
 
-  it("keeps a copy of discarded changes and shows the latest version", async () => {
+  it("keeps a copy of discarded changes, shows the latest version, and offers the copy in Upload's menu", async () => {
     deps.askConflict.mockResolvedValue("discard");
     git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
     git.discard.mockResolvedValue(done([PATH]));
@@ -483,9 +516,47 @@ describe("GitSync conflicts", () => {
     expect(git.discard).toHaveBeenCalledWith(PATH, []);
     expect(deps.files.replaceFromDisk).toHaveBeenCalledTimes(1);
     expect(store.get().doc.markdown).toBe("# Theirs\n");
-    expect(store.get().banner).toMatchObject({ kind: "info", actions: [{ id: GIT_OPEN_COPY }] });
+    expect(store.get().banner).toEqual({
+      kind: "info",
+      message: "Your changes to “notes.md” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.",
+      actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }],
+    });
+    expect(store.get().git?.discardedCopies).toEqual([{ path: "/profile/discarded-changes/notes.md", keptMs: 0 }]);
     sync.handleBannerAction(GIT_OPEN_COPY);
-    expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md");
+    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md"));
+  });
+
+  it.each([
+    {
+      when: "another tab is in front",
+      act: () => store.addTab({ ...blankDoc(), filePath: "/work/other.md" }),
+      message: "Your changes to “notes.md” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “notes.md” is in front.",
+    },
+    {
+      when: "its tab is closed",
+      act: () => store.closeTab(store.get().activeTabId!),
+      message: "Your changes to “notes.md” are discarded. Upload's menu offers a copy of them for 30 days while “notes.md” is in front.",
+    },
+  ])("says where the latest version went when $when by the time Git is done", async ({ act, message }) => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockImplementation(async () => {
+      act();
+      return done([PATH]);
+    });
+    await sync.check({ force: true });
+    expect(store.get().banner?.message).toBe(message);
+  });
+
+  it.each([
+    { put: "put the file back", changed: [PATH], message: "Your changes to “notes.md” are discarded, and Upload's menu offers a copy of them for 30 days. Get latest failed. No connection." },
+    { put: "changed nothing", changed: [], message: "Get latest failed. No connection." },
+  ])("says whether the changes are discarded when Git $put but could not get the latest version", async ({ changed, message }) => {
+    deps.askConflict.mockResolvedValue("discard");
+    git.keepCopy.mockResolvedValue("/profile/discarded-changes/notes.md");
+    git.discard.mockResolvedValue({ kind: "failed", message: "No connection.", changedOpenFiles: changed });
+    await sync.check({ force: true });
+    expect(store.get().banner?.message).toBe(message);
   });
 
   it("keeps a newer copy when the user typed while Git ran", async () => {
@@ -501,7 +572,7 @@ describe("GitSync conflicts", () => {
     expect(deps.files.replaceFromDisk).toHaveBeenCalledTimes(2);
     expect(store.get().doc.markdown).toBe("# Theirs\n");
     sync.handleBannerAction(GIT_OPEN_COPY);
-    expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/latest.md");
+    await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/latest.md"));
   });
 
   it("leaves a document that was saved under another name while Git ran alone", async () => {

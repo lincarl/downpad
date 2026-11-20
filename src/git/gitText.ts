@@ -11,6 +11,22 @@ const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
   ["minute", 60_000],
 ];
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** The labels of kept copies of discarded changes in Upload's menu, such
+ *  as "20 Nov, 09:05" in local time. Unlike `timeAgo`, they stay true while
+ *  the menu shows. Copies kept in the same minute get the second as well,
+ *  as in "20 Nov, 09:05:41", so that the user can tell them apart. */
+export function keptTimes(timesMs: readonly number[]): string[] {
+  const twoDigits = (value: number): string => String(value).padStart(2, "0");
+  const minutes = timesMs.map((timeMs) => {
+    const date = new Date(timeMs);
+    return `${date.getDate()} ${MONTHS[date.getMonth()]}, ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+  });
+  return minutes.map((label, index) =>
+    minutes.indexOf(label) === minutes.lastIndexOf(label) ? label : `${label}:${twoDigits(new Date(timesMs[index]).getSeconds())}`);
+}
+
 /** "5 minutes ago", "yesterday", or "just now" for less than a minute. */
 export function timeAgo(timeMs: number, nowMs = Date.now()): string {
   const elapsed = Math.max(0, nowMs - timeMs);

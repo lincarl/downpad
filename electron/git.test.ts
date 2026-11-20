@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFi
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
+import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, linkedPaths, listDiscardedCopies, mergeText, previewCombine, pushWasOutrun, upload } from "./git";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -424,16 +424,36 @@ describe("pushWasOutrun", () => {
   });
 });
 
-describe("keepDiscardedCopy", () => {
-  it("keeps a copy and deletes copies older than 30 days", async () => {
+describe("discarded copies", () => {
+  const past = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+
+  it("keeps each document's copies apart and lists them newest first", async () => {
     const data = join(root, "profile");
-    const old = join(data, "discarded-changes", "old notes.md");
-    await mkdir(join(data, "discarded-changes"), { recursive: true });
-    await writeFile(old, "Old\n");
-    const past = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
-    await utimes(old, past, past);
+    const first = await keepDiscardedCopy(data, notes(), "First\n");
+    await utimes(first, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    const second = await keepDiscardedCopy(data, notes(), "Second\n");
+    // Another document with the same file name, and one being written.
+    await keepDiscardedCopy(data, join(theirs, "notes.md"), "Theirs\n");
+    await writeFile(join(first, "..", ".notes.md.1234.tmp"), "Half");
+    expect(await readFile(second, "utf8")).toBe("Second\n");
+    expect((await listDiscardedCopies(data, notes())).map((copy) => copy.path)).toEqual([second, first]);
+    expect(await listDiscardedCopies(data, join(mine, "other.md"))).toEqual([]);
+  });
+
+  it("lists no copy older than 30 days, and deletes such copies when it keeps the next one", async () => {
+    const data = join(root, "profile");
+    const expired = await keepDiscardedCopy(data, notes(), "Old\n");
+    await utimes(expired, past, past);
+    expect(await listDiscardedCopies(data, notes())).toEqual([]);
+    // A copy that an earlier version kept beside the documents' folders, and
+    // a document whose only copy expired.
+    const earlier = join(data, "discarded-changes", "2026-01-01T00-00-00-000Z notes.md");
+    await writeFile(earlier, "Earlier\n");
+    await utimes(earlier, past, past);
+    const other = await keepDiscardedCopy(data, join(theirs, "notes.md"), "Other\n");
+    await utimes(other, past, past);
     const copy = await keepDiscardedCopy(data, notes(), "Mine\n");
-    expect(await readFile(copy, "utf8")).toBe("Mine\n");
-    expect(await readdir(join(data, "discarded-changes"))).toEqual([copy.split(/[\\/]/).pop()]);
+    expect(await readdir(join(data, "discarded-changes"))).toEqual([copy.split(/[\\/]/).at(-2)]);
+    expect((await listDiscardedCopies(data, notes())).map((entry) => entry.path)).toEqual([copy]);
   });
 });

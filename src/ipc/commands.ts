@@ -4,6 +4,7 @@ import { desktopBridge, invoke } from "./bridge";
 import type { Eol, RecentEntry, Settings } from "../state/types";
 import type {
   DefaultHandler,
+  DiscardedCopy,
   FileStat,
   FileMeta,
   FilePayload,
@@ -324,4 +325,9 @@ export function gitDiscard(path: string, openFiles: GitOpenFile[]): Promise<GitS
 /** Keep a copy of changes about to be discarded. Returns the copy's path. */
 export function keepDiscardedCopy(path: string, content: string): Promise<string> {
   return invoke("keep_discarded_copy", { path, content });
+}
+
+/** The kept copies of the document's discarded changes, newest first. */
+export function listDiscardedCopies(path: string): Promise<DiscardedCopy[]> {
+  return invoke("list_discarded_copies", { path });
 }

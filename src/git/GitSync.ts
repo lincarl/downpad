@@ -2,15 +2,24 @@
 // service checks the active document's repository for remote changes, gets
 // them without asking when nothing that is not uploaded would change, and
 // otherwise tells the user: a notice when the changes combine with theirs, or
-// the conflict dialog when they touch the same parts. The Git work itself
-// runs in the main process (electron/git.ts).
+// the conflict dialog when they touch the same parts. It also lists the kept
+// copies of the active document's discarded changes for Upload's menu. The
+// Git work itself runs in the main process (electron/git.ts).
 
 import type { Store } from "../state/store";
 import type { FileService } from "../files/FileService";
 import type { BannerState, GitState, Tab } from "../state/types";
 import { hasUnsavedChanges } from "../state/types";
-import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
-import { gitDiscard, gitGetLatest, gitPreviewCombine, gitStatus, gitUpload, keepDiscardedCopy } from "../ipc/commands";
+import type { DiscardedCopy, GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
+import {
+  gitDiscard,
+  gitGetLatest,
+  gitPreviewCombine,
+  gitStatus,
+  gitUpload,
+  keepDiscardedCopy,
+  listDiscardedCopies,
+} from "../ipc/commands";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "../files/pathIdentity";
 import { openConflictDialog, type ConflictDialogOptions, type ConflictChoice } from "./ConflictDialog";
@@ -68,8 +77,9 @@ export class GitSync {
   private readonly conflictsShown = new Set<string>();
   /** The overlapping change that the notice's Resolve opens. */
   private conflict: { path: string; author: string; timeMs: number } | null = null;
-  /** The copy of discarded changes that the notice's Open copy opens. */
-  private discardedCopy: string | null = null;
+  /** The copy of discarded changes that the notice's Open copy opens, and
+   *  the document whose changes it holds. */
+  private discardedCopy: { document: string; copy: string } | null = null;
   /** The notice this service shows, which it may replace or clear. */
   private notice: BannerState | null = null;
 
@@ -154,7 +164,6 @@ export class GitSync {
   /** Handle a notice bar action. Returns false for actions of other notices. */
   handleBannerAction(id: string): boolean {
     if (!this.enabled()) return [GIT_GET_LATEST, GIT_RESOLVE, GIT_OPEN_COPY].includes(id);
-    const generation = this.generation;
     if (id === GIT_GET_LATEST) {
       this.clearNotice();
       void this.getLatest();
@@ -163,13 +172,32 @@ export class GitSync {
       this.clearNotice();
       if (conflict) void this.resolveConflict(conflict.path, conflict);
     } else if (id === GIT_OPEN_COPY) {
-      const copy = this.discardedCopy;
+      const kept = this.discardedCopy;
       this.clearNotice();
-      if (copy) void this.deps.files.openPath(copy).catch((error: unknown) => {
-        if (this.isCurrent(generation)) this.showError(errorText(error));
-      });
+      if (kept) void this.openDiscardedCopy(kept.document, kept.copy);
     } else return false;
     return true;
+  }
+
+  /** Open `copy`, a kept copy of the discarded changes of the document at
+   *  `document`, in a tab. Downpad first lists the document's copies again,
+   *  so it never opens one it no longer keeps, such as one older than 30
+   *  days, and says so instead. */
+  async openDiscardedCopy(document: string, copy: string): Promise<void> {
+    const generation = this.generation;
+    if (!this.enabled()) return;
+    const copies = await listDiscardedCopies(document).catch(() => null);
+    if (!this.isCurrent(generation)) return;
+    if (copies) {
+      this.publishCopies(document, copies);
+      if (!copies.some((entry) => sameFilePath(entry.path, copy))) {
+        this.showError("This copy of your discarded changes is gone. Downpad keeps such copies for 30 days.");
+        return;
+      }
+    }
+    await this.deps.files.openPath(copy).catch((error: unknown) => {
+      if (this.isCurrent(generation)) this.showError(errorText(error));
+    });
   }
 
   // ── Checks ───────────────────────────────────────────────────────────────
@@ -203,21 +231,24 @@ export class GitSync {
     if (status && !status.fetchError) await this.react(path, status, generation);
   }
 
-  /** Read the active document's local Git state, without asking the remote.
-   *  Returns it, or null when the document is not in a usable repository. */
+  /** Read the active document's local Git state, without asking the remote,
+   *  and the kept copies of its discarded changes. Returns the state, or null
+   *  when the document is not in a usable repository. */
   private async refresh(generation = this.generation): Promise<GitFileStatus | null> {
     const path = this.activePath();
     if (!path || !this.isCurrent(generation)) return null;
     let status: GitFileStatus | null;
+    let copies: DiscardedCopy[] | undefined;
     try {
-      status = await gitStatus(path, false);
+      // A list that cannot be read keeps the copies listed before.
+      [status, copies] = await Promise.all([gitStatus(path, false), listDiscardedCopies(path).catch(() => undefined)]);
     } catch (error) {
       console.error("Downpad: Git status failed", error);
       return null;
     }
     if (!this.isCurrent(generation) || this.activePath() !== path) return null;
     const previous = this.deps.store.get().git;
-    this.publish(path, status, previous && sameFilePath(previous.path, path) ? previous.problem : null);
+    this.publish(path, status, previous && sameFilePath(previous.path, path) ? previous.problem : null, copies);
     return status;
   }
 
@@ -331,8 +362,9 @@ export class GitSync {
   }
 
   /** Report the outcome of an Upload or Get latest, after reloading the open
-   *  documents it changed, however it ended. */
-  private async finish(path: string, result: GitSyncResult, action: Action, fromSave: boolean, generation: number): Promise<void> {
+   *  documents it changed, however it ended. `lead` goes before a failure,
+   *  to say what happened before it. */
+  private async finish(path: string, result: GitSyncResult, action: Action, fromSave: boolean, generation: number, lead = ""): Promise<void> {
     const name = fileName(path);
     await this.reloadChanged(result.changedOpenFiles);
     if (!this.isCurrent(generation)) return;
@@ -369,11 +401,11 @@ export class GitSync {
           break;
         }
         this.showError(
-          `${action === "upload" ? "Downpad cannot upload yet" : "Downpad cannot get the latest version"}, because the latest version would replace changes in ${listFiles(result.files)} that are not uploaded. Upload those changes or discard them first.`,
+          `${lead}${action === "upload" ? "Downpad cannot upload yet" : "Downpad cannot get the latest version"}, because the latest version would replace changes in ${listFiles(result.files)} that are not uploaded. Upload those changes or discard them first.`,
         );
         break;
       case "failed":
-        this.showError(`${action === "upload" ? "Upload failed" : "Get latest failed"}. ${result.message}`);
+        this.showError(`${lead}${action === "upload" ? "Upload failed" : "Get latest failed"}. ${result.message}`);
         break;
     }
     await this.refresh(generation);
@@ -414,7 +446,9 @@ export class GitSync {
   }
 
   /** Keep a copy of the user's changes, then replace the document with the
-   *  latest version. */
+   *  latest version. The notice then says where the latest version went,
+   *  since another tab can be in front by then, and that Upload's menu
+   *  offers the copy. */
   private async discardMine(path: string, generation: number): Promise<void> {
     this.deps.flush();
     const tab = this.activeTab();
@@ -429,17 +463,24 @@ export class GitSync {
     const others = this.openFiles().filter((file) => !sameFilePath(file.path, path));
     const result = await this.during(path, "getting-latest", () => gitDiscard(path, others), generation);
     if (!result) return;
-    if (result.changedOpenFiles.some((file) => sameFilePath(file, path))) {
+    const name = fileName(path);
+    const discarded = result.changedOpenFiles.some((file) => sameFilePath(file, path));
+    // Where the file that Git put back went: into the document in front, into
+    // its tab behind another one, or nowhere, as when the tab was closed.
+    let replaced: "shown" | "stored" | "gone" = "gone";
+    if (discarded) {
       // The file is put back, so the tab gets it too. Text typed since the
       // last copy was kept gets a newer copy first, so no typing is lost.
       let kept = tab.doc.markdown;
       for (let attempt = 1; ; attempt++) {
-        const replace = () => this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
-        const outcome = await replace();
+        const outcome = await this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
         if (outcome === "stored") await this.deps.discardEditors(tab.id);
-        if (outcome !== "changed") break;
+        if (outcome !== "changed") {
+          replaced = outcome;
+          break;
+        }
         if (attempt === 5) {
-          if (this.isCurrent(generation)) this.showError(`“${fileName(path)}” is still changing, so Downpad left your changes in it. A copy of them is kept.`);
+          if (this.isCurrent(generation)) this.showError(`“${name}” is still changing, so Downpad left your changes in it. Upload's menu also offers a copy of them for 30 days.`);
           return;
         }
         this.deps.flush();
@@ -455,18 +496,22 @@ export class GitSync {
     }
     const rest = { ...result, changedOpenFiles: result.changedOpenFiles.filter((file) => !sameFilePath(file, path)) };
     if (rest.kind !== "done") {
-      await this.finish(path, rest, "get-latest", false, generation);
+      // Git put the file back to its last commit but could not get the
+      // latest version, so the failure says that the changes are gone too.
+      const lead = discarded ? `Your changes to “${name}” are discarded, and Upload's menu offers a copy of them for 30 days. ` : "";
+      await this.finish(path, rest, "get-latest", false, generation, lead);
       return;
     }
     await this.reloadChanged(rest.changedOpenFiles);
     if (!this.isCurrent(generation)) return;
     this.conflict = null;
-    this.discardedCopy = copy;
-    this.showNotice({
-      kind: "info",
-      message: `Your changes to “${fileName(path)}” are discarded, and the latest version is shown. Downpad kept a copy of them.`,
-      actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }],
-    });
+    this.discardedCopy = { document: path, copy };
+    const where = {
+      shown: `Your changes to “${name}” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.`,
+      stored: `Your changes to “${name}” are discarded, and its tab has the latest version. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`,
+      gone: `Your changes to “${name}” are discarded. Upload's menu offers a copy of them for 30 days while “${name}” is in front.`,
+    };
+    this.showNotice({ kind: "info", message: where[replaced], actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });
     await this.refresh(generation);
   }
 
@@ -562,9 +607,19 @@ export class GitSync {
     if (git && sameFilePath(git.path, path)) this.deps.store.set({ git: { ...git, activity } });
   }
 
-  private publish(path: string, status: GitFileStatus | null, problem: string | null): void {
+  /** Publish the Git state of the document at `path`. Without `copies`, it
+   *  keeps the copies of discarded changes listed for that document. */
+  private publish(path: string, status: GitFileStatus | null, problem: string | null, copies?: DiscardedCopy[]): void {
     const activity = this.activityPath && sameFilePath(this.activityPath, path) ? this.activity : null;
-    this.deps.store.set({ git: status ? { path, status, activity, problem } : null });
+    const previous = this.deps.store.get().git;
+    const discardedCopies = copies ?? (previous && sameFilePath(previous.path, path) ? previous.discardedCopies : []);
+    this.deps.store.set({ git: status ? { path, status, activity, problem, discardedCopies } : null });
+  }
+
+  /** Show `copies` in Upload's menu while it is the menu of `document`. */
+  private publishCopies(document: string, copies: DiscardedCopy[]): void {
+    const git = this.deps.store.get().git;
+    if (git && sameFilePath(git.path, document)) this.deps.store.set({ git: { ...git, discardedCopies: copies } });
   }
 
   /** Reload the open documents whose files a Git action changed. Documents

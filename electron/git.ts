@@ -4,13 +4,14 @@
 // repository, and never forces anything on the remote. See docs/design.md, Git.
 
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, realpath, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { GFM, parser as markdownParser } from "@lezer/markdown";
 import { documentLanguage } from "../src/files/documentLanguage";
 import { formatGitError } from "../src/git/gitErrors";
-import type { GitFileStatus, GitOpenFile, GitOutcome, GitSyncResult } from "../src/ipc/contracts";
+import type { DiscardedCopy, GitFileStatus, GitOpenFile, GitOutcome, GitSyncResult } from "../src/ipc/contracts";
 import { readMarkdown, writeAtomic, writeMarkdown } from "./io";
 
 /** The repository, branch and remote branch of one document. */
@@ -755,21 +756,73 @@ async function takeBack(context: GitContext, commit: string, paths: string[]): P
 }
 
 /**
- * Keep a copy of changes that the user is about to discard, in
- * `<userData>/discarded-changes`, and delete copies older than
- * DISCARDED_COPY_DAYS. Returns the copy's path.
+ * Keep a copy of changes that the user is about to discard, in the
+ * document's own folder under `<userData>/discarded-changes`, and delete
+ * copies older than DISCARDED_COPY_DAYS. Returns the copy's path.
  */
 export async function keepDiscardedCopy(userData: string, path: string, content: string): Promise<string> {
-  const folder = join(userData, "discarded-changes");
+  await deleteExpiredCopies(join(userData, "discarded-changes"));
+  const folder = discardedCopyFolder(userData, path);
   await mkdir(folder, { recursive: true });
-  const cutoff = Date.now() - DISCARDED_COPY_DAYS * 24 * 60 * 60 * 1000;
-  for (const name of await readdir(folder).catch(() => [])) {
-    const entry = join(folder, name);
-    const info = await stat(entry).catch(() => null);
-    if (info?.isFile() && info.mtimeMs < cutoff) await unlink(entry).catch(() => {});
-  }
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  // The local time, which the tab of an opened copy shows as Upload's menu
+  // does, with milliseconds so that copies kept one after another keep apart.
+  const now = new Date();
+  const digits = (value: number, length = 2): string => String(value).padStart(length, "0");
+  const stamp = `${now.getFullYear()}-${digits(now.getMonth() + 1)}-${digits(now.getDate())} `
+    + `${digits(now.getHours())}.${digits(now.getMinutes())}.${digits(now.getSeconds())}.${digits(now.getMilliseconds(), 3)}`;
   const copy = join(folder, `${stamp} ${basename(path)}`);
   await writeAtomic(copy, content);
   return copy;
+}
+
+/**
+ * The copies of the document's discarded changes that are kept, newest
+ * first. A copy older than DISCARDED_COPY_DAYS is left out, also before the
+ * next copy deletes it. The copies that Downpad 0.3.14 and earlier kept
+ * directly in `discarded-changes` name only the document's file name, so
+ * they belong to no document here.
+ */
+export async function listDiscardedCopies(userData: string, path: string): Promise<DiscardedCopy[]> {
+  const folder = discardedCopyFolder(userData, path);
+  const cutoff = copyCutoff();
+  const copies = await Promise.all((await readdir(folder).catch(() => [])).map(async (name): Promise<DiscardedCopy | null> => {
+    // A copy that is still being written is a hidden temporary file.
+    if (name.startsWith(".")) return null;
+    const copy = join(folder, name);
+    const info = await stat(copy).catch(() => null);
+    return info?.isFile() && info.mtimeMs >= cutoff ? { path: copy, keptMs: info.mtimeMs } : null;
+  }));
+  return copies.filter((copy) => copy !== null).sort((a, b) => b.keptMs - a.keptMs);
+}
+
+/** The folder that keeps one document's copies, named by a hash of its path
+ *  so that documents with the same file name keep theirs apart. Windows
+ *  paths are compared without case, as Downpad's tabs compare them. */
+function discardedCopyFolder(userData: string, path: string): string {
+  const identity = process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+  return join(userData, "discarded-changes", createHash("sha256").update(identity).digest("hex").slice(0, 16));
+}
+
+/** Delete the copies older than DISCARDED_COPY_DAYS in `root`, and in the
+ *  documents' folders in it, which go once they are empty. */
+async function deleteExpiredCopies(root: string): Promise<void> {
+  const cutoff = copyCutoff();
+  const deleteIn = async (folder: string, depth: number): Promise<void> => {
+    for (const name of await readdir(folder).catch(() => [])) {
+      const entry = join(folder, name);
+      const info = await stat(entry).catch(() => null);
+      if (info?.isFile() && info.mtimeMs < cutoff) await unlink(entry).catch(() => {});
+      else if (info?.isDirectory() && depth === 0) {
+        await deleteIn(entry, 1);
+        // Fails, as it should, while the folder still holds a copy.
+        await rmdir(entry).catch(() => {});
+      }
+    }
+  };
+  await deleteIn(root, 0);
+}
+
+/** Copies kept before this time are older than DISCARDED_COPY_DAYS. */
+function copyCutoff(): number {
+  return Date.now() - DISCARDED_COPY_DAYS * 24 * 60 * 60 * 1000;
 }

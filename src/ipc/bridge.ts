@@ -4,6 +4,7 @@
 import type { Eol, RecentEntry, Settings } from "../state/types";
 import type {
   DefaultHandler,
+  DiscardedCopy,
   FileMeta,
   FilePayload,
   FileStamp,
@@ -73,6 +74,7 @@ export interface DesktopCommandArgs {
   git_upload: { path: string; openFiles: GitOpenFile[] };
   git_discard: { path: string; openFiles: GitOpenFile[] };
   keep_discarded_copy: { path: string; content: string };
+  list_discarded_copies: { path: string };
 }
 
 export interface DesktopCommandResults {
@@ -122,6 +124,7 @@ export interface DesktopCommandResults {
   git_upload: GitSyncResult;
   git_discard: GitSyncResult;
   keep_discarded_copy: string;
+  list_discarded_copies: DiscardedCopy[];
 }
 
 /** Undo or Redo, chosen in a native menu. */

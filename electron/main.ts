@@ -21,7 +21,7 @@ import { debInstallCommand, discardStagedMsi, installDeb, installedPackageKind, 
 import { Updater, type PendingUpdate } from "./updater";
 import type { PackageKind } from "./updatePlan";
 import { watchPath } from "./watchers";
-import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, previewCombine, upload } from "./git";
+import { discardChanges, getLatest, gitStatus, keepDiscardedCopy, listDiscardedCopies, previewCombine, upload } from "./git";
 import { Spellchecker } from "./spellcheck";
 import { WindowsSpelling } from "./systemSpellcheck";
 
@@ -324,6 +324,7 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "git_upload": return upload(path(args), openFiles(args));
     case "git_discard": return discardChanges(path(args), openFiles(args));
     case "keep_discarded_copy": return keepDiscardedCopy(app.getPath("userData"), path(args), string(args, "content"));
+    case "list_discarded_copies": return listDiscardedCopies(app.getPath("userData"), path(args));
     default: throw new Error("Unknown desktop command.");
   }
 }

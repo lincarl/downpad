@@ -275,6 +275,12 @@ export class AppRuntime {
     void this.git.getLatest();
   }
 
+  /** Open a kept copy of the discarded changes of the document at
+   *  `document` (Upload's menu). */
+  openDiscardedCopy(document: string, copy: string): void {
+    void this.git.openDiscardedCopy(document, copy);
+  }
+
   /** Open the find card, or close it when it is open (the toolbar's Find button). */
   toggleFind(): void {
     if (this.store.get().view === "recent" || !this.store.get().activeTabId) return;

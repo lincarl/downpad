@@ -215,6 +215,13 @@ export interface GitFileStatus {
   unfinishedOperation: boolean;
 }
 
+/** A copy of a document's changes that Discard my changes kept (Git, spec). */
+export interface DiscardedCopy {
+  path: string;
+  /** When the copy was kept, as the file's modification time. */
+  keptMs: number;
+}
+
 /** An open document, which Get latest and Upload reload or protect. */
 export interface GitOpenFile {
   path: string;

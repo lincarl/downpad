@@ -233,6 +233,35 @@ test("shows the document again when its changes are discarded while the Recent v
   await expect(shownDocument()).toContainText("My second paragraph.");
 });
 
+test("offers the copy of discarded changes in Upload's menu after its notice is gone, also after a restart", async () => {
+  await writeFile(path.join(mine, "notes.md"), NOTES.replace("Second paragraph.", "My second paragraph."));
+  await pushTheirs(NOTES.replace("Second paragraph.", "Their second paragraph."));
+  const loose = path.join(directory, "loose.md");
+  await writeFile(loose, "# Loose\n");
+  await launch(path.join(mine, "notes.md"));
+  await page.getByRole("dialog", { name: "Someone else changed this document" }).getByRole("button", { name: "Discard my changes" }).click();
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText("Your changes to “notes.md” are discarded, and the latest version is shown. Upload's menu offers a copy of them for 30 days.");
+  // Another tab takes the notice down for good.
+  await open(loose);
+  await expect(shownDocument().locator("h1")).toHaveText("Loose");
+  await expect(banner).toBeHidden();
+  await page.getByRole("tab", { name: "notes.md", exact: true }).click();
+  await expect(shownDocument()).toContainText("Their second paragraph.");
+  await expect(banner).toBeHidden();
+  const openCopy = async (): Promise<void> => {
+    await page.getByRole("button", { name: "Upload options" }).click();
+    await page.getByRole("menuitem", { name: /^Open copy from \d+ \w{3}, \d\d:\d\d$/ }).click();
+    await expect(shownDocument()).toContainText("My second paragraph.");
+  };
+  await openCopy();
+  await app!.close();
+  app = undefined;
+  await launch(path.join(mine, "notes.md"));
+  await expect(shownDocument()).toContainText("Their second paragraph.");
+  await openCopy();
+});
+
 test("saves the user's version as a new file when the changes overlap", async () => {
   await writeFile(path.join(mine, "notes.md"), NOTES.replace("Second paragraph.", "My second paragraph."));
   await pushTheirs(NOTES.replace("Second paragraph.", "Their second paragraph."));
