@@ -473,6 +473,14 @@ export class GitSync {
     // tab keeps it. A look that fails counts as a file, whose read then says
     // what is wrong.
     const missing = discarded && !(await pathExists(path).catch(() => true));
+    if (missing) {
+      // No file holds the tab's text any more, so the document counts as
+      // unsaved with no saved text known. Closing it then asks first, and
+      // autosave, which only writes over a version it knows, does not put the
+      // file back by itself. Only a save the user asks for does.
+      const holds = this.deps.store.get().tabs.some((entry) => entry.id === tab.id && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
+      if (holds) this.deps.store.patchDocById(tab.id, { isDirty: true, savedMarkdown: null });
+    }
     // Whether the document's tab took the file that Git put back. It did not
     // when the tab was closed or got another file meanwhile.
     let tookFile = false;

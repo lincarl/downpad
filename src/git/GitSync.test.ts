@@ -616,8 +616,11 @@ describe("GitSync conflicts", () => {
     await sync.check({ force: true });
     expect(store.get().banner).toEqual({ kind: "info", message, actions: [{ id: GIT_OPEN_COPY, label: "Open copy" }] });
     expect(git.pathExists).toHaveBeenCalledWith(PATH);
-    // An open tab keeps the user's text.
-    if (store.get().tabs.length === tabs) expect(store.get().doc).toMatchObject({ filePath: PATH, markdown: "# Notes\n\nMine\n" });
+    // An open tab keeps the user's text, as unsaved with no saved text
+    // known, so closing it asks and autosave leaves the file out.
+    if (store.get().tabs.length === tabs) {
+      expect(store.get().doc).toMatchObject({ filePath: PATH, markdown: "# Notes\n\nMine\n", isDirty: true, savedMarkdown: null });
+    }
     sync.handleBannerAction(GIT_OPEN_COPY);
     await vi.waitFor(() => expect(deps.files.openPath).toHaveBeenLastCalledWith("/profile/discarded-changes/notes.md"));
   });
