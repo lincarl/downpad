@@ -452,28 +452,37 @@ export class FileService {
    *  user cancels, the tab is gone or has another file by then, or `refuse`
    *  turns the path down. Throws for a path that another tab has, or that
    *  another tab's save chose and is still saving, since two tabs with one
-   *  file would each take the other's reload, notice and saves for its own. */
-  private choosePath(request: SaveRequest, originalPath: string | null): Promise<string | null> {
+   *  file would each take the other's reload, notice and saves for its own.
+   *  The turn lasts only while a dialog shows, so a look at the disk that
+   *  hangs, as on a share that stopped answering, holds up no other tab's
+   *  Save As. */
+  private async choosePath(request: SaveRequest, originalPath: string | null): Promise<string | null> {
     const { tabId, choice } = request;
-    const turn = this.dialogTurn.then(async () => {
-      const picked = await saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
-      // A JSON or YAML file keeps its kind under a name chosen without an
-      // extension, which can ask about replacing a file of the full name.
-      const path = picked ? await this.withOwnExtension(picked, originalPath) : null;
-      const { tabs } = this.store.get();
-      const afterDialog = tabs.find((tab) => tab.id === tabId)?.doc;
-      if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return null;
-      const name = path.split(/[\\/]/).pop();
-      if (tabs.some((tab) => tab.id !== tabId && samePath(tab.doc.filePath, path))) {
-        throw new Error(`“${name}” is open in another tab. Close that tab, or choose another name.`);
-      }
-      const open = new Set(tabs.map((tab) => tab.id));
-      if ([...this.pendingSaves].some((other) => other.tabId !== tabId && open.has(other.tabId) && samePath(other.chosen ?? null, path))) {
-        throw new Error(`“${name}” is being saved from another tab. Choose another name.`);
-      }
-      request.chosen = path;
-      return path;
-    });
+    const picked = await this.inDialogTurn(() => saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" }));
+    // A JSON or YAML file keeps its kind under a name chosen without an
+    // extension, which can ask about replacing a file of the full name.
+    const path = picked ? await this.withOwnExtension(picked, originalPath) : null;
+    // Nothing waits from here to the claim, so two tabs never both claim one
+    // path, also when another tab's dialog showed during the look above.
+    const { tabs } = this.store.get();
+    const afterDialog = tabs.find((tab) => tab.id === tabId)?.doc;
+    if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return null;
+    const name = path.split(/[\\/]/).pop();
+    if (tabs.some((tab) => tab.id !== tabId && samePath(tab.doc.filePath, path))) {
+      throw new Error(`“${name}” is open in another tab. Close that tab, or choose another name.`);
+    }
+    const open = new Set(tabs.map((tab) => tab.id));
+    if ([...this.pendingSaves].some((other) => other.tabId !== tabId && open.has(other.tabId) && samePath(other.chosen ?? null, path))) {
+      throw new Error(`“${name}” is being saved from another tab. Choose another name.`);
+    }
+    request.chosen = path;
+    return path;
+  }
+
+  /** Run `show`, which shows a dialog of a Save As, once no other one shows,
+   *  and resolve as it does. */
+  private inDialogTurn<T>(show: () => Promise<T>): Promise<T> {
+    const turn = this.dialogTurn.then(show);
     this.dialogTurn = turn.then(() => {}, () => {});
     return turn;
   }
@@ -558,13 +567,14 @@ export class FileService {
    *  Resolves null when the user keeps that file. Only a look that finds no
    *  file lets the save go on without asking. A failure of the look itself,
    *  as on a drive that does not answer, fails the save, since the file may
-   *  be there (`pathExists`). */
+   *  be there (`pathExists`). The look runs outside the turn for Save As
+   *  dialogs, and the question takes a turn of its own. */
   private async withOwnExtension(chosen: string, originalPath: string | null): Promise<string | null> {
     if (!originalPath || documentLanguage(originalPath) === "markdown" || extensionOf(chosen) !== "") return chosen;
     const path = `${chosen.replace(/\.$/, "")}.${extensionOf(originalPath)}`;
     if (!(await pathExists(path))) return path;
     const name = path.split(/[\\/]/).pop() ?? path;
-    const replace = await ask(`“${name}” already exists. Replace it?`, { title: "Downpad", kind: "warning", okLabel: "Replace", cancelLabel: "Cancel" });
+    const replace = await this.inDialogTurn(() => ask(`“${name}” already exists. Replace it?`, { title: "Downpad", kind: "warning", okLabel: "Replace", cancelLabel: "Cancel" }));
     return replace ? path : null;
   }
 

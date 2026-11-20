@@ -465,6 +465,26 @@ describe("saving document snapshots", () => {
     void firstSave;
   });
 
+  it("lets another tab's Save As show its dialog while a look for a file does not answer, and lets one tab claim the name", async () => {
+    const { store, files } = setup();
+    const first = store.get().activeTabId!;
+    store.patchDoc({ filePath: "/share/settings.json" });
+    // The share stops answering the look for a file of the full name.
+    const look = deferred<boolean>();
+    native.pathExists.mockReturnValueOnce(look.promise);
+    native.saveDialog.mockResolvedValueOnce("/share/backup").mockResolvedValueOnce("/share/backup.json");
+    native.writeFile.mockReturnValueOnce(new Promise(() => {}));
+    const firstSave = files.saveAs();
+    await eventually(() => expect(native.pathExists).toHaveBeenCalledOnce());
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.json", markdown: "{}\n", isDirty: true });
+    void files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledExactlyOnceWith("/share/backup.json", "{}\n", "lf"));
+    // The first Save As finds the name claimed once its look answers.
+    look.resolve(false);
+    await expect(firstSave).rejects.toThrow("“backup.json” is being saved from another tab. Choose another name.");
+    expect(files.isSaving(first)).toBe(false);
+  });
+
   it("tells about a write that has run for a while without an answer, and once it ends", async () => {
     vi.useFakeTimers();
     try {
