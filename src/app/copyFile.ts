@@ -12,7 +12,7 @@ import type { DesktopEventBindings } from "./DesktopEventBindings";
 
 export interface CopyFileDependencies {
   store: Store;
-  files: Pick<FileService, "save">;
+  files: Pick<FileService, "save" | "untilSaved">;
   editorHost: Pick<EditorHost, "flush">;
   desktopEvents: Pick<DesktopEventBindings, "settled" | "showPendingChange" | "holdSaveAfterChecks" | "recheck">;
   /** Whether Copy file can run now, as the menu asks. */
@@ -25,7 +25,8 @@ export interface CopyFileDependencies {
  *  saved first, and an untitled document asks where to save it, so the file
  *  holds what the editor shows. Cancelling that Save As copies nothing. A
  *  recovered document, whose file may have changed while Downpad was closed,
- *  asks the user to save it first, and a change on disk that is not resolved
+ *  asks the user to save it first, unless a save of it under way ends first,
+ *  which Copy file waits for, and a change on disk that is not resolved
  *  shows its notice instead. Failures show as an error notice. */
 export async function copyActiveFile(dependencies: CopyFileDependencies): Promise<void> {
   const { store, files, editorHost, desktopEvents, canCopyFile, isDisposed } = dependencies;
@@ -35,8 +36,11 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   if (!tabId) return;
   /** Whether Copy file still acts on the tab it started for. */
   const stillInFront = (): boolean => !isDisposed() && store.get().activeTabId === tabId;
-  // A comparison of the document with its file that runs, as after a switch
-  // of tabs, tells first whether the file changed.
+  // A save of the tab under way records its file first, so a recovered
+  // document that the user is saving counts as saved. A comparison of the
+  // document with its file that runs, as after a switch of tabs, then tells
+  // whether the file changed.
+  await files.untilSaved(tabId);
   await desktopEvents.settled(tabId);
   if (!stillInFront() || !canCopyFile()) return;
   // A change on disk whose bar was dismissed or replaced is still unresolved,

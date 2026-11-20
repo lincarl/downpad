@@ -19,7 +19,10 @@ function setup(doc: Partial<DocumentState>, saved = true) {
   const store = createAppStore();
   store.patchDoc({ filePath, markdown: "# Mine\n", savedMarkdown: "# Mine\n", isDirty: false, modifiedMs: 100, fileSize: 7, ...doc });
   const tabId = store.get().activeTabId!;
-  const files = { save: vi.fn<CopyFileDependencies["files"]["save"]>(async () => saved) };
+  const files = {
+    save: vi.fn<CopyFileDependencies["files"]["save"]>(async () => saved),
+    untilSaved: vi.fn<CopyFileDependencies["files"]["untilSaved"]>(async () => {}),
+  };
   const desktopEvents = {
     settled: vi.fn(async () => {}),
     showPendingChange: vi.fn(() => false),
@@ -44,6 +47,19 @@ describe("Copy file", () => {
     expect(store.get().banner).toEqual({ kind: "info", message: "Save this recovered document first. Its file may have changed while Downpad was closed." });
     expect(files.save).not.toHaveBeenCalled();
     expect(clipboard.copy).not.toHaveBeenCalled();
+  });
+
+  it("waits for a save of the tab under way, and copies a recovered document that the save recorded", async () => {
+    const { store, tabId, files, copy } = setup({ modifiedMs: 0, fileSize: undefined, savedMarkdown: null, isDirty: true });
+    files.untilSaved.mockImplementationOnce(async () => {
+      // The save that the user asked for ends and records the file.
+      store.patchDoc({ modifiedMs: 100, fileSize: 7, savedMarkdown: "# Mine\n", isDirty: false });
+    });
+    await copy();
+    expect(files.untilSaved).toHaveBeenCalledWith(tabId);
+    expect(files.save).not.toHaveBeenCalled();
+    expect(clipboard.copy).toHaveBeenCalledWith(filePath);
+    expect(store.get().banner).toBeNull();
   });
 
   it.each([

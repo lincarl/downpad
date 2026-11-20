@@ -370,6 +370,33 @@ describe("saving document snapshots", () => {
     expect(store.get().doc).toEqual(replacement);
   });
 
+  it("tells when no save of a tab is under way, also one behind another tab's save or queued during the wait", async () => {
+    const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
+    await files.untilSaved(tabId);
+
+    const writes = [deferred<FileMeta>(), deferred<FileMeta>(), deferred<FileMeta>()];
+    for (const write of writes) native.writeFile.mockReturnValueOnce(write.promise);
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.md", markdown: "# Other\n", isDirty: true });
+    const other = files.save();
+    store.activateTab(tabId);
+    const save = files.save();
+    const saved = vi.fn();
+    void files.untilSaved(tabId).then(saved);
+    // The user types and saves again while the first save waits.
+    store.patchDoc({ markdown: "# Later\n", isDirty: true });
+    const later = files.save();
+    writes[0].resolve({ modifiedMs: 300 });
+    expect(await other).toBe(true);
+    writes[1].resolve({ modifiedMs: 400 });
+    expect(await save).toBe(true);
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledTimes(3));
+    expect(saved).not.toHaveBeenCalled();
+    writes[2].resolve({ modifiedMs: 500 });
+    await eventually(() => expect(saved).toHaveBeenCalledOnce());
+    expect(await later).toBe(true);
+  });
+
   it("tells when no save that can move a document is under way, through the Save As dialog and its write", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;

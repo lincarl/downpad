@@ -588,6 +588,18 @@ describe("a file that changed on disk", () => {
     expect(bindings.holdSave()).toBe(false);
   });
 
+  it("lets a reload resolve a change when it records a third text with the change's time and size", async () => {
+    await changeOnDisk("# Theirs\n", 100);
+    expect(store.get().banner?.kind).toBe("file-changed");
+    // Another program replaces the file again and keeps its time and size,
+    // and the reload shows that text.
+    disk.fileStamp.mockResolvedValue({ modifiedMs: 100, sizeBytes: 9 });
+    disk.readFile.mockResolvedValue({ content: "# Third!\n", eol: "lf", hadBom: false, modifiedMs: 100, sizeBytes: 9 });
+    store.patchDoc({ markdown: "# Third!\n", savedMarkdown: "# Third!\n", modifiedMs: 100, fileSize: 9, isDirty: false });
+    await eventually(() => expect(store.get().banner).toBeNull());
+    expect(bindings.holdSave()).toBe(false);
+  });
+
   it("reads the file again when Keep mine makes a read out of date, and keeps the read of a real edit after a touch", async () => {
     await changeOnDisk("# Theirs\n", 200);
     let finishRead!: (payload: FilePayload) => void;

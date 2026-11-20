@@ -217,7 +217,9 @@ export class DesktopEventBindings {
       if (!recordsVersion(before.doc, state.doc)) return;
       if (!this.pendingChanges.has(tabId)) return;
       if (!this.changeOf(tabId)) this.resolve(tabId);
-      else void this.compareWithDisk(false);
+      // The file's time and size cannot tell here, as a reload can record a
+      // third text with the time and size of the change.
+      else void this.compareWithDisk(true);
     });
   }
 

@@ -277,6 +277,12 @@ export class FileService {
     while ([...this.pendingSaves].some(moves)) await this.saveQueue;
   }
 
+  /** Resolve once no save of the tab is under way, waiting for its turn or
+   *  being written, so the document shows what its last save recorded. */
+  async untilSaved(tabId: string): Promise<void> {
+    while ([...this.pendingSaves].some((request) => request.tabId === tabId)) await this.saveQueue;
+  }
+
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
   private queueSave(
     tabId: string | null,
