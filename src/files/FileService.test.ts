@@ -957,27 +957,38 @@ describe("saving before close", () => {
     expect(store.get().doc).toMatchObject({ filePath: "/local/other.md", isDirty: false });
   });
 
-  it("stops asking where to save untitled documents once a save fails, and leaves no failure unhandled", async () => {
-    const closeSaveFailed = vi.fn();
+  it("stops asking where to save untitled documents once a save fails, and tells the failure after the last dialog", async () => {
+    // The file each untitled document has when the failure is told.
+    const filesWhenTold: (string | null)[] = [];
+    const closeSaveFailed = vi.fn(() => {
+      filesWhenTold.push(...untitled.map((id) => store.get().tabs.find((tab) => tab.id === id)!.doc.filePath));
+    });
     const { store, files } = setup(true, { closeSaveFailed });
     const filed = store.get().activeTabId!;
-    store.addTab({ ...blankDoc(), markdown: "First untitled\n", isDirty: true });
-    store.addTab({ ...blankDoc(), markdown: "Second untitled\n", isDirty: true });
+    const untitled = [
+      store.addTab({ ...blankDoc(), markdown: "First untitled\n", isDirty: true }),
+      store.addTab({ ...blankDoc(), markdown: "Second untitled\n", isDirty: true }),
+    ];
     const write = deferred<FileMeta>();
     native.writeFile.mockReturnValueOnce(write.promise);
     const dialog = deferred<string | null>();
     native.saveDialog.mockReturnValueOnce(dialog.promise);
     const closing = files.confirmCloseAll();
     await eventually(() => expect(native.saveDialog).toHaveBeenCalledOnce());
-    // The document with a file fails while the first dialog shows.
+    // The document with a file fails while the first dialog shows, which
+    // would cover its notice.
     const failure = new Error("Disk unavailable");
     write.reject(failure);
-    await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closeSaveFailed).not.toHaveBeenCalled();
     dialog.resolve("/docs/first.md");
     expect(await closing).toBe("cancel");
     expect(native.writeFile).toHaveBeenLastCalledWith("/docs/first.md", "First untitled\n", "lf");
     expect(native.saveDialog).toHaveBeenCalledOnce();
-    expect(closeSaveFailed).toHaveBeenCalledOnce();
+    // Told once the first untitled document has its file, which takes down
+    // the notice that shows then (`noticeScope`).
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
+    expect(filesWhenTold).toEqual(["/docs/first.md", null]);
   });
 
   it("reports a save that fails while an untitled document's dialog shows, also when the user cancels that dialog", async () => {
@@ -1014,6 +1025,18 @@ describe("saving before close", () => {
     const failure = new Error("Disk unavailable");
     write.reject(failure);
     await eventually(() => expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(tabId, filePath, failure));
+  });
+
+  it("keeps the tabs as soon as one save fails, without waiting for one that does not return", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(true, { closeSaveFailed });
+    const failing = store.addTab({ ...blankDoc(), filePath: "/local/other.md", markdown: "# Other\n", isDirty: true });
+    // The first document is on a network drive that went away.
+    const failure = new Error("Disk full");
+    native.writeFile.mockImplementation((path) => (path === filePath ? new Promise(() => {}) : Promise.reject(failure)));
+    expect(await files.confirmCloseAll()).toBe("cancel");
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(failing, "/local/other.md", failure);
+    expect(store.get().tabs).toHaveLength(3);
   });
 
   it("keeps every tab when a close save fails, and reports the failure", async () => {

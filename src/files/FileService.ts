@@ -73,11 +73,13 @@ export interface SaveEvents {
   slowWrite?(tabId: string): void;
   /** A write that `slowWrite` told about has ended, written or not. */
   slowWriteEnded?(tabId: string): void;
-  /** A save of the tab that a close asked for failed with `error`, also
-   *  after the close stopped waiting for it. `path` is the document's file
-   *  when the save was asked for, null for an untitled document, which names
-   *  the document once its tab is closed. The close keeps its tabs open and
-   *  leaves telling the user to this event, as a failed Save does. */
+  /** A save of the tab that a close asked for failed with `error`. `path` is
+   *  the document's file when the save was asked for, null for an untitled
+   *  document, which names the document once its tab is closed. A failure
+   *  while the close is under way is told once the close ends, so that its
+   *  notice shows after the close's last dialog, and a later one at once.
+   *  The close keeps its tabs open and leaves telling the user to this
+   *  event, as a failed Save does. */
   closeSaveFailed?(tabId: string, path: string | null, error: unknown): void;
 }
 
@@ -672,13 +674,16 @@ export class FileService {
    *  together, then those of untitled documents one after another, since each
    *  shows a dialog. Cancellation or failure leaves all tabs open, including
    *  those saved first ("cancel"). A save that fails reports its failure
-   *  itself, whenever it fails, through `SaveEvents.closeSaveFailed`, so a
-   *  failure while a dialog shows, or after the close stopped waiting, is
-   *  told too, and the close never rejects for it. A Save As of a tab that
-   *  fails or is cancelled while the close is under way leaves them open too
-   *  ("cancel"), and the close's save of that tab then writes nothing. The
-   *  close waits for every save of the tabs, which never ends for a write that
-   *  does not return.
+   *  itself through `SaveEvents.closeSaveFailed`, so the close never rejects
+   *  for it. A failure while the close is under way is reported once the
+   *  close ends, so its notice shows after the close's last dialog, and a
+   *  later one at once. A Save As of a tab that fails or is cancelled while the
+   *  close is under way leaves them open too ("cancel"), and the close's save
+   *  of that tab then writes nothing. The close waits for every save of the
+   *  tabs until one is known not to have saved, and then keeps them without
+   *  waiting for the others, apart from the save of the untitled document
+   *  whose dialog it showed. While all saves work it waits for each, which
+   *  never ends for a write that does not return.
    *  Once `signal` aborts, as for a newer close that the user asked for, it
    *  stops waiting and keeps the tabs ("cancel"), and the saves go on. */
   private async prepareClose(tabIds: string[], message: string, signal?: AbortSignal): Promise<CloseDecision> {
@@ -696,31 +701,53 @@ export class FileService {
       // The native prompt can remain open while editor updates are pending.
       this.present.flush();
       const unsaved = ownTabs().filter(hasUnsavedChanges);
-      // A save that fails tells the user itself, also while a dialog below
-      // shows or after the close stopped waiting, and counts as not saved.
+      // A save that fails counts as not saved, and tells the user itself
+      // (`SaveEvents.closeSaveFailed`). While the close is under way, its
+      // failures wait until the close ends, so their notice shows after the
+      // close's last dialog. Until then a dialog can cover it, and the save of
+      // an untitled document that works gives a tab another file, which
+      // clears the notice bar.
+      const held: (() => void)[] = [];
+      let holding = true;
+      let failed = false;
+      let notSaved!: () => void;
+      const someNotSaved = new Promise<false>((resolve) => { notSaved = () => resolve(false); });
       const closeSave = (tabId: string): Promise<boolean> => {
         const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
         return this.queueSave(tabId, false, { failedMovesBefore: failedMoves.get(tabId) }).catch((error: unknown) => {
-          this.events.closeSaveFailed?.(tabId, path, error);
+          const tell = (): void => this.events.closeSaveFailed?.(tabId, path, error);
+          if (holding) held.push(tell);
+          else tell();
           return false;
+        }).then((saved) => {
+          if (!saved) {
+            failed = true;
+            notSaved();
+          }
+          return saved;
         });
       };
-      // The saves of documents with a file start together, so one that does
-      // not return, as to a network drive that went away, holds up no other.
-      let failed = false;
-      const filed = Promise.all(unsaved.filter((tab) => tab.doc.filePath !== null).map((tab) => closeSave(tab.id).then((saved) => {
-        if (!saved) failed = true;
-        return saved;
-      })));
-      // Untitled documents ask where to save them, one dialog after another,
-      // until one is cancelled or a save fails.
-      for (const tab of unsaved.filter((tab) => tab.doc.filePath === null)) {
-        if (signal?.aborted || failed) break;
-        const saved = await unlessAborted(closeSave(tab.id), signal);
+      try {
+        // The saves of documents with a file start together, so one that
+        // does not return, as to a network drive that went away, holds up no
+        // other.
+        const filed = Promise.all(unsaved.filter((tab) => tab.doc.filePath !== null).map((tab) => closeSave(tab.id)));
+        // Untitled documents ask where to save them, one dialog after
+        // another, until one is cancelled or a save fails. The close waits
+        // for each to its end, since one that works gives its tab a file,
+        // which would clear a notice that showed before.
+        for (const tab of unsaved.filter((tab) => tab.doc.filePath === null)) {
+          if (signal?.aborted || failed) break;
+          if (await unlessAborted(closeSave(tab.id), signal) !== true) return "cancel";
+        }
+        // Once a save is known not to have saved, the close keeps the tabs
+        // without waiting for the others, such as one that does not return.
+        const saved = await unlessAborted(Promise.race([filed.then((all) => !all.includes(false)), someNotSaved]), signal);
         if (saved !== true) return "cancel";
+      } finally {
+        holding = false;
+        for (const tell of held) tell();
       }
-      const saved = await unlessAborted(filed, signal);
-      if (saved === ABORTED || saved.includes(false)) return "cancel";
     }
     // Another queued save may still overwrite the file after our write. Wait
     // for it as well, and reject any newer edits or pending dropped assets.
