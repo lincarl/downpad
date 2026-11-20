@@ -34,8 +34,6 @@ export interface GitSyncDependencies {
   flush(): void;
   /** Drop a background tab's editors, so they are built from its new text. */
   discardEditors(tabId: string): Promise<void>;
-  /** Run a reload of the active document, keeping the reader's place. */
-  keepingPlace(reload: () => Promise<void>): Promise<void>;
   /** Read the file of the document in front now, and show the notice for a
    *  change on disk if it differs from the document. */
   compareWithDisk(): Promise<void>;
@@ -437,9 +435,7 @@ export class GitSync {
       let kept = tab.doc.markdown;
       for (let attempt = 1; ; attempt++) {
         const replace = () => this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
-        let outcome: Awaited<ReturnType<typeof replace>> = "gone";
-        if (this.deps.store.get().activeTabId === tab.id) await this.deps.keepingPlace(async () => { outcome = await replace(); });
-        else outcome = await replace();
+        const outcome = await replace();
         if (outcome === "stored") await this.deps.discardEditors(tab.id);
         if (outcome !== "changed") break;
         if (attempt === 5) {
@@ -583,17 +579,14 @@ export class GitSync {
       try {
         if (tab.id === store.get().activeTabId) {
           const text = tab.doc.markdown;
-          const reload: { outcome?: Awaited<ReturnType<typeof files.replaceFromDisk>> } = {};
-          await this.deps.keepingPlace(async () => {
-            reload.outcome = await files.replaceFromDisk(tab.id, path, (markdown) => markdown === text);
-          });
+          const outcome = await files.replaceFromDisk(tab.id, path, (markdown) => markdown === text);
           // A tab that went behind another one during the read took the file
           // without its editors, which still show the old text.
-          if (reload.outcome === "stored") await this.deps.discardEditors(tab.id);
+          if (outcome === "stored") await this.deps.discardEditors(tab.id);
           // A document that kept text typed meanwhile differs from its file
           // now. The notice asks about it at once, without waiting for the
           // watcher, which does not see every file, such as a link's target.
-          if (reload.outcome === "changed" && store.get().activeTabId === tab.id) await this.deps.compareWithDisk();
+          if (outcome === "changed" && store.get().activeTabId === tab.id) await this.deps.compareWithDisk();
         } else if (await files.refreshFromDisk(tab.id)) {
           await this.deps.discardEditors(tab.id);
         }

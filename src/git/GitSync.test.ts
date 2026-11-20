@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FileService } from "../files/FileService";
 import { sameFilePath } from "../files/pathIdentity";
 import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
 import { createAppStore } from "../app/createAppStore";
@@ -52,6 +53,17 @@ let deps: GitSyncDependencies & {
 let sync: GitSync;
 
 /** Open `PATH` in the store's only tab, with `markdown` saved or, with `unsaved`, edited. */
+/** Run `act` while the next replacement of a tab's document reads its file. */
+function duringRead(act: () => void): void {
+  type Replace = FileService["replaceFromDisk"];
+  const replace = vi.mocked<Replace>(deps.files.replaceFromDisk);
+  const read = replace.getMockImplementation() as Replace;
+  replace.mockImplementationOnce(async (...args) => {
+    act();
+    return read(...args);
+  });
+}
+
 function openDocument({ unsaved = false } = {}): void {
   const doc = {
     ...store.get().doc,
@@ -103,7 +115,6 @@ beforeEach(() => {
     },
     flush: vi.fn(),
     discardEditors: vi.fn(async () => {}),
-    keepingPlace: vi.fn(async (reload: () => Promise<void>) => reload()),
     compareWithDisk: vi.fn(async () => {}),
     askConflict: vi.fn(async () => "later" as ConflictChoice),
   };
@@ -354,7 +365,6 @@ describe("GitSync checks", () => {
     await sync.check({ force: true });
     expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], false);
     expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, PATH, expect.any(Function));
-    expect(deps.keepingPlace).toHaveBeenCalledOnce();
     // The document in front built its editors again as it took the file.
     expect(deps.discardEditors).not.toHaveBeenCalled();
     expect(deps.compareWithDisk).not.toHaveBeenCalled();
@@ -367,10 +377,7 @@ describe("GitSync checks", () => {
     git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
     git.getLatest.mockResolvedValue(done([PATH]));
     // The user types after the check for unsaved changes, before the tab takes the file.
-    vi.mocked(deps.keepingPlace).mockImplementationOnce(async (reload) => {
-      store.patchDoc({ markdown: "# Notes\n\nTyped during the read\n" });
-      await reload();
-    });
+    duringRead(() => store.patchDoc({ markdown: "# Notes\n\nTyped during the read\n" }));
     await sync.check({ force: true });
     expect(deps.files.replaceFromDisk).toHaveBeenCalledOnce();
     expect(store.get().doc.markdown).toBe("# Notes\n\nTyped during the read\n");
@@ -384,10 +391,7 @@ describe("GitSync checks", () => {
     const tabId = store.get().activeTabId!;
     git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
     git.getLatest.mockResolvedValue(done([PATH]));
-    vi.mocked(deps.keepingPlace).mockImplementationOnce(async (reload) => {
-      store.addTab({ ...store.get().doc, filePath: "/repo/other.md" });
-      await reload();
-    });
+    duringRead(() => store.addTab({ ...store.get().doc, filePath: "/repo/other.md" }));
     await sync.check({ force: true });
     expect(store.get().tabs.find((tab) => tab.id === tabId)?.doc.markdown).toBe("# Theirs\n");
     expect(deps.discardEditors).toHaveBeenCalledExactlyOnceWith(tabId);

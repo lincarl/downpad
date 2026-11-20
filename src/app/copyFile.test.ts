@@ -38,8 +38,9 @@ function setup(doc: Partial<DocumentState>, saved = true) {
     desktopEvents,
     canCopyFile: () => true,
     isDisposed: () => false,
+    reportSaveFailure: vi.fn(),
   };
-  return { store, tabId, files, desktopEvents, copy: () => copyActiveFile(dependencies) };
+  return { store, tabId, files, desktopEvents, reportSaveFailure: vi.mocked(dependencies.reportSaveFailure), copy: () => copyActiveFile(dependencies) };
 }
 
 describe("Copy file", () => {
@@ -204,16 +205,18 @@ describe("Copy file", () => {
     expect(clipboard.copy).not.toHaveBeenCalled();
   });
 
-  it("says why its save failed, and copies nothing", async () => {
-    const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
+  it("reports a save that threw as a failed save of its document, also with another tab in front by then, and copies nothing", async () => {
+    const { store, tabId, files, copy, reportSaveFailure } = setup({ markdown: "# Mine, edited\n", isDirty: true });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    files.save.mockRejectedValueOnce(new Error("“other.md” is open in another tab. Close that tab, or choose another name."));
+    const failure = new Error("“other.md” is open in another tab. Close that tab, or choose another name.");
+    files.save.mockImplementationOnce(async () => {
+      store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+      throw failure;
+    });
     await copy();
     logged.mockRestore();
-    expect(store.get().banner).toEqual({
-      kind: "error",
-      message: "Could not save the file before copying it. “other.md” is open in another tab. Close that tab, or choose another name.",
-    });
+    expect(reportSaveFailure).toHaveBeenCalledExactlyOnceWith(tabId, failure);
+    expect(store.get().banner).toBeNull();
     expect(clipboard.copy).not.toHaveBeenCalled();
   });
 

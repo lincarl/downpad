@@ -35,8 +35,11 @@ export interface EditorPresenter {
    *  (preserves undo). Use after a pure tab switch / focusing an open file. */
   showActiveDoc(): Promise<void>;
   /** Show the active tab's document after its content was *replaced* (open / new
-   *  / reload): force a fresh editor (undo resets). */
-  reloadActiveDoc(): Promise<void>;
+   *  / reload): force a fresh editor (undo resets). `background` marks a
+   *  replacement the user did not ask for at that moment, as Git's: the
+   *  document stays where it is scrolled, and the Recent view stays in front
+   *  if it shows. */
+  reloadActiveDoc(options?: { background?: boolean }): Promise<void>;
 }
 
 interface SaveRequest {
@@ -86,10 +89,10 @@ export class FileService {
 
   /**
    * Open a known path (drag-drop, the Recent view, launch args). If the file is
-   * already open, focuses that tab, also when a Save As under way is giving
-   * the file to it, or when it got its tab while this open read it; if the
-   * active tab is an empty untitled buffer, replaces it; otherwise opens a
-   * new tab. Reload rereads an existing
+   * already open, focuses that tab, also when it got its tab while this open
+   * read it, or from a Save As that was writing it, which the open waits
+   * for; if the active tab is an empty untitled buffer, replaces it;
+   * otherwise opens a new tab. Reload rereads an existing
    * tab from disk after confirming any unsaved changes. If that tab closes
    * during the read, or gets another file, as through Save As, the read is
    * discarded and the tab keeps its document. Text typed in the tab during
@@ -98,7 +101,11 @@ export class FileService {
   async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
     this.present.flush();
 
-    const existing = options.reload ? this.store.get().tabs.find((t) => samePath(t.doc.filePath, path)) : this.tabOf(path);
+    const showing = (): Tab | undefined => this.store.get().tabs.find((t) => samePath(t.doc.filePath, path));
+    // A Save As that is writing the file gives it to its tab once it ends,
+    // or to none when it fails, so the open waits to see which.
+    if (!options.reload) await this.untilWritten(path);
+    const existing = showing();
     const focus = async (tab: Tab): Promise<void> => {
       this.store.activateTab(tab.id);
       await this.present.showActiveDoc(); // focus the open tab — keep its undo
@@ -128,8 +135,11 @@ export class FileService {
     if (moved()) return;
     // Another open of the file, or a Save As onto it, can have given it a tab
     // while it was read, and one file never gets two tabs.
-    const opened = existing ? undefined : this.tabOf(path);
-    if (opened) return focus(opened);
+    if (!existing) {
+      await this.untilWritten(path);
+      const opened = showing();
+      if (opened) return focus(opened);
+    }
     const doc = fileDocument(path, payload, existing?.doc.frontmatterCollapsed ?? false);
     if (existing) {
       this.store.activateTab(existing.id);
@@ -141,14 +151,14 @@ export class FileService {
     this.recordOpened(path);
   }
 
-  /** The tab that shows the file at `path`, or that a save under way is
-   *  giving it to, as a Save As that is writing it. */
-  private tabOf(path: string): Tab | undefined {
-    const { tabs } = this.store.get();
-    const shown = tabs.find((tab) => samePath(tab.doc.filePath, path));
-    if (shown) return shown;
-    const writer = [...this.pendingSaves].find((request) => request.write !== undefined && samePath(request.write.path, path));
-    return writer && tabs.find((tab) => tab.id === writer.tabId);
+  /** Resolve once no save under way is writing the file at `path`, as a Save
+   *  As that gives the file to its tab when it ends. */
+  private async untilWritten(path: string): Promise<void> {
+    for (;;) {
+      const writer = [...this.pendingSaves].find((request) => request.write !== undefined && samePath(request.write.path, path));
+      if (!writer) return;
+      await writer.outcome;
+    }
   }
 
   /** Reopen the files of an earlier session in new tabs, in their order,
@@ -223,7 +233,7 @@ export class FileService {
       return "stored";
     }
     this.store.replaceActiveDoc(doc);
-    await this.present.reloadActiveDoc();
+    await this.present.reloadActiveDoc({ background: true });
     return "shown";
   }
 

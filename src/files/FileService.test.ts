@@ -96,11 +96,13 @@ describe("replacing a document with its file after a discard", () => {
   });
 
   it("replaces the document of a tab whose path Windows spells in another case", async () => {
-    const { store, files } = setup();
+    const { store, presenter, files } = setup();
     const tabId = store.get().activeTabId!;
     store.patchDoc({ filePath: "C:\\Docs\\Notes.md" });
     expect(await files.replaceFromDisk(tabId, "c:\\docs\\notes.md", () => true)).toBe("shown");
     expect(store.get().doc.markdown).toBe(onDisk.content);
+    // Nobody asked for this replacement at that moment, so the document keeps its place.
+    expect(presenter.reloadActiveDoc).toHaveBeenCalledExactlyOnceWith({ background: true });
   });
 
   it("leaves a tab that holds another file by now", async () => {
@@ -891,10 +893,13 @@ describe("reloading an open file", () => {
     expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
   });
 
-  it("shows the tab whose Save As is writing a file when that file is opened", async () => {
+  it.each([
+    { end: "works", fails: false },
+    { end: "fails", fails: true },
+  ])("waits for a Save As that is writing a file when that file is opened, and shows the file in one tab when the save $end", async ({ fails }) => {
     const { store, presenter, files } = setup(true);
     const writer = store.get().activeTabId!;
-    store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    const other = store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
     const tabs = store.get().tabs.length;
     store.activateTab(writer);
     const write = deferred<FileMeta>();
@@ -902,17 +907,31 @@ describe("reloading an open file", () => {
     native.writeFile.mockReturnValueOnce(write.promise);
     const saveAs = files.saveAs();
     await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
-    store.activateTab(store.get().tabs.find((tab) => tab.doc.filePath === "/docs/other.md")!.id);
-    await files.openPath("/docs/target.md");
-    expect(native.readFile).not.toHaveBeenCalled();
-    expect(store.get().activeTabId).toBe(writer);
-    expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
+    store.activateTab(other);
+    const opening = files.openPath("/docs/target.md");
     // Another file opens in a tab of its own meanwhile.
     await files.openPath("/docs/third.md");
     expect(store.get().tabs).toHaveLength(tabs + 1);
-    expect(store.get().doc.filePath).toBe("/docs/third.md");
-    write.resolve({ modifiedMs: 300 });
-    expect(await saveAs).toBe(true);
+    expect(native.readFile).toHaveBeenCalledExactlyOnceWith("/docs/third.md");
+
+    if (fails) {
+      write.reject(new Error("Disk unavailable"));
+      await expect(saveAs).rejects.toThrow("Disk unavailable");
+      await opening;
+      // No tab got the file, so the open reads it into a tab of its own.
+      expect(native.readFile).toHaveBeenLastCalledWith("/docs/target.md");
+      expect(store.get().tabs).toHaveLength(tabs + 2);
+      expect(store.get().tabs.find((tab) => tab.id === writer)?.doc.filePath).toBe(filePath);
+    } else {
+      write.resolve({ modifiedMs: 300 });
+      expect(await saveAs).toBe(true);
+      await opening;
+      // The open shows the tab that the save gave the file to.
+      expect(native.readFile).toHaveBeenCalledOnce();
+      expect(store.get().activeTabId).toBe(writer);
+      expect(presenter.showActiveDoc).toHaveBeenCalledOnce();
+      expect(store.get().tabs).toHaveLength(tabs + 1);
+    }
     expect(store.get().tabs.filter((tab) => tab.doc.filePath === "/docs/target.md")).toHaveLength(1);
   });
 

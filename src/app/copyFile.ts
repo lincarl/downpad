@@ -6,7 +6,6 @@
 import type { EditorHost } from "../editor/EditorHost";
 import type { FileService } from "../files/FileService";
 import { copyFileToClipboard } from "../ipc/commands";
-import { failureReason } from "../ipc/failureReason";
 import type { Store } from "../state/store";
 import { isRecoveredDocument } from "../state/types";
 import type { DesktopEventBindings } from "./DesktopEventBindings";
@@ -19,6 +18,9 @@ export interface CopyFileDependencies {
   /** Whether Copy file can run now, as the menu asks. */
   canCopyFile(): boolean;
   isDisposed(): boolean;
+  /** Show that the save of a tab's document failed with `error`, as a failed
+   *  Save does, by the document's name. */
+  reportSaveFailure(tabId: string, error: unknown): void;
 }
 
 /** Counts the runs of Copy file, and tells the latest one that got as far as
@@ -79,10 +81,11 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
     const saved = !doc.isDirty && doc.filePath
       ? true
       : await files.save({ automatic: (id) => desktopEvents.holdSaveAfterChecks(id) }).catch((error: unknown) => {
-        // The reason tells what to do, such as for a file that is open in
-        // another tab.
+        // The notice of a failed Save names the document, since another tab
+        // can be in front by now, and gives the reason, which tells what to
+        // do, such as for a file that is open in another tab.
         console.error("Downpad: saving the file before copying it failed", error);
-        if (!isDisposed()) store.set({ banner: { kind: "error", message: `Could not save the file before copying it. ${failureReason(error)}`.trimEnd() } });
+        if (!isDisposed()) dependencies.reportSaveFailure(tabId, error);
         return null;
       });
     if (saved === null) return;

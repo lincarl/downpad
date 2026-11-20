@@ -65,7 +65,9 @@ test.afterEach(async ({}, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) await rm(directory, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
 });
 
-async function launch(file: string): Promise<void> {
+/** Launch Downpad with `file`. `beforeStart` runs once the window exists,
+ *  before the app has started in it. */
+async function launch(file: string, beforeStart?: () => Promise<void>): Promise<void> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE" && entry[0] !== "DOWNPAD_DEV_URL"),
   );
@@ -78,6 +80,7 @@ async function launch(file: string): Promise<void> {
     env: { ...environment, DOWNPAD_USER_DATA_DIR: path.join(directory, "profile") },
   });
   page = await app.firstWindow();
+  await beforeStart?.();
   await expect(page.getByTestId("app-shell")).toHaveAttribute("data-started", "true");
 }
 
@@ -101,6 +104,36 @@ test("gets someone else's change to a document without asking", async () => {
   await expect(shownDocument()).toContainText("Their first paragraph.");
   await expect(status()).toHaveText("Up to date");
   await expect(page.locator(".banner")).toBeHidden();
+});
+
+test("gets someone else's change while the Recent view shows, and stays on that view", async () => {
+  await pushTheirs(NOTES.replace("First paragraph.", "Their first paragraph."));
+  // Hold Get latest until released. Electron keeps the handlers of
+  // ipcMain.handle in `_invokeHandlers`, and a handler on the window's own
+  // `ipc` runs in their place.
+  await launch(path.join(mine, "notes.md"), () => app!.evaluate(({ BrowserWindow, ipcMain }) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("downpad:invoke")!;
+    const released = new Promise((resolve) => Reflect.set(globalThis, "releaseGetLatest", resolve));
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("downpad:invoke", async (event, command, ...args) => {
+      if (command === "git_get_latest") {
+        Reflect.set(globalThis, "getLatestHeld", true);
+        await released;
+      }
+      return invoke(event, command, ...args);
+    });
+  }));
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "getLatestHeld") === true)).toBe(true);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  const recent = page.locator(".recent-name").first();
+  await expect(recent).toBeVisible();
+  await app!.evaluate(() => (Reflect.get(globalThis, "releaseGetLatest") as () => void)());
+  // The document takes their change behind the Recent view, which stays in front.
+  await expect(page.locator(".milkdown").first()).toContainText("Their first paragraph.");
+  await expect(recent).toBeVisible();
+  await page.getByRole("tab", { name: /notes\.md/ }).click();
+  await expect(shownDocument()).toContainText("Their first paragraph.");
+  await expect(status()).toHaveText("Up to date");
 });
 
 test("uploads typed changes", async () => {

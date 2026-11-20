@@ -88,7 +88,7 @@ export class AppRuntime {
     const presenter: EditorPresenter = {
       flush: (options) => this.editorHost.flush(options),
       showActiveDoc: () => this.showActiveDoc(),
-      reloadActiveDoc: () => this.reloadActiveDoc(),
+      reloadActiveDoc: (options) => this.reloadActiveDoc(options?.background ? hosts.editorArea : null),
     };
     this.saveFailure = new SaveFailureNotice(store);
     this.cleanups.push(clearNoticesOfOtherDocuments(store));
@@ -174,7 +174,6 @@ export class AppRuntime {
       files: this.files,
       flush: () => this.editorHost.flush(),
       discardEditors: (tabId) => this.editorHost.discardTab(tabId),
-      keepingPlace: (reload) => keepingPlace(hosts.editorArea, () => this.store.get().activeTabId, reload),
       compareWithDisk: () => this.desktopEvents.recheck(),
     });
 
@@ -598,19 +597,25 @@ export class AppRuntime {
   }
 
   /** Show the active tab's document after its content was replaced (open / new /
-   *  reload), forcing a fresh editor (undo resets). */
-  private async reloadActiveDoc(): Promise<void> {
-    await this.presentActiveDoc(true);
+   *  reload), forcing a fresh editor (undo resets). With `background`, the
+   *  editor area, the user did not ask for the replacement at that moment,
+   *  as for Git's: the new editors are scrolled to where the old ones were,
+   *  and the Recent view stays in front if it shows. */
+  private async reloadActiveDoc(background: HTMLElement | null = null): Promise<void> {
+    if (!background) return this.presentActiveDoc(true);
+    await keepingPlace(background, () => this.store.get().activeTabId, () => this.presentActiveDoc(true, true));
   }
 
-  private async presentActiveDoc(reload: boolean): Promise<void> {
+  private async presentActiveDoc(reload: boolean, background = false): Promise<void> {
     // The find bar is bound to the editor we're about to (re)show; close it so it
     // doesn't linger with stale search state from the previous document.
     if (this.findBar.isOpen()) this.findBar.close();
-    if (this.store.get().view === "recent") this.recentView.onLeave();
-    // Leaving Recent re-enters the editor; the editor host honours the persisted
-    // `editorLayout` (document / split / Markdown only) when it presents.
-    this.store.set({ view: "wysiwyg" });
+    if (!background || this.store.get().view !== "recent") {
+      if (this.store.get().view === "recent") this.recentView.onLeave();
+      // Leaving Recent re-enters the editor; the editor host honours the persisted
+      // `editorLayout` (document / split / Markdown only) when it presents.
+      this.store.set({ view: "wysiwyg" });
+    }
     // A document that was replaced, as by a reload, leaves the notices about
     // what it was behind. They go before its editor is built, so a notice
     // that shows meanwhile stays (`noticeScope`).
@@ -671,6 +676,10 @@ export class AppRuntime {
       desktopEvents: this.desktopEvents,
       canCopyFile: () => this.canCopyFile(),
       isDisposed: () => this.disposed,
+      reportSaveFailure: (tabId, error) => {
+        const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+        if (tab) this.saveFailure.show(tabId, tabLabel(tab), error);
+      },
     });
   }
 
