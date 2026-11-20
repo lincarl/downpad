@@ -86,13 +86,11 @@ const MARKDOWN_LINK_EXT = /\.(?:md|markdown|mdown|mkd)$/i;
  * when a link uses `./` or `../`. Drive-letter and POSIX paths are returned with
  * forward slashes (Windows accepts `C:/…`) and a `..` never escapes the
  * drive/root. UNC paths (`\\server\share\…`) are left exactly as-is: they are
- * rare here and reshaping their prefix risks breaking share resolution. With
- * `backslashInNames`, only `/` separates segments, as in a POSIX path, where
- * a file name can have a backslash.
+ * rare here and reshaping their prefix risks breaking share resolution.
  */
-export function collapseDotSegments(joined: string, backslashInNames = false): string {
+export function collapseDotSegments(joined: string): string {
   if (/^[\\/]{2}/.test(joined)) return joined; // UNC — leave untouched
-  const unified = backslashInNames ? joined : joined.replace(/\\/g, "/");
+  const unified = joined.replace(/\\/g, "/");
   const leadingSlash = unified.startsWith("/");
   const out: string[] = [];
   for (const seg of unified.split("/")) {
@@ -115,9 +113,9 @@ export function collapseDotSegments(joined: string, backslashInNames = false): s
  * mailto, data, file, …), a protocol-relative URL or other network path
  * (isNetworkPath), an in-document anchor (`#heading`), a non-markdown file, or
  * a relative link with no saved document to anchor it. Any query/fragment is
- * stripped, so `notes.md#section` still targets `notes.md`; the result has
- * its `./`/`..` segments collapsed, also for an absolute link, so it dedupes
- * against the same file opened by other means (§5.19).
+ * stripped, so `notes.md#section` still targets `notes.md`; a relative result
+ * has its `./`/`..` segments collapsed so it dedupes against the same file
+ * opened by other means (§5.19).
  */
 export function resolveMarkdownLinkTarget(href: string, docPath: string | null): string | null {
   if (!href) return null;
@@ -133,13 +131,7 @@ export function resolveMarkdownLinkTarget(href: string, docPath: string | null):
   if (isNetworkPath(href) || isNetworkPath(target)) return null;
   const path = safeDecode(target);
   if (!path || !MARKDOWN_LINK_EXT.test(path)) return null;
-  // An absolute path stays as written, unless it has `./` or `../` segments.
-  // In a POSIX path only `/` separates them, as a file name can have a
-  // backslash there.
-  if (isAbsolutePath(path)) {
-    if (path.startsWith("/")) return /(^|\/)\.{1,2}(?=\/|$)/.test(path) ? collapseDotSegments(path, true) : path;
-    return /(^|[\\/])\.{1,2}(?=[\\/]|$)/.test(path) ? collapseDotSegments(path) : path;
-  }
+  if (isAbsolutePath(path)) return path;
   if (!docPath) return null;
   const dir = dirName(docPath);
   if (!dir) return null;
