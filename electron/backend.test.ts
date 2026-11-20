@@ -326,6 +326,37 @@ describe("Existing settings and history compatibility", () => {
     expect(parse(await readFile(decoy, "utf8"))).toMatchObject({ theme: "dark" });
   });
 
+  it.skipIf(process.platform === "win32")("puts the changes onto the file settings.toml leads to when its link changes during the write", async () => {
+    const directory = await fixtureDirectory();
+    const first = join(directory, "first.toml");
+    const second = join(directory, "second.toml");
+    const path = join(directory, "settings.toml");
+    await writeFile(first, 'theme = "light"\n');
+    await writeFile(second, 'theme = "light"\neditorWidthPx = 900\n');
+    await symlink(first, path);
+    const originalOpen = filesystem.open;
+    let moved = false;
+    const opening = vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+      if (args[1] === "wx" && !moved) {
+        // While the write stages its file, another program points the link
+        // at another settings file.
+        moved = true;
+        await rm(path);
+        await symlink(second, path);
+      }
+      return originalOpen(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: 900 });
+    } finally {
+      opening.mockRestore();
+      syncBuiltinESMExports();
+    }
+    expect(await readFile(first, "utf8")).toBe('theme = "light"\n');
+    expect(parse(await readFile(second, "utf8"))).toMatchObject({ theme: "dark", editorWidthPx: 900 });
+  });
+
   it("puts changes onto settings.toml as it is when written and returns the settings it then holds", async () => {
     const directory = await fixtureDirectory();
     const store = new ConfigStore(directory);

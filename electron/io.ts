@@ -136,43 +136,49 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
 /** How often a read starts again while another program rewrites the file in place. */
 const READ_ATTEMPTS = 3;
 
-/** Whether the real file at `target` holds `text`, as its LF form without a BOM, or is
- *  gone. A file that is not valid UTF-8 does not hold it. Once the text matches, the path
- *  must still name the very file read, with the time and size it had then, so a program
- *  that replaced the file during the read or the comparison is noticed. That look at the
- *  path is the last step, so it comes as close to the rename as it can. */
-async function holdsText(target: string, text: string): Promise<boolean> {
-  const missing = (error: unknown) => {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw error;
-  };
-  const version = await readVersion(target).catch(missing);
-  if (!version) return true;
-  let content: string;
-  try {
-    ({ content } = decodeMarkdown(version.bytes));
-  } catch {
-    return false;
-  }
-  if (content !== text) return false;
-  // Not through a symbolic link that another program put in the file's place,
-  // which the rename would replace.
-  const now = await lstat(target).catch(missing);
-  if (!now) return true;
-  return now.dev === version.info.dev && now.ino === version.info.ino
-    && now.mtimeMs === version.info.mtimeMs && now.size === version.info.size;
+/** For a `.catch`: null when the path names nothing, and the error otherwise. */
+function nullIfMissing(error: unknown): null {
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+  throw error;
 }
 
-/** Whether `path` still leads to the real file `target`, as it did when a write
- *  resolved it, or now leads nowhere. A symbolic link that another program pointed at
- *  another file meanwhile does not, so the write would not replace the file the
- *  path names. */
-async function leadsTo(path: string, target: string): Promise<boolean> {
-  const now = await realpath(absolutePath(path)).catch((error: unknown) => {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw error;
-  });
-  return now === null || now === target;
+/** Whether `path` still leads to `target`, the real file that a write resolved it to,
+ *  so the write replaces the file the path names. A symbolic link that another program
+ *  pointed at another file does not. A file that was missing when the write resolved
+ *  the path, and so kept its folders and spelling as given, counts as `target` once it
+ *  is back. A path that names nothing leads to `target` only when the write resolved it
+ *  as itself, and not when it is now a symbolic link to a missing file. */
+export async function leadsTo(path: string, target: string): Promise<boolean> {
+  const requested = absolutePath(path);
+  const now = await realpath(requested).catch(nullIfMissing);
+  if (now !== null) return now === target || now === (await realpath(target).catch(nullIfMissing));
+  return requested === target && !(await lstat(requested).catch(nullIfMissing));
+}
+
+/** Whether an automatic write may replace `target`, the real file that `path` led to
+ *  when the write resolved it. The file must hold `text`, as its LF form without a BOM,
+ *  or be gone, and `path` must still lead to it. A file that is not valid UTF-8 does not
+ *  hold the text. The last step, as close to the rename as it can be, looks at the
+ *  directory entry that the rename replaces without following a symbolic link. It must
+ *  still be the very file read, with the time and size it had then, or still be absent,
+ *  so a program that replaced the file during the read, the comparison or the path
+ *  lookup, also with a symbolic link, is noticed. */
+async function mayReplace(path: string, target: string, text: string): Promise<boolean> {
+  const version = await readVersion(target).catch(nullIfMissing);
+  if (version) {
+    let content: string;
+    try {
+      ({ content } = decodeMarkdown(version.bytes));
+    } catch {
+      return false;
+    }
+    if (content !== text) return false;
+  }
+  if (!(await leadsTo(path, target))) return false;
+  const now = await lstat(target).catch(nullIfMissing);
+  if (!version || !now) return !version && !now;
+  return now.dev === version.info.dev && now.ino === version.info.ino
+    && now.mtimeMs === version.info.mtimeMs && now.size === version.info.size;
 }
 
 /** The file's modification time and size, which tell whether it changed without
@@ -197,7 +203,7 @@ let pendingMarkdownWrite: Promise<void> = Promise.resolve();
  *  that kept the file's time, and reading it revalidates a network file system's
  *  cached attributes. The check reads the real file that the write replaces, so a
  *  symbolic link that changes or goes meanwhile cannot point it at another file, and
- *  it refuses the write when `path` leads to another file by then. */
+ *  it refuses the write when `path` leads to another file by then (`mayReplace`). */
 export function writeMarkdown(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
@@ -205,7 +211,7 @@ export function writeMarkdown(path: string, content: string, eol: Eol, expectedC
     const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
     const beforeReplace = expectedContent === undefined
       ? undefined
-      : async (target: string) => await holdsText(target, expectedContent) && await leadsTo(path, target);
+      : (target: string) => mayReplace(path, target, expectedContent);
     try {
       const modifiedMs = await writeAtomic(path, text, { beforeReplace });
       return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };

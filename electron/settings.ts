@@ -5,7 +5,7 @@ import { parseForESLint, type AST } from "toml-eslint-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { Settings } from "../src/state/types";
 import { SETTINGS_ENCODING_BROKEN, SETTINGS_SYNTAX_BROKEN } from "../src/ipc/contracts";
-import { ReplaceDeclinedError, writeAtomic } from "./io";
+import { leadsTo, ReplaceDeclinedError, writeAtomic } from "./io";
 
 const ENUMS: Partial<Record<keyof Settings, readonly unknown[]>> = {
   theme: ["system", "light", "dark"], editorTheme: ["follow-ui", "light", "dark"],
@@ -178,9 +178,10 @@ export async function updateSettingsFile(path: string, changes: unknown, expecte
     const next = normalizeSettings({ ...current, ...applied }, current);
     try {
       await writeAtomic(path, patchSettingsToml(existing, next), {
-        // The real file that the rename replaces, also when settings.toml
-        // is a symbolic link that another program points elsewhere meanwhile.
-        beforeReplace: async (target) => (await existingSettingsText(target)) === existing,
+        // The real file that the rename replaces, also when settings.toml is
+        // a symbolic link, and only while settings.toml still leads to it. The
+        // text is read last, as close to the rename as it can be.
+        beforeReplace: async (target) => await leadsTo(path, target) && (await existingSettingsText(target)) === existing,
       });
       return next;
     } catch (error) {

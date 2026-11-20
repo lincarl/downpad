@@ -221,6 +221,76 @@ it.skipIf(process.platform === "win32")("refuses an automatic write when another
   expect(await readFile(moved, "utf8")).toBe("Original text\n");
 });
 
+it("refuses an automatic write when another program replaces the file while the check looks up the document's path", async () => {
+  const { directory, destination } = await fixture();
+  const replacement = join(directory, "replacement.md");
+  await writeFile(replacement, "Theirs\n");
+  const originalRealpath = filesystem.realpath;
+  let lookups = 0;
+  vi.spyOn(filesystem, "realpath").mockImplementation(async (...args: Parameters<typeof filesystem.realpath>) => {
+    lookups += 1;
+    // The first lookup resolves the write's target, and the second is the
+    // check's, during which another program replaces the file.
+    if (lookups === 2) await rename(replacement, destination);
+    return originalRealpath(...args);
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
+it.skipIf(process.platform === "win32")("refuses an automatic write when the file or the document's link becomes a link to a missing file", async () => {
+  const { directory, destination } = await fixture();
+  const link = join(directory, "link.md");
+  const missing = join(directory, "missing.md");
+  await symlink(destination, link);
+  const originalOpen = filesystem.open;
+  let replace: (() => Promise<void>) | null = null;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx" && replace) await replace();
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  // While Downpad writes its replacement, another program points the
+  // document's link at a file that does not exist.
+  replace = async () => {
+    await rm(link);
+    await symlink(missing, link);
+  };
+  await expect(writeMarkdown(link, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Original text\n");
+
+  // Or it puts such a link in the file's place.
+  replace = async () => {
+    await rm(destination);
+    await symlink(missing, destination);
+  };
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readlink(destination)).toBe(missing);
+});
+
+it.skipIf(process.platform === "win32")("writes a file that is back with the expected text, also through a folder that is a link", async () => {
+  const { directory } = await fixture();
+  const folder = join(directory, "folder");
+  await mkdir(folder);
+  const linkedFolder = join(directory, "linked");
+  await symlink(folder, linkedFolder);
+  const real = join(folder, "note.md");
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    // The file is missing when the write starts, and a sync tool puts it
+    // back with the text the document saved while the write stages its file.
+    if (args[1] === "wx") await writeFile(real, "Original text\n");
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await writeMarkdown(join(linkedFolder, "note.md"), "Mine\n", "lf", "Original text\n");
+  expect(await readFile(real, "utf8")).toBe("Mine\n");
+});
+
 it("retries a Windows sharing lock that the check before the rename meets", async () => {
   const { destination } = await fixture();
   simulatePlatform("win32");
