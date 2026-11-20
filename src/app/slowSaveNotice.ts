@@ -1,6 +1,6 @@
 // The notice that a save has waited long for its file's drive (design, Data
 // and persistence). It names the document, never takes the place of another
-// notice, and goes when that write ends.
+// notice, and goes when that write ends or the document's tab closes.
 
 import type { Store } from "../state/store";
 import type { BannerState } from "../state/types";
@@ -28,9 +28,10 @@ export class SlowSaveNotice {
     this.store.set({ banner: next });
   }
 
-  /** The slow write of a tab's document ended, written or not. Its notice
-   *  goes if it still shows. */
-  ended(tabId: string): void {
+  /** Take the notice of a tab's document down if it still shows, as once its
+   *  slow write ended, written or not, or once its tab closed, when the notice
+   *  no longer has a document to tell about. */
+  takeDown(tabId: string): void {
     const { shown } = this;
     if (shown?.tabId !== tabId) return;
     this.shown = null;

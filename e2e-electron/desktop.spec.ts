@@ -5435,6 +5435,38 @@ async function hangWritesUnder(marker: string): Promise<void> {
   }, marker);
 }
 
+test("the notice of a save that has not finished goes when its document's tab closes from behind another tab", async () => {
+  const gone = path.join(directory, "gone-drive");
+  await mkdir(gone);
+  const stuck = path.join(gone, "remote.md");
+  const local = path.join(directory, "local.md");
+  await writeFile(stuck, "Remote document.\n");
+  await writeFile(local, "Local document.\n");
+  await launch(stuck);
+  await chooseOpen(local);
+  const paragraph = page.locator(".editor-pane:not([hidden]) .ProseMirror p").first();
+  await expect(paragraph).toHaveText("Local document.");
+  await hangWritesUnder("gone-drive");
+  const stuckTab = page.getByRole("tab", { name: /remote\.md/ });
+  await stuckTab.click();
+  await expect(paragraph).toHaveText("Remote document.");
+  await typeAtEnd(paragraph, " Never written.");
+  // The renderer's clock, which the notice waits on, goes ahead on request.
+  await page.clock.install();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "goneAsked"))).toBe(1);
+  await page.getByRole("tab", { name: /local\.md/ }).click();
+  await expect(paragraph).toHaveText("Local document.");
+  await page.clock.fastForward(10_000);
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText("Saving “remote.md” has not finished after 10 seconds.");
+
+  await chooseCloseAction("Discard");
+  await stuckTab.locator(".tab-close").click();
+  await expect(stuckTab).toHaveCount(0);
+  await expect(banner).toBeHidden();
+});
+
 test("a save that never returns holds up no other document, and closing its document again with Discard closes it", async () => {
   const gone = path.join(directory, "gone-drive");
   await mkdir(gone);

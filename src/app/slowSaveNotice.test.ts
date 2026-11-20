@@ -9,9 +9,9 @@ it("names the document and goes when its write ends, but not when another tab's 
   const notice = new SlowSaveNotice(store);
   notice.show("tab-1", "notes.md");
   expect(store.get().banner).toEqual({ kind: "info", message });
-  notice.ended("tab-2");
+  notice.takeDown("tab-2");
   expect(store.get().banner?.message).toBe(message);
-  notice.ended("tab-1");
+  notice.takeDown("tab-1");
   expect(store.get().banner).toBeNull();
 });
 
@@ -27,7 +27,7 @@ it("never takes the place of another notice, and leaves a notice that replaced i
   notice.show("tab-1", "notes.md");
   const failure = { kind: "error" as const, message: "Downpad could not save “notes.md”." };
   store.set({ banner: failure });
-  notice.ended("tab-1");
+  notice.takeDown("tab-1");
   expect(store.get().banner).toBe(failure);
 });
 
@@ -37,8 +37,8 @@ it("replaces its own notice for another document", () => {
   notice.show("tab-1", "notes.md");
   notice.show("tab-2", "other.md");
   expect(store.get().banner?.message).toContain("“other.md”");
-  notice.ended("tab-1");
+  notice.takeDown("tab-1");
   expect(store.get().banner?.message).toContain("“other.md”");
-  notice.ended("tab-2");
+  notice.takeDown("tab-2");
   expect(store.get().banner).toBeNull();
 });

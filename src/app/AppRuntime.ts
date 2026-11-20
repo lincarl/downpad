@@ -110,7 +110,7 @@ export class AppRuntime {
         const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
         if (tab && !this.disposed) this.slowSave.show(tabId, tabLabel(tab));
       },
-      slowWriteEnded: (tabId) => this.slowSave.ended(tabId),
+      slowWriteEnded: (tabId) => this.slowSave.takeDown(tabId),
     });
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).
@@ -606,6 +606,9 @@ export class AppRuntime {
       if (this.disposed || decision === "cancel" || (decision !== "discard" && !this.files.canCloseTabs([id]))) return;
       const wasActive = this.store.get().activeTabId === id;
       const nextActive = this.store.closeTab(id);
+      // A notice that the closed document's save has not finished, which can
+      // show while another tab is in front, no longer helps.
+      this.slowSave.takeDown(id);
       // Free the closed tab's editor pane(s) — including a background tab's, which
       // would otherwise leak since it never becomes active again to be evicted.
       await this.editorHost.discardTab(id);
@@ -633,7 +636,10 @@ export class AppRuntime {
       const tabs = [...this.store.get().tabs];
       // Remove the approved documents together before asynchronous editor cleanup
       // can let another document gain unsaved edits between individual closes.
-      for (const tab of tabs) this.store.closeTab(tab.id);
+      for (const tab of tabs) {
+        this.store.closeTab(tab.id);
+        this.slowSave.takeDown(tab.id);
+      }
       for (const tab of tabs) await this.editorHost.discardTab(tab.id);
       if (this.findBar.isOpen()) this.findBar.close();
       await this.editorHost.unmount();
