@@ -22,6 +22,7 @@ import {
   pathExists,
 } from "../ipc/commands";
 import { isElectron } from "../ipc/env";
+import { failureReason } from "../ipc/failureReason";
 import { sameFilePath } from "../files/pathIdentity";
 import { openConflictDialog, type ConflictDialogOptions, type ConflictChoice } from "./ConflictDialog";
 import { fileName, listFiles, myVersionPath, timeAgo } from "./gitText";
@@ -622,7 +623,8 @@ export class GitSync {
       try {
         await this.deps.files.openBeside(path, tab.id);
       } catch (error) {
-        openFailure = errorText(error);
+        // A plain reason for the read, without Electron's text about IPC.
+        openFailure = failureReason(error);
       }
     }
     await this.reloadChanged(result.changedOpenFiles);

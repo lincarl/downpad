@@ -751,8 +751,8 @@ describe("GitSync conflicts", () => {
     },
     {
       when: "the latest version cannot be opened",
-      act: () => deps.files.openBeside.mockRejectedValue(new Error("Disk unavailable")),
-      banner: { kind: "error", message: "Your version is saved as “notes (my version).md”, but Downpad could not open the latest “notes.md”. Disk unavailable" },
+      act: () => deps.files.openBeside.mockRejectedValue(new Error("Error invoking remote method 'downpad:invoke': Error: EACCES: permission denied, open '/work/notes.md'")),
+      banner: { kind: "error", message: "Your version is saved as “notes (my version).md”, but Downpad could not open the latest “notes.md”. Permission was denied, or another program is using the file." },
     },
   ])("says that the user's version is saved, and what happened, when $when", async ({ act, banner }) => {
     deps.askConflict.mockResolvedValue("save-as");
