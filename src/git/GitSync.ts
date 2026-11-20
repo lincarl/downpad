@@ -569,15 +569,20 @@ export class GitSync {
   }
 
   /** Reload the open documents whose files a Git action changed. Documents
-   *  with unsaved changes keep them; Downpad never gets changes for those. */
+   *  with unsaved changes keep them; Downpad never gets changes for those.
+   *  That holds also for text typed in the document in front while its file
+   *  is read, which the file's notice for a change on disk then asks about. */
   private async reloadChanged(paths: readonly string[]): Promise<void> {
     const { store, files } = this.deps;
     for (const path of paths) {
-      const tab = store.get().tabs.find((entry) => entry.doc.filePath === path);
+      const tab = store.get().tabs.find((entry) => entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
       if (!tab || hasUnsavedChanges(tab)) continue;
       try {
         if (tab.id === store.get().activeTabId) {
-          await this.deps.keepingPlace(() => files.openPath(path, { reload: true }));
+          const text = tab.doc.markdown;
+          await this.deps.keepingPlace(async () => {
+            await files.replaceFromDisk(tab.id, path, (markdown) => markdown === text);
+          });
         } else if (await files.refreshFromDisk(tab.id)) {
           await this.deps.discardEditors(tab.id);
         }

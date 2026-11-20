@@ -110,15 +110,20 @@ export class FileService {
       if (!discard) return;
     }
 
-    const payload = await readFile(path);
-    if (existing) {
-      // A closed reload owner must not redirect the read into the active tab,
-      // even if that tab has since opened the same path. A tab that shows
-      // another file by now, as after a Save As during the read, keeps its
-      // document, with the text typed into it since.
-      const now = this.store.get().tabs.find((tab) => tab.id === existing.id)?.doc;
-      if (!now || !samePath(now.filePath, path)) return;
+    // A closed reload owner must not redirect the read into the active tab,
+    // even if that tab has since opened the same path. A tab that shows
+    // another file by now, as after a Save As during the read, keeps its
+    // document, with the text typed into it since, and a read that failed
+    // is none of its business then.
+    const moved = (): boolean => !!existing && !samePath(this.store.get().tabs.find((tab) => tab.id === existing.id)?.doc.filePath ?? null, path);
+    let payload: FilePayload;
+    try {
+      payload = await readFile(path);
+    } catch (error) {
+      if (moved()) return;
+      throw error;
     }
+    if (moved()) return;
     const doc = fileDocument(path, payload, existing?.doc.frontmatterCollapsed ?? false);
     if (existing) {
       this.store.activateTab(existing.id);
@@ -189,7 +194,7 @@ export class FileService {
    */
   async replaceFromDisk(tabId: string, path: string, kept: (markdown: string) => boolean): Promise<"shown" | "stored" | "changed" | "gone"> {
     const owner = (): Tab | undefined =>
-      this.store.get().tabs.find((tab) => tab.id === tabId && tab.doc.filePath === path);
+      this.store.get().tabs.find((tab) => tab.id === tabId && samePath(tab.doc.filePath, path));
     if (!owner()) return "gone";
     const payload = await readFile(path);
     this.present.flush();
@@ -382,6 +387,12 @@ export class FileService {
       path = await saveDialog({ filters: MD_FILTERS, defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
+      // Two tabs with one file would each take the other's reload, notice
+      // and saves for its own.
+      const chosen = path;
+      if (this.store.get().tabs.some((tab) => tab.id !== tabId && samePath(tab.doc.filePath, chosen))) {
+        throw new Error(`“${chosen.split(/[\\/]/).pop()}” is open in another tab. Close that tab, or choose another name.`);
+      }
     }
     if (!path) return false;
     let expectedContent: string | undefined;

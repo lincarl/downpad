@@ -5148,6 +5148,26 @@ test("a Save that cannot write says why, and the document stays open and unsaved
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
 });
 
+test("a Save As onto a file that is open in another tab is refused and says why", async () => {
+  const first = path.join(directory, "save-as-first.md");
+  const second = path.join(directory, "save-as-second.md");
+  await writeFile(first, "# First\n");
+  await writeFile(second, "# Second\n");
+  await launch(first);
+  await chooseOpen(second);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Second");
+  await page.getByRole("tab", { name: /save-as-first\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("First");
+  await chooseSave(second);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “save-as-first.md”. “save-as-second.md” is open in another tab. Close that tab, or choose another name.");
+  expect(await readFile(second, "utf8")).toBe("# Second\n");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  // The notice is about the first document, so it goes when the other tab comes to the front.
+  await page.getByRole("tab", { name: /save-as-second\.md/ }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("Save on close keeps edits typed while the write is pending", async () => {
   const file = path.join(directory, "edit-during-close.md");
   await writeFile(file, "First version.\n");

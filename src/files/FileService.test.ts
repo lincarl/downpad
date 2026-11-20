@@ -95,6 +95,14 @@ describe("replacing a document with its file after a discard", () => {
     expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
   });
 
+  it("replaces the document of a tab whose path Windows spells in another case", async () => {
+    const { store, files } = setup();
+    const tabId = store.get().activeTabId!;
+    store.patchDoc({ filePath: "C:\\Docs\\Notes.md" });
+    expect(await files.replaceFromDisk(tabId, "c:\\docs\\notes.md", () => true)).toBe("shown");
+    expect(store.get().doc.markdown).toBe(onDisk.content);
+  });
+
   it("leaves a tab that holds another file by now", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;
@@ -533,6 +541,29 @@ describe("saving document snapshots", () => {
     expect(native.writeFile.mock.calls[1][0]).toBe("C:\\Docs\\notes.md");
   });
 
+  it("refuses a Save As, and the first save of an untitled document, onto a file that is open in another tab", async () => {
+    const { store, files } = setup(true);
+    const first = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), filePath: "C:\\Docs\\Other.md", markdown: "# Other\n", savedMarkdown: "# Other\n" });
+    store.activateTab(first);
+    native.saveDialog.mockResolvedValueOnce("c:\\docs\\other.md");
+    await expect(files.saveAs()).rejects.toThrow("“other.md” is open in another tab. Close that tab, or choose another name.");
+    expect(native.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc.filePath).toBe(filePath);
+    expect(files.failedMoves(first)).toBe(1);
+
+    store.addTab({ ...blankDoc(), markdown: "Draft\n", isDirty: true });
+    native.saveDialog.mockResolvedValueOnce(filePath);
+    await expect(files.save()).rejects.toThrow("“notes.md” is open in another tab.");
+    expect(native.writeFile).not.toHaveBeenCalled();
+
+    // Onto its own file, a Save As writes.
+    store.activateTab(first);
+    native.saveDialog.mockResolvedValueOnce(filePath);
+    expect(await files.saveAs()).toBe(true);
+    expect(native.writeFile).toHaveBeenCalledOnce();
+  });
+
   it("takes for its own write only a save that is writing the document's file", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;
@@ -838,6 +869,23 @@ describe("reloading an open file", () => {
 
     expect(store.get().doc).toEqual(kept);
     expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about a reload's failed read once its tab shows another file", async () => {
+    const { store, presenter, files } = setup();
+    const owner = store.get().activeTabId!;
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const loading = files.openPath(filePath, { reload: true });
+    await eventually(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
+    store.patchDocById(owner, { filePath: "/local/notes.md" });
+    read.reject(new Error("The share went away."));
+    await expect(loading).resolves.toBeUndefined();
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+
+    // A failed read of the file the tab still shows is told.
+    native.readFile.mockRejectedValueOnce(new Error("The share went away."));
+    await expect(files.openPath("/local/notes.md", { reload: true })).rejects.toThrow("The share went away.");
   });
 
   it("replaces text typed during a reload's read with the file, as the user asked", async () => {

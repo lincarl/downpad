@@ -350,8 +350,33 @@ describe("GitSync checks", () => {
     git.getLatest.mockResolvedValue(done([PATH]));
     await sync.check({ force: true });
     expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], false);
-    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, PATH, expect.any(Function));
+    expect(deps.keepingPlace).toHaveBeenCalledOnce();
+    expect(store.get().doc.markdown).toBe("# Theirs\n");
     expect(store.get().banner).toBeNull();
+  });
+
+  it("keeps text typed in the document in front while Get latest reads its file", async () => {
+    openDocument();
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done([PATH]));
+    // The user types after the check for unsaved changes, before the tab takes the file.
+    vi.mocked(deps.keepingPlace).mockImplementationOnce(async (reload) => {
+      store.patchDoc({ markdown: "# Notes\n\nTyped during the read\n" });
+      await reload();
+    });
+    await sync.check({ force: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledOnce();
+    expect(store.get().doc.markdown).toBe("# Notes\n\nTyped during the read\n");
+    expect(deps.files.openPath).not.toHaveBeenCalled();
+  });
+
+  it("finds the tab of a changed file also when Windows spells its path in another case", async () => {
+    store.replaceActiveDoc({ ...store.get().doc, filePath: "C:\\Repo\\Notes.md", markdown: "# Notes\n", savedMarkdown: "# Notes\n", isDirty: false });
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done(["c:\\repo\\notes.md"]));
+    await sync.check({ force: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, "c:\\repo\\notes.md", expect.any(Function));
   });
 
   it("only tells the user about remote changes when Get latest automatically is off", async () => {

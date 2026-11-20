@@ -62,7 +62,7 @@ In the document view, End moves the caret to the end of a line that starts with 
 
 ## Recent files and recovery
 
-Unsaved documents show a red document icon in their tab, while the window title shows only the file name and app name. Closing a tab, all tabs, or the window offers Save, Cancel, and Discard when there is unsaved work. Save writes each affected document and asks for a path for an untitled document. Cancelling a save, a failed write, or work still waiting to be saved keeps the documents open. A save, open or close that fails shows a notice that says what failed and why, and a drop or paste names the files it could not add or open.
+Unsaved documents show a red document icon in their tab, while the window title shows only the file name and app name. Closing a tab, all tabs, or the window offers Save, Cancel, and Discard when there is unsaved work. Save writes each affected document and asks for a path for an untitled document. Cancelling a save, a failed write, or work still waiting to be saved keeps the documents open. A save, open or close that fails shows a notice that says what failed and why, and a drop or paste names the files it could not add or open. A document cannot be saved onto a file that is open in another tab.
 
 The Recent button sits in the menu row, immediately left of Open, and uses the same toolbar styling with a Lucide list-clock icon. The Recent view lists previously opened documents, with starred favorites pinned at the top. Its search field finds documents by file name, by content, or both.
 

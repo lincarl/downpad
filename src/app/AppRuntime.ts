@@ -29,6 +29,7 @@ import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
 import { copyActiveFile } from "./copyFile";
+import { clearNoticesOfOtherDocuments } from "./noticeScope";
 import { SaveFailureNotice } from "./saveFailureNotice";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
 import { GitSync } from "../git/GitSync";
@@ -89,6 +90,7 @@ export class AppRuntime {
       reloadActiveDoc: () => this.reloadActiveDoc(),
     };
     this.saveFailure = new SaveFailureNotice(store);
+    this.cleanups.push(clearNoticesOfOtherDocuments(store));
     this.files = new FileService(store, presenter, (tabId) => this.saveFailure.saved(tabId));
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).
@@ -612,12 +614,10 @@ export class AppRuntime {
     this.afterActiveDocChanged();
   }
 
-  /** Re-point the file watcher at the active document and clear a stale banner
-   *  left over from the previously active file (§5.1, §5.19). The notice for
-   *  an unresolved change on disk to this document shows again, and a change
-   *  made while another tab was in front shows it too. */
+  /** Re-point the file watcher at the active document (§5.1, §5.19). The
+   *  notice for an unresolved change on disk to this document shows again,
+   *  and a change made while another tab was in front shows it too. */
   private afterActiveDocChanged(): void {
-    this.store.set({ banner: null });
     this.files.watchActive();
     this.desktopEvents.activeDocChanged();
   }
