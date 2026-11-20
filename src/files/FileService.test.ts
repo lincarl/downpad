@@ -12,7 +12,7 @@ const native = vi.hoisted(() => ({
   writeFile: vi.fn<(path: string, content: string, eol: Eol, expectedContent?: string) => Promise<FileMeta>>(),
   watchFile: vi.fn<(path: string) => Promise<void>>(),
   recordFileOpened: vi.fn<(path: string, openedAtMs: number) => Promise<unknown>>(),
-  pathExists: vi.fn<(path: string) => Promise<boolean>>(),
+  fileStamp: vi.fn<(path: string) => Promise<{ modifiedMs: number; sizeBytes: number }>>(),
   ask: vi.fn<(message: string) => Promise<boolean>>(),
   confirmSaveChanges: vi.fn<(message: string) => Promise<"save" | "discard" | "cancel">>(),
   saveDialog: vi.fn<(options: unknown) => Promise<string | null>>(),
@@ -24,11 +24,13 @@ vi.mock("../ipc/commands", () => ({
   writeFile: native.writeFile,
   watchFile: native.watchFile,
   recordFileOpened: native.recordFileOpened,
-  pathExists: native.pathExists,
+  fileStamp: native.fileStamp,
 }));
 vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog, confirmSaveChanges: native.confirmSaveChanges }));
 
 const filePath = "/docs/notes.md";
+/** The main process's error for a look at a file that is not there, as Electron hands it on. */
+const noSuchFile = new Error("Error invoking remote method 'downpad:invoke': Error: ENOENT: no such file or directory, open '/docs/backup.json'");
 const onDisk: FilePayload = {
   content: "# Changed outside the app\n",
   eol: "crlf",
@@ -63,7 +65,7 @@ beforeEach(() => {
   native.watchFile.mockResolvedValue();
   native.recordFileOpened.mockResolvedValue({});
   native.ask.mockResolvedValue(true);
-  native.pathExists.mockResolvedValue(false);
+  native.fileStamp.mockRejectedValue(noSuchFile);
   native.confirmSaveChanges.mockResolvedValue("save");
   native.saveDialog.mockResolvedValue(null);
 });
@@ -440,9 +442,10 @@ describe("saving document snapshots", () => {
     await files.saveAs();
     expect(offered()).toEqual(["JSON", "Markdown", "Text", "YAML", "All files"]);
 
+    // The file's own extension comes first, which a Windows dialog adds to a bare name.
     store.patchDoc({ filePath: "/docs/compose.yml" });
     await files.saveAs();
-    expect(offered()[0]).toBe("YAML");
+    expect((native.saveDialog.mock.lastCall![0] as { filters: unknown[] }).filters[0]).toEqual({ name: "YAML", extensions: ["yml", "yaml"] });
 
     // An untitled document is Markdown.
     store.patchDoc({ filePath: null });
@@ -473,20 +476,39 @@ describe("saving document snapshots", () => {
     native.saveDialog.mockResolvedValueOnce("/docs/README");
     expect(await files.saveAs()).toBe(true);
     expect(store.get().doc.filePath).toBe("/docs/README");
-    expect(native.pathExists).toHaveBeenCalledTimes(2);
+    expect(native.fileStamp).toHaveBeenCalledTimes(2);
+
+    // A dot that starts the name is part of the name, not an extension.
+    store.patchDoc({ filePath: "/docs/formatter.json" });
+    native.saveDialog.mockResolvedValueOnce("/docs/.prettierrc");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/.prettierrc.json");
+  });
+
+  it("fails the save when it cannot tell whether a file of the full name exists, so it never replaces one unasked", async () => {
+    const { store, files } = setup();
+    store.patchDoc({ filePath: "/docs/settings.json" });
+    // The share stops answering for the look, and a path that holds the
+    // word ENOENT is no missing file.
+    native.fileStamp.mockRejectedValueOnce(new Error("Error invoking remote method 'downpad:invoke': Error: EIO: i/o error, open '/ENOENT/backup.json'"));
+    native.saveDialog.mockResolvedValueOnce("/ENOENT/backup");
+    await expect(files.saveAs()).rejects.toThrow("EIO");
+    expect(native.ask).not.toHaveBeenCalled();
+    expect(native.writeFile).not.toHaveBeenCalled();
+    expect(store.get().doc.filePath).toBe("/docs/settings.json");
   });
 
   it("asks before the name with the added extension replaces a file, which the dialog did not ask about", async () => {
     const { store, files } = setup();
     const tabId = store.get().activeTabId!;
     store.patchDoc({ filePath: "/docs/settings.json" });
-    native.pathExists.mockResolvedValue(true);
+    native.fileStamp.mockResolvedValue({ modifiedMs: 1, sizeBytes: 2 });
 
     native.ask.mockResolvedValueOnce(false);
     native.saveDialog.mockResolvedValueOnce("/docs/backup");
     expect(await files.saveAs()).toBe(false);
     expect(native.ask).toHaveBeenCalledExactlyOnceWith("“backup.json” already exists. Replace it?", expect.objectContaining({ okLabel: "Replace" }));
-    expect(native.pathExists).toHaveBeenCalledExactlyOnceWith("/docs/backup.json");
+    expect(native.fileStamp).toHaveBeenCalledExactlyOnceWith("/docs/backup.json");
     expect(native.writeFile).not.toHaveBeenCalled();
     expect(store.get().doc.filePath).toBe("/docs/settings.json");
     // A Save As the user backed out of, as one cancelled in its dialog.

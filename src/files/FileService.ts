@@ -6,7 +6,8 @@
 // changes the EditorPresenter re-shows it in the editor.
 
 import { openDialog, saveDialog, ask, confirmSaveChanges } from "../ipc/dialogs";
-import { pathExists, readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
+import { fileStamp, readFile, writeFile, recordFileOpened, watchFile, unwatchFile } from "../ipc/commands";
+import { fileSystemErrorCode } from "../ipc/failureReason";
 import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload } from "../ipc/contracts";
 import { isElectron } from "../ipc/env";
 import { sameFilePath } from "./pathIdentity";
@@ -424,7 +425,7 @@ export class FileService {
     let path = originalPath;
     const choosePath = saveAs || !path;
     if (choosePath) {
-      path = await saveDialog({ filters: fileFilters(documentLanguage(originalPath)), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
+      path = await saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" });
       if (path) path = await this.withOwnExtension(path, originalPath);
       const afterDialog = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
       if (!path || !afterDialog || afterDialog.filePath !== originalPath || choice.refuse?.(path)) return false;
@@ -482,11 +483,18 @@ export class FileService {
    *  document has now, `originalPath`. Windows adds it in the dialog, and
    *  other systems return the name as typed. The dialog asked about replacing
    *  the name as typed, so this asks about a file that has the full name.
-   *  Resolves null when the user keeps that file. */
+   *  Resolves null when the user keeps that file. Only a look that finds no
+   *  file lets the save go on without asking. Any other failure of the look,
+   *  as on a drive that does not answer, fails the save, since the file may
+   *  be there. */
   private async withOwnExtension(chosen: string, originalPath: string | null): Promise<string | null> {
     if (!originalPath || documentLanguage(originalPath) === "markdown" || extensionOf(chosen) !== "") return chosen;
     const path = `${chosen.replace(/\.$/, "")}.${extensionOf(originalPath)}`;
-    if (!(await pathExists(path))) return path;
+    const exists = await fileStamp(path).then(() => true, (error: unknown) => {
+      if (fileSystemErrorCode(error) === "ENOENT") return false;
+      throw error;
+    });
+    if (!exists) return path;
     const name = path.split(/[\\/]/).pop() ?? path;
     const replace = await ask(`“${name}” already exists. Replace it?`, { title: "Downpad", kind: "warning", okLabel: "Replace", cancelLabel: "Cancel" });
     return replace ? path : null;

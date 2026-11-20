@@ -5,6 +5,7 @@ import { blankDoc } from "../state/types";
 import { forgetImageAnswers } from "../editor/wysiwyg/imageView";
 import { createAppStore } from "./createAppStore";
 import { FileDropCoordinator, type FileDropDependencies } from "./FileDropCoordinator";
+import { takesNoFiles } from "../files/documentLanguage";
 
 const disk = vi.hoisted(() => ({
   readImageBytes: vi.fn<(path: string) => Promise<ImageBytes>>(),
@@ -73,6 +74,9 @@ function setup() {
     }),
     insertDropped: async (drop: FileDrop, markdown: string) => {
       if (!(await untilActive(drop.tabId))) return false;
+      // As EditorHost does, refuse a document that is a JSON or YAML file by now.
+      const refusal = takesNoFiles(store.get().tabs.find((t) => t.id === drop.tabId)?.doc.filePath ?? null);
+      if (refusal) throw refusal;
       log.push(`insert ${markdown} into ${tab(drop.tabId)} with ${tab(store.get().activeTabId)} in front`);
       return true;
     },
@@ -361,6 +365,24 @@ describe("FileDropCoordinator", () => {
     expect(disk.writeAttachment).not.toHaveBeenCalled();
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
       "Downpad could not add “report.pdf”. A JSON file takes no dropped files. Drop them on a Markdown document.",
+    );
+  });
+
+  it("stores no copy of an image beside an untitled document that the drop's own save made a JSON file", async () => {
+    const { store, log, files, coordinator, reportFailure } = setup();
+    store.set((state) => ({ settings: { ...state.settings, embedImagesAsBase64: false } }));
+    store.patchDoc({ filePath: null, markdown: "{}" });
+    files.save = async () => {
+      store.patchDoc({ filePath: "/docs/config.json" });
+      return true;
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await coordinator.handle(["/drop/pic.png"], point);
+    logged.mockRestore();
+    expect(disk.writeAttachment).not.toHaveBeenCalled();
+    expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “pic.png”. A JSON file takes no dropped files. Drop them on a Markdown document.",
     );
   });
 

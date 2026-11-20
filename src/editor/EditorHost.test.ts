@@ -782,6 +782,35 @@ describe("EditorHost JSON and YAML files", () => {
     vi.restoreAllMocks();
   });
 
+  it("puts no dropped file into a document that became a JSON file while the file waited for its turn", async () => {
+    const root = document.createElement("div");
+    const store = storeWithFile("/notes/a.md");
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    // A slow file of an earlier drop holds the second drop back.
+    const first = host.aimDrop()!;
+    const second = host.aimDrop()!;
+    const waiting = host.insertDropped(second, "![](b.png)");
+    // Meanwhile a Save As makes the document a JSON file.
+    store.patchDocById("tab-1", { filePath: "/notes/a.json" });
+    await host.showActiveDoc();
+    host.releaseDrop(first);
+
+    await expect(waiting).rejects.toThrow("A JSON file takes no dropped files.");
+    expect(fakeEditors.insertedAt).toBeNull();
+    expect(fakeEditors.rawInsertedAt).toBeNull();
+    expect(store.get().doc.markdown).toBe("original markdown");
+    host.releaseDrop(second);
+
+    // Saved as Markdown again, the document takes files.
+    store.patchDocById("tab-1", { filePath: "/notes/a.md" });
+    await host.showActiveDoc();
+    const third = host.aimDrop()!;
+    expect(await host.insertDropped(third, "![](c.png)")).toBe(true);
+    host.releaseDrop(third);
+    await host.dispose();
+  });
+
   it("offers no spelling check for a JSON file", async () => {
     const managed = vi.spyOn(await import("./spelling"), "managedSpellingAvailable").mockReturnValue(true);
     const store = storeWithFile("/data/settings.json");

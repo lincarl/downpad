@@ -82,7 +82,8 @@ export function filterByName(entries: RecentEntry[], query: string): RecentEntry
  * (`plainSnippet`), unless the query itself contains Markdown markup, since
  * the match would then vanish with it, or nothing readable would remain. A
  * JSON or YAML file has no Markdown markers, and what looks like one, such as
- * the `-` of a YAML list or a `#` comment, is part of what was searched for.
+ * the `-` of a YAML list or a `#` comment, is part of what was searched for,
+ * so its line shows with all its characters, without the space around it.
  */
 export function snippetText(snippet: string, query: string, path: string): string {
   if (documentLanguage(path) !== "markdown") return snippet.trim() || snippet;

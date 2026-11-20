@@ -28,7 +28,7 @@ import type { Store } from "../state/store";
 import { serializerStyleFromSettings } from "../state/types";
 import type { DocumentViewFailure, EditorLayout } from "../state/types";
 import { applyEditorMarkdownForTab } from "../document/DocumentModel";
-import { documentLanguage, type DocumentLanguage } from "../files/documentLanguage";
+import { documentLanguage, takesNoFiles, type DocumentLanguage } from "../files/documentLanguage";
 import { WysiwygEditor } from "./wysiwyg/WysiwygEditor";
 import { forgetImageAnswers } from "./wysiwyg/imageView";
 import type { DropTarget } from "./wysiwyg/fileDrop";
@@ -409,6 +409,9 @@ export class EditorHost implements FindController {
    * the latest edit for the drop's next file. An insert reported by the
    * document pane would write the block the file joins in its own form under
    * the user's caret.
+   *
+   * Throws for a document that is a JSON or YAML file once its turn has come
+   * (`takesNoFiles`), and puts nothing in.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
     await this.untilTurn(drop);
@@ -417,6 +420,11 @@ export class EditorHost implements FindController {
       if (!(await this.waitWhileBehind(drop))) return false;
       place = this.dropPlace(drop);
     }
+    // The waits are over, and nothing below waits again. A Save As meanwhile
+    // can have made the document a JSON or YAML file, which a Markdown image
+    // or link would break.
+    const refusal = takesNoFiles(this.store.get().tabs.find((tab) => tab.id === drop.tabId)?.doc.filePath ?? null);
+    if (refusal) throw refusal;
     const aimed = this.drops.get(drop)!;
     const { pane } = place;
     const target = place.target ?? (aimed.forDocument ? (pane.raw?.blockTargetAtCaret() ?? null) : null);
