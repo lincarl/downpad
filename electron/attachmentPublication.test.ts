@@ -26,6 +26,36 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+it("holds up no other folder's attachments when a write never returns, and keeps one folder's writes in order", async () => {
+  const directory = await fixtureDirectory();
+  const gone = join(directory, "gone-drive");
+  const local = join(directory, "local");
+  await mkdir(gone);
+  await mkdir(local);
+  // A drive that went away never answers the write that stages the file.
+  const originalOpen = filesystem.open;
+  const never = new Promise<never>(() => {});
+  vi.spyOn(filesystem, "open").mockImplementation((path, ...rest) => (String(path).startsWith(gone) ? never : originalOpen(path, ...rest)));
+  syncBuiltinESMExports();
+  const bytes = Uint8Array.of(1, 2, 3);
+  const settled: string[] = [];
+  void writeAttachment(join(gone, "note.md"), "attachments", "a.png", bytes).finally(() => settled.push("gone"));
+
+  expect(await writeAttachment(join(local, "note.md"), "attachments", "a.png", bytes)).toBe("attachments/a.png");
+  // The folder's own writes still take turns, so the names they claim keep their order.
+  const [first, second] = await Promise.all([
+    writeAttachment(join(local, "note.md"), "attachments", "a.png", bytes),
+    writeAttachment(join(local, "other.md"), "attachments", "a.png", bytes),
+  ]);
+  expect([first, second]).toEqual(["attachments/a-1.png", "attachments/a-2.png"]);
+  expect(settled).toEqual([]);
+});
+
+it("rejects a folder outside the document's folder without queueing anything", async () => {
+  const directory = await fixtureDirectory();
+  await expect(writeAttachment(join(directory, "note.md"), "../elsewhere", "a.png", Uint8Array.of(1))).rejects.toThrow("must stay inside the document folder");
+});
+
 it("keeps the final attachment invisible to readers until all bytes have been written", async () => {
   const directory = await fixtureDirectory();
   const attachments = join(directory, "attachments");

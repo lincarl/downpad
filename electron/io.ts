@@ -285,17 +285,29 @@ export async function ensureAttachmentsDirectory(docPath: string, folderName: st
   return directory;
 }
 
-let pendingAttachmentWrite: Promise<void> = Promise.resolve();
+/** Attachment writes under way, by the folder they write to (`fileKey`). */
+const attachmentWrites = new Map<string, Promise<void>>();
 const UNSUPPORTED_LINK_ERRORS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
 
-/** Stage complete attachments, then publish without replacing existing names when hard links are supported. */
+/** Stage complete attachments, then publish without replacing existing names when hard links are supported.
+ *  Writes to one attachments folder run one at a time, in the order asked for, which the
+ *  name check of the fallback without hard links needs. Writes to other folders never wait
+ *  for them, so a write that does not return, as to a network drive that went away, holds
+ *  up only later writes to its own folder. The folder's path is worked out without a look
+ *  at the disk. */
 export function writeAttachment(
   docPath: string,
   folderName: string,
   fileName: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  const result = pendingAttachmentWrite.then(async () => {
+  let folder: string;
+  try {
+    folder = attachmentsDirectory(docPath, folderName);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return queued(attachmentWrites, fileKey(folder), async () => {
     if (!fileName || fileName === "." || fileName === ".." || /[\\/\0]/.test(fileName)) {
       throw new Error("An attachment name must be a file name.");
     }
@@ -333,8 +345,6 @@ export function writeAttachment(
       await unlink(temporary).catch(() => {});
     }
   });
-  pendingAttachmentWrite = result.then(() => {}, () => {});
-  return result;
 }
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {

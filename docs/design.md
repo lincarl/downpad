@@ -154,7 +154,7 @@ A pane that a layout switch hid still takes a dropped or pasted file at its plac
 
 The image block's upload input and Replace image put an image into the editor that asked for it, so they do not wait for a Save As (they leave out `ImageStoreContext.untilPathSettled`). A long wait would make it likelier that the editor is rebuilt or dropped from memory before the image goes in, which loses the image. They still write the image again if a Save As that ended while the image was written put the document in another folder. A Save As still being written when such an image is written leaves the image beside the old folder, with a link that does not resolve from the new one.
 
-Attachment writes stage complete bytes in a sibling temporary file before publication. On filesystems with hard links, publication atomically claims a free name. FAT and exFAT use serialized application writes, a fresh name check, and atomic rename instead. That fallback preserves support for these filesystems, but another process creating the same name between the check and rename can have its file replaced.
+Attachment writes stage complete bytes in a sibling temporary file before publication. Writes to one attachments folder run one at a time, and writes to other folders never wait for them, so a folder on a drive that does not answer holds up only its own attachments, as for document writes. On filesystems with hard links, publication atomically claims a free name. FAT and exFAT use serialized application writes, a fresh name check, and atomic rename instead. That fallback preserves support for these filesystems, but another process creating the same name between the check and rename can have its file replaced.
 
 ## Desktop integration
 
