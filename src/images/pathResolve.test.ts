@@ -144,8 +144,10 @@ describe("resolveMarkdownLinkTarget", () => {
     expect(resolveMarkdownLinkTarget("C:\\work\\sub\\..\\notes.md", null)).toBe("C:/work/notes.md");
   });
 
-  it("leaves a POSIX path with a backslash as written, since a file name can have one there", () => {
-    expect(resolveMarkdownLinkTarget("/notes/./tax%5C2026.md", null)).toBe("/notes/./tax\\2026.md");
+  it("keeps a backslash in a POSIX path, where a file name can have one, as it removes the ./ segments", () => {
+    expect(resolveMarkdownLinkTarget("/notes/./tax%5C2026.md", null)).toBe("/notes/tax\\2026.md");
+    expect(resolveMarkdownLinkTarget("/notes/sub/../tax%5C.%5C2026.md", null)).toBe("/notes/tax\\.\\2026.md");
+    expect(resolveMarkdownLinkTarget("/notes/tax%5C.%5C2026.md", null)).toBe("/notes/tax\\.\\2026.md");
   });
 
   it.each([

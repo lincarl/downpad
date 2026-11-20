@@ -918,18 +918,31 @@ describe("reloading an open file", () => {
     expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
   });
 
-  it("collects typing in the tab that goes behind before it shows the tab that has the file", async () => {
-    const { store, presenter, files } = setup();
-    const owner = store.get().activeTabId!;
-    store.addTab({ ...blankDoc(), filePath: "/docs/other.md", markdown: "# Other\n", savedMarkdown: "# Other\n" });
-    const other = store.get().activeTabId!;
-    presenter.flush.mockReset();
+  it("collects typing in the tab that goes behind once its wait for a save ends, before it shows the tab that has the file", async () => {
+    const { store, presenter, files } = setup(true);
+    const writer = store.get().activeTabId!;
+    const other = store.addTab({ ...blankDoc(), filePath: "/docs/other.md", markdown: "# Other\n", savedMarkdown: "# Other\n" });
+    store.activateTab(writer);
+    const write = deferred<FileMeta>();
+    native.saveDialog.mockResolvedValueOnce("/docs/target.md");
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saveAs = files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    store.activateTab(other);
+    const opening = files.openPath("/docs/target.md");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // From here on: the editor reports typing only when asked, and the open
+    // asks before another tab comes to the front.
     const order: string[] = [];
-    presenter.flush.mockImplementation(() => { order.push(`flush with ${store.get().activeTabId === other ? "other" : "owner"} in front`); });
-    await files.openPath(filePath);
-    expect(store.get().activeTabId).toBe(owner);
-    expect(order.at(-1)).toBe("flush with other in front");
-    expect(order.length).toBeGreaterThanOrEqual(2);
+    presenter.flush.mockImplementation(() => { order.push("collect typing"); });
+    const stop = store.select((state) => state.activeTabId, () => { order.push("show another tab"); });
+    write.resolve({ modifiedMs: 300 });
+    expect(await saveAs).toBe(true);
+    await opening;
+    stop();
+    expect(store.get().activeTabId).toBe(writer);
+    expect(order).toEqual(["collect typing", "show another tab"]);
   });
 
   it("gives a file one tab when it is opened twice before the first read ends", async () => {

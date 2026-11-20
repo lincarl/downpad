@@ -86,11 +86,13 @@ const MARKDOWN_LINK_EXT = /\.(?:md|markdown|mdown|mkd)$/i;
  * when a link uses `./` or `../`. Drive-letter and POSIX paths are returned with
  * forward slashes (Windows accepts `C:/…`) and a `..` never escapes the
  * drive/root. UNC paths (`\\server\share\…`) are left exactly as-is: they are
- * rare here and reshaping their prefix risks breaking share resolution.
+ * rare here and reshaping their prefix risks breaking share resolution. With
+ * `backslashInNames`, only `/` separates segments, as in a POSIX path, where
+ * a file name can have a backslash.
  */
-export function collapseDotSegments(joined: string): string {
+export function collapseDotSegments(joined: string, backslashInNames = false): string {
   if (/^[\\/]{2}/.test(joined)) return joined; // UNC — leave untouched
-  const unified = joined.replace(/\\/g, "/");
+  const unified = backslashInNames ? joined : joined.replace(/\\/g, "/");
   const leadingSlash = unified.startsWith("/");
   const out: string[] = [];
   for (const seg of unified.split("/")) {
@@ -132,11 +134,11 @@ export function resolveMarkdownLinkTarget(href: string, docPath: string | null):
   const path = safeDecode(target);
   if (!path || !MARKDOWN_LINK_EXT.test(path)) return null;
   // An absolute path stays as written, unless it has `./` or `../` segments.
-  // A POSIX path with a backslash stays too, as a file name can have one
-  // there, which collapsing would take for a separator.
+  // In a POSIX path only `/` separates them, as a file name can have a
+  // backslash there.
   if (isAbsolutePath(path)) {
-    const posixBackslash = path.startsWith("/") && path.includes("\\");
-    return !posixBackslash && /(^|[\\/])\.{1,2}(?=[\\/]|$)/.test(path) ? collapseDotSegments(path) : path;
+    if (path.startsWith("/")) return /(^|\/)\.{1,2}(?=\/|$)/.test(path) ? collapseDotSegments(path, true) : path;
+    return /(^|[\\/])\.{1,2}(?=[\\/]|$)/.test(path) ? collapseDotSegments(path) : path;
   }
   if (!docPath) return null;
   const dir = dirName(docPath);

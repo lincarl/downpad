@@ -68,10 +68,10 @@ export class AppRuntime {
   private closingTabs = false;
   /** The element the document's editors show in, which the Recent view hides. */
   private readonly editorArea: HTMLElement;
-  /** While the Recent view is in front: the tab behind it, where its document
-   *  was scrolled when the view came, and whether that document was replaced
-   *  meanwhile, so that its new editors get that place when it shows again. */
-  private behindRecent: { tabId: string | null; place: Place; replaced: boolean } | null = null;
+  /** While the Recent view is in front: the tab behind it, and where its
+   *  document was scrolled when the view came. The document gets that place
+   *  when it shows again, also in editors built meanwhile. */
+  private behindRecent: { tabId: string | null; place: Place } | null = null;
   /** The error notice of a save the user asked for that failed. */
   private readonly saveFailure: SaveFailureNotice;
   private disposed = false;
@@ -594,7 +594,7 @@ export class AppRuntime {
     if (this.store.get().view === "recent") return;
     if (this.findBar.isOpen()) this.findBar.close();
     // The hidden editor area measures as not scrolled, so its place is taken now.
-    this.behindRecent = { tabId: this.store.get().activeTabId, place: capturePlace(this.editorArea), replaced: false };
+    this.behindRecent = { tabId: this.store.get().activeTabId, place: capturePlace(this.editorArea) };
     this.store.set({ view: "recent" });
     await this.recentView.refresh();
   }
@@ -611,24 +611,11 @@ export class AppRuntime {
    *  changed. With `quiet` as well, the user did not ask for the replacement
    *  at that moment, so the Recent view stays in front if it shows. Behind
    *  the Recent view nothing can be measured or scrolled, so the document
-   *  gets the place it had when that view came, once it shows again. */
+   *  gets the place it had when that view came, once it shows again
+   *  (`presentActiveDoc`). */
   private async reloadActiveDoc({ keepPlace = false, quiet = false }: { keepPlace?: boolean; quiet?: boolean } = {}): Promise<void> {
-    if (!keepPlace) return this.presentActiveDoc(true);
-    const inFront = (): string | null => this.store.get().activeTabId;
-    if (this.store.get().view !== "recent") {
-      await keepingPlace(this.editorArea, inFront, () => this.presentActiveDoc(true, quiet));
-      return;
-    }
-    const behind = this.behindRecent?.tabId === inFront() ? this.behindRecent : null;
-    if (quiet) {
-      await this.presentActiveDoc(true, true);
-      if (behind) behind.replaced = true;
-      return;
-    }
-    // The user asked for it, so the document shows, where it was scrolled.
-    const tab = inFront();
-    await this.presentActiveDoc(true);
-    if (behind) restorePlace(this.editorArea, behind.place, () => inFront() === tab);
+    if (!keepPlace || this.store.get().view === "recent") return this.presentActiveDoc(true, quiet);
+    await keepingPlace(this.editorArea, () => this.store.get().activeTabId, () => this.presentActiveDoc(true));
   }
 
   private async presentActiveDoc(reload: boolean, background = false): Promise<void> {
@@ -652,10 +639,11 @@ export class AppRuntime {
     if (reload && this.store.get().banner) this.store.set({ banner: null });
     if (reload) await this.editorHost.reloadActiveDoc();
     else await this.editorHost.showActiveDoc();
-    // The document that was replaced behind the Recent view shows again, in
-    // new editors, which get the place the old ones had.
+    // The document that was behind the Recent view shows again, where it was
+    // scrolled when that view came. Its editors can be new ones, built while
+    // the view was in front or just now, and the old ones are there already.
     const tab = this.store.get().activeTabId;
-    if (back?.replaced && !reload && back.tabId === tab) restorePlace(this.editorArea, back.place, () => this.store.get().activeTabId === tab);
+    if (back && back.tabId === tab) restorePlace(this.editorArea, back.place, () => this.store.get().activeTabId === tab);
     this.afterActiveDocChanged();
   }
 
