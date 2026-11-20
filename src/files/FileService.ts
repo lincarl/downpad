@@ -198,11 +198,13 @@ export class FileService {
 
   /** True if the active tab is a pristine untitled buffer that open can reuse.
    *  One that a dropped file is on its way into keeps its document, so the
-   *  file never goes into the one opened (§5.4). */
+   *  file never goes into the one opened (§5.4). So does one whose save is
+   *  under way, as a draft the user emptied again while its Save As writes,
+   *  so that the save ends in the tab it started in. */
   private activeIsReusable(): boolean {
     const { tabs, activeTabId } = this.store.get();
     const active = tabs.find((t) => t.id === activeTabId);
-    return !!active && !hasUnsavedChanges(active) && !active.doc.filePath && active.doc.markdown.trim() === "";
+    return !!active && !hasUnsavedChanges(active) && !active.doc.filePath && active.doc.markdown.trim() === "" && !this.isSaving(active.id);
   }
 
   /** Point the single backend watcher at the active document's file, or clear
@@ -393,7 +395,7 @@ export class FileService {
     // stays known, and a report of that file still compares with it.
     const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
     request.write = { path, replaced: previous };
-    if (path === originalPath) this.store.patchDocById(tabId, { savedMarkdown: null });
+    if (samePath(path, originalPath)) this.store.patchDocById(tabId, { savedMarkdown: null });
     let meta: FileMeta;
     try {
       meta = await (expectedContent === undefined

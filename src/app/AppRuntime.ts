@@ -64,8 +64,9 @@ export class AppRuntime {
   private switchingView = false;
   private closingTabs = false;
   /** The error notice of the last save the user asked for that failed, with
-   *  its tab, so that a later save of that tab that succeeds takes it down. */
-  private saveFailure: { tabId: string; banner: BannerState } | null = null;
+   *  its tab and the file time the document had then, so that a later write
+   *  of the document that works takes the notice down (`followSaveFailure`). */
+  private saveFailure: { tabId: string; banner: BannerState; modifiedMs: number } | null = null;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -370,6 +371,7 @@ export class AppRuntime {
     if (this.disposed) return;
     this.scheduler.start();
     this.session.start(this.startup.sessionToRestore);
+    this.cleanups.push(this.followSaveFailure());
 
     this.cleanups.push(this.store.subscribe((state, previous) => {
       const next = state.settings;
@@ -415,6 +417,25 @@ export class AppRuntime {
     void this.startup.maybePromptDefaultHandler();
   }
 
+  /** Take the notice of a failed save down once a later write of its document
+   *  works, which records another file time: a save the user asks for,
+   *  autosave or the save before Copy file. A notice that was dismissed or
+   *  replaced is forgotten. Returns the unsubscribe function. */
+  private followSaveFailure(): () => void {
+    return this.store.subscribe((state) => {
+      const failure = this.saveFailure;
+      if (!failure) return;
+      if (state.banner !== failure.banner) {
+        this.saveFailure = null;
+        return;
+      }
+      const doc = state.tabs.find((tab) => tab.id === failure.tabId)?.doc;
+      if (doc && (doc.savedMarkdown === null || doc.modifiedMs === failure.modifiedMs)) return;
+      this.saveFailure = null;
+      this.store.set({ banner: null });
+    });
+  }
+
   /** Save the active document as the user asked, then upload it when Upload
    *  when saving is on. Autosave and the saves of a close prompt do not
    *  upload. */
@@ -428,17 +449,16 @@ export class AppRuntime {
     } catch (error) {
       console.error("Downpad: file action failed", error);
       if (this.disposed) return;
-      // The notice names the document, as another tab can be in front by now.
-      const banner: BannerState = { kind: "error", message: `Downpad could not save “${tabLabel(tab)}”. ${failureReason(error)}`.trimEnd() };
-      this.saveFailure = { tabId: tab.id, banner };
+      // The notice names the document, as another tab can be in front by
+      // now, and by the name it has now, as a Save As ahead of this save can
+      // have given it another file.
+      const now = this.store.get().tabs.find((candidate) => candidate.id === tab.id) ?? tab;
+      const banner: BannerState = { kind: "error", message: `Downpad could not save “${tabLabel(now)}”. ${failureReason(error)}`.trimEnd() };
+      this.saveFailure = { tabId: tab.id, banner, modifiedMs: now.doc.modifiedMs };
       this.store.set({ banner });
       return;
     }
     if (!saved) return;
-    if (this.saveFailure?.tabId === tab.id) {
-      if (this.store.get().banner === this.saveFailure.banner) this.store.set({ banner: null });
-      this.saveFailure = null;
-    }
     // Upload the saved document, also if another tab became active meanwhile.
     this.git.afterUserSave(this.store.get().tabs.find((candidate) => candidate.id === tab.id)?.doc.filePath ?? null);
   }

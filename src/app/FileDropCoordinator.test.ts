@@ -215,6 +215,34 @@ describe("FileDropCoordinator", () => {
     logged.mockRestore();
   });
 
+  it("names the files left out and the Markdown files that did not open in one notice, after the last file opened, each with its reason", async () => {
+    const { log, files, coordinator, reportFailure } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const read = disk.readImageBytes.getMockImplementation()!;
+    disk.readImageBytes.mockImplementation(async (path) => {
+      if (path === "/drop/gone.png") throw new Error("ENOENT: no such file or directory, open '/drop/gone.png'");
+      if (path === "/drop/locked.png") throw new Error("EACCES: permission denied, open '/drop/locked.png'");
+      return read(path);
+    });
+    const open = files.openPath;
+    files.openPath = async (path) => {
+      // The notice comes after every Markdown file had its turn.
+      expect(reportFailure).not.toHaveBeenCalled();
+      if (path === "/drop/binary.md") throw new Error("The file is not valid UTF-8.");
+      if (path === "/drop/gone.md") throw new Error("ENOENT: no such file or directory, open '/drop/gone.md'");
+      await open(path);
+    };
+    await coordinator.handle(["/drop/gone.png", "/drop/locked.png", "/drop/binary.md", "/drop/gone.md", "/drop/a.md"], point);
+    expect(log.at(-1)).toBe("open /drop/a.md");
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “gone.png”. The file or folder does not exist. "
+      + "Downpad could not add “locked.png”. Permission was denied, or another program is using the file. "
+      + "Downpad could not open “binary.md”. The file is not valid UTF-8. "
+      + "Downpad could not open “gone.md”. The file or folder does not exist.",
+    );
+    logged.mockRestore();
+  });
+
   it("shows no notice for a drop whose files all open and go in", async () => {
     const { coordinator, reportFailure } = setup();
     await coordinator.handle(["/drop/pic.png", "/drop/a.md"], point);
@@ -376,6 +404,21 @@ describe("FileDropCoordinator pasted images", () => {
       `insert ${image} into dropped-on with dropped-on in front`,
       "release dropped-on",
     ]);
+  });
+
+  it("names a pasted image that could not be stored in a notice, and shows none for a paste that went in", async () => {
+    const { store, log, coordinator, droppedOn, reportFailure } = setup();
+    await coordinator.pasteImages(droppedOn, [pastedPng()]);
+    expect(reportFailure).not.toHaveBeenCalled();
+
+    store.set((state) => ({ settings: { ...state.settings, embedImagesAsBase64: false } }));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    disk.writeAttachment.mockRejectedValueOnce(new Error("ENOSPC: no space left on device, write"));
+    log.length = 0;
+    await coordinator.pasteImages(droppedOn, [pastedPng()]);
+    logged.mockRestore();
+    expect(log).toEqual(["aim the paste at the caret in dropped-on", "release dropped-on"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^Downpad could not add “.+”\. The disk is full\.$/));
   });
 
   it("writes a pasted image stored as a file beside the document where a Save As under way puts it", async () => {

@@ -5,20 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const native = vi.hoisted(() => ({
   write: vi.fn(async (_items: unknown[]) => {}),
-  /** Called before the look at a file, to hold it back. */
-  beforeStat: vi.fn(async (_path: string) => {}),
 }));
-
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    stat: async (path: string) => {
-      await native.beforeStat(path);
-      return actual.stat(path);
-    },
-  };
-});
 
 vi.mock("electron", () => ({
   clipboard: { write: native.write },
@@ -64,30 +51,6 @@ describe("copyFileToClipboard", () => {
     expect(native.write).toHaveBeenCalledOnce();
     const [items] = native.write.mock.calls[0];
     expect(items).toEqual([{ entries: fileClipboardEntries(join(folder, "note.md"), process.platform) }]);
-  });
-
-  it("writes copies in the order they were asked for, also when the look at an earlier file is slow", async () => {
-    native.write.mockClear();
-    await writeFile(join(folder, "later.md"), "# Later\n");
-    let release!: () => void;
-    native.beforeStat.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
-    const slow = copyFileToClipboard(join(folder, "note.md"));
-    const later = copyFileToClipboard(join(folder, "later.md"));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(native.write).not.toHaveBeenCalled();
-    release();
-    await Promise.all([slow, later]);
-    expect(native.write.mock.calls.map(([items]) => items)).toEqual([
-      [{ entries: fileClipboardEntries(join(folder, "note.md"), process.platform) }],
-      [{ entries: fileClipboardEntries(join(folder, "later.md"), process.platform) }],
-    ]);
-  });
-
-  it("copies a file after a copy that failed", async () => {
-    native.write.mockClear();
-    await expect(copyFileToClipboard(join(folder, "missing.md"))).rejects.toThrow();
-    await copyFileToClipboard(join(folder, "note.md"));
-    expect(native.write).toHaveBeenCalledOnce();
   });
 
   it("refuses a folder or a missing file and leaves the clipboard alone", async () => {

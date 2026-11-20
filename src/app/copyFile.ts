@@ -20,10 +20,13 @@ export interface CopyFileDependencies {
   isDisposed(): boolean;
 }
 
-/** Counts the runs of Copy file, and tells the latest one that wrote the
- *  clipboard, so that a run chosen earlier does not write over it. */
+/** Counts the runs of Copy file, and tells the latest one that put its file
+ *  on the clipboard, so that a run chosen earlier does not write over it. */
 let runs = 0;
 let copied = 0;
+/** The clipboard step of the runs, one at a time, so that a run looks at
+ *  `copied` only after the runs that reached the clipboard before it ended. */
+let clipboardTurn: Promise<void> = Promise.resolve();
 
 /** Put the active document's file on the clipboard, as the file manager
  *  copies it, to paste into a folder or as an attachment. Unsaved changes are
@@ -92,10 +95,15 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
     if (!path) return;
     // A Copy file chosen since that copied its file already, as for another
     // tab while this one's save ran, decides what the clipboard holds. One
-    // that copied nothing, such as one that showed a notice, does not.
-    if (run < copied) return;
-    copied = run;
-    await copyFileToClipboard(path);
+    // that copied nothing, such as one that showed a notice or failed, does
+    // not.
+    const copy = clipboardTurn.then(async () => {
+      if (run < copied) return;
+      await copyFileToClipboard(path);
+      copied = run;
+    });
+    clipboardTurn = copy.then(() => {}, () => {});
+    await copy;
   } catch (error) {
     console.error("Downpad: copying the file failed", error);
     if (!isDisposed()) store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });

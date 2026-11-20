@@ -463,6 +463,47 @@ describe("saving document snapshots", () => {
     expect(files.failedMoves(tabId)).toBe(0);
   });
 
+  it("opens a file in a tab of its own while the untitled tab in front is being saved, also once the user emptied it", async () => {
+    const { store, files } = setup();
+    store.addTab({ ...blankDoc(), markdown: "Draft\n", isDirty: true });
+    const untitled = store.get().activeTabId!;
+    const write = deferred<FileMeta>();
+    native.saveDialog.mockResolvedValueOnce("/docs/draft.md");
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saving = files.save();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    // The user takes the text back while the file is written, and opens another file.
+    store.patchDoc({ markdown: "", isDirty: false });
+    const tabs = store.get().tabs.length;
+    await files.openPath("/docs/other.md");
+    expect(store.get().tabs).toHaveLength(tabs + 1);
+    expect(store.get().doc.filePath).toBe("/docs/other.md");
+    write.resolve({ modifiedMs: 300 });
+    expect(await saving).toBe(true);
+    expect(store.get().tabs.find((tab) => tab.id === untitled)?.doc.filePath).toBe("/docs/draft.md");
+
+    // Without a save under way, an empty untitled tab takes the file opened.
+    store.addTab(blankDoc());
+    const count = store.get().tabs.length;
+    await files.openPath("/docs/third.md");
+    expect(store.get().tabs).toHaveLength(count);
+    expect(store.get().doc.filePath).toBe("/docs/third.md");
+  });
+
+  it("takes a Save As onto the document's file for a write of that file, also when Windows spells the path in another case", async () => {
+    const { store, files } = setup(true);
+    store.patchDoc({ filePath: "C:\\Docs\\notes.md" });
+    const write = deferred<FileMeta>();
+    native.saveDialog.mockResolvedValueOnce("c:\\docs\\NOTES.md");
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const saveAs = files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    // The file may hold the old text or the new one until the write ends.
+    expect(store.get().doc.savedMarkdown).toBeNull();
+    write.resolve({ modifiedMs: 300 });
+    expect(await saveAs).toBe(true);
+  });
+
   it("takes for its own write only a save that is writing the document's file", async () => {
     const { store, files } = setup(true);
     const tabId = store.get().activeTabId!;
