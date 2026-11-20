@@ -1024,10 +1024,24 @@ describe("saving before close", () => {
     // The drive answers again, and a save of the document works while the
     // untitled document's dialog still shows.
     expect(await files.save()).toBe(true);
+    // Typing after that write does not bring the failure back.
+    store.patchDoc({ markdown: "# Typed since\n", isDirty: true });
     dialog.resolve(null);
     expect(await closing).toBe("cancel");
     expect(closeSaveFailed).not.toHaveBeenCalled();
-    expect(store.get().doc.isDirty).toBe(false);
+  });
+
+  it("tells the failure of a close's save for a document whose text has no unsaved changes, when no write of it worked since", async () => {
+    const closeSaveFailed = vi.fn();
+    const { store, files } = setup(false, { closeSaveFailed });
+    const filed = store.get().activeTabId!;
+    // A file dropped on the document is still on its way in, so the document
+    // counts as unsaved though its text is the saved text.
+    store.setFilesPending(filed, true);
+    const failure = new Error("EROFS: read-only file system");
+    native.writeFile.mockRejectedValueOnce(failure);
+    expect(await files.confirmCloseTab(filed, "notes.md")).toBe("cancel");
+    expect(closeSaveFailed).toHaveBeenCalledExactlyOnceWith(filed, filePath, failure);
   });
 
   it("reports a close save that fails after the close stopped waiting for it", async () => {

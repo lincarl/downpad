@@ -77,7 +77,8 @@ export interface SaveEvents {
    *  the document's file when the save was asked for, null for an untitled
    *  document, which names the document once its tab is closed. A failure
    *  while the close is under way is told once the close ends, so that its
-   *  notice shows after the close's last dialog, and a later one at once.
+   *  notice shows after the close's last dialog, unless a write of the
+   *  document has worked since it failed, and a later one at once.
    *  The close keeps its tabs open and leaves telling the user to this
    *  event, as a failed Save does. */
   closeSaveFailed?(tabId: string, path: string | null, error: unknown): void;
@@ -104,6 +105,11 @@ export class FileService {
   /** By tab, how many saves that were to give its document another file ended
    *  without doing so (`failedMoves`). */
   private unmoved = new Map<string, number>();
+  /** Counts the writes of documents that worked, and by tab, the count at
+   *  the tab's last one. A caller that noted the count learns from it
+   *  whether a tab's document was written since (`writtenSince`). */
+  private writes = 0;
+  private lastWrite = new Map<string, number>();
 
   constructor(
     private readonly store: Store,
@@ -500,6 +506,22 @@ export class FileService {
     return turn;
   }
 
+  /** Note that a write of the tab's document worked, and forget the notes of
+   *  closed tabs. */
+  private noteWrite(tabId: string): void {
+    const { tabs } = this.store.get();
+    for (const id of this.lastWrite.keys()) {
+      if (!tabs.some((tab) => tab.id === id)) this.lastWrite.delete(id);
+    }
+    this.lastWrite.set(tabId, ++this.writes);
+  }
+
+  /** Whether a write of the tab's document has worked since `writes` had the
+   *  value `count`. */
+  private writtenSince(tabId: string, count: number): boolean {
+    return (this.lastWrite.get(tabId) ?? 0) > count;
+  }
+
   /** Count a save of the tab that did not move its document, and forget the
    *  counts of closed tabs. */
   private countFailedMove(tabId: string): void {
@@ -566,6 +588,7 @@ export class FileService {
       }
     }
     this.markSaved(tabId, snapshot, originalPath, path, meta);
+    this.noteWrite(tabId);
     this.events.saved?.(tabId);
     if (choosePath) this.recordOpened(path);
     return true;
@@ -677,9 +700,9 @@ export class FileService {
    *  itself through `SaveEvents.closeSaveFailed`, so the close never rejects
    *  for it. A failure while the close is under way is reported once the
    *  close ends, so its notice shows after the close's last dialog, and a
-   *  later one at once. A failure is not reported when a later save of the
-   *  document has worked by then, as an autosave once its drive answers
-   *  again. A Save As of a tab that fails or is cancelled while the
+   *  later one at once. A failure is not reported when a later write of the
+   *  document has worked by the time the close ends, as an autosave once its
+   *  drive answers again. A Save As of a tab that fails or is cancelled while the
    *  close is under way leaves them open too ("cancel"), and the close's save
    *  of that tab then writes nothing. The close waits for every save of the
    *  tabs until one is known not to have saved, and then keeps them without
@@ -709,7 +732,7 @@ export class FileService {
       // close's last dialog. Until then a dialog can cover it, and the save of
       // an untitled document that works gives a tab another file, which
       // clears the notice bar.
-      const held: Array<{ tabId: string; tell: () => void }> = [];
+      const held: Array<{ tabId: string; writes: number; tell: () => void }> = [];
       let holding = true;
       let failed = false;
       let notSaved!: () => void;
@@ -718,7 +741,7 @@ export class FileService {
         const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
         return this.queueSave(tabId, false, { failedMovesBefore: failedMoves.get(tabId) }).catch((error: unknown) => {
           const tell = (): void => this.events.closeSaveFailed?.(tabId, path, error);
-          if (holding) held.push({ tabId, tell });
+          if (holding) held.push({ tabId, writes: this.writes, tell });
           else tell();
           return false;
         }).then((saved) => {
@@ -748,12 +771,11 @@ export class FileService {
         if (saved !== true) return "cancel";
       } finally {
         holding = false;
-        for (const { tabId, tell } of held) {
-          // A later save of the document that worked meanwhile, such as an
-          // autosave once its drive answered again, leaves nothing to tell.
-          const tab = this.store.get().tabs.find((entry) => entry.id === tabId);
-          if (tab && !tab.doc.isDirty && tab.doc.savedMarkdown !== null) continue;
-          tell();
+        // A write of the document that worked after the failure, such as an
+        // autosave once its drive answered again, leaves nothing to tell,
+        // also when the document has been edited again since.
+        for (const { tabId, writes, tell } of held) {
+          if (!this.writtenSince(tabId, writes)) tell();
         }
       }
     }
