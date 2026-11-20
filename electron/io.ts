@@ -285,16 +285,24 @@ export async function ensureAttachmentsDirectory(docPath: string, folderName: st
   return directory;
 }
 
-/** Attachment writes under way, by the folder they write to (`fileKey`). */
-const attachmentWrites = new Map<string, Promise<void>>();
+/** Attachment writes under way, by the folder as the caller spelled it (`fileKey`). */
+const attachmentWritesByPath = new Map<string, Promise<void>>();
+/** Attachment writes under way, by the real folder they write to (`fileKey`). */
+const attachmentWritesByFolder = new Map<string, Promise<void>>();
 const UNSUPPORTED_LINK_ERRORS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
 
 /** Stage complete attachments, then publish without replacing existing names when hard links are supported.
- *  Writes to one attachments folder run one at a time, in the order asked for, which the
- *  name check of the fallback without hard links needs. Writes to other folders never wait
- *  for them, so a write that does not return, as to a network drive that went away, holds
- *  up only later writes to its own folder. The folder's path is worked out without a look
- *  at the disk. */
+ *  Writes to one attachments folder keep apart, which the name check of the fallback
+ *  without hard links needs, and writes to other folders never wait for them, so a write
+ *  that does not return, as to a network drive that went away, holds up only later writes
+ *  to its own folder. As for `writeMarkdown`, in two steps:
+ *  - Writes through one spelling of the folder's path run one at a time, in the order
+ *    asked for. They wait before the folder is made and resolved, which can itself hang
+ *    on such a drive.
+ *  - Writes that resolve to one real folder, also through a symbolic link, another letter
+ *    case or a mapped drive and its network path, run their staging and publication one
+ *    at a time, in the order their folders resolved, so two of them never claim one
+ *    name. */
 export function writeAttachment(
   docPath: string,
   folderName: string,
@@ -307,44 +315,52 @@ export function writeAttachment(
   } catch (error) {
     return Promise.reject(error);
   }
-  return queued(attachmentWrites, fileKey(folder), async () => {
+  return queued(attachmentWritesByPath, fileKey(folder), async () => {
     if (!fileName || fileName === "." || fileName === ".." || /[\\/\0]/.test(fileName)) {
       throw new Error("An attachment name must be a file name.");
     }
     const directory = await ensureAttachmentsDirectory(docPath, folderName);
-    const extension = extname(fileName);
-    const stem = basename(fileName, extension);
-    const temporary = join(directory, `.attachment-${randomUUID()}.tmp`);
-    const file = await open(temporary, "wx");
-    try {
-      await file.writeFile(bytes);
-      await file.sync();
-      await file.close();
-      for (let suffix = 0; ; suffix++) {
-        const name = suffix === 0 ? fileName : `${stem}-${suffix}${extension}`;
-        const destination = join(directory, name);
-        try {
-          await link(temporary, destination);
-        } catch (error: unknown) {
-          if (!(error instanceof Error && "code" in error)) throw error;
-          if (error.code === "EEXIST") continue;
-          if (typeof error.code !== "string" || !UNSUPPORTED_LINK_ERRORS.has(error.code)) throw error;
-          // FAT/exFAT lack hard links. Serialize application writers and recheck
-          // the name before rename. A separate process can still create it here.
-          const occupied = await lstat(destination).then(() => true, (statError: unknown) => {
-            if (statError instanceof Error && "code" in statError && statError.code === "ENOENT") return false;
-            throw statError;
-          });
-          if (occupied) continue;
-          await rename(temporary, destination);
-        }
-        return `${folderName.replace(/\\/g, "/")}/${name}`;
-      }
-    } finally {
-      await file.close().catch(() => {});
-      await unlink(temporary).catch(() => {});
-    }
+    const real = await realpath(directory);
+    return queued(attachmentWritesByFolder, fileKey(real), () => publishAttachment(directory, folderName, fileName, bytes));
   });
+}
+
+/** Stage `bytes` in `directory`, the attachments folder `folderName`, and publish them
+ *  under `fileName` or, while that name is taken, the first free `name-N` form of it.
+ *  Resolves with the attachment's path relative to the document. */
+async function publishAttachment(directory: string, folderName: string, fileName: string, bytes: Uint8Array): Promise<string> {
+  const extension = extname(fileName);
+  const stem = basename(fileName, extension);
+  const temporary = join(directory, `.attachment-${randomUUID()}.tmp`);
+  const file = await open(temporary, "wx");
+  try {
+    await file.writeFile(bytes);
+    await file.sync();
+    await file.close();
+    for (let suffix = 0; ; suffix++) {
+      const name = suffix === 0 ? fileName : `${stem}-${suffix}${extension}`;
+      const destination = join(directory, name);
+      try {
+        await link(temporary, destination);
+      } catch (error: unknown) {
+        if (!(error instanceof Error && "code" in error)) throw error;
+        if (error.code === "EEXIST") continue;
+        if (typeof error.code !== "string" || !UNSUPPORTED_LINK_ERRORS.has(error.code)) throw error;
+        // FAT/exFAT lack hard links. Serialize application writers and recheck
+        // the name before rename. A separate process can still create it here.
+        const occupied = await lstat(destination).then(() => true, (statError: unknown) => {
+          if (statError instanceof Error && "code" in statError && statError.code === "ENOENT") return false;
+          throw statError;
+        });
+        if (occupied) continue;
+        await rename(temporary, destination);
+      }
+      return `${folderName.replace(/\\/g, "/")}/${name}`;
+    }
+  } finally {
+    await file.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
 }
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {

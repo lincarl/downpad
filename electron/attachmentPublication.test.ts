@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
 import { ipcBytes, readImage, writeAttachment } from "./io";
@@ -140,6 +140,41 @@ it("serializes complete-file rename fallback when hard links are unavailable", a
   expect(await readFile(join(attachments, "image-1.png"))).toEqual(Buffer.from([1, 2, 3]));
   expect(await readFile(join(attachments, "image-2.png"))).toEqual(Buffer.from([4, 5, 6]));
   expect((await readdir(attachments)).sort()).toEqual(["image-1.png", "image-2.png", "image.png"]);
+});
+
+it.skipIf(process.platform === "win32")("gives writes through two spellings of one folder their own names when hard links are unavailable", async () => {
+  const directory = await fixtureDirectory();
+  // Another spelling of the documents' folder, as a mapped drive and its network path are.
+  const alias = `${directory}-alias`;
+  await symlink(directory, alias);
+  temporaryDirectories.push(alias);
+  const attachments = join(directory, "attachments");
+  await mkdir(attachments);
+  await writeFile(join(attachments, "image.png"), Uint8Array.of(9));
+  vi.spyOn(filesystem, "link").mockRejectedValue(Object.assign(new Error("Hard links are unsupported."), { code: "ENOTSUP" }));
+  const originalRename = filesystem.rename;
+  const started = deferred();
+  const release = deferred();
+  const renaming = vi.spyOn(filesystem, "rename").mockImplementationOnce(async (existing, destination) => {
+    started.resolve();
+    await release.promise;
+    return originalRename(existing, destination);
+  });
+  syncBuiltinESMExports();
+  const older = writeAttachment(join(directory, "note.md"), "attachments", "image.png", Uint8Array.of(1, 2, 3));
+  await started.promise;
+  const newer = writeAttachment(join(alias, "other.md"), "attachments", "image.png", Uint8Array.of(4, 5, 6));
+  try {
+    // The newer write waits for the older one, though its path is spelled otherwise.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(renaming).toHaveBeenCalledTimes(1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([older, newer]);
+  }
+  expect(await Promise.all([older, newer])).toEqual(["attachments/image-1.png", "attachments/image-2.png"]);
+  expect(await readFile(join(attachments, "image-1.png"))).toEqual(Buffer.from([1, 2, 3]));
+  expect(await readFile(join(attachments, "image-2.png"))).toEqual(Buffer.from([4, 5, 6]));
 });
 
 it("removes incomplete staging files after write failure and continues queued attachments", async () => {
