@@ -362,6 +362,8 @@ describe("FileDropCoordinator", () => {
     await coordinator.handle(["/drop/report.pdf"], point);
     logged.mockRestore();
     expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
+    // The file is neither read nor stored for a document that takes none.
+    expect(disk.readImageBytes).not.toHaveBeenCalled();
     expect(disk.writeAttachment).not.toHaveBeenCalled();
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
       "Downpad could not add “report.pdf”. A JSON file takes no dropped files. Drop them on a Markdown document.",

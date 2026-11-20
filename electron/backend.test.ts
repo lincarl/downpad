@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { basename, join, resolve } from "node:path";
 import { parse } from "smol-toml";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
-import { absolutePath, ensureAttachmentsDirectory, readMarkdown, writeAttachment, writeMarkdown } from "./io";
+import { absolutePath, ensureAttachmentsDirectory, exists, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { pageRanges, pdfOptions, printerOptions, validatePrintOptions } from "./printing";
 import { clipboardPermission, externalUrl, ImageAccess, trustedPage } from "./security";
 import { loadSettingsFile, normalizeSettings, patchSettingsToml, updateSettingsFile } from "./settings";
@@ -81,6 +81,28 @@ describe("Markdown file operations", () => {
     await writeMarkdown(path, opened.content, opened.eol);
     expect(await readFile(path, "utf8")).toBe(saved);
     expect(await readMarkdown(path)).toMatchObject({ content, eol });
+  });
+
+  it("tells whether a path names something by its metadata, and rejects when the look itself fails", async () => {
+    const directory = await fixtureDirectory();
+    const file = join(directory, "backup.json");
+    await writeFile(file, "{}");
+    expect(await exists(file)).toBe(true);
+    expect(await exists(directory)).toBe(true);
+    // A file that cannot be read is there all the same.
+    await filesystem.chmod(file, 0o000);
+    expect(await exists(file)).toBe(true);
+    await filesystem.chmod(file, 0o600);
+
+    expect(await exists(join(directory, "missing.json"))).toBe(false);
+    // A folder of the path is a file, so the path can name nothing.
+    expect(await exists(join(file, "inside.json"))).toBe(false);
+
+    // Any other failure may hide a file, so it is no answer. Windows reports
+    // a name this long as a missing file.
+    if (process.platform !== "win32") {
+      await expect(exists(join(directory, `${"n".repeat(5000)}.json`))).rejects.toMatchObject({ code: "ENAMETOOLONG" });
+    }
   });
 
   it("rejects invalid UTF-8 rather than silently corrupting an opened document", async () => {

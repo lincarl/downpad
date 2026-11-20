@@ -410,21 +410,25 @@ export class EditorHost implements FindController {
    * document pane would write the block the file joins in its own form under
    * the user's caret.
    *
-   * Throws for a document that is a JSON or YAML file once its turn has come
-   * (`takesNoFiles`), and puts nothing in.
+   * Throws for a document that is a JSON or YAML file (`takesNoFiles`), at
+   * once and again after each wait, and puts nothing in.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
+    // A JSON or YAML file, which a Markdown image or link would break, takes
+    // nothing. It is refused at once, without a wait for its turn or for its
+    // tab to come to the front, which would keep the document unsaved
+    // meanwhile.
+    this.refuseDataFile(drop.tabId);
     await this.untilTurn(drop);
     let place = this.dropPlace(drop);
     while (!place) {
+      this.refuseDataFile(drop.tabId);
       if (!(await this.waitWhileBehind(drop))) return false;
       place = this.dropPlace(drop);
     }
-    // The waits are over, and nothing below waits again. A Save As meanwhile
-    // can have made the document a JSON or YAML file, which a Markdown image
-    // or link would break.
-    const refusal = takesNoFiles(this.store.get().tabs.find((tab) => tab.id === drop.tabId)?.doc.filePath ?? null);
-    if (refusal) throw refusal;
+    // The waits are over, and nothing below waits again. A Save As during
+    // them can have made the document such a file.
+    this.refuseDataFile(drop.tabId);
     const aimed = this.drops.get(drop)!;
     const { pane } = place;
     const target = place.target ?? (aimed.forDocument ? (pane.raw?.blockTargetAtCaret() ?? null) : null);
@@ -1599,6 +1603,13 @@ export class EditorHost implements FindController {
 
   private hasTab(tabId: string): boolean {
     return this.store.get().tabs.some((tab) => tab.id === tabId);
+  }
+
+  /** Throw the error that says why no file goes into a tab's document, if it
+   *  is a JSON or YAML file (`takesNoFiles`). */
+  private refuseDataFile(tabId: string): void {
+    const refusal = takesNoFiles(this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null);
+    if (refusal) throw refusal;
   }
 
   /** The language of a tab's document, which its file name tells. */

@@ -811,6 +811,27 @@ describe("EditorHost JSON and YAML files", () => {
     await host.dispose();
   });
 
+  it("refuses a file for a JSON file at once, without waiting for its turn or for its tab to come to the front", async () => {
+    const root = document.createElement("div");
+    const store = storeWithFile("/notes/a.md");
+    const host = new EditorHost(root, store);
+    await host.reloadActiveDoc();
+    const earlier = host.aimDrop()!;
+    const drop = host.aimDrop()!;
+    // A Save As makes the document a JSON file, and another tab comes to the front.
+    store.patchDocById("tab-1", { filePath: "/notes/a.json" });
+    store.addTab({ ...store.get().doc, filePath: "/notes/b.md", markdown: "# B" });
+    await host.reloadActiveDoc();
+
+    // The earlier drop is still under way, and the tab is behind another one.
+    await expect(host.insertDropped(drop, "![](b.png)")).rejects.toThrow("A JSON file takes no dropped files.");
+    await expect(host.insertDropped(earlier, "![](a.png)")).rejects.toThrow("A JSON file takes no dropped files.");
+    host.releaseDrop(drop);
+    host.releaseDrop(earlier);
+    expect(hasUnsavedChanges(store.get().tabs[0])).toBe(false);
+    await host.dispose();
+  });
+
   it("offers no spelling check for a JSON file", async () => {
     const managed = vi.spyOn(await import("./spelling"), "managedSpellingAvailable").mockReturnValue(true);
     const store = storeWithFile("/data/settings.json");

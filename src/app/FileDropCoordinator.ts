@@ -328,6 +328,9 @@ export class FileDropCoordinator {
       if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
       return;
     }
+    // The save can have made the document a JSON or YAML file, which takes
+    // no file, so there is no need to read this one.
+    this.refuseDataFile(drop.tabId);
     const { bytes } = await readImageBytes(path);
     const link = await storeBesideDocument(this.dropDocument(drop), async (getFilePath) => {
       const filePath = getFilePath();

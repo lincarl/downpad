@@ -216,8 +216,15 @@ export function writeMarkdown(path: string, content: string, eol: Eol, expectedC
   return result;
 }
 
+/** Whether the path names something, by its metadata alone, so also a file that cannot
+ *  be read. Only an answer that nothing is there counts as absent. Any other failure of
+ *  the look, as on a drive that does not answer, rejects, since a file may be there. */
 export async function exists(path: string): Promise<boolean> {
-  return stat(absolutePath(path)).then(() => true, () => false);
+  return stat(absolutePath(path)).then(() => true, (error: unknown) => {
+    // ENOTDIR: a folder of the path is a file, so the path can name nothing.
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+    throw error;
+  });
 }
 
 function attachmentsDirectory(docPath: string, folderName: string): string {
