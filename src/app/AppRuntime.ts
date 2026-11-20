@@ -64,9 +64,9 @@ export class AppRuntime {
   private switchingView = false;
   private closingTabs = false;
   /** The error notice of the last save the user asked for that failed, with
-   *  its tab and the file time the document had then, so that a later write
-   *  of the document that works takes the notice down (`followSaveFailure`). */
-  private saveFailure: { tabId: string; banner: BannerState; modifiedMs: number } | null = null;
+   *  its tab, so that a later write of the document that works takes the
+   *  notice down (`clearSaveFailure`). */
+  private saveFailure: { tabId: string; banner: BannerState } | null = null;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -89,7 +89,7 @@ export class AppRuntime {
       showActiveDoc: () => this.showActiveDoc(),
       reloadActiveDoc: () => this.reloadActiveDoc(),
     };
-    this.files = new FileService(store, presenter);
+    this.files = new FileService(store, presenter, (tabId) => this.clearSaveFailure(tabId));
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).
     this.editorHost.setSaveHandler(() => this.files.save());
@@ -371,7 +371,6 @@ export class AppRuntime {
     if (this.disposed) return;
     this.scheduler.start();
     this.session.start(this.startup.sessionToRestore);
-    this.cleanups.push(this.followSaveFailure());
 
     this.cleanups.push(this.store.subscribe((state, previous) => {
       const next = state.settings;
@@ -417,23 +416,15 @@ export class AppRuntime {
     void this.startup.maybePromptDefaultHandler();
   }
 
-  /** Take the notice of a failed save down once a later write of its document
-   *  works, which records another file time: a save the user asks for,
-   *  autosave or the save before Copy file. A notice that was dismissed or
-   *  replaced is forgotten. Returns the unsubscribe function. */
-  private followSaveFailure(): () => void {
-    return this.store.subscribe((state) => {
-      const failure = this.saveFailure;
-      if (!failure) return;
-      if (state.banner !== failure.banner) {
-        this.saveFailure = null;
-        return;
-      }
-      const doc = state.tabs.find((tab) => tab.id === failure.tabId)?.doc;
-      if (doc && (doc.savedMarkdown === null || doc.modifiedMs === failure.modifiedMs)) return;
-      this.saveFailure = null;
-      this.store.set({ banner: null });
-    });
+  /** Take the notice of a failed save down once a write of its document
+   *  worked: a save the user asks for, autosave or the save before Copy file
+   *  (`FileService`'s `onSaved`). A notice that was dismissed or replaced
+   *  stays as it is. */
+  private clearSaveFailure(tabId: string): void {
+    const failure = this.saveFailure;
+    if (failure?.tabId !== tabId) return;
+    this.saveFailure = null;
+    if (this.store.get().banner === failure.banner) this.store.set({ banner: null });
   }
 
   /** Save the active document as the user asked, then upload it when Upload
@@ -454,7 +445,7 @@ export class AppRuntime {
       // have given it another file.
       const now = this.store.get().tabs.find((candidate) => candidate.id === tab.id) ?? tab;
       const banner: BannerState = { kind: "error", message: `Downpad could not save “${tabLabel(now)}”. ${failureReason(error)}`.trimEnd() };
-      this.saveFailure = { tabId: tab.id, banner, modifiedMs: now.doc.modifiedMs };
+      this.saveFailure = { tabId: tab.id, banner };
       this.store.set({ banner });
       return;
     }

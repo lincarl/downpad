@@ -36,6 +36,12 @@ interface Failure {
   error: unknown;
 }
 
+/** Whether `promise` has settled by now. */
+async function settledBy(promise: Promise<unknown>): Promise<boolean> {
+  const pending = Symbol("pending");
+  return (await Promise.race([promise, Promise.resolve(pending)])) !== pending;
+}
+
 /** Opens or inserts the files of each desktop drop. */
 export class FileDropCoordinator {
   constructor(private readonly dependencies: FileDropDependencies) {}
@@ -46,9 +52,11 @@ export class FileDropCoordinator {
    * into the document they were dropped on. Images embed where they were
    * dropped, or at the caret, and other files are copied into the attachments
    * folder and linked the same way. A file that cannot be read or stored is
-   * left out, and the others still go in. Once the drop's files are in and
-   * its Markdown files open, one error notice names the files left out and
-   * the Markdown files that did not open, with the reason of each. A file only goes into
+   * left out, and the others still go in. Once its Markdown files open, one
+   * error notice names the files left out and the Markdown files that did
+   * not open, with the reason of each. Files that wait for their document
+   * to be in front again name the ones left out in a notice of their own
+   * then. A file only goes into
    * the document in front, so those files go in first and the Markdown files
    * open once they are in. A new tab would otherwise put the document behind
    * it while they are read. Those files go in after the files of earlier
@@ -80,8 +88,14 @@ export class FileDropCoordinator {
       if (error !== null) unopened.push({ action: "open", name: baseName(path), error });
     }
     // One notice for the whole drop, after its last tab opened, since a tab
-    // that comes to the front clears the notice bar.
-    this.report([...(await inserted), ...unopened]);
+    // that comes to the front clears the notice bar. Files that wait until
+    // their document is in front again report on their own once they are in,
+    // so the Markdown files that did not open do not wait with them.
+    if (await settledBy(inserted)) this.report([...(await inserted), ...unopened]);
+    else {
+      this.report(unopened);
+      this.report(await inserted);
+    }
   }
 
   /**

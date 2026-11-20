@@ -181,6 +181,35 @@ describe("FileDropCoordinator", () => {
     expect(store.get().activeTabId).toBe(droppedOn);
   });
 
+  it("names the Markdown files that did not open at once, and the files left out once they had their turn, when those wait for their tab", async () => {
+    const { store, files, coordinator, droppedOn, reportFailure } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const otherTab = store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    store.activateTab(droppedOn);
+    let failRead = () => {};
+    disk.readImageBytes.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        failRead = () => reject(new Error("ENOENT: no such file or directory, open '/drop/pic.png'"));
+      }),
+    );
+    const open = files.openPath;
+    files.openPath = async (path) => {
+      if (path === "/drop/bad.md") throw new Error("The file is not valid UTF-8.");
+      await open(path);
+    };
+    const handled = coordinator.handle(["/drop/pic.png", "/drop/bad.md", "/drop/a.md"], point);
+    await settle();
+    // The user shows another tab while the image is read.
+    store.activateTab(otherTab);
+    await settle();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “bad.md”. The file is not valid UTF-8.");
+    failRead();
+    await handled;
+    expect(reportFailure).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenLastCalledWith("Downpad could not add “pic.png”. The file or folder does not exist.");
+    logged.mockRestore();
+  });
+
   it("opens every Markdown file of a drop of only Markdown files, aiming nothing", async () => {
     const { log, coordinator } = setup();
     await coordinator.handle(["/drop/a.md", "/drop/b.markdown"], point);

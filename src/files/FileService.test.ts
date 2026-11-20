@@ -35,7 +35,7 @@ const onDisk: FilePayload = {
   sizeBytes: 28,
 };
 
-function setup(dirty = false) {
+function setup(dirty = false, onSaved?: (tabId: string) => void) {
   const store = createAppStore();
   store.addTab({
     ...blankDoc(),
@@ -51,7 +51,7 @@ function setup(dirty = false) {
     showActiveDoc: vi.fn(async () => {}),
     reloadActiveDoc: vi.fn(async () => {}),
   };
-  return { store, presenter, files: new FileService(store, presenter) };
+  return { store, presenter, files: new FileService(store, presenter, onSaved) };
 }
 
 beforeEach(() => {
@@ -461,6 +461,25 @@ describe("saving document snapshots", () => {
     expect(await files.save()).toBe(false);
     expect(files.failedMoves(untitled)).toBe(1);
     expect(files.failedMoves(tabId)).toBe(0);
+  });
+
+  it("tells each write of a tab's document that worked, and no save that wrote nothing", async () => {
+    const onSaved = vi.fn<(tabId: string) => void>();
+    const { store, files } = setup(true, onSaved);
+    const tabId = store.get().activeTabId!;
+    native.writeFile.mockRejectedValueOnce(new Error("Disk unavailable"));
+    await expect(files.save()).rejects.toThrow("Disk unavailable");
+    native.saveDialog.mockResolvedValueOnce(null);
+    expect(await files.saveAs()).toBe(false);
+    expect(await files.save({ automatic: () => true })).toBe(false);
+    expect(onSaved).not.toHaveBeenCalled();
+
+    // A save the user asks for, and one nobody asked for.
+    expect(await files.save()).toBe(true);
+    expect(onSaved).toHaveBeenCalledExactlyOnceWith(tabId);
+    store.patchDoc({ markdown: "# Later\n", isDirty: true });
+    expect(await files.save({ automatic: () => false })).toBe(true);
+    expect(onSaved).toHaveBeenCalledTimes(2);
   });
 
   it("opens a file in a tab of its own while the untitled tab in front is being saved, also once the user emptied it", async () => {

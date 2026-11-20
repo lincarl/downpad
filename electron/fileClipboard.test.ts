@@ -81,6 +81,17 @@ describe("copyFileToClipboard", () => {
     expect(native.write.mock.calls.map(([items]) => items)).toEqual([later]);
   });
 
+  it("ends a copy that a later one replaced without an error, also when its look at the file fails", async () => {
+    native.write.mockClear();
+    let release!: () => void;
+    native.beforeStat.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const slow = copyFileToClipboard(join(folder, "missing.md"));
+    await copyFileToClipboard(join(folder, "note.md"));
+    release();
+    await expect(slow).resolves.toBeUndefined();
+    expect(native.write).toHaveBeenCalledOnce();
+  });
+
   it("refuses a folder or a missing file and leaves the clipboard alone", async () => {
     native.write.mockClear();
     await expect(copyFileToClipboard(folder)).rejects.toThrow("Only a file can be copied.");

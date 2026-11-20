@@ -69,9 +69,12 @@ export class FileService {
    *  without doing so (`failedMoves`). */
   private unmoved = new Map<string, number>();
 
+  /** `onSaved` is called with a tab each time a write of its document
+   *  worked, whoever asked for the save. */
   constructor(
     private readonly store: Store,
     private readonly present: EditorPresenter,
+    private readonly onSaved: (tabId: string) => void = () => {},
   ) {}
 
   /** Open a new untitled buffer in its own tab (§5.19). */
@@ -408,6 +411,7 @@ export class FileService {
       throw error;
     }
     this.markSaved(tabId, snapshot, originalPath, path, meta);
+    this.onSaved(tabId);
     if (choosePath) this.recordOpened(path);
     return true;
   }
