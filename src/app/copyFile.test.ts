@@ -21,8 +21,9 @@ function setup(doc: Partial<DocumentState>, saved = true) {
   const tabId = store.get().activeTabId!;
   const files = {
     save: vi.fn<CopyFileDependencies["files"]["save"]>(async () => saved),
-    untilSaved: vi.fn<CopyFileDependencies["files"]["untilSaved"]>(async () => true),
+    untilSaved: vi.fn<CopyFileDependencies["files"]["untilSaved"]>(async () => {}),
     isSaving: vi.fn<CopyFileDependencies["files"]["isSaving"]>(() => false),
+    failedMoves: vi.fn<CopyFileDependencies["files"]["failedMoves"]>(() => 0),
   };
   const desktopEvents = {
     settled: vi.fn(async () => {}),
@@ -56,7 +57,7 @@ describe("Copy file", () => {
 
   it("waits for a save of the tab under way, and copies a recovered document that the save recorded", async () => {
     const { store, tabId, files, copy } = setup(recovered);
-    let end!: (moved: boolean) => void;
+    let end!: () => void;
     files.untilSaved.mockReturnValueOnce(new Promise((resolve) => { end = resolve; }));
     const copying = copy();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -66,7 +67,7 @@ describe("Copy file", () => {
 
     // The save that the user asked for ends and records the file.
     store.patchDoc(recorded);
-    end(true);
+    end();
     await copying;
     expect(files.save).not.toHaveBeenCalled();
     expect(clipboard.copy).toHaveBeenCalledWith(filePath);
@@ -78,9 +79,8 @@ describe("Copy file", () => {
     // The user saves the recovered document while Copy file waits for the
     // comparison, and the second wait ends once that save recorded the file.
     desktopEvents.settled.mockImplementationOnce(async () => { files.isSaving.mockReturnValueOnce(true); });
-    files.untilSaved.mockResolvedValueOnce(true).mockImplementationOnce(async () => {
+    files.untilSaved.mockResolvedValueOnce().mockImplementationOnce(async () => {
       store.patchDoc(recorded);
-      return true;
     });
     await copy();
     expect(files.untilSaved).toHaveBeenCalledTimes(2);
@@ -88,19 +88,46 @@ describe("Copy file", () => {
     expect(store.get().banner).toBeNull();
   });
 
-  it("saves and copies nothing after a Save As under way that failed or was cancelled", async () => {
-    const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
-    files.untilSaved.mockResolvedValueOnce(false);
+  it.each([
+    { wait: "a save", during: "untilSaved" },
+    { wait: "a comparison of the file", during: "settled" },
+  ] as const)("saves and copies nothing after a Save As that failed or was cancelled while it waited for $wait", async ({ during }) => {
+    const { store, files, desktopEvents, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
+    const failMove = async () => { files.failedMoves.mockReturnValue(1); };
+    if (during === "untilSaved") files.untilSaved.mockImplementationOnce(failMove);
+    else desktopEvents.settled.mockImplementationOnce(failMove);
     await copy();
     expect(files.save).not.toHaveBeenCalled();
     expect(clipboard.copy).not.toHaveBeenCalled();
     expect(store.get().banner).toBeNull();
   });
 
+  it("goes on after a Save As that failed before Copy file was chosen", async () => {
+    const { files, copy } = setup({});
+    files.failedMoves.mockReturnValue(3);
+    await copy();
+    expect(clipboard.copy).toHaveBeenCalledWith(filePath);
+  });
+
+  it("leaves the clipboard to a Copy file chosen later, as for another tab while its save ran", async () => {
+    const { store, files, copy } = setup({ markdown: "# Mine, edited\n", isDirty: true });
+    let saved!: (value: boolean) => void;
+    files.save.mockReturnValueOnce(new Promise((resolve) => { saved = resolve; }));
+    const first = copy();
+    await vi.waitFor(() => expect(files.save).toHaveBeenCalledOnce(), { interval: 1 });
+    // The user copies another tab's saved file while the first save runs.
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.md", savedMarkdown: "", modifiedMs: 100, fileSize: 0 });
+    await copy();
+    expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith("/docs/other.md");
+    saved(true);
+    await first;
+    expect(clipboard.copy).toHaveBeenCalledExactlyOnceWith("/docs/other.md");
+  });
+
   it.each([
-    { document: "a document whose save is being written", doc: { modifiedMs: 100, savedMarkdown: null, isDirty: true } },
+    { document: "a document with a recorded file size whose saved text is unknown", doc: { modifiedMs: 100, savedMarkdown: null, isDirty: true } },
     { document: "a document whose file says it was written in 1970", doc: { modifiedMs: 0, isDirty: true } },
-    { document: "a document dated 1970 whose save is being written", doc: { modifiedMs: 0, savedMarkdown: null, isDirty: true } },
+    { document: "a document dated 1970 with a recorded file size whose saved text is unknown", doc: { modifiedMs: 0, savedMarkdown: null, isDirty: true } },
   ])("saves $document through the guarded save, and copies its file", async ({ doc }) => {
     const { store, files, desktopEvents, copy } = setup(doc);
     await copy();

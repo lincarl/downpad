@@ -47,8 +47,8 @@ interface SaveRequest {
   choice: SaveAsChoice;
   /** Marks a save nobody asked for as such, with the check that holds it. */
   automatic?: (tabId: string) => boolean | Promise<boolean>;
-  /** The saved text the write replaces, once the write starts. */
-  replaced?: string | null;
+  /** Once the write starts: the file it writes, and the saved text it replaces. */
+  write?: { path: string; replaced: string | null };
   /** Whether the save wrote the document, once it ends. A save that threw did not. */
   outcome?: Promise<boolean>;
 }
@@ -65,6 +65,9 @@ export type CloseDecision = "close" | "discard" | "cancel";
 export class FileService {
   private saveQueue: Promise<void> = Promise.resolve();
   private pendingSaves = new Set<SaveRequest>();
+  /** By tab, how many saves that were to give its document another file ended
+   *  without doing so (`failedMoves`). */
+  private unmoved = new Map<string, number>();
 
   constructor(
     private readonly store: Store,
@@ -253,11 +256,15 @@ export class FileService {
     return this.queueSave(this.store.get().activeTabId, false, options);
   }
 
-  /** Whether a save of the tab under way writes `markdown` or replaces it, so
-   *  a file that holds it is the app's own doing, not a change on disk. */
+  /** Whether a save of the tab is writing the document's file now, with
+   *  `markdown` or over it, so a file that holds it is the app's own doing,
+   *  not a change on disk. A save that still waits for its turn or its dialog
+   *  writes nothing yet, and a Save As writes another file. */
   isOwnWrite(tabId: string, markdown: string): boolean {
+    const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
     return [...this.pendingSaves].some(
-      (request) => request.tabId === tabId && (request.snapshot.markdown === markdown || request.replaced === markdown),
+      ({ tabId: owner, snapshot, write }) => owner === tabId && write !== undefined && samePath(write.path, path)
+        && (snapshot.markdown === markdown || write.replaced === markdown),
     );
   }
 
@@ -286,19 +293,21 @@ export class FileService {
   }
 
   /** Resolve once no save of the tab is under way, so the document shows what
-   *  its last save recorded. Saves of other tabs are not waited for. Resolves
-   *  with false when a save that was to give the document another file, a
-   *  Save As or the save of an untitled document, failed or was cancelled
-   *  meanwhile, so the document kept a file the user was leaving. */
-  async untilSaved(tabId: string): Promise<boolean> {
-    let moved = true;
+   *  its last save recorded. Saves of other tabs are not waited for. */
+  async untilSaved(tabId: string): Promise<void> {
     for (;;) {
       const requests = [...this.pendingSaves].filter((request) => request.tabId === tabId);
-      if (requests.length === 0) return moved;
-      for (const request of requests) {
-        if (!(await request.outcome) && (request.saveAs || request.expectedPath === null)) moved = false;
-      }
+      if (requests.length === 0) return;
+      for (const request of requests) await request.outcome;
     }
+  }
+
+  /** How many saves that were to give the tab's document another file, a
+   *  Save As or the save of an untitled document, have failed or been
+   *  cancelled so far. A caller that compares two counts learns whether the
+   *  document kept a file the user was leaving in between. */
+  failedMoves(tabId: string): number {
+    return this.unmoved.get(tabId) ?? 0;
   }
 
   /** Capture the requested buffer now, then order saves and Save As dialogs. */
@@ -316,12 +325,38 @@ export class FileService {
     if (!tabId || !doc) return Promise.resolve(false);
     const request: SaveRequest = { tabId, snapshot: doc, expectedPath: doc.filePath, saveAs, choice, automatic };
     this.pendingSaves.add(request);
-    const operation = this.saveQueue.then(() => this.saveSnapshot(request))
-      .finally(() => this.pendingSaves.delete(request));
+    // The save leaves the pending ones and counts as a failed move in one
+    // step, so a caller that sees no save under way sees the count too. A
+    // save queued behind the first save of an untitled document has its path
+    // by now, and does not count.
+    const end = (saved: boolean): void => {
+      this.pendingSaves.delete(request);
+      if (!saved && (request.saveAs || request.expectedPath === null)) this.countFailedMove(tabId);
+    };
+    const operation = this.saveQueue.then(() => this.saveSnapshot(request)).then(
+      (saved) => {
+        end(saved);
+        return saved;
+      },
+      (error: unknown) => {
+        end(false);
+        throw error;
+      },
+    );
     request.outcome = operation.catch(() => false);
     // A failed or cancelled operation must not prevent a subsequent save.
     this.saveQueue = operation.then(() => {}, () => {});
     return operation;
+  }
+
+  /** Count a save of the tab that did not move its document, and forget the
+   *  counts of closed tabs. */
+  private countFailedMove(tabId: string): void {
+    const { tabs } = this.store.get();
+    for (const id of this.unmoved.keys()) {
+      if (!tabs.some((tab) => tab.id === id)) this.unmoved.delete(id);
+    }
+    if (tabs.some((tab) => tab.id === tabId)) this.unmoved.set(tabId, this.failedMoves(tabId) + 1);
   }
 
   private async saveSnapshot(request: SaveRequest): Promise<boolean> {
@@ -355,7 +390,7 @@ export class FileService {
     // Until the write settles, the file may hold the old saved text or the new
     // one, so an edit back to either still counts as unsaved.
     const previous = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.savedMarkdown ?? null;
-    request.replaced = previous;
+    request.write = { path, replaced: previous };
     this.store.patchDocById(tabId, { savedMarkdown: null });
     let meta: FileMeta;
     try {

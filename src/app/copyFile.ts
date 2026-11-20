@@ -12,7 +12,7 @@ import type { DesktopEventBindings } from "./DesktopEventBindings";
 
 export interface CopyFileDependencies {
   store: Store;
-  files: Pick<FileService, "save" | "untilSaved" | "isSaving">;
+  files: Pick<FileService, "save" | "untilSaved" | "isSaving" | "failedMoves">;
   editorHost: Pick<EditorHost, "flush">;
   desktopEvents: Pick<DesktopEventBindings, "settled" | "showPendingChange" | "holdSaveAfterChecks" | "recheck">;
   /** Whether Copy file can run now, as the menu asks. */
@@ -20,12 +20,17 @@ export interface CopyFileDependencies {
   isDisposed(): boolean;
 }
 
+/** Counts the runs of Copy file, so that the latest one chosen decides what
+ *  the clipboard holds. */
+let runs = 0;
+
 /** Put the active document's file on the clipboard, as the file manager
  *  copies it, to paste into a folder or as an attachment. Unsaved changes are
  *  saved first, and an untitled document asks where to save it, so the file
  *  holds what the editor shows. Cancelling that Save As copies nothing. Copy
  *  file first waits for a save of the tab under way, and does nothing when a
- *  Save As among them failed or was cancelled. A recovered document
+ *  Save As failed or was cancelled meanwhile, or when Copy file was chosen
+ *  again before it reached the clipboard. A recovered document
  *  that no save has recorded, whose file may have changed while Downpad was
  *  closed, asks the user to save it first, and a change on disk that is not
  *  resolved shows its notice instead. Failures show as an error notice. */
@@ -35,6 +40,7 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   if (!canCopyFile()) return;
   const tabId = store.get().activeTabId;
   if (!tabId) return;
+  const run = ++runs;
   /** Whether Copy file still acts on the tab it started for. */
   const stillInFront = (): boolean => !isDisposed() && store.get().activeTabId === tabId;
   // A save of the tab under way records its file first, so a recovered
@@ -42,14 +48,16 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
   // document with its file that runs, as after a switch of tabs, then tells
   // whether the file changed. Each can start while Copy file waits for the
   // other, so it waits until neither runs.
+  const failedMoves = files.failedMoves(tabId);
   do {
-    // After a Save As that failed, the document still has the file the user
-    // was leaving, which Copy file's own save must not write then. A failed
-    // save shows its own error notice (`AppRuntime.run`), and a cancelled
-    // one was the user's choice.
-    if (!(await files.untilSaved(tabId))) return;
+    await files.untilSaved(tabId);
     await desktopEvents.settled(tabId);
   } while (files.isSaving(tabId));
+  // After a Save As that failed or was cancelled meanwhile, the document
+  // still has the file the user was leaving, which Copy file's own save must
+  // not write then. A failed save shows its own error notice
+  // (`AppRuntime.run`), and a cancelled one was the user's choice.
+  if (files.failedMoves(tabId) !== failedMoves) return;
   if (!stillInFront() || !canCopyFile()) return;
   // A change on disk whose bar was dismissed or replaced is still unresolved,
   // so the bar asks again and nothing is saved or copied.
@@ -79,6 +87,9 @@ export async function copyActiveFile(dependencies: CopyFileDependencies): Promis
       store.set({ banner: { kind: "error", message: "Could not save the file before copying it. Please try again." } });
       return;
     }
+    // A Copy file chosen since, as for another tab while this one's save
+    // ran, decides what the clipboard holds.
+    if (run !== runs) return;
     const path = store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
     if (path) await copyFileToClipboard(path);
   } catch (error) {
