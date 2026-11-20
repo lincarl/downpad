@@ -246,6 +246,7 @@ describe("FileDropCoordinator", () => {
 
   it("names the files left out and the Markdown files that did not open in one notice, after the last file opened, each with its reason", async () => {
     const { log, files, coordinator, reportFailure } = setup();
+    reportFailure.mockImplementation(() => { log.push("notice"); });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const read = disk.readImageBytes.getMockImplementation()!;
     disk.readImageBytes.mockImplementation(async (path) => {
@@ -255,14 +256,13 @@ describe("FileDropCoordinator", () => {
     });
     const open = files.openPath;
     files.openPath = async (path) => {
-      // The notice comes after every Markdown file had its turn.
-      expect(reportFailure).not.toHaveBeenCalled();
       if (path === "/drop/binary.md") throw new Error("The file is not valid UTF-8.");
       if (path === "/drop/gone.md") throw new Error("ENOENT: no such file or directory, open '/drop/gone.md'");
       await open(path);
     };
     await coordinator.handle(["/drop/gone.png", "/drop/locked.png", "/drop/binary.md", "/drop/gone.md", "/drop/a.md"], point);
-    expect(log.at(-1)).toBe("open /drop/a.md");
+    // The notice comes after the last Markdown file opened.
+    expect(log.slice(-2)).toEqual(["open /drop/a.md", "notice"]);
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
       "Downpad could not add “gone.png”. The file or folder does not exist. "
       + "Downpad could not add “locked.png”. Permission was denied, or another program is using the file. "
@@ -270,6 +270,17 @@ describe("FileDropCoordinator", () => {
       + "Downpad could not open “gone.md”. The file or folder does not exist.",
     );
     logged.mockRestore();
+  });
+
+  it("names every file of a drop that no document was ready to take, and still opens its Markdown files", async () => {
+    const { log, editorHost, coordinator, reportFailure } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The editor is still being built, so nothing can take the files.
+    editorHost.aimDrop = () => null;
+    await coordinator.handle(["/drop/pic.png", "/drop/data.csv", "/drop/a.md"], point);
+    logged.mockRestore();
+    expect(log).toEqual(["open /drop/a.md"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not add “pic.png”, “data.csv”. No document was ready to take the file. Try again.");
   });
 
   it("shows no notice for a drop whose files all open and go in", async () => {

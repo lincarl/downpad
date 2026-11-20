@@ -511,6 +511,7 @@ describe("saving document snapshots", () => {
 
   it("takes a Save As onto the document's file for a write of that file, also when Windows spells the path in another case", async () => {
     const { store, files } = setup(true);
+    const tabId = store.get().activeTabId!;
     store.patchDoc({ filePath: "C:\\Docs\\notes.md" });
     const write = deferred<FileMeta>();
     native.saveDialog.mockResolvedValueOnce("c:\\docs\\NOTES.md");
@@ -519,8 +520,12 @@ describe("saving document snapshots", () => {
     await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
     // The file may hold the old text or the new one until the write ends.
     expect(store.get().doc.savedMarkdown).toBeNull();
+    // Another program writes the file after this save, and the app records
+    // that version, which the save's answer must not replace.
+    store.patchDocById(tabId, { savedMarkdown: "# Theirs\n", modifiedMs: 900, isDirty: true });
     write.resolve({ modifiedMs: 300 });
     expect(await saveAs).toBe(true);
+    expect(store.get().doc).toMatchObject({ savedMarkdown: "# Theirs\n", modifiedMs: 900, isDirty: true });
   });
 
   it("takes for its own write only a save that is writing the document's file", async () => {
@@ -808,6 +813,42 @@ describe("reloading an open file", () => {
     });
     expect(presenter.reloadActiveDoc).toHaveBeenCalledOnce();
     expect(native.ask).toHaveBeenCalledTimes(dirty ? 1 : 0);
+  });
+
+  it.each([
+    { change: "got another file through Save As", patch: { filePath: "/local/notes.md" } },
+    { change: "got another file and then new text", patch: { filePath: "/local/notes.md", markdown: "# Typed after the Save As\n", isDirty: true } },
+  ])("keeps the document of a tab that $change while its reload read the file", async ({ patch }) => {
+    const { store, presenter, files } = setup();
+    const owner = store.get().activeTabId!;
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const loading = files.openPath(filePath, { reload: true });
+    await eventually(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
+    store.patchDocById(owner, patch);
+    const kept = store.get().doc;
+
+    read.resolve(onDisk);
+    await loading;
+
+    expect(store.get().doc).toEqual(kept);
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+  });
+
+  it("replaces text typed during a reload's read with the file, as the user asked", async () => {
+    const { store, presenter, files } = setup();
+    const owner = store.get().activeTabId!;
+    const read = deferred<FilePayload>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    const loading = files.openPath(filePath, { reload: true });
+    await eventually(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith(filePath));
+    store.patchDocById(owner, { markdown: "# Typed during the read\n", isDirty: true });
+
+    read.resolve(onDisk);
+    await loading;
+
+    expect(store.get().doc).toMatchObject({ filePath, markdown: onDisk.content, isDirty: false });
+    expect(presenter.reloadActiveDoc).toHaveBeenCalledOnce();
   });
 
   it("reloads its original tab after another tab becomes active during the read", async () => {

@@ -89,7 +89,9 @@ export class FileService {
    * already open, focuses that tab; if the active tab is an empty untitled
    * buffer, replaces it; otherwise opens a new tab. Reload rereads an existing
    * tab from disk after confirming any unsaved changes. If that tab closes
-   * during the read, its result is discarded.
+   * during the read, or gets another file, as through Save As, the read is
+   * discarded and the tab keeps its document. Text typed in the tab during
+   * the read goes with the reload the user asked for.
    */
   async openPath(path: string, options: { reload?: boolean } = {}): Promise<void> {
     this.present.flush();
@@ -109,9 +111,14 @@ export class FileService {
     }
 
     const payload = await readFile(path);
-    // A closed reload owner must not redirect the read into the active tab,
-    // even if that tab has since opened the same path.
-    if (existing && !this.store.get().tabs.some((tab) => tab.id === existing.id)) return;
+    if (existing) {
+      // A closed reload owner must not redirect the read into the active tab,
+      // even if that tab has since opened the same path. A tab that shows
+      // another file by now, as after a Save As during the read, keeps its
+      // document, with the text typed into it since.
+      const now = this.store.get().tabs.find((tab) => tab.id === existing.id)?.doc;
+      if (!now || !samePath(now.filePath, path)) return;
+    }
     const doc = fileDocument(path, payload, existing?.doc.frontmatterCollapsed ?? false);
     if (existing) {
       this.store.activateTab(existing.id);
@@ -422,7 +429,7 @@ export class FileService {
   private markSaved(tabId: string, snapshot: DocumentState, originalPath: string | null, path: string, { modifiedMs, sizeBytes }: FileMeta): void {
     const current = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
     if (!current || current.filePath !== originalPath) return;
-    const newerOnDisk = path === originalPath && current.savedMarkdown !== null && current.modifiedMs > modifiedMs;
+    const newerOnDisk = samePath(path, originalPath) && current.savedMarkdown !== null && current.modifiedMs > modifiedMs;
     this.store.patchDocById(
       tabId,
       newerOnDisk

@@ -76,6 +76,8 @@ export class FileDropCoordinator {
       if (drop) {
         inserted = this.insertFiles(others, drop);
         await this.untilInsertedOrBehind(inserted, drop.tabId);
+      } else if (others.length > 0) {
+        throw new Error("No document was ready to take the file. Try again.");
       }
     } catch (error) {
       // No document could take the files. The Markdown files still open.
