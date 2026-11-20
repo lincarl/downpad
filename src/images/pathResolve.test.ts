@@ -135,6 +135,9 @@ describe("resolveMarkdownLinkTarget", () => {
     expect(resolveMarkdownLinkTarget("C:/other/a.md", null)).toBe("C:/other/a.md");
     expect(resolveMarkdownLinkTarget("C:\\other\\a.md", null)).toBe("C:\\other\\a.md");
     expect(resolveMarkdownLinkTarget("/home/me/a.md", null)).toBe("/home/me/a.md");
+    // As written, also with `./` and `../` in it: the file system resolves those.
+    expect(resolveMarkdownLinkTarget("/work/sub/../notes.md", null)).toBe("/work/sub/../notes.md");
+    expect(resolveMarkdownLinkTarget("/work/./notes.md", doc)).toBe("/work/./notes.md");
   });
 
   it.each([

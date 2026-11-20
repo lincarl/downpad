@@ -120,15 +120,18 @@ describe("the places of documents behind the Recent view", () => {
 
   it("forgets the place of a tab that was closed, and takes none when no editors show", () => {
     const { editorArea } = area();
-    const { store, host, b } = tabs("b");
+    const { store, host, a, b } = tabs("b");
     const places = new PlacesBehindRecent();
     places.take(editorArea, host, store);
     store.closeTab(b);
+    // The store's tab in front is the first one now, and no editors show.
+    expect(store.get().activeTabId).toBe(a);
     places.take(editorArea, { shownTabId: null }, store);
     const built = rebuild(editorArea);
     places.giveBack(editorArea, b, () => b);
     places.giveBack(editorArea, null, () => null);
-    expect([editorArea.scrollTop, built.wysiwyg.scrollTop]).toEqual([0, 0]);
+    places.giveBack(editorArea, a, () => a);
+    expect([editorArea.scrollTop, built.wysiwyg.scrollTop, built.raw.scrollTop]).toEqual([0, 0, 0]);
   });
 });
 
