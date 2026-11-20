@@ -1,6 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -284,23 +283,30 @@ test("keeps the user's text in its tab when the latest version has no such file,
 });
 
 test("lets Upload's menu scroll to every copy in a short window", async () => {
-  // Twelve copies of the document's discarded changes, kept a minute apart.
+  // Twelve copies of the document's discarded changes, which the app keeps
+  // as Discard my changes does, so that no test repeats where they go.
   const notes = path.join(mine, "notes.md");
-  const folder = path.join(directory, "profile", "discarded-changes", createHash("sha256").update(path.resolve(notes)).digest("hex").slice(0, 16));
-  await mkdir(folder, { recursive: true });
-  const digits = (value: number): string => String(value).padStart(2, "0");
-  for (let minute = 0; minute < 12; minute++) {
-    await writeFile(path.join(folder, `2026-11-20 09.${digits(minute)}.00.000 notes.md`), `Copy from 09:${digits(minute)}.\n`);
-  }
-  await launch(notes);
+  await launch();
+  await page.evaluate(async (file) => {
+    for (let copy = 1; copy <= 12; copy++) {
+      await window.downpadDesktop!.invoke("keep_discarded_copy", { path: file, content: `Copy ${copy}.\n` });
+      // Copies are named by the millisecond they were kept.
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+  }, notes);
+  await open(notes);
+  await expect(shownDocument()).toContainText("First paragraph.");
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(480, 360));
   await expect.poll(() => page.evaluate(() => window.innerHeight)).toBeLessThanOrEqual(360);
   await page.getByRole("button", { name: "Upload options" }).click();
-  const oldest = page.getByRole("menuitem", { name: "Open copy from 20 Nov, 09:00" });
+  // The menu lists the copies newest first, so the oldest is the last.
+  const copies = page.getByRole("menuitem", { name: /^Open copy from / });
+  await expect(copies).toHaveCount(12);
+  const oldest = copies.last();
   await oldest.scrollIntoViewIfNeeded();
   await expect(oldest).toBeInViewport({ ratio: 1 });
   await oldest.click();
-  await expect(shownDocument()).toContainText("Copy from 09:00.");
+  await expect(shownDocument()).toContainText("Copy 1.");
 });
 
 test("saves the user's version as a new file when the changes overlap", async () => {
