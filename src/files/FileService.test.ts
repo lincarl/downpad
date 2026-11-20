@@ -101,8 +101,10 @@ describe("replacing a document with its file after a discard", () => {
     store.patchDoc({ filePath: "C:\\Docs\\Notes.md" });
     expect(await files.replaceFromDisk(tabId, "c:\\docs\\notes.md", () => true)).toBe("shown");
     expect(store.get().doc.markdown).toBe(onDisk.content);
-    // Nobody asked for this replacement at that moment, so the document keeps its place.
-    expect(presenter.reloadActiveDoc).toHaveBeenCalledExactlyOnceWith({ background: true });
+    // The document keeps its place, and shows unless the replacement is a quiet one.
+    expect(presenter.reloadActiveDoc).toHaveBeenCalledExactlyOnceWith({ keepPlace: true, quiet: false });
+    expect(await files.replaceFromDisk(tabId, "c:\\docs\\notes.md", () => true, { quiet: true })).toBe("shown");
+    expect(presenter.reloadActiveDoc).toHaveBeenLastCalledWith({ keepPlace: true, quiet: true });
   });
 
   it("leaves a tab that holds another file by now", async () => {
@@ -888,6 +890,46 @@ describe("reloading an open file", () => {
     expect(store.get().tabs).toHaveLength(tabs + 1);
     expect(store.get().tabs.find((tab) => tab.id === untitled)?.doc.markdown).toBe("A draft\n");
     expect(store.get().doc.filePath).toBe("/docs/other.md");
+  });
+
+  it("gives a file one tab when a Save As onto it starts while the open reads it", async () => {
+    const { store, presenter, files } = setup(true);
+    const writer = store.get().activeTabId!;
+    const tabs = store.get().tabs.length;
+    const read = deferred<FilePayload>();
+    const write = deferred<FileMeta>();
+    native.readFile.mockReturnValueOnce(read.promise);
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const opening = files.openPath("/docs/target.md");
+    await eventually(() => expect(native.readFile).toHaveBeenCalledExactlyOnceWith("/docs/target.md"));
+    native.saveDialog.mockResolvedValueOnce("/docs/target.md");
+    const saveAs = files.saveAs();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledOnce());
+    // The open waits for the save, which gives the file to its tab.
+    read.resolve(onDisk);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.get().tabs).toHaveLength(tabs);
+    write.resolve({ modifiedMs: 300 });
+    expect(await saveAs).toBe(true);
+    await opening;
+    expect(store.get().tabs).toHaveLength(tabs);
+    expect(store.get().activeTabId).toBe(writer);
+    expect(store.get().doc.filePath).toBe("/docs/target.md");
+    expect(presenter.reloadActiveDoc).not.toHaveBeenCalled();
+  });
+
+  it("collects typing in the tab that goes behind before it shows the tab that has the file", async () => {
+    const { store, presenter, files } = setup();
+    const owner = store.get().activeTabId!;
+    store.addTab({ ...blankDoc(), filePath: "/docs/other.md", markdown: "# Other\n", savedMarkdown: "# Other\n" });
+    const other = store.get().activeTabId!;
+    presenter.flush.mockReset();
+    const order: string[] = [];
+    presenter.flush.mockImplementation(() => { order.push(`flush with ${store.get().activeTabId === other ? "other" : "owner"} in front`); });
+    await files.openPath(filePath);
+    expect(store.get().activeTabId).toBe(owner);
+    expect(order.at(-1)).toBe("flush with other in front");
+    expect(order.length).toBeGreaterThanOrEqual(2);
   });
 
   it("gives a file one tab when it is opened twice before the first read ends", async () => {

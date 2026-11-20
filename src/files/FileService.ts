@@ -35,11 +35,11 @@ export interface EditorPresenter {
    *  (preserves undo). Use after a pure tab switch / focusing an open file. */
   showActiveDoc(): Promise<void>;
   /** Show the active tab's document after its content was *replaced* (open / new
-   *  / reload): force a fresh editor (undo resets). `background` marks a
-   *  replacement the user did not ask for at that moment, as Git's: the
-   *  document stays where it is scrolled, and the Recent view stays in front
-   *  if it shows. */
-  reloadActiveDoc(options?: { background?: boolean }): Promise<void>;
+   *  / reload): force a fresh editor (undo resets). With `keepPlace`, the
+   *  document stays where it is scrolled, as for a file Git changed. With
+   *  `quiet` as well, the user did not ask for the replacement at that
+   *  moment, so the Recent view stays in front if it shows. */
+  reloadActiveDoc(options?: { keepPlace?: boolean; quiet?: boolean }): Promise<void>;
 }
 
 interface SaveRequest {
@@ -107,6 +107,9 @@ export class FileService {
     if (!options.reload) await this.untilWritten(path);
     const existing = showing();
     const focus = async (tab: Tab): Promise<void> => {
+      // The open may have waited meanwhile, and the tab in front can have
+      // typing that its editor has not reported yet.
+      this.present.flush();
       this.store.activateTab(tab.id);
       await this.present.showActiveDoc(); // focus the open tab — keep its undo
       this.recordOpened(path);
@@ -221,9 +224,17 @@ export class FileService {
    * "shown" when it replaced the active tab's document and showed it,
    * "stored" when it replaced another tab's, whose editors the caller drops,
    * "changed" when the text was not the kept one, and "gone" when the tab
-   * no longer holds `path`.
+   * no longer holds `path`. The document keeps the place it is scrolled to.
+   * With `quiet`, nobody asked for the replacement at that moment, as for
+   * Git's automatic Get latest, and the Recent view stays in front if it
+   * shows. Otherwise the document shows, so a notice about it is seen with it.
    */
-  async replaceFromDisk(tabId: string, path: string, kept: (markdown: string) => boolean): Promise<"shown" | "stored" | "changed" | "gone"> {
+  async replaceFromDisk(
+    tabId: string,
+    path: string,
+    kept: (markdown: string) => boolean,
+    { quiet = false }: { quiet?: boolean } = {},
+  ): Promise<"shown" | "stored" | "changed" | "gone"> {
     const owner = (): Tab | undefined =>
       this.store.get().tabs.find((tab) => tab.id === tabId && samePath(tab.doc.filePath, path));
     if (!owner()) return "gone";
@@ -238,7 +249,7 @@ export class FileService {
       return "stored";
     }
     this.store.replaceActiveDoc(doc);
-    await this.present.reloadActiveDoc({ background: true });
+    await this.present.reloadActiveDoc({ keepPlace: true, quiet });
     return "shown";
   }
 

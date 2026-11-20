@@ -95,7 +95,7 @@ export class AppRuntime {
     const presenter: EditorPresenter = {
       flush: (options) => this.editorHost.flush(options),
       showActiveDoc: () => this.showActiveDoc(),
-      reloadActiveDoc: (options) => this.reloadActiveDoc(options?.background ?? false),
+      reloadActiveDoc: (options) => this.reloadActiveDoc(options),
     };
     this.saveFailure = new SaveFailureNotice(store);
     this.cleanups.push(clearNoticesOfOtherDocuments(store));
@@ -606,20 +606,29 @@ export class AppRuntime {
   }
 
   /** Show the active tab's document after its content was replaced (open / new /
-   *  reload), forcing a fresh editor (undo resets). With `background`, the
-   *  user did not ask for the replacement at that moment, as for Git's: the
-   *  new editors are scrolled to where the old ones were, and the Recent
-   *  view stays in front if it shows. Behind the Recent view nothing can be
-   *  scrolled, so the document gets its place when it shows again. */
-  private async reloadActiveDoc(background = false): Promise<void> {
-    if (!background) return this.presentActiveDoc(true);
+   *  reload), forcing a fresh editor (undo resets). With `keepPlace`, the new
+   *  editors are scrolled to where the old ones were, as for a file Git
+   *  changed. With `quiet` as well, the user did not ask for the replacement
+   *  at that moment, so the Recent view stays in front if it shows. Behind
+   *  the Recent view nothing can be measured or scrolled, so the document
+   *  gets the place it had when that view came, once it shows again. */
+  private async reloadActiveDoc({ keepPlace = false, quiet = false }: { keepPlace?: boolean; quiet?: boolean } = {}): Promise<void> {
+    if (!keepPlace) return this.presentActiveDoc(true);
     const inFront = (): string | null => this.store.get().activeTabId;
     if (this.store.get().view !== "recent") {
-      await keepingPlace(this.editorArea, inFront, () => this.presentActiveDoc(true, true));
+      await keepingPlace(this.editorArea, inFront, () => this.presentActiveDoc(true, quiet));
       return;
     }
-    await this.presentActiveDoc(true, true);
-    if (this.behindRecent && this.behindRecent.tabId === inFront()) this.behindRecent.replaced = true;
+    const behind = this.behindRecent?.tabId === inFront() ? this.behindRecent : null;
+    if (quiet) {
+      await this.presentActiveDoc(true, true);
+      if (behind) behind.replaced = true;
+      return;
+    }
+    // The user asked for it, so the document shows, where it was scrolled.
+    const tab = inFront();
+    await this.presentActiveDoc(true);
+    if (behind) restorePlace(this.editorArea, behind.place, () => inFront() === tab);
   }
 
   private async presentActiveDoc(reload: boolean, background = false): Promise<void> {

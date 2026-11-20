@@ -144,6 +144,10 @@ describe("resolveMarkdownLinkTarget", () => {
     expect(resolveMarkdownLinkTarget("C:\\work\\sub\\..\\notes.md", null)).toBe("C:/work/notes.md");
   });
 
+  it("leaves a POSIX path with a backslash as written, since a file name can have one there", () => {
+    expect(resolveMarkdownLinkTarget("/notes/./tax%5C2026.md", null)).toBe("/notes/./tax\\2026.md");
+  });
+
   it.each([
     "//h/s/notes.md", "\\\\h\\s\\notes.md", "%2F%2Fh/s/notes.md", "%5C%5Ch%5Cs%5Cnotes.md", "/%5Ch/s/notes.md", "\\\\?\\UNC\\h\\s\\notes.md",
     // A malformed escape after the path keeps the whole href from decoding.

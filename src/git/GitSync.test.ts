@@ -105,7 +105,7 @@ beforeEach(() => {
       refreshFromDisk: vi.fn(async () => true),
       // As FileService does: the tab takes the file only if its text is the
       // kept one, and a tab in back takes it without its editors.
-      replaceFromDisk: vi.fn(async (tabId: string, path: string, kept: (markdown: string) => boolean) => {
+      replaceFromDisk: vi.fn(async (tabId: string, path: string, kept: (markdown: string) => boolean, _options?: { quiet?: boolean }) => {
         const tab = store.get().tabs.find((entry) => entry.id === tabId && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
         if (!tab) return "gone" as const;
         if (!kept(tab.doc.markdown)) return "changed" as const;
@@ -364,7 +364,8 @@ describe("GitSync checks", () => {
     git.getLatest.mockResolvedValue(done([PATH]));
     await sync.check({ force: true });
     expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], false);
-    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, PATH, expect.any(Function));
+    // Nobody asked for the replacement at that moment, so it is a quiet one.
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, PATH, expect.any(Function), { quiet: true });
     // The document in front built its editors again as it took the file.
     expect(deps.discardEditors).not.toHaveBeenCalled();
     expect(deps.compareWithDisk).not.toHaveBeenCalled();
@@ -416,7 +417,7 @@ describe("GitSync checks", () => {
     git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
     git.getLatest.mockResolvedValue(done(["c:\\repo\\notes.md"]));
     await sync.check({ force: true });
-    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, "c:\\repo\\notes.md", expect.any(Function));
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, "c:\\repo\\notes.md", expect.any(Function), { quiet: true });
   });
 
   it("only tells the user about remote changes when Get latest automatically is off", async () => {

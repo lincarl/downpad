@@ -132,7 +132,12 @@ export function resolveMarkdownLinkTarget(href: string, docPath: string | null):
   const path = safeDecode(target);
   if (!path || !MARKDOWN_LINK_EXT.test(path)) return null;
   // An absolute path stays as written, unless it has `./` or `../` segments.
-  if (isAbsolutePath(path)) return /(^|[\\/])\.{1,2}(?=[\\/]|$)/.test(path) ? collapseDotSegments(path) : path;
+  // A POSIX path with a backslash stays too, as a file name can have one
+  // there, which collapsing would take for a separator.
+  if (isAbsolutePath(path)) {
+    const posixBackslash = path.startsWith("/") && path.includes("\\");
+    return !posixBackslash && /(^|[\\/])\.{1,2}(?=[\\/]|$)/.test(path) ? collapseDotSegments(path) : path;
+  }
   if (!docPath) return null;
   const dir = dirName(docPath);
   if (!dir) return null;
