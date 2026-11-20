@@ -631,8 +631,6 @@ describe("GitSync conflicts", () => {
     // known, so closing it asks and autosave leaves the file out.
     if (store.get().tabs.length === tabs) {
       expect(store.get().doc).toMatchObject({ filePath: PATH, markdown: "# Notes\n\nMine\n", isDirty: true, savedMarkdown: null });
-      // A change on disk that the watcher told of while Git worked is about
-      // a file that is gone.
       expect(deps.fileGone).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId);
     }
     sync.handleBannerAction(GIT_OPEN_COPY);

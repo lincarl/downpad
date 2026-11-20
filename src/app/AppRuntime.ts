@@ -750,11 +750,9 @@ export class AppRuntime {
   /** Whether Copy file can run. It needs the desktop app and a document that
    *  shows. It also waits while the bar for a change on disk asks for Reload
    *  or Keep mine, since its save would replace the other version without
-   *  asking. And it waits until a document whose file is known to be gone
-   *  has a file again, as after Discard my changes when the latest version
-   *  has no such file: Copy file could neither save that document nor copy a
-   *  file, and its error would take the place of the notice that offers the
-   *  kept copy. */
+   *  asking. It waits too while the document's file is known to be gone,
+   *  since its error would take the place of the notice that offers the kept
+   *  copy. */
   private canCopyFile(): boolean {
     const { activeTabId, banner } = this.store.get();
     return isElectron() && this.documentShows() && banner?.kind !== "file-changed"

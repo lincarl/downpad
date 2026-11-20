@@ -51,7 +51,6 @@ export interface GitSyncDependencies {
   /** Read the file of the document in front now, and show the notice for a
    *  change on disk if it differs from the document. */
   compareWithDisk(): Promise<void>;
-  /** Forget the change on disk of a tab's document, whose file is gone. */
   fileGone(tabId: string): void;
   /** Ask what to do about overlapping changes. Tests replace the dialog. */
   askConflict?: (options: ConflictDialogOptions) => Promise<ConflictChoice>;

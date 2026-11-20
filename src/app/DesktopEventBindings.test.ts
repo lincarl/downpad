@@ -615,7 +615,20 @@ describe("a file that changed on disk", () => {
     expect(bindings.holdSave(second)).toBe(false);
   });
 
-  it("forgets the change of a file that is gone, and shows no bar for a read of it that was under way", async () => {
+  /** Report a change of the file whose read ends when the returned function
+   *  is called with what the file held. */
+  async function reportWithHeldRead(modifiedMs: number): Promise<(payload: FilePayload) => void> {
+    let finishRead!: (payload: FilePayload) => void;
+    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
+    const reads = disk.readFile.mock.calls.length;
+    events.fileChanged!({ path: filePath, modifiedMs });
+    await eventually(() => expect(disk.readFile.mock.calls.length).toBe(reads + 1));
+    return finishRead;
+  }
+
+  const noSuchFile = new Error("ENOENT: no such file or directory");
+
+  it("forgets the change on disk of a file that is gone", async () => {
     const tabId = store.get().activeTabId!;
     await changeOnDisk("# Theirs\n");
     expect(store.get().banner?.kind).toBe("file-changed");
@@ -624,64 +637,50 @@ describe("a file that changed on disk", () => {
     bindings.fileGone(tabId);
     expect(store.get().banner).toBeNull();
     expect(bindings.showPendingChange()).toBe(false);
+  });
 
-    // A read that started while the file was still there ends after the file
-    // went. The file is then read again, which fails now, and no bar shows.
-    let finishRead!: (payload: FilePayload) => void;
-    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
-    const reads = disk.readFile.mock.calls.length;
-    events.fileChanged!({ path: filePath, modifiedMs: 300 });
-    await eventually(() => expect(disk.readFile.mock.calls.length).toBe(reads + 1));
+  it("uses no read of a file that began before the file went", async () => {
+    const tabId = store.get().activeTabId!;
+    const finishRead = await reportWithHeldRead(300);
     bindings.fileGone(tabId);
-    disk.readFile.mockRejectedValue(new Error("ENOENT: no such file or directory"));
+    disk.readFile.mockRejectedValue(noSuchFile);
     finishRead({ content: "# Put back\n", eol: "lf", hadBom: false, modifiedMs: 300, sizeBytes: 11 });
     await bindings.settled(tabId);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.get().banner).toBeNull();
     expect(bindings.showPendingChange()).toBe(false);
+    expect(bindings.isFileGone(tabId)).toBe(true);
   });
 
-  it("knows a file as gone until a save records it or a read finds it again", async () => {
+  it("counts a file as gone until a save records it, not while a save is under way or after one failed", async () => {
     const tabId = store.get().activeTabId!;
     expect(bindings.isFileGone(tabId)).toBe(false);
-    // Git took the file away, which leaves the document unsaved with no
-    // saved text known.
     store.patchDoc({ isDirty: true, savedMarkdown: null });
     bindings.fileGone(tabId);
     expect(bindings.isFileGone(tabId)).toBe(true);
-    // A save under way, or one that failed, records nothing.
     store.patchDoc({ savedMarkdown: null });
     expect(bindings.isFileGone(tabId)).toBe(true);
-    // The user's save puts the file back.
     store.patchDoc({ modifiedMs: 300, savedMarkdown: "# Mine\n", isDirty: false });
     expect(bindings.isFileGone(tabId)).toBe(false);
+  });
 
-    // Another program puts another version back, which the watcher reports.
-    // The file is there then, and its change is still to be resolved.
+  it("counts a file as back once a read finds it, with its change still to resolve", async () => {
+    const tabId = store.get().activeTabId!;
     store.patchDoc({ isDirty: true, savedMarkdown: null });
     bindings.fileGone(tabId);
-    disk.readFile.mockRejectedValueOnce(new Error("ENOENT: no such file or directory"));
+    disk.readFile.mockRejectedValueOnce(noSuchFile);
     events.fileChanged!({ path: filePath, modifiedMs: 300 });
     await bindings.settled(tabId);
     expect(bindings.isFileGone(tabId)).toBe(true);
+
     await changeOnDisk("# Theirs\n", 400);
     expect(bindings.isFileGone(tabId)).toBe(false);
     expect(bindings.holdSave(tabId)).toBe(true);
+  });
 
-    // A read begun while the file was still there says nothing of it now.
-    let finishRead!: (payload: FilePayload) => void;
-    disk.readFile.mockImplementationOnce(() => new Promise((resolve) => (finishRead = resolve)));
-    const reads = disk.readFile.mock.calls.length;
-    events.fileChanged!({ path: filePath, modifiedMs: 500 });
-    await eventually(() => expect(disk.readFile.mock.calls.length).toBe(reads + 1));
+  it("forgets the gone file of a closed tab", () => {
+    const tabId = store.get().activeTabId!;
     bindings.fileGone(tabId);
-    disk.readFile.mockRejectedValue(new Error("ENOENT: no such file or directory"));
-    finishRead({ content: "# Put back\n", eol: "lf", hadBom: false, modifiedMs: 500, sizeBytes: 11 });
-    await bindings.settled(tabId);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(bindings.isFileGone(tabId)).toBe(true);
-
-    // A closed tab is forgotten.
     store.set({ tabs: [], activeTabId: null });
     expect(bindings.isFileGone(tabId)).toBe(false);
   });
@@ -689,13 +688,10 @@ describe("a file that changed on disk", () => {
   it.each([
     { document: "a document that recorded its file", recorded: { fileSize: 0 } },
     { document: "a recovered document", recorded: { fileSize: undefined } },
-  ])("reads the file of $document that was gone when its tab comes to the front", async ({ recorded }) => {
+  ])("reads the file of $document that was gone when its tab comes to the front, without a report of the watcher", async ({ recorded }) => {
     const tabId = store.get().activeTabId!;
     store.patchDoc({ ...recorded, isDirty: true, savedMarkdown: null });
     bindings.fileGone(tabId);
-    // The file is put back with the time and size the document recorded,
-    // as from a backup, while another tab is in front, so no report of the
-    // watcher tells of it.
     const reads = disk.readFile.mock.calls.length;
     bindings.activeDocChanged();
     await bindings.settled(tabId);

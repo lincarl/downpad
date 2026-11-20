@@ -68,8 +68,7 @@ export class DesktopEventBindings {
   /** Set while this class records a file version itself, which makes no read
    *  out of date. */
   private recording = false;
-  /** The tabs whose file is known to be gone (`fileGone`). */
-  private readonly gone = new Set<string>();
+  private readonly tabsWithFileGone = new Set<string>();
   private started = false;
   private disposed = false;
   /** Closes of the window, one at a time (`CloseRequests`). */
@@ -127,30 +126,23 @@ export class DesktopEventBindings {
     if (tabId) await this.settled(tabId);
   }
 
-  /** The file of the tab's document is gone and stays gone, as when Git got
-   *  a latest version without it. An unresolved change on disk of the
-   *  document is about a file that is no longer there, so it is forgotten and
-   *  its bar goes, and a comparison under way that read the file before it
-   *  went counts as out of date, so it shows no bar either. */
+  /** Also forgets the tab's unresolved change on disk, takes its bar down
+   *  and makes a comparison under way out of date, since that one may have
+   *  read the file before it went. */
   fileGone(tabId: string): void {
     this.revisions.set(tabId, (this.revisions.get(tabId) ?? 0) + 1);
     this.resolve(tabId);
-    this.gone.add(tabId);
+    this.tabsWithFileGone.add(tabId);
   }
 
-  /** Whether the file of the tab's document is known to be gone: `fileGone`
-   *  said so, and since then no save, Save As or reload recorded a file for
-   *  the document, and no read of the file that was begun after it found one.
-   *  The file is read on each report of the watcher and each time the tab
-   *  comes to the front.
-   *  Copy file is not offered meanwhile, since it has no file to copy and its
-   *  save writes only over a version the document recorded. */
+  /** True from `fileGone` until a save, Save As or reload records a file for
+   *  the tab's document, or a read begun after it finds the file. */
   isFileGone(tabId: string): boolean {
     const { tabs } = this.dependencies.store.get();
-    for (const id of this.gone) {
-      if (!tabs.some((tab) => tab.id === id)) this.gone.delete(id);
+    for (const id of this.tabsWithFileGone) {
+      if (!tabs.some((tab) => tab.id === id)) this.tabsWithFileGone.delete(id);
     }
-    return this.gone.has(tabId);
+    return this.tabsWithFileGone.has(tabId);
   }
 
   /** As holdSave, once the comparisons of the tab that run have ended. */
@@ -238,8 +230,7 @@ export class DesktopEventBindings {
         for (const tab of state.tabs) {
           const previous = earlier.get(tab.id);
           if (!previous || previous === tab.doc || !recordsVersion(previous, tab.doc)) continue;
-          // A version that is recorded is of a file that is there.
-          this.gone.delete(tab.id);
+          this.tabsWithFileGone.delete(tab.id);
           if (!this.recording) this.revisions.set(tab.id, (this.revisions.get(tab.id) ?? 0) + 1);
         }
       }
@@ -312,7 +303,7 @@ export class DesktopEventBindings {
     const { files, store } = this.dependencies;
     const { activeTabId: tabId, doc } = store.get();
     if (!tabId || !doc.filePath) return;
-    const reads = read || this.pendingChanges.has(tabId) || this.gone.has(tabId);
+    const reads = read || this.pendingChanges.has(tabId) || this.tabsWithFileGone.has(tabId);
     if (!reads && isRecoveredDocument(doc)) return;
     const path = doc.filePath;
     // A save, reload or Keep mine that records another file version
@@ -347,8 +338,7 @@ export class DesktopEventBindings {
       // A later comparison already told what the file holds.
       if ((this.lastUsed.get(tabId) ?? 0) > comparison) return;
       this.lastUsed.set(tabId, comparison);
-      // The file is there again, as when another program put it back.
-      this.gone.delete(tabId);
+      this.tabsWithFileGone.delete(tabId);
       const current = state.doc;
       if (files.isOwnWrite(tabId, onDisk.content)) return;
       if (onDisk.content === current.savedMarkdown || onDisk.content === current.markdown) {
