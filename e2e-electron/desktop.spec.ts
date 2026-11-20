@@ -339,8 +339,9 @@ test("a tab's Copy file brings its document to the front, also from Recent, and 
   await writeFile(first, "# First\n\nMine.\n");
   await writeFile(second, "# Second\n\nOurs.\n");
   await launch(first);
-  // The tab in back keeps its editor in the page, hidden.
-  const shown = (selector: string) => page.locator(`.editor-pane:not([hidden]) .ProseMirror ${selector}`);
+  // The tab in back keeps its editor in the page, hidden, and the Recent view
+  // hides the panel around every editor, so only what shows counts.
+  const shown = (selector: string) => page.locator(`.editor-pane:visible .ProseMirror ${selector}`);
   const notice = page.getByText("This file changed on disk.");
   const copied = () => app!.evaluate(async ({ clipboard }) => {
     const [item] = await clipboard.read();
