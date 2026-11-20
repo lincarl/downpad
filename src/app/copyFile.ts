@@ -23,11 +23,11 @@ export interface CopyFileDependencies {
 /** Put the active document's file on the clipboard, as the file manager
  *  copies it, to paste into a folder or as an attachment. Unsaved changes are
  *  saved first, and an untitled document asks where to save it, so the file
- *  holds what the editor shows. Cancelling that Save As copies nothing. A
- *  recovered document, whose file may have changed while Downpad was closed,
- *  asks the user to save it first, unless a save of it under way ends first,
- *  which Copy file waits for, and a change on disk that is not resolved
- *  shows its notice instead. Failures show as an error notice. */
+ *  holds what the editor shows. Cancelling that Save As copies nothing. Copy
+ *  file first waits for a save of the tab under way. A recovered document
+ *  that no save has recorded, whose file may have changed while Downpad was
+ *  closed, asks the user to save it first, and a change on disk that is not
+ *  resolved shows its notice instead. Failures show as an error notice. */
 export async function copyActiveFile(dependencies: CopyFileDependencies): Promise<void> {
   const { store, files, editorHost, desktopEvents, canCopyFile, isDisposed } = dependencies;
   // The menu can stay open while the file changes on disk.
