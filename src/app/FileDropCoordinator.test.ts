@@ -104,8 +104,11 @@ function setup() {
     },
     save: async () => true,
   };
-  const coordinator = new FileDropCoordinator({ store, files, editorHost, showActiveDoc: async () => {} });
-  return { store, log, files, editorHost, coordinator, droppedOn, saveAs, turn };
+  /** Whether the last notice still shows, which a test can end. */
+  const notice = { shows: true };
+  const reportFailure = vi.fn<(message: string) => () => boolean>(() => () => notice.shows);
+  const coordinator = new FileDropCoordinator({ store, files, editorHost, showActiveDoc: async () => {}, reportFailure });
+  return { store, log, files, editorHost, coordinator, droppedOn, saveAs, turn, reportFailure, notice };
 }
 
 /** A promise and the function that resolves it. */
@@ -180,6 +183,66 @@ describe("FileDropCoordinator", () => {
     expect(store.get().activeTabId).toBe(droppedOn);
   });
 
+  it.each([
+    { first: "still shows", shows: true, later: "Downpad could not add “pic.png”. The file or folder does not exist. Downpad could not open “bad.md”. The file is not valid UTF-8." },
+    { first: "is gone", shows: false, later: "Downpad could not add “pic.png”. The file or folder does not exist." },
+  ])("names the Markdown files that did not open at once, and the files left out later, with the Markdown files again when the first notice $first", async ({ shows, later }) => {
+    const { store, files, coordinator, droppedOn, reportFailure, notice } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const otherTab = store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    store.activateTab(droppedOn);
+    let failRead = () => {};
+    disk.readImageBytes.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        failRead = () => reject(new Error("ENOENT: no such file or directory, open '/drop/pic.png'"));
+      }),
+    );
+    const open = files.openPath;
+    files.openPath = async (path) => {
+      if (path === "/drop/bad.md") throw new Error("The file is not valid UTF-8.");
+      await open(path);
+    };
+    const handled = coordinator.handle(["/drop/pic.png", "/drop/bad.md", "/drop/a.md"], point);
+    await settle();
+    // The user shows another tab while the image is read.
+    store.activateTab(otherTab);
+    await settle();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “bad.md”. The file is not valid UTF-8.");
+    notice.shows = shows;
+    failRead();
+    await handled;
+    expect(reportFailure).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenLastCalledWith(later);
+    logged.mockRestore();
+  });
+
+  it("shows no second notice when the files that waited all went in", async () => {
+    const { store, files, coordinator, droppedOn, reportFailure } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const otherTab = store.addTab({ ...blankDoc(), filePath: "/docs/other.md" });
+    store.activateTab(droppedOn);
+    let finishRead = () => {};
+    disk.readImageBytes.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRead = () => resolve({ bytes: new Uint8Array([1, 2, 3]), mime: "image/png" });
+      }),
+    );
+    const open = files.openPath;
+    files.openPath = async (path) => {
+      if (path === "/drop/bad.md") throw new Error("The file is not valid UTF-8.");
+      await open(path);
+    };
+    const handled = coordinator.handle(["/drop/pic.png", "/drop/bad.md"], point);
+    await settle();
+    store.activateTab(otherTab);
+    await settle();
+    finishRead();
+    store.activateTab(droppedOn);
+    await handled;
+    logged.mockRestore();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “bad.md”. The file is not valid UTF-8.");
+  });
+
   it("opens every Markdown file of a drop of only Markdown files, aiming nothing", async () => {
     const { log, coordinator } = setup();
     await coordinator.handle(["/drop/a.md", "/drop/b.markdown"], point);
@@ -199,22 +262,71 @@ describe("FileDropCoordinator", () => {
     ]);
   });
 
-  it("opens the other Markdown files of a drop when one cannot be opened", async () => {
-    const { log, files, coordinator } = setup();
+  it("opens the other Markdown files of a drop when some cannot be opened, and names those in one notice", async () => {
+    const { log, files, coordinator, reportFailure } = setup();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const open = files.openPath;
     files.openPath = async (path) => {
-      if (path === "/drop/gone.md") throw new Error("missing");
+      if (path.includes("gone")) throw new Error("Error invoking remote method 'command': Error: ENOENT: no such file or directory, open '/drop/gone.md'");
       await open(path);
     };
-    await coordinator.handle(["/drop/gone.md", "/drop/b.md"], point);
+    await coordinator.handle(["/drop/gone.md", "/drop/b.md", "/drop/gone too.md"], point);
     expect(log).toEqual(["open /drop/b.md"]);
     expect(logged).toHaveBeenCalledWith("Downpad: could not open gone.md", expect.any(Error));
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not open “gone.md”, “gone too.md”. The file or folder does not exist.");
     logged.mockRestore();
   });
 
-  it("puts the files after one that cannot be read into the document, then opens the Markdown files", async () => {
-    const { log, coordinator } = setup();
+  it("names the files left out and the Markdown files that did not open in one notice, after the last file opened, each with its reason", async () => {
+    const { log, files, coordinator, reportFailure } = setup();
+    reportFailure.mockImplementation(() => {
+      log.push("notice");
+      return () => true;
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const read = disk.readImageBytes.getMockImplementation()!;
+    disk.readImageBytes.mockImplementation(async (path) => {
+      if (path === "/drop/gone.png") throw new Error("ENOENT: no such file or directory, open '/drop/gone.png'");
+      if (path === "/drop/locked.png") throw new Error("EACCES: permission denied, open '/drop/locked.png'");
+      return read(path);
+    });
+    const open = files.openPath;
+    files.openPath = async (path) => {
+      if (path === "/drop/binary.md") throw new Error("The file is not valid UTF-8.");
+      if (path === "/drop/gone.md") throw new Error("ENOENT: no such file or directory, open '/drop/gone.md'");
+      await open(path);
+    };
+    await coordinator.handle(["/drop/gone.png", "/drop/locked.png", "/drop/binary.md", "/drop/gone.md", "/drop/a.md"], point);
+    // The notice comes after the last Markdown file opened.
+    expect(log.slice(-2)).toEqual(["open /drop/a.md", "notice"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+      "Downpad could not add “gone.png”. The file or folder does not exist. "
+      + "Downpad could not add “locked.png”. Permission was denied, or another program is using the file. "
+      + "Downpad could not open “binary.md”. The file is not valid UTF-8. "
+      + "Downpad could not open “gone.md”. The file or folder does not exist.",
+    );
+    logged.mockRestore();
+  });
+
+  it("names every file of a drop that no document was ready to take, and still opens its Markdown files", async () => {
+    const { log, editorHost, coordinator, reportFailure } = setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The editor is still being built, so nothing can take the files.
+    editorHost.aimDrop = () => null;
+    await coordinator.handle(["/drop/pic.png", "/drop/data.csv", "/drop/a.md"], point);
+    logged.mockRestore();
+    expect(log).toEqual(["open /drop/a.md"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not add “pic.png”, “data.csv”. No document was ready to take the file. Try again.");
+  });
+
+  it("shows no notice for a drop whose files all open and go in", async () => {
+    const { coordinator, reportFailure } = setup();
+    await coordinator.handle(["/drop/pic.png", "/drop/a.md"], point);
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("puts the files after one that cannot be read into the document, names it in a notice, then opens the Markdown files", async () => {
+    const { log, coordinator, reportFailure } = setup();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const read = disk.readImageBytes.getMockImplementation()!;
     disk.readImageBytes.mockImplementation(async (path) => {
@@ -231,6 +343,7 @@ describe("FileDropCoordinator", () => {
     ]);
     expect(disk.writeAttachment).toHaveBeenCalledWith("/docs/notes.md", "attachments", "data.csv", expect.any(Uint8Array));
     expect(logged).toHaveBeenCalledWith("Downpad: could not insert gone.png", expect.any(Error));
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("Downpad could not add “gone.png”. missing");
     logged.mockRestore();
   });
 
@@ -367,6 +480,21 @@ describe("FileDropCoordinator pasted images", () => {
       `insert ${image} into dropped-on with dropped-on in front`,
       "release dropped-on",
     ]);
+  });
+
+  it("names a pasted image that could not be stored in a notice, and shows none for a paste that went in", async () => {
+    const { store, log, coordinator, droppedOn, reportFailure } = setup();
+    await coordinator.pasteImages(droppedOn, [pastedPng()]);
+    expect(reportFailure).not.toHaveBeenCalled();
+
+    store.set((state) => ({ settings: { ...state.settings, embedImagesAsBase64: false } }));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    disk.writeAttachment.mockRejectedValueOnce(new Error("ENOSPC: no space left on device, write"));
+    log.length = 0;
+    await coordinator.pasteImages(droppedOn, [pastedPng()]);
+    logged.mockRestore();
+    expect(log).toEqual(["aim the paste at the caret in dropped-on", "release dropped-on"]);
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^Downpad could not add “.+”\. The disk is full\.$/));
   });
 
   it("writes a pasted image stored as a file beside the document where a Save As under way puts it", async () => {

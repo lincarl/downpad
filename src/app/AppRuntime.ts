@@ -14,8 +14,9 @@ import { RecentView } from "../home/RecentView";
 import { createIpcRecentDataSource } from "../home/recentData";
 import { openDialog } from "../ipc/dialogs";
 import { desktopBridge } from "../ipc/bridge";
+import { failureReason } from "../ipc/failureReason";
 import { SnapshotScheduler } from "../recovery/snapshotScheduler";
-import type { Tab, EditorLayout } from "../state/types";
+import type { BannerState, Tab, EditorLayout } from "../state/types";
 import { layoutFromDefaultView, shownLayout } from "../state/types";
 import { installDocumentContextMenu } from "../shell/documentContextMenu";
 import { pagePressesKeepFocus, shiftPressesAsClicks } from "../shell/pagePresses";
@@ -27,8 +28,11 @@ import { DesktopEventBindings } from "./DesktopEventBindings";
 import { FileDropCoordinator } from "./FileDropCoordinator";
 import { SessionKeeper } from "./SessionKeeper";
 import { saveDialogSettings } from "./saveDialogSettings";
+import { copyActiveFile } from "./copyFile";
+import { keepingPlace, PlacesBehindRecent } from "./keepingPlace";
+import { clearNoticesOfOtherDocuments } from "./noticeScope";
+import { SaveFailureNotice } from "./saveFailureNotice";
 import { copyFormattedDocument } from "../clipboard/formattedDocument";
-import { copyFileToClipboard } from "../ipc/commands";
 import { GitSync } from "../git/GitSync";
 
 export interface AppRuntimeHosts {
@@ -62,6 +66,12 @@ export class AppRuntime {
    *  of panes, such as a reload. A layout or a tab chosen meanwhile is ignored. */
   private switchingView = false;
   private closingTabs = false;
+  /** The element the document's editors show in, which the Recent view hides. */
+  private readonly editorArea: HTMLElement;
+  /** Where the documents were scrolled that the Recent view came over. */
+  private readonly placesBehindRecent = new PlacesBehindRecent();
+  /** The error notice of a save the user asked for that failed. */
+  private readonly saveFailure: SaveFailureNotice;
   private disposed = false;
   private readonly cleanups: Array<() => void> = [];
 
@@ -71,6 +81,7 @@ export class AppRuntime {
     hosts: AppRuntimeHosts,
     private readonly callbacks: AppRuntimeCallbacks,
   ) {
+    this.editorArea = hosts.editorArea;
     this.settingsModel = new SettingsModel(store, () => this.onWysiwygConfigChanged());
     this.settingsDialog = new SettingsDialog(
       store,
@@ -82,16 +93,18 @@ export class AppRuntime {
     const presenter: EditorPresenter = {
       flush: (options) => this.editorHost.flush(options),
       showActiveDoc: () => this.showActiveDoc(),
-      reloadActiveDoc: () => this.reloadActiveDoc(),
+      reloadActiveDoc: (options) => this.reloadActiveDoc(options),
     };
-    this.files = new FileService(store, presenter);
+    this.saveFailure = new SaveFailureNotice(store);
+    this.cleanups.push(clearNoticesOfOtherDocuments(store));
+    this.files = new FileService(store, presenter, (tabId) => this.saveFailure.saved(tabId));
     // Image storage in the WYSIWYG view may need to save an untitled buffer
     // first (to know the attachments folder) — let it drive a save (§5.5).
     this.editorHost.setSaveHandler(() => this.files.save());
     // Double-clicking a `.md` link opens that file in a tab (§5.6); openPath
     // focuses it if already open, else opens a new tab (consistent with §5.19).
-    this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path)));
-    this.scheduler = new SnapshotScheduler(store, this.files, () => this.desktopEvents.hasPendingChange());
+    this.editorHost.setOpenLinkHandler((path) => this.run(() => this.files.openPath(path), OPEN_FAILED));
+    this.scheduler = new SnapshotScheduler(store, this.files, (tabId) => this.desktopEvents.holdSave(tabId));
     this.session = new SessionKeeper(store);
     // The find card floats over the document and searches the formatted
     // document or raw Markdown according to the active layout. Its open state
@@ -141,18 +154,23 @@ export class AppRuntime {
       files: this.files,
       editorHost: this.editorHost,
       showActiveDoc: () => this.showActiveDoc(),
+      reportFailure: (message) => {
+        const banner: BannerState = { kind: "error", message };
+        if (!this.disposed) this.store.set({ banner });
+        return () => this.store.get().banner === banner;
+      },
     });
     // Images pasted into the document view go in as the files of a drop at
     // the caret, so one that waits for a Save As never goes into a hidden or
     // rebuilt editor (§5.5).
-    this.editorHost.setPasteHandler((tabId, files) => this.run(() => this.fileDrops.pasteImages(tabId, files)));
+    this.editorHost.setPasteHandler((tabId, files) => this.run(() => this.fileDrops.pasteImages(tabId, files), "Downpad could not add the pasted file."));
     this.desktopEvents = new DesktopEventBindings({
       store,
       files: this.files,
       editorHost: this.editorHost,
       scheduler: this.scheduler,
       session: this.session,
-      run: (action) => this.run(action),
+      run: (action, failure) => this.run(action, failure),
       handleDrop: (paths, drop) => this.fileDrops.handle(paths, drop),
     });
 
@@ -161,7 +179,7 @@ export class AppRuntime {
       files: this.files,
       flush: () => this.editorHost.flush(),
       discardEditors: (tabId) => this.editorHost.discardTab(tabId),
-      keepingPlace: (reload) => keepingPlace(hosts.editorArea, reload),
+      compareWithDisk: () => this.desktopEvents.recheck(),
     });
 
     // Recent view (§5.8). Opening a file from it shows the editor first, then
@@ -172,7 +190,7 @@ export class AppRuntime {
       {
         // Opening from the Recent view lands the file in its own tab (§5.19);
         // openPath flushes the current editor and re-shows the active document.
-        onOpenFile: (p) => this.run(() => this.files.openPath(p)),
+        onOpenFile: (p) => this.run(() => this.files.openPath(p), OPEN_FAILED),
         onSummaryChange: (text) => this.callbacks.setRecentSummary(text),
         pickFile: () => this.pickMarkdownFile(),
         reveal: (p) => this.reveal(p),
@@ -221,7 +239,7 @@ export class AppRuntime {
   }
 
   openDocument(): void {
-    this.run(() => this.files.openViaDialog());
+    this.run(() => this.files.openViaDialog(), OPEN_FAILED);
   }
 
   saveDocument(): void {
@@ -290,11 +308,11 @@ export class AppRuntime {
   }
 
   closeDocumentTab(id: string): void {
-    this.run(() => this.closeTab(id));
+    this.run(() => this.closeTab(id), CLOSE_FAILED);
   }
 
   closeEveryTab(): void {
-    this.run(() => this.closeAllTabs());
+    this.run(() => this.closeAllTabs(), CLOSE_FAILED);
   }
 
   handleBannerAction(id: string): void {
@@ -395,7 +413,7 @@ export class AppRuntime {
       showFind: (mode) => this.findBar.show(mode),
       focusRecentSearch: () => this.recentView.focusSearch(),
       save: (saveAs) => this.run(() => this.saveByUser(saveAs)),
-      open: () => this.run(() => this.files.openViaDialog()),
+      open: () => this.run(() => this.files.openViaDialog(), OPEN_FAILED),
       create: () => this.run(() => this.files.newDocument()),
       print: () => void this.printActiveDocument(),
     }));
@@ -412,11 +430,24 @@ export class AppRuntime {
    *  when saving is on. Autosave and the saves of a close prompt do not
    *  upload. */
   private async saveByUser(saveAs: boolean): Promise<void> {
-    const tabId = this.store.get().activeTabId;
-    const saved = await (saveAs ? this.files.saveAs() : this.files.save());
+    const { tabs, activeTabId } = this.store.get();
+    const tab = tabs.find((candidate) => candidate.id === activeTabId);
+    if (!tab) return;
+    let saved: boolean;
+    try {
+      saved = await (saveAs ? this.files.saveAs() : this.files.save());
+    } catch (error) {
+      console.error("Downpad: file action failed", error);
+      if (this.disposed) return;
+      // The notice names the document by the name it has now, as a Save As
+      // ahead of this save can have given it another file.
+      const now = this.store.get().tabs.find((candidate) => candidate.id === tab.id) ?? tab;
+      this.saveFailure.show(tab.id, tabLabel(now), error);
+      return;
+    }
+    if (!saved) return;
     // Upload the saved document, also if another tab became active meanwhile.
-    const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null;
-    if (saved) this.git.afterUserSave(path);
+    this.git.afterUserSave(this.store.get().tabs.find((candidate) => candidate.id === tab.id)?.doc.filePath ?? null);
   }
 
   /** Re-mount the WYSIWYG editor so changed serializer style (§5.16) or link
@@ -560,6 +591,9 @@ export class AppRuntime {
   private async showRecent(): Promise<void> {
     if (this.store.get().view === "recent") return;
     if (this.findBar.isOpen()) this.findBar.close();
+    // The hidden editor area measures as not scrolled, so its place is taken
+    // now, for the tab whose editors show, which can lag behind the active one.
+    this.placesBehindRecent.take(this.editorArea, this.editorHost, this.store);
     this.store.set({ view: "recent" });
     await this.recentView.refresh();
   }
@@ -571,30 +605,45 @@ export class AppRuntime {
   }
 
   /** Show the active tab's document after its content was replaced (open / new /
-   *  reload), forcing a fresh editor (undo resets). */
-  private async reloadActiveDoc(): Promise<void> {
-    await this.presentActiveDoc(true);
+   *  reload), forcing a fresh editor (undo resets). With `keepPlace`, the new
+   *  editors are scrolled to where the old ones were, as for a file Git
+   *  changed. With `quiet` as well, the user did not ask for the replacement
+   *  at that moment, so the Recent view stays in front if it shows. Behind
+   *  the Recent view nothing can be measured or scrolled, so the document
+   *  gets the place it had when that view came, once it shows again
+   *  (`presentActiveDoc`). */
+  private async reloadActiveDoc({ keepPlace = false, quiet = false }: { keepPlace?: boolean; quiet?: boolean } = {}): Promise<void> {
+    if (!keepPlace || this.store.get().view === "recent") return this.presentActiveDoc(true, quiet);
+    await keepingPlace(this.editorArea, () => this.store.get().activeTabId, () => this.presentActiveDoc(true));
   }
 
-  private async presentActiveDoc(reload: boolean): Promise<void> {
+  private async presentActiveDoc(reload: boolean, background = false): Promise<void> {
     // The find bar is bound to the editor we're about to (re)show; close it so it
     // doesn't linger with stale search state from the previous document.
     if (this.findBar.isOpen()) this.findBar.close();
-    if (this.store.get().view === "recent") this.recentView.onLeave();
-    // Leaving Recent re-enters the editor; the editor host honours the persisted
-    // `editorLayout` (document / split / Markdown only) when it presents.
-    this.store.set({ view: "wysiwyg" });
+    if (!background || this.store.get().view !== "recent") {
+      if (this.store.get().view === "recent") this.recentView.onLeave();
+      // Leaving Recent re-enters the editor; the editor host honours the persisted
+      // `editorLayout` (document / split / Markdown only) when it presents.
+      this.store.set({ view: "wysiwyg" });
+    }
+    // A document that was replaced, as by a reload, leaves the notices about
+    // what it was behind. They go before its editor is built, so a notice
+    // that shows meanwhile stays (`noticeScope`).
+    if (reload && this.store.get().banner) this.store.set({ banner: null });
     if (reload) await this.editorHost.reloadActiveDoc();
     else await this.editorHost.showActiveDoc();
+    // A document that was behind the Recent view shows again, where it was
+    // scrolled when that view came.
+    const inFront = (): string | null => this.store.get().activeTabId;
+    if (this.store.get().view !== "recent") this.placesBehindRecent.giveBack(this.editorArea, inFront(), inFront);
     this.afterActiveDocChanged();
   }
 
-  /** Re-point the file watcher at the active document and clear a stale banner
-   *  left over from the previously active file (§5.1, §5.19). The notice for
-   *  an unresolved change on disk to this document shows again, and a change
-   *  made while another tab was in front shows it too. */
+  /** Re-point the file watcher at the active document (§5.1, §5.19). The
+   *  notice for an unresolved change on disk to this document shows again,
+   *  and a change made while another tab was in front shows it too. */
   private afterActiveDocChanged(): void {
-    this.store.set({ banner: null });
     this.files.watchActive();
     this.desktopEvents.activeDocChanged();
   }
@@ -633,29 +682,20 @@ export class AppRuntime {
     return isElectron() && this.documentShows() && this.store.get().banner?.kind !== "file-changed";
   }
 
-  /** Put the active document's file on the clipboard, as the file manager
-   *  copies it, to paste into a folder or as an attachment. Unsaved changes
-   *  are saved first, and an untitled document asks where to save it, so the
-   *  file holds what the editor shows. Cancelling that Save As copies
-   *  nothing. */
-  private async copyFile(): Promise<void> {
-    // The menu can stay open while the file changes on disk.
-    if (!this.canCopyFile()) return;
-    // A change on disk whose bar was dismissed or replaced is still
-    // unresolved, so the bar asks again and nothing is saved or copied.
-    if (this.desktopEvents.showPendingChange()) return;
-    this.editorHost.flush();
-    const tabId = this.store.get().activeTabId;
-    const doc = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc;
-    if (!tabId || !doc) return;
-    try {
-      if ((doc.isDirty || !doc.filePath) && !(await this.files.save())) return;
-      const path = this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath;
-      if (path) await copyFileToClipboard(path);
-    } catch (error) {
-      console.error("Downpad: copying the file failed", error);
-      if (!this.disposed) this.store.set({ banner: { kind: "error", message: "Could not copy the file. Please try again." } });
-    }
+  /** Run Copy file on the active document (see copyActiveFile). */
+  private copyFile(): Promise<void> {
+    return copyActiveFile({
+      store: this.store,
+      files: this.files,
+      editorHost: this.editorHost,
+      desktopEvents: this.desktopEvents,
+      canCopyFile: () => this.canCopyFile(),
+      isDisposed: () => this.disposed,
+      reportSaveFailure: (tabId, error) => {
+        const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+        if (tab) this.saveFailure.show(tabId, tabLabel(tab), error);
+      },
+    });
   }
 
   /** Flush the source pane too, so every layout copies the latest document. */
@@ -701,34 +741,21 @@ export class AppRuntime {
     };
   }
 
-  /** Run a file action, surfacing failures without crashing the shell. */
-  private run(action: () => Promise<unknown>): void {
+  /** Run a file action. A failure does not crash the shell, and shows as an
+   *  error notice that says `failure` and then the reason the error gives. */
+  private run(action: () => Promise<unknown>, failure = "Downpad could not finish that action."): void {
     if (this.disposed) return;
-    action().catch((err) => {
-      console.error("Downpad: file action failed", err);
+    action().catch((error: unknown) => {
+      console.error("Downpad: file action failed", error);
+      if (this.disposed) return;
+      this.store.set({ banner: { kind: "error", message: `${failure} ${failureReason(error)}`.trimEnd() } });
     });
   }
 }
 
-/** Run a reload of the active document and scroll its new editors to where
- *  the old ones were, so a document that Get latest changed stays in place. */
-async function keepingPlace(editorArea: HTMLElement, reload: () => Promise<void>): Promise<void> {
-  const panes = (): HTMLElement[] => [editorArea, ...editorArea.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")];
-  const place = (element: HTMLElement): string =>
-    element === editorArea ? "area" : element.classList.contains("editor-pane-raw") ? "raw" : "wysiwyg";
-  const before = new Map(panes().map((element) => [place(element), element.scrollTop]));
-  await reload();
-  const restore = (): void => {
-    for (const element of panes()) {
-      const top = before.get(place(element));
-      if (top !== undefined) element.scrollTop = top;
-    }
-  };
-  restore();
-  // The new document view can still grow in the next frame, as its images
-  // and diagrams take their place.
-  requestAnimationFrame(restore);
-}
+/** What the error notice of a failed file action says before the reason. */
+const OPEN_FAILED = "Downpad could not open the file.";
+const CLOSE_FAILED = "Downpad could not close the document.";
 
 /** Display label for a document: its file name, or "Untitled" when unsaved. */
 function fileLabel(filePath: string | null): string {

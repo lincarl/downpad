@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { absolutePath, ensureAttachmentsDirectory, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { pageRanges, pdfOptions, printerOptions, validatePrintOptions } from "./printing";
 import { clipboardPermission, externalUrl, ImageAccess, trustedPage } from "./security";
-import { loadSettingsFile, normalizeSettings, patchSettingsToml, saveSettingsFile } from "./settings";
+import { loadSettingsFile, normalizeSettings, patchSettingsToml, updateSettingsFile } from "./settings";
 import { adoptLegacyData, ConfigStore, firstMatch, parseRecent, pathKey, RecentSearch } from "./storage";
 import { watchPath } from "./watchers";
 
@@ -21,6 +21,33 @@ async function fixtureDirectory(): Promise<string> {
   return directory;
 }
 afterEach(async () => { await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
+
+/** Runs `change` once during the next settings write, either while the write stages
+ *  its file or while it reads settings.toml a last time before the rename, after
+ *  the bytes are read. The caller restores the spies. */
+function changeDuringSettingsWrite(moment: "stage" | "last read", change: () => void): void {
+  let staged = false;
+  let changed = false;
+  const run = () => {
+    if (changed) return;
+    changed = true;
+    change();
+  };
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      staged = true;
+      if (moment === "stage") run();
+    }
+    return originalOpen(...args);
+  });
+  const decode = TextDecoder.prototype.decode;
+  vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: Parameters<TextDecoder["decode"]>) {
+    if (staged && moment === "last read") run();
+    return decode.apply(this, args);
+  });
+  syncBuiltinESMExports();
+}
 
 describe("Markdown file operations", () => {
   it("opens BOM/CRLF documents and saves full replacements with their original EOL", async () => {
@@ -143,7 +170,7 @@ describe("Existing settings and history compatibility", () => {
     const path = join(await fixtureDirectory(), "settings.toml");
     const original = `# Keep quoted keys\n${key} = "light" # chosen theme\nunknownKey = 42\n`;
     await writeFile(path, original);
-    await saveSettingsFile(path, { ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
+    await updateSettingsFile(path, { ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
     const saved = await readFile(path, "utf8");
     expect(saved).toContain(`${key} = "dark" # chosen theme`);
     expect(saved).toContain("# Keep quoted keys\n");
@@ -160,7 +187,7 @@ describe("Existing settings and history compatibility", () => {
     const original = `# Font preference\nfontFamily = ${value} # font comment\nunknownKey = 42\n`;
     expect(parse(original).fontFamily).not.toBeTypeOf("string");
     await writeFile(path, original);
-    await saveSettingsFile(path, DEFAULT_SETTINGS);
+    await updateSettingsFile(path, DEFAULT_SETTINGS);
     const saved = await readFile(path, "utf8");
     expect(saved).toContain('# Font preference\nfontFamily = "Segoe UI" # font comment\nunknownKey = 42\n');
     expect(parse(saved)).toMatchObject({ ...DEFAULT_SETTINGS, unknownKey: 42 });
@@ -176,7 +203,7 @@ describe("Existing settings and history compatibility", () => {
     const original = unknownRoot + 'theme = "light" # root theme\n' + tables;
     const parsed = parse(original);
     await writeFile(path, original);
-    await saveSettingsFile(path, { ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
+    await updateSettingsFile(path, { ...DEFAULT_SETTINGS, theme: "dark", hasSeenWelcome: true });
     const saved = await readFile(path, "utf8");
     expect(saved).toContain(unknownRoot);
     expect(saved.endsWith(tables)).toBe(true);
@@ -190,7 +217,7 @@ describe("Existing settings and history compatibility", () => {
     const fontFamily = 'Readable "Font" \\ # name\n\t\u007F';
     await writeFile(path, original);
     expect(await loadSettingsFile(path)).toMatchObject({ fontFamily: "Original" });
-    await saveSettingsFile(path, { ...DEFAULT_SETTINGS, fontFamily });
+    await updateSettingsFile(path, { ...DEFAULT_SETTINGS, fontFamily });
     const saved = await readFile(path, "utf8");
     expect(saved.startsWith('\uFEFF"fontFamily" = ')).toBe(true);
     expect(saved).toContain('\\u007f" # font\r\n');
@@ -204,7 +231,7 @@ describe("Existing settings and history compatibility", () => {
     await writeFile(path, 'editorFontScale = -0.0 # retain sign\nunknownKey = 42\n');
     const loaded = await loadSettingsFile(path);
     expect(Object.is(loaded.editorFontScale, -0)).toBe(true);
-    await saveSettingsFile(path, { ...loaded, hasSeenWelcome: true });
+    await updateSettingsFile(path, { ...loaded, hasSeenWelcome: true });
     const saved = await readFile(path, "utf8");
     expect(saved).toContain('editorFontScale = -0.0 # retain sign');
     expect(Object.is(parse(saved).editorFontScale, -0)).toBe(true);
@@ -221,7 +248,7 @@ describe("Existing settings and history compatibility", () => {
     const original = '# Preserve this unusual configuration\nunknownKey = "keep"\n' + subtree;
     expect(() => parse(original)).not.toThrow();
     await writeFile(path, original);
-    await expect(saveSettingsFile(path, DEFAULT_SETTINGS)).rejects.toThrow("cannot be updated safely. The original file was preserved");
+    await expect(updateSettingsFile(path, DEFAULT_SETTINGS)).rejects.toThrow("cannot be updated safely. The original file was preserved");
     expect(await readFile(path, "utf8")).toBe(original);
     expect(await readdir(directory)).toEqual(["settings.toml"]);
   });
@@ -231,7 +258,7 @@ describe("Existing settings and history compatibility", () => {
     const path = join(directory, "settings.toml");
     const original = 'fontFamily = "Readable" # keep\nunknownKey = 42\n';
     await writeFile(path, original);
-    await expect(saveSettingsFile(path, { ...DEFAULT_SETTINGS, fontFamily: "\uD800" }))
+    await expect(updateSettingsFile(path, { ...DEFAULT_SETTINGS, fontFamily: "\uD800" }))
       .rejects.toThrow("cannot be updated safely. The original file was preserved");
     expect(await readFile(path, "utf8")).toBe(original);
     expect(await readdir(directory)).toEqual(["settings.toml"]);
@@ -247,10 +274,100 @@ describe("Existing settings and history compatibility", () => {
     await writeFile(path, original);
     expect(await loadSettingsFile(path)).toEqual(DEFAULT_SETTINGS);
     expect(await readFile(path)).toEqual(original);
-    await expect(saveSettingsFile(path, { ...DEFAULT_SETTINGS, hasSeenWelcome: true }))
+    await expect(updateSettingsFile(path, { ...DEFAULT_SETTINGS, hasSeenWelcome: true }))
       .rejects.toMatchObject({ message: expect.stringContaining("contains invalid UTF-8. Convert the file to UTF-8"), cause: expect.any(TypeError) });
     expect(await readFile(path)).toEqual(original);
     expect(await readdir(directory)).toEqual(["settings.toml"]);
+  });
+
+  it("leaves a setting as it is when a change brings a malformed value", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    await writeFile(path, 'theme = "light"\n');
+    expect(await updateSettingsFile(path, { theme: "sepia", editorWidthPx: 900 })).toMatchObject({ theme: "light", editorWidthPx: 900 });
+    expect(parse(await readFile(path, "utf8"))).toMatchObject({ theme: "light", editorWidthPx: 900 });
+  });
+
+  it("applies a change with an expected value only while the file still holds that value", async () => {
+    const path = join(await fixtureDirectory(), "settings.toml");
+    // A hand edit made after the change failed to save.
+    await writeFile(path, "editorFontScale = 1.5\n");
+    expect(await updateSettingsFile(path, { editorFontScale: 1.1, theme: "dark" }, { editorFontScale: 1 }))
+      .toMatchObject({ editorFontScale: 1.5, theme: "dark" });
+    expect(await updateSettingsFile(path, { editorFontScale: 1.1 }, { editorFontScale: 1.5 }))
+      .toMatchObject({ editorFontScale: 1.1 });
+    await expect(updateSettingsFile(path, {}, ["editorFontScale"])).rejects.toThrow("Settings changes must be an object.");
+  });
+
+  it.each([
+    { moment: "stage", when: "stages its file" },
+    { moment: "last read", when: "reads the file a last time" },
+  ] as const)("puts the changes onto a version that another program saves while the write $when", async ({ moment }) => {
+    const directory = await fixtureDirectory();
+    const path = join(directory, "settings.toml");
+    const replacement = join(directory, "replacement.toml");
+    await writeFile(path, 'theme = "light"\n');
+    await writeFile(replacement, 'theme = "light"\neditorWidthPx = 900\n');
+    try {
+      // Another editor saves the file by a rename, as editors do.
+      changeDuringSettingsWrite(moment, () => synchronousFilesystem.renameSync(replacement, path));
+      expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: 900 });
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    }
+    expect(parse(await readFile(path, "utf8"))).toMatchObject({ theme: "dark", editorWidthPx: 900 });
+    expect(await readdir(directory)).toEqual(["settings.toml"]);
+  });
+
+  it.skipIf(process.platform === "win32")("checks the real file before the rename, also when settings.toml is a symbolic link that changes meanwhile", async () => {
+    const directory = await fixtureDirectory();
+    const real = join(directory, "real.toml");
+    const decoy = join(directory, "decoy.toml");
+    const path = join(directory, "settings.toml");
+    await writeFile(real, 'theme = "light"\n');
+    await writeFile(decoy, 'theme = "light"\n');
+    await symlink(real, path);
+    try {
+      // Before the rename, another program edits the real file and points
+      // the link at a file with the text the write read first.
+      changeDuringSettingsWrite("stage", () => {
+        synchronousFilesystem.writeFileSync(real, 'theme = "light"\neditorWidthPx = 900\n');
+        synchronousFilesystem.rmSync(path);
+        synchronousFilesystem.symlinkSync(decoy, path);
+      });
+      await updateSettingsFile(path, { theme: "dark" });
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    }
+    expect(await readFile(real, "utf8")).toBe('theme = "light"\neditorWidthPx = 900\n');
+    expect(parse(await readFile(decoy, "utf8"))).toMatchObject({ theme: "dark" });
+  });
+
+  it.skipIf(process.platform === "win32").each([
+    { moment: "stage", when: "stages its file" },
+    { moment: "last read", when: "reads the file a last time" },
+  ] as const)("puts the changes onto the file the write read, and none onto another, when settings.toml's link changes while the write $when", async ({ moment }) => {
+    const directory = await fixtureDirectory();
+    const first = join(directory, "first.toml");
+    const second = join(directory, "second.toml");
+    const path = join(directory, "settings.toml");
+    await writeFile(first, 'theme = "light"\n');
+    await writeFile(second, 'theme = "light"\neditorWidthPx = 900\n');
+    await symlink(first, path);
+    try {
+      // Another program points the link at another settings file.
+      changeDuringSettingsWrite(moment, () => {
+        synchronousFilesystem.rmSync(path);
+        synchronousFilesystem.symlinkSync(second, path);
+      });
+      expect(await updateSettingsFile(path, { theme: "dark" })).toMatchObject({ theme: "dark", editorWidthPx: DEFAULT_SETTINGS.editorWidthPx });
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    }
+    expect(parse(await readFile(first, "utf8"))).toMatchObject({ theme: "dark" });
+    expect(await readFile(second, "utf8")).toBe('theme = "light"\neditorWidthPx = 900\n');
   });
 
   it("puts changes onto settings.toml as it is when written and returns the settings it then holds", async () => {
@@ -302,7 +419,7 @@ describe("Existing settings and history compatibility", () => {
   it("creates and saves complete defaults when the settings file does not exist", async () => {
     const path = join(await fixtureDirectory(), "settings.toml");
     const settings = { ...DEFAULT_SETTINGS, hasSeenWelcome: true };
-    await saveSettingsFile(path, settings);
+    await updateSettingsFile(path, settings);
     expect(await loadSettingsFile(path)).toEqual(settings);
     expect(parse(await readFile(path, "utf8"))).toMatchObject(settings);
   });
@@ -315,7 +432,7 @@ describe("Existing settings and history compatibility", () => {
     const reading = vi.spyOn(filesystem, "readFile").mockRejectedValueOnce(denied);
     try {
       syncBuiltinESMExports();
-      await expect(saveSettingsFile(path, DEFAULT_SETTINGS)).rejects.toBe(denied);
+      await expect(updateSettingsFile(path, DEFAULT_SETTINGS)).rejects.toBe(denied);
     } finally {
       reading.mockRestore();
       syncBuiltinESMExports();
@@ -338,7 +455,7 @@ describe("Existing settings and history compatibility", () => {
     await writeFile(path, "gitAutoGetLatest = false\ngitUploadOnSave = true\n");
     const settings = await loadSettingsFile(path);
     expect(settings.gitEnabled).toBe(true);
-    await saveSettingsFile(path, { ...settings, gitEnabled: false });
+    await updateSettingsFile(path, { ...settings, gitEnabled: false });
     expect(await loadSettingsFile(path)).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 
@@ -372,7 +489,7 @@ describe("Existing settings and history compatibility", () => {
       .toMatchObject({ recentFilesDefaultSearch: "names", recentFilesKeepRemoved: false });
     const path = join(await fixtureDirectory(), "recent-settings.toml");
     for (const scope of ["names", "contents", "all"] as const) {
-      await saveSettingsFile(path, { recentFilesDefaultSearch: scope, recentFilesKeepRemoved: true });
+      await updateSettingsFile(path, { recentFilesDefaultSearch: scope, recentFilesKeepRemoved: true });
       expect(await loadSettingsFile(path)).toMatchObject({ recentFilesDefaultSearch: scope, recentFilesKeepRemoved: true });
     }
   });

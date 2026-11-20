@@ -49,7 +49,7 @@ import type { Settings } from "@/state/types";
 import { layoutFromDefaultView } from "@/state/types";
 import { cn } from "@/lib/utils";
 import { AccentColorFieldView } from "./AccentColorFieldView";
-import { changesFrom, sameSettings } from "./settingsChanges";
+import { changesFrom, sameSettings, sameValue } from "./settingsChanges";
 import { CheckRow, FormRow, Hint, SettingsBox, SettingsPage } from "./SettingsLayout";
 import { SpellingSettings } from "./SpellingSettings";
 import { KEYBOARD_SHORTCUTS } from "./shortcuts";
@@ -59,6 +59,10 @@ import { UI_PALETTES, resolveScheme, type Scheme } from "./themePalettes";
 
 export interface SettingsDialogViewProps {
   initial: Settings;
+  /** The app's settings now. A setting that changes there while the dialog is
+   *  open, such as by a hand edit of settings.toml, shows in the dialog unless
+   *  the user changed it in the dialog. */
+  saved: Settings;
   /** Save the settings that changed in the dialog since it opened or since
    *  Apply, for OK and Apply. Called only when something changed. Resolves
    *  with the changes as saved, which can hold other values, such as fewer
@@ -119,7 +123,7 @@ function knownOr<T extends string>(value: string, choices: ReadonlyArray<{ value
 const FIRST_CONTROL =
   'input[type="radio"]:checked, input:not([type="radio"]):not([type="hidden"]):not(:disabled), select:not(:disabled), button:not(:disabled)';
 
-export function SettingsDialogView({ initial, onSave, onRequestClose }: SettingsDialogViewProps) {
+export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: SettingsDialogViewProps) {
   // The form, in state, as the dialog draws it in a portal after its first
   // render. The render it starts reads what the form shows first.
   const [form, setForm] = useState<HTMLFormElement | null>(null);
@@ -251,7 +255,7 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     const gitUploadOnSave = form.elements.namedItem("gitUploadOnSave") as HTMLInputElement | null;
     const number = (field: HTMLInputElement, saved: number): number =>
       field.value === String(saved) ? saved : numVal(field, saved);
-    const scalePct = Math.round(applied.editorFontScale * 100);
+    const scalePct = scalePercent(applied.editorFontScale);
     const wrapCol = typeof applied.mdHardWrap === "number" ? applied.mdHardWrap : 80;
 
     return {
@@ -263,10 +267,12 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       editorWidthMode: select("editorWidthMode").value as Settings["editorWidthMode"],
       editorWidthPx: number(editorWidthPx, applied.editorWidthPx),
       fontFamily: fontFamily.value || applied.fontFamily,
-      // The field shows a whole percentage, so an unedited one keeps the
-      // saved scale, such as 1.125 from the toolbar.
+      // An unedited or emptied field keeps the saved scale exactly, such as
+      // 1.125 from a hand edit.
       editorFontScale:
-        editorFontScalePct.value === String(scalePct) ? applied.editorFontScale : numVal(editorFontScalePct, scalePct) / 100,
+        editorFontScalePct.value === String(scalePct) || editorFontScalePct.value.trim() === ""
+          ? applied.editorFontScale
+          : numVal(editorFontScalePct, scalePct) / 100,
       linkDisplay: select("linkDisplay").value as Settings["linkDisplay"],
       embedImagesAsBase64: input("embedImagesAsBase64").checked,
       maxEmbedSizeKB: number(maxEmbedSizeKB, applied.maxEmbedSizeKB),
@@ -318,6 +324,46 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
     latestForm.current = readForm;
   });
 
+  // The app's settings as the dialog last took them in.
+  const seen = useRef(saved);
+  /** Take the settings that changed in the app since the dialog last took
+   *  them in as saved, and show them in the fields the user has not changed.
+   *  A field the user changed keeps the user's value, which Apply and OK then
+   *  compare with the new saved one. Returns the settings saved then. */
+  const follow = (current: Settings, base: Settings): Settings => {
+    const now = latestForm.current();
+    if (!now) return base;
+    const before = seen.current;
+    seen.current = current;
+    const taken = (Object.keys(current) as (keyof Settings)[]).filter(
+      (key) => !sameValue(current[key], before[key]) && !sameValue(current[key], base[key]),
+    );
+    if (taken.length === 0) return base;
+    const next: Settings = { ...base, ...Object.fromEntries(taken.map((key) => [key, current[key]])) };
+    const changed = new Set(taken.filter((key) => sameValue(now[key], base[key])));
+    showFields(form, next, changed);
+    if (changed.has("theme")) setTheme(knownOr(next.theme, UI_THEMES, "system"));
+    if (changed.has("editorTheme")) setDocumentTheme(knownOr(next.editorTheme, DOCUMENT_THEMES, "follow-ui"));
+    if (changed.has("accentMode")) {
+      setAccentMode(next.accentMode);
+      if (next.accentMode !== "system") chosenAccentMode.current = next.accentMode;
+    }
+    if (changed.has("accentColor")) setAccentColor(normalizeHex(next.accentColor) ?? DEFAULT_ACCENT);
+    if (changed.has("autosaveEnabled")) setAutosaveOn(next.autosaveEnabled);
+    if (changed.has("gitEnabled")) setGitOn(next.gitEnabled);
+    if (changed.has("mdHardWrap")) setHardWrapOn(next.mdHardWrap !== false);
+    if (changed.has("spellCheckLanguages")) setSpellCheckLanguages(next.spellCheckLanguages ?? []);
+    setApplied(next);
+    return next;
+  };
+  // A save under way leaves the app's settings alone, as they hold its own
+  // change then. Once it ends, a render takes them in as they are by then,
+  // after a failed save without its change, which this count asks for.
+  const [savesEnded, setSavesEnded] = useState(0);
+  useEffect(() => {
+    if (settled.current && !saving.current) follow(saved, applied);
+  }, [saved, savesEnded]);
+
   /** Save the settings in `next` that differ from `applied`, and mark them
    *  saved once written. The fields then show what was saved, such as a
    *  number brought into its field's range, the value an emptied field kept,
@@ -332,13 +378,15 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
       if (!written) return null;
       const now = latestForm.current();
       const edited = now ? changesFrom(next, now) : {};
-      const saved = { ...next, ...written };
+      const result = { ...next, ...written };
       // Before the next render, which compares the form with `applied`.
-      showSaved(form, saved, edited);
-      setApplied(saved);
+      showSaved(form, result, edited);
+      setApplied(result);
       return edited;
     } finally {
       saving.current = false;
+      // Settings that changed in the app while the save ran show then.
+      setSavesEnded((count) => count + 1);
     }
   };
 
@@ -609,7 +657,8 @@ export function SettingsDialogView({ initial, onSave, onRequestClose }: Settings
                     <FormRow label="Text size (%)" className="mt-1">
                       <NumberInput
                         name="editorFontScalePct"
-                        value={Math.round(initial.editorFontScale * 100)}
+                        value={scalePercent(initial.editorFontScale)}
+                        fitsText
                         min={60}
                         max={250}
                       />
@@ -1023,13 +1072,18 @@ function NumberInput({
   min,
   max,
   disabled,
+  fitsText,
 }: {
   name: string;
   value: number;
   min: number;
   max: number;
   disabled?: boolean;
+  /** Whether the field grows with its text, at least as wide as `max`, for a
+   *  saved value with decimals. */
+  fitsText?: boolean;
 }) {
+  const room = `calc(${Math.max(String(max).length, String(value).length)}ch + 26px)`;
   return (
     <Input
       name={name}
@@ -1038,10 +1092,78 @@ function NumberInput({
       min={min}
       max={max}
       disabled={disabled}
-      style={{ width: `calc(${String(max).length}ch + 26px)` }}
-      className="min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      style={fitsText ? { minWidth: room } : { width: room }}
+      className={cn(
+        "min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+        fitsText && "[field-sizing:content]",
+      )}
     />
   );
+}
+
+/** The typed fields: their names, their settings and the text they show for
+ *  a setting's value. */
+const TYPED_FIELDS: ReadonlyArray<[name: string, key: keyof Settings, text: (settings: Settings) => string | null]> = [
+  ["editorWidthPx", "editorWidthPx", (s) => String(s.editorWidthPx)],
+  ["editorFontScalePct", "editorFontScale", (s) => String(scalePercent(s.editorFontScale))],
+  ["fontFamily", "fontFamily", (s) => s.fontFamily],
+  ["maxEmbedSizeKB", "maxEmbedSizeKB", (s) => String(s.maxEmbedSizeKB)],
+  ["attachmentsFolderName", "attachmentsFolderName", (s) => s.attachmentsFolderName],
+  ["maxRetainedTabEditors", "maxRetainedTabEditors", (s) => String(s.maxRetainedTabEditors)],
+  ["autosaveIntervalSeconds", "autosaveIntervalSeconds", (s) => String(s.autosaveIntervalSeconds)],
+  ["recentFilesMaxRetained", "recentFilesMaxRetained", (s) => String(s.recentFilesMaxRetained)],
+  ["recentFilesVisibleCount", "recentFilesVisibleCount", (s) => String(s.recentFilesVisibleCount)],
+  // With hard wrap off, the column keeps the number it shows.
+  ["hardWrapCol", "mdHardWrap", (s) => (typeof s.mdHardWrap === "number" ? String(s.mdHardWrap) : null)],
+];
+
+/** The check boxes named after their settings. */
+const CHECK_FIELDS: ReadonlyArray<keyof Settings> = [
+  "embedImagesAsBase64",
+  "collapseBase64InRawView",
+  "spellCheckEnabled",
+  "showFrontmatterPanel",
+  "autosaveEnabled",
+  "recentFilesKeepRemoved",
+  "autoUpdate",
+  "gitEnabled",
+  "gitAutoGetLatest",
+  "gitUploadOnSave",
+];
+
+/** The lists named after their settings. */
+const LIST_FIELDS: ReadonlyArray<keyof Settings> = [
+  "editorWidthMode",
+  "linkDisplay",
+  "defaultView",
+  "mdBulletChar",
+  "mdEmphasisChar",
+  "mdStrongChar",
+  "mdHeadingStyle",
+  "recentFilesDefaultSearch",
+];
+
+/** Put `settings` into the form's fields for the settings in `keys`: typed
+ *  fields, check boxes and lists. The theme cards, the accent and the spelling
+ *  languages show the dialog's state instead. */
+function showFields(form: HTMLFormElement | null, settings: Settings, keys: ReadonlySet<keyof Settings>): void {
+  if (!form) return;
+  const field = (name: string) => form.elements.namedItem(name);
+  for (const [name, key, text] of TYPED_FIELDS) {
+    const value = keys.has(key) ? text(settings) : null;
+    const input = field(name);
+    if (value !== null && input instanceof HTMLInputElement) input.value = value;
+  }
+  for (const key of CHECK_FIELDS) {
+    const input = field(key);
+    if (keys.has(key) && input instanceof HTMLInputElement) input.checked = settings[key] === true;
+  }
+  for (const key of LIST_FIELDS) {
+    const select = field(key);
+    if (keys.has(key) && select instanceof HTMLSelectElement) select.value = String(settings[key]);
+  }
+  const hardWrapOn = field("hardWrapOn");
+  if (keys.has("mdHardWrap") && hardWrapOn instanceof HTMLInputElement) hardWrapOn.checked = settings.mdHardWrap !== false;
 }
 
 /** Put `settings` into the form's typed fields, which keep what the user
@@ -1049,24 +1171,13 @@ function NumberInput({
  *  whose setting is in `edited`, as after an edit while a save ran, keeps
  *  its text. */
 function showSaved(form: HTMLFormElement | null, settings: Settings, edited: Partial<Settings> = {}): void {
-  if (!form) return;
-  const fields: [name: string, key: keyof Settings, value: string | number][] = [
-    ["editorWidthPx", "editorWidthPx", settings.editorWidthPx],
-    ["editorFontScalePct", "editorFontScale", Math.round(settings.editorFontScale * 100)],
-    ["fontFamily", "fontFamily", settings.fontFamily],
-    ["maxEmbedSizeKB", "maxEmbedSizeKB", settings.maxEmbedSizeKB],
-    ["attachmentsFolderName", "attachmentsFolderName", settings.attachmentsFolderName],
-    ["maxRetainedTabEditors", "maxRetainedTabEditors", settings.maxRetainedTabEditors],
-    ["autosaveIntervalSeconds", "autosaveIntervalSeconds", settings.autosaveIntervalSeconds],
-    ["recentFilesMaxRetained", "recentFilesMaxRetained", settings.recentFilesMaxRetained],
-    ["recentFilesVisibleCount", "recentFilesVisibleCount", settings.recentFilesVisibleCount],
-  ];
-  if (typeof settings.mdHardWrap === "number") fields.push(["hardWrapCol", "mdHardWrap", settings.mdHardWrap]);
-  for (const [name, key, value] of fields) {
-    if (key in edited) continue;
-    const field = form.elements.namedItem(name);
-    if (field instanceof HTMLInputElement) field.value = String(value);
-  }
+  showFields(form, settings, new Set(TYPED_FIELDS.map(([, key]) => key).filter((key) => !(key in edited))));
+}
+
+/** The text size as the Text size field shows it: a percentage, with up to
+ *  two decimals for a hand-edited scale such as 2.504. */
+function scalePercent(scale: number): number {
+  return Math.round(scale * 10000) / 100;
 }
 
 /** A number field's value as a whole number within its range, or the fallback.

@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -4574,6 +4574,35 @@ test("Open recovered shows a snapshot's exact text as unsaved", async () => {
   await expect(page).toHaveTitle("recovered.md — Downpad");
 });
 
+test("Copy file asks to save a recovered document first, and copies it once saved", async () => {
+  // The file holds other text than the snapshot, as after an edit while Downpad was closed.
+  const file = path.join(directory, "recovered-copy.md");
+  await writeFile(file, "# Changed while closed\n");
+  const recovery = path.join(directory, "profile", "recovery");
+  await mkdir(recovery);
+  const snapshot = { sessionId: "copy-session", savedAt: new Date().toISOString(), filePath: file, markdown: "# Recovered\n", isDirty: true };
+  await writeFile(path.join(recovery, "copy-session.json"), JSON.stringify(snapshot));
+  await launch(undefined, { duringStartup: true });
+  await page.getByRole("button", { name: "Open recovered", exact: true }).click();
+  await untilStarted();
+  await expect(page.locator(heading)).toHaveText("Recovered");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  await expect(page.getByText("Save this recovered document first. Its file may have changed while Downpad was closed.")).toBeVisible();
+  expect(await readFile(file, "utf8")).toBe("# Changed while closed\n");
+
+  await page.locator(heading).click();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Recovered\n");
+  await page.locator(heading).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
+  const copied = () => app!.evaluate(async ({ clipboard }) => {
+    const [item] = await clipboard.read();
+    return item?.types.includes("text/uri-list") ? (await item.getType("text/uri-list")).text() : null;
+  });
+  await expect.poll(async () => (await copied())?.trim()).toBe(pathToFileURL(file).href);
+});
+
 test("a failed Open original preserves recovery and still allows Open recovered", async () => {
   const file = path.join(directory, "unavailable-original.md");
   const recovery = path.join(directory, "profile", "recovery");
@@ -4819,6 +4848,41 @@ test("General Recent preferences persist and hide missing files without deleting
   expect(history.map((entry) => entry.path)).toContain(missing);
 });
 
+test("an open Settings dialog shows a hand edit of settings.toml in the fields the user did not change", async () => {
+  const settingsFile = path.join(directory, "profile", "settings.toml");
+  await launch();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const shown = dialog.getByRole("spinbutton", { name: "Recent files shown" });
+  const kept = dialog.getByRole("spinbutton", { name: "Recent history kept" });
+  await shown.fill("30");
+  await writeFile(settingsFile, `${await readFile(settingsFile, "utf8")}recentFilesMaxRetained = 50\nrecentFilesKeepRemoved = true\n`);
+  await expect(kept).toHaveValue("50");
+  await expect(dialog.getByRole("checkbox", { name: "Keep removed files in list" })).toBeChecked();
+  await expect(shown).toHaveValue("30");
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect.poll(async () => {
+    const text = await readFile(settingsFile, "utf8");
+    return ["recentFilesVisibleCount = 30", "recentFilesMaxRetained = 50", "recentFilesKeepRemoved = true"].every((line) => text.includes(line));
+  }).toBe(true);
+});
+
+test("a file restored with an older time shows the notice that it changed on disk", async () => {
+  const file = path.join(directory, "restored.md");
+  await writeFile(file, "# Restored\n\nCurrent text.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Restored");
+  // A backup with its original, older time replaces the file.
+  await writeFile(file, "# Restored\n\nBackup text.\n");
+  const older = new Date(Date.now() - 3_600_000);
+  await utimes(file, older, older);
+  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.locator(".milkdown .ProseMirror p")).toHaveText("Backup text.");
+  await expect(page.getByText("This file changed on disk.")).toBeHidden();
+});
+
 test("Settings says when settings.toml cannot be written, and Apply tries again once it can", async () => {
   const settingsFile = path.join(directory, "profile", "settings.toml");
   await launch();
@@ -5050,12 +5114,58 @@ test("Save on close keeps an untitled tab after cancellation or write failure", 
   await failure;
   await expect(tab).toBeVisible();
   await expect(editor).toHaveText("Keep this document.");
+  // The notice says what failed and why.
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not close the document. The file or folder does not exist.");
 
   const saved = path.join(directory, "retry.md");
   await chooseSave(saved);
   await tab.locator(".tab-close").click();
   await expect(tab).toHaveCount(0);
   expect(await readFile(saved, "utf8")).toBe("Keep this document.\n");
+});
+
+test("a Save that cannot write says why, and the document stays open and unsaved", async () => {
+  await launch();
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  const editor = page.locator(".editor-pane:not([hidden]) .ProseMirror");
+  await editor.click();
+  await page.keyboard.insertText("Keep this document.");
+  // A nonexistent parent exercises the real write failure path.
+  await chooseSave(path.join(directory, "missing-parent", "failed.md"));
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “Untitled”. The file or folder does not exist.");
+  const untitled = page.getByRole("tab", { name: /Untitled/ });
+  await expect(untitled.locator(".tab-file-icon.is-dirty")).toBeVisible();
+  await expect(editor).toHaveText("Keep this document.");
+
+  // A save of the document that works takes the notice down.
+  const saved = path.join(directory, "saved-after-failure.md");
+  await chooseSave(saved);
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => readFile(saved, "utf8").catch(() => null)).toBe("Keep this document.\n");
+  await expect(page.getByRole("tab", { name: /saved-after-failure\.md/ })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
+});
+
+test("a Save As onto a file that is open in another tab is refused and says why", async () => {
+  const first = path.join(directory, "save-as-first.md");
+  const second = path.join(directory, "save-as-second.md");
+  await writeFile(first, "# First\n");
+  await writeFile(second, "# Second\n");
+  await launch(first);
+  await chooseOpen(second);
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("Second");
+  await page.getByRole("tab", { name: /save-as-first\.md/ }).click();
+  await expect(page.locator(".editor-pane:not([hidden]) .ProseMirror h1")).toHaveText("First");
+  await chooseSave(second);
+  await page.keyboard.press("ControlOrMeta+Shift+s");
+  await expect(page.getByRole("alert")).toHaveText("Downpad could not save “save-as-first.md”. “save-as-second.md” is open in another tab. Close that tab, or choose another name.");
+  expect(await readFile(second, "utf8")).toBe("# Second\n");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  // The notice is about the first document, so it goes when the other tab comes to the front.
+  await page.getByRole("tab", { name: /save-as-second\.md/ }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("Save on close keeps edits typed while the write is pending", async () => {

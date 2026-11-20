@@ -470,6 +470,27 @@ describe("EditorHost terminal disposal", () => {
     expect(root.firstElementChild).toBe(reactOwnedSibling);
   });
 
+  it("tells the tab whose panes show, which stays the earlier tab while another tab's editor is built", async () => {
+    const root = document.createElement("div");
+    const store = makeStore();
+    const host = new EditorHost(root, store);
+    expect(host.shownTabId).toBeNull();
+    await host.reloadActiveDoc();
+    expect(host.shownTabId).toBe("tab-1");
+
+    const mount = deferred();
+    fakeEditors.mountPromise = mount.promise;
+    const second = store.addTab({ ...store.get().doc, markdown: "second tab" });
+    const showing = host.showActiveDoc();
+    // The store's tab in front is the new one, and the panes are the first tab's.
+    expect(store.get().activeTabId).toBe(second);
+    expect(host.shownTabId).toBe("tab-1");
+    mount.resolve();
+    await showing;
+    expect(host.shownTabId).toBe(second);
+    await host.dispose();
+  });
+
   it("does not resurrect a tab closed while its editor is being created", async () => {
     const mount = deferred();
     const destroy = deferred();

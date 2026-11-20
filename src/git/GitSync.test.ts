@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FileService } from "../files/FileService";
+import { sameFilePath } from "../files/pathIdentity";
 import type { GitFileStatus, GitOpenFile, GitSyncResult } from "../ipc/contracts";
 import { createAppStore } from "../app/createAppStore";
 import type { Store } from "../state/store";
@@ -50,6 +52,17 @@ let deps: GitSyncDependencies & {
 };
 let sync: GitSync;
 
+/** Run `act` while the next replacement of a tab's document reads its file. */
+function duringRead(act: () => void): void {
+  type Replace = FileService["replaceFromDisk"];
+  const replace = vi.mocked<Replace>(deps.files.replaceFromDisk);
+  const read = replace.getMockImplementation() as Replace;
+  replace.mockImplementationOnce(async (...args) => {
+    act();
+    return read(...args);
+  });
+}
+
 /** Open `PATH` in the store's only tab, with `markdown` saved or, with `unsaved`, edited. */
 function openDocument({ unsaved = false } = {}): void {
   const doc = {
@@ -90,18 +103,19 @@ beforeEach(() => {
       openPath: vi.fn(async () => {}),
       openBeside: vi.fn(async () => {}),
       refreshFromDisk: vi.fn(async () => true),
-      // As FileService does: the tab takes the file only if its text is the kept one.
-      replaceFromDisk: vi.fn(async (tabId: string, path: string, kept: (markdown: string) => boolean) => {
-        const tab = store.get().tabs.find((entry) => entry.id === tabId && entry.doc.filePath === path);
+      // As FileService does: the tab takes the file only if its text is the
+      // kept one, and a tab in back takes it without its editors.
+      replaceFromDisk: vi.fn(async (tabId: string, path: string, kept: (markdown: string) => boolean, _options?: { quiet?: boolean }) => {
+        const tab = store.get().tabs.find((entry) => entry.id === tabId && entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
         if (!tab) return "gone" as const;
         if (!kept(tab.doc.markdown)) return "changed" as const;
         store.patchDocById(tabId, { markdown: "# Theirs\n", savedMarkdown: "# Theirs\n", isDirty: false });
-        return "shown" as const;
+        return store.get().activeTabId === tabId ? ("shown" as const) : ("stored" as const);
       }),
     },
     flush: vi.fn(),
     discardEditors: vi.fn(async () => {}),
-    keepingPlace: vi.fn(async (reload: () => Promise<void>) => reload()),
+    compareWithDisk: vi.fn(async () => {}),
     askConflict: vi.fn(async () => "later" as ConflictChoice),
   };
   sync = new GitSync(deps);
@@ -350,8 +364,60 @@ describe("GitSync checks", () => {
     git.getLatest.mockResolvedValue(done([PATH]));
     await sync.check({ force: true });
     expect(git.getLatest).toHaveBeenCalledWith(PATH, [{ path: PATH, unsaved: false }], false);
-    expect(deps.files.openPath).toHaveBeenCalledWith(PATH, { reload: true });
+    // Nobody asked for the replacement at that moment, so it is a quiet one.
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, PATH, expect.any(Function), { quiet: true });
+    // The document in front built its editors again as it took the file.
+    expect(deps.discardEditors).not.toHaveBeenCalled();
+    expect(deps.compareWithDisk).not.toHaveBeenCalled();
+    expect(store.get().doc.markdown).toBe("# Theirs\n");
     expect(store.get().banner).toBeNull();
+  });
+
+  it("keeps text typed in the document in front while Get latest reads its file", async () => {
+    openDocument();
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done([PATH]));
+    // The user types after the check for unsaved changes, before the tab takes the file.
+    duringRead(() => store.patchDoc({ markdown: "# Notes\n\nTyped during the read\n" }));
+    await sync.check({ force: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledOnce();
+    expect(store.get().doc.markdown).toBe("# Notes\n\nTyped during the read\n");
+    expect(deps.files.openPath).not.toHaveBeenCalled();
+    // The document differs from its file now, which the notice asks about at once.
+    expect(deps.compareWithDisk).toHaveBeenCalledOnce();
+  });
+
+  it("asks about the file at once when the document in front got unsaved text while Get latest ran", async () => {
+    openDocument();
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockImplementation(async () => {
+      // The user types after Git checked the documents.
+      store.patchDoc({ markdown: "# Notes\n\nTyped meanwhile\n", isDirty: true });
+      return done([PATH]);
+    });
+    await sync.check({ force: true });
+    expect(deps.files.replaceFromDisk).not.toHaveBeenCalled();
+    expect(store.get().doc.markdown).toBe("# Notes\n\nTyped meanwhile\n");
+    expect(deps.compareWithDisk).toHaveBeenCalledOnce();
+  });
+
+  it("drops the editors of a tab that went behind another one while Get latest read its file", async () => {
+    openDocument();
+    const tabId = store.get().activeTabId!;
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done([PATH]));
+    duringRead(() => store.addTab({ ...store.get().doc, filePath: "/repo/other.md" }));
+    await sync.check({ force: true });
+    expect(store.get().tabs.find((tab) => tab.id === tabId)?.doc.markdown).toBe("# Theirs\n");
+    expect(deps.discardEditors).toHaveBeenCalledExactlyOnceWith(tabId);
+  });
+
+  it("finds the tab of a changed file also when Windows spells its path in another case", async () => {
+    store.replaceActiveDoc({ ...store.get().doc, filePath: "C:\\Repo\\Notes.md", markdown: "# Notes\n", savedMarkdown: "# Notes\n", isDirty: false });
+    git.status.mockImplementation(async (_path, fetch) => (fetch ? behind : clean));
+    git.getLatest.mockResolvedValue(done(["c:\\repo\\notes.md"]));
+    await sync.check({ force: true });
+    expect(deps.files.replaceFromDisk).toHaveBeenCalledExactlyOnceWith(store.get().activeTabId, "c:\\repo\\notes.md", expect.any(Function), { quiet: true });
   });
 
   it("only tells the user about remote changes when Get latest automatically is off", async () => {

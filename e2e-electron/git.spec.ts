@@ -65,7 +65,8 @@ test.afterEach(async ({}, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) await rm(directory, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
 });
 
-async function launch(file: string): Promise<void> {
+/** Launch Downpad, with `file` if given. */
+async function launch(file?: string): Promise<void> {
   const environment = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE" && entry[0] !== "DOWNPAD_DEV_URL"),
   );
@@ -74,11 +75,42 @@ async function launch(file: string): Promise<void> {
     chromiumSandbox: true,
     executablePath,
     cwd: projectRoot,
-    args: [...(executablePath ? [] : [path.join(projectRoot, "electron-dist", "main.js")]), file],
+    args: [...(executablePath ? [] : [path.join(projectRoot, "electron-dist", "main.js")]), ...(file ? [file] : [])],
     env: { ...environment, DOWNPAD_USER_DATA_DIR: path.join(directory, "profile") },
   });
   page = await app.firstWindow();
   await expect(page.getByTestId("app-shell")).toHaveAttribute("data-started", "true");
+}
+
+/** Open `file` through the Open button, with the dialog answered for the user. */
+async function open(file: string): Promise<void> {
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedFile] });
+  }, file);
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+}
+
+/** Make the main process hold each call of `command` until `release` is
+ *  called. `held` resolves once a call waits. Electron keeps the handlers of
+ *  ipcMain.handle in `_invokeHandlers`, and a handler on the window's own
+ *  `ipc` runs in their place. */
+async function hold(command: string): Promise<{ held: () => Promise<void>; release: () => Promise<void> }> {
+  await app!.evaluate(({ BrowserWindow, ipcMain }, name) => {
+    type Handler = (event: unknown, ...args: unknown[]) => unknown;
+    const invoke = (Reflect.get(ipcMain, "_invokeHandlers") as Map<string, Handler>).get("downpad:invoke")!;
+    const released = new Promise((resolve) => Reflect.set(globalThis, "releaseHeld", resolve));
+    BrowserWindow.getAllWindows()[0]!.webContents.ipc.handle("downpad:invoke", async (event, called, ...args) => {
+      if (called === name) {
+        Reflect.set(globalThis, "commandHeld", true);
+        await released;
+      }
+      return invoke(event, called, ...args);
+    });
+  }, command);
+  return {
+    held: () => expect.poll(() => app!.evaluate(() => Reflect.get(globalThis, "commandHeld") === true)).toBe(true),
+    release: () => app!.evaluate(() => (Reflect.get(globalThis, "releaseHeld") as () => void)()),
+  };
 }
 
 /** The document view of the active tab. Other tabs keep hidden editors. */
@@ -101,6 +133,39 @@ test("gets someone else's change to a document without asking", async () => {
   await expect(shownDocument()).toContainText("Their first paragraph.");
   await expect(status()).toHaveText("Up to date");
   await expect(page.locator(".banner")).toBeHidden();
+});
+
+test("gets someone else's change while the Recent view shows, and stays on that view", async () => {
+  // A document long enough to scroll, which both clones have.
+  const long = `${NOTES}\n${Array.from({ length: 150 }, (_, index) => `Paragraph ${index + 1}.\n`).join("\n")}`;
+  await pushTheirs(long);
+  git(mine, "pull", "--quiet", "--ff-only");
+  await pushTheirs(long.replace("First paragraph.", "Their first paragraph."));
+  // Get latest is held from before the document opens, so it cannot run first.
+  await launch();
+  const getLatest = await hold("git_get_latest");
+  await open(path.join(mine, "notes.md"));
+  await getLatest.held();
+  // Both panes of the Split layout scroll on their own.
+  await page.getByRole("radio", { name: "Split", exact: true }).click();
+  const paneTops = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")].map((pane) => pane.scrollTop));
+  await expect.poll(async () => (await paneTops()).length).toBe(2);
+  await page.evaluate(() => {
+    for (const pane of document.querySelectorAll<HTMLElement>(".editor-pane:not([hidden])")) pane.scrollTop = 600;
+  });
+  expect(await paneTops()).toEqual([600, 600]);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  const recent = page.locator(".recent-name").first();
+  await expect(recent).toBeVisible();
+  await getLatest.release();
+  // The document takes their change behind the Recent view, which stays in front.
+  await expect(page.locator(".milkdown").first()).toContainText("Their first paragraph.");
+  await expect(recent).toBeVisible();
+  await page.getByRole("tab", { name: /notes\.md/ }).click();
+  await expect(shownDocument()).toContainText("Their first paragraph.");
+  await expect(status()).toHaveText("Up to date");
+  // Its new editors are where the old ones were scrolled.
+  await expect.poll(paneTops).toEqual([600, 600]);
 });
 
 test("uploads typed changes", async () => {
@@ -145,6 +210,27 @@ test("asks about changes to the same parts, and discards the user's on request",
   await banner.getByRole("button", { name: "Open copy" }).click();
   await expect(shownDocument()).toContainText("My second paragraph.");
   expect(git(mine, "status", "--porcelain")).toBe("");
+});
+
+test("shows the document again when its changes are discarded while the Recent view is in front", async () => {
+  await writeFile(path.join(mine, "notes.md"), NOTES.replace("Second paragraph.", "My second paragraph."));
+  await pushTheirs(NOTES.replace("Second paragraph.", "Their second paragraph."));
+  await launch(path.join(mine, "notes.md"));
+  const dialog = page.getByRole("dialog", { name: "Someone else changed this document" });
+  await expect(dialog).toContainText("Anna Berg changed “notes.md”");
+  const discard = await hold("git_discard");
+  await dialog.getByRole("button", { name: "Discard my changes" }).click();
+  await discard.held();
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await expect(page.locator(".recent-name").first()).toBeVisible();
+  await discard.release();
+  // The user asked for this, so the document shows, with the notice about it.
+  await expect(shownDocument()).toContainText("Their second paragraph.");
+  await expect(page.locator(".recent-name").first()).toBeHidden();
+  const banner = page.locator(".banner");
+  await expect(banner).toContainText("Your changes to “notes.md” are discarded");
+  await banner.getByRole("button", { name: "Open copy" }).click();
+  await expect(shownDocument()).toContainText("My second paragraph.");
 });
 
 test("saves the user's version as a new file when the changes overlap", async () => {

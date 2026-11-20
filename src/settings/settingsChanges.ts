@@ -4,7 +4,7 @@
 import type { Settings } from "../state/types";
 
 /** Whether two setting values are the same, also for a list of languages. */
-function sameValue(a: unknown, b: unknown): boolean {
+export function sameValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 

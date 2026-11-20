@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { FileMeta, FilePayload, ImageBytes } from "../src/ipc/contracts";
+import { FILE_CHANGED_ON_DISK, type FileMeta, type FilePayload, type FileStamp, type ImageBytes } from "../src/ipc/contracts";
 import type { Eol } from "../src/state/types";
 
 export function absolutePath(value: unknown): string {
@@ -13,13 +14,22 @@ export function absolutePath(value: unknown): string {
 
 const WINDOWS_SHARING_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 
-/** Allow briefly held Windows handles to close before failing an atomic replacement. */
-async function renameAtomic(source: string, destination: string): Promise<void> {
+/** A check that runs just before a rename replaces `target`, the real file and not a
+ *  symbolic link to it, and answers whether the rename may go ahead. */
+type BeforeReplace = (target: string) => Promise<boolean>;
+
+/** Allow briefly held Windows handles to close before failing an atomic replacement.
+ *  `beforeReplace` runs before each attempt, also a retry, and a false answer
+ *  throws ReplaceDeclinedError. */
+async function renameAtomic(source: string, destination: string, beforeReplace?: BeforeReplace): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
+      // The check reads the target, which a sharing lock can hold as well.
+      if (beforeReplace && !(await beforeReplace(destination))) throw new ReplaceDeclinedError();
       await rename(source, destination);
       return;
     } catch (error: unknown) {
+      if (error instanceof ReplaceDeclinedError) throw error;
       if (process.platform !== "win32" || attempt >= 10 || !(error instanceof Error && "code" in error
         && typeof error.code === "string" && WINDOWS_SHARING_ERRORS.has(error.code))) throw error;
       await new Promise<void>((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
@@ -27,11 +37,24 @@ async function renameAtomic(source: string, destination: string): Promise<void> 
   }
 }
 
+/** Thrown by writeAtomic when its `beforeReplace` check declines the replacement. */
+export class ReplaceDeclinedError extends Error {
+  constructor() {
+    super("The file changed while its replacement was written.");
+  }
+}
+
 /** Replace the real target after its complete replacement reaches disk, preserving symlinks
  *  and an existing target's permissions. A new file gets the default mode for the umask.
  *  Resolves with the modification time of the file written, which the rename keeps, so a
- *  write by another program right after it is not taken for this one. */
-export async function writeAtomic(destination: string, bytes: Uint8Array | string): Promise<number> {
+ *  write by another program right after it is not taken for this one. `beforeReplace` runs
+ *  just before the rename, and again before a retry of it, with the real file the rename
+ *  replaces, and a false answer leaves the target as it is and throws ReplaceDeclinedError. */
+export async function writeAtomic(
+  destination: string,
+  bytes: Uint8Array | string,
+  { beforeReplace }: { beforeReplace?: BeforeReplace } = {},
+): Promise<number> {
   const requested = absolutePath(destination);
   const path = await realpath(requested).catch(async (error: unknown) => {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
@@ -52,7 +75,7 @@ export async function writeAtomic(destination: string, bytes: Uint8Array | strin
     await file.sync();
     await file.close();
     const { mtimeMs } = await stat(temporary);
-    await renameAtomic(temporary, path);
+    await renameAtomic(temporary, path, beforeReplace);
     return mtimeMs;
   } catch (error) {
     await file.close().catch(() => {});
@@ -61,9 +84,38 @@ export async function writeAtomic(destination: string, bytes: Uint8Array | strin
   }
 }
 
-export async function readMarkdown(path: string): Promise<FilePayload> {
-  const target = absolutePath(path);
-  const bytes = await readFile(target);
+/** A file's bytes with the metadata of the very file they came from. */
+interface FileVersion {
+  bytes: Buffer;
+  info: Stats;
+}
+
+/** Read the bytes and the metadata of one open file, so a replacement of the file in
+ *  between cannot pair the old bytes with the new metadata. A program that rewrites the
+ *  file in place while it is read changes its time or size, and the read starts again,
+ *  up to READ_ATTEMPTS times, and then fails. */
+async function readVersion(target: string): Promise<FileVersion> {
+  for (let attempt = 1; ; attempt++) {
+    const handle = await open(target, "r");
+    let version: FileVersion;
+    let settled: boolean;
+    try {
+      const before = await handle.stat();
+      const bytes = await handle.readFile();
+      const info = await handle.stat();
+      version = { bytes, info };
+      settled = before.mtimeMs === info.mtimeMs && before.size === info.size && bytes.length === info.size;
+    } finally {
+      await handle.close();
+    }
+    if (settled) return version;
+    if (attempt >= READ_ATTEMPTS) throw new Error("The file kept changing while it was read.");
+  }
+}
+
+/** A Markdown file's text as the app keeps it: without a BOM and with LF line
+ *  endings, with the line ending and BOM the file had. */
+function decodeMarkdown(bytes: Buffer): Pick<FilePayload, "content" | "eol" | "hadBom"> {
   const hadBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   let raw: string;
   try {
@@ -73,24 +125,92 @@ export async function readMarkdown(path: string): Promise<FilePayload> {
   }
   const crlf = raw.match(/\r\n/g)?.length ?? 0;
   const lf = (raw.match(/\n/g)?.length ?? 0) - crlf;
-  return {
-    content: raw.replace(/\r\n?/g, "\n"),
-    eol: crlf > 0 && crlf >= lf ? "crlf" : "lf",
-    hadBom,
-    sizeBytes: bytes.length,
-    modifiedMs: Math.floor((await stat(target)).mtimeMs),
-  };
+  return { content: raw.replace(/\r\n?/g, "\n"), eol: crlf > 0 && crlf >= lf ? "crlf" : "lf", hadBom };
+}
+
+export async function readMarkdown(path: string): Promise<FilePayload> {
+  const { bytes, info } = await readVersion(absolutePath(path));
+  return { ...decodeMarkdown(bytes), sizeBytes: bytes.length, modifiedMs: Math.floor(info.mtimeMs) };
+}
+
+/** How often a read starts again while another program rewrites the file in place. */
+const READ_ATTEMPTS = 3;
+
+/** For a `.catch`: null when the path names nothing, and the error otherwise. */
+function nullIfMissing(error: unknown): null {
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+  throw error;
+}
+
+/** Whether a guarded write may replace `target`, the real file that the write resolved
+ *  its path to. `holds` answers whether the file's bytes, or null for a file that is
+ *  gone, are still the version the write was made over. The check reads the real file,
+ *  so a symbolic link that another program points elsewhere meanwhile does not change
+ *  which file the write checks and replaces. The last step, as close to the rename as
+ *  it can be, looks at the directory entry that the rename replaces without following
+ *  a symbolic link. It must still be the very file read, with the time and size it had
+ *  then, or still be absent, so a program that replaced the file during the read or the
+ *  comparison, also with a symbolic link, is noticed. The rename cannot check the file
+ *  itself, so a replacement after that last look goes unnoticed. An error that `holds`
+ *  throws ends the check with that error. */
+export async function mayReplace(target: string, holds: (bytes: Buffer | null) => boolean): Promise<boolean> {
+  const version = await readVersion(target).catch(nullIfMissing);
+  if (!holds(version?.bytes ?? null)) return false;
+  const now = await lstat(target).catch(nullIfMissing);
+  if (!version || !now) return !version && !now;
+  return now.dev === version.info.dev && now.ino === version.info.ino
+    && now.mtimeMs === version.info.mtimeMs && now.size === version.info.size;
+}
+
+/** Whether `bytes` hold `text`, as its LF form without a BOM, or the file is gone
+ *  (null). Bytes that are not valid UTF-8 do not hold the text. */
+function holdsMarkdown(bytes: Buffer | null, text: string): boolean {
+  if (bytes === null) return true;
+  try {
+    return decodeMarkdown(bytes).content === text;
+  } catch {
+    return false;
+  }
+}
+
+/** The file's modification time and size, which tell whether it changed without
+ *  reading it. They come from an open file, as a network file system can answer a
+ *  plain stat from attributes it cached earlier. */
+export async function fileStamp(path: string): Promise<FileStamp> {
+  const handle = await open(absolutePath(path), "r");
+  try {
+    const info = await handle.stat();
+    return { modifiedMs: Math.floor(info.mtimeMs), sizeBytes: info.size };
+  } finally {
+    await handle.close();
+  }
 }
 
 let pendingMarkdownWrite: Promise<void> = Promise.resolve();
 
-/** Serialize document saves before path resolution so aliases cannot reorder writes. */
-export function writeMarkdown(path: string, content: string, eol: Eol): Promise<FileMeta> {
+/** Serialize document saves before path resolution so aliases cannot reorder writes.
+ *  With `expectedContent`, the write replaces the file only while it still holds that
+ *  text, as its LF form without a BOM, or is gone, and otherwise throws
+ *  FILE_CHANGED_ON_DISK and leaves the file as it is. The text tells also a replacement
+ *  that kept the file's time, and reading it revalidates a network file system's
+ *  cached attributes. The check reads the real file that the write replaces, so a
+ *  symbolic link that changes or goes meanwhile cannot point it at another file
+ *  (`mayReplace`). */
+export function writeMarkdown(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
   const result = pendingMarkdownWrite.then(async () => {
     if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
     const normalized = content.replace(/\r\n?/g, "\n");
-    const modifiedMs = await writeAtomic(path, eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized);
-    return { modifiedMs: Math.floor(modifiedMs) };
+    const text = eol === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
+    const beforeReplace = expectedContent === undefined
+      ? undefined
+      : (target: string) => mayReplace(target, (bytes) => holdsMarkdown(bytes, expectedContent));
+    try {
+      const modifiedMs = await writeAtomic(path, text, { beforeReplace });
+      return { modifiedMs: Math.floor(modifiedMs), sizeBytes: Buffer.byteLength(text) };
+    } catch (error) {
+      if (error instanceof ReplaceDeclinedError) throw new Error(FILE_CHANGED_ON_DISK);
+      throw error;
+    }
   });
   pendingMarkdownWrite = result.then(() => {}, () => {});
   return result;

@@ -15,7 +15,29 @@ export interface FilePayload {
 
 export interface FileMeta {
   modifiedMs: number;
+  /** The size in bytes of the file written, when known. */
+  sizeBytes?: number;
 }
+
+/** A file's modification time and size, which tell whether it can have
+ *  changed without reading it. */
+export interface FileStamp {
+  modifiedMs: number;
+  sizeBytes: number;
+}
+
+/** The message of a write that the main process declined because the file
+ *  is no longer the version the renderer expected, as another program
+ *  changed it. */
+export const FILE_CHANGED_ON_DISK = "The file changed on disk before it was saved.";
+
+/** The start of the message of a settings write that failed because
+ *  settings.toml has broken syntax. */
+export const SETTINGS_SYNTAX_BROKEN = "Cannot save settings because settings.toml contains invalid TOML.";
+
+/** The start of the message of a settings write that failed because
+ *  settings.toml is not valid UTF-8. */
+export const SETTINGS_ENCODING_BROKEN = "Cannot save settings because settings.toml contains invalid UTF-8.";
 
 /** Raw image bytes + MIME (guessed by extension); for relocate / copy-image (§5.5). */
 export interface ImageBytes {

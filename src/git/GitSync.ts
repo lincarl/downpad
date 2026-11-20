@@ -34,8 +34,9 @@ export interface GitSyncDependencies {
   flush(): void;
   /** Drop a background tab's editors, so they are built from its new text. */
   discardEditors(tabId: string): Promise<void>;
-  /** Run a reload of the active document, keeping the reader's place. */
-  keepingPlace(reload: () => Promise<void>): Promise<void>;
+  /** Read the file of the document in front now, and show the notice for a
+   *  change on disk if it differs from the document. */
+  compareWithDisk(): Promise<void>;
   /** Ask what to do about overlapping changes. Tests replace the dialog. */
   askConflict?: (options: ConflictDialogOptions) => Promise<ConflictChoice>;
 }
@@ -434,9 +435,7 @@ export class GitSync {
       let kept = tab.doc.markdown;
       for (let attempt = 1; ; attempt++) {
         const replace = () => this.deps.files.replaceFromDisk(tab.id, path, (markdown) => markdown === kept);
-        let outcome: Awaited<ReturnType<typeof replace>> = "gone";
-        if (this.deps.store.get().activeTabId === tab.id) await this.deps.keepingPlace(async () => { outcome = await replace(); });
-        else outcome = await replace();
+        const outcome = await replace();
         if (outcome === "stored") await this.deps.discardEditors(tab.id);
         if (outcome !== "changed") break;
         if (attempt === 5) {
@@ -569,15 +568,31 @@ export class GitSync {
   }
 
   /** Reload the open documents whose files a Git action changed. Documents
-   *  with unsaved changes keep them; Downpad never gets changes for those. */
+   *  with unsaved changes keep them; Downpad never gets changes for those.
+   *  That holds also for text typed in the document in front while its file
+   *  is read, which the notice for a change on disk then asks about. */
   private async reloadChanged(paths: readonly string[]): Promise<void> {
     const { store, files } = this.deps;
     for (const path of paths) {
-      const tab = store.get().tabs.find((entry) => entry.doc.filePath === path);
-      if (!tab || hasUnsavedChanges(tab)) continue;
+      const tab = store.get().tabs.find((entry) => entry.doc.filePath !== null && sameFilePath(entry.doc.filePath, path));
+      if (!tab) continue;
+      if (hasUnsavedChanges(tab)) {
+        // Text typed after Git checked the documents keeps the document, and
+        // the notice for a change on disk asks about the file at once.
+        if (tab.id === store.get().activeTabId) await this.deps.compareWithDisk().catch(() => {});
+        continue;
+      }
       try {
         if (tab.id === store.get().activeTabId) {
-          await this.deps.keepingPlace(() => files.openPath(path, { reload: true }));
+          const text = tab.doc.markdown;
+          const outcome = await files.replaceFromDisk(tab.id, path, (markdown) => markdown === text, { quiet: true });
+          // A tab that went behind another one during the read took the file
+          // without its editors, which still show the old text.
+          if (outcome === "stored") await this.deps.discardEditors(tab.id);
+          // A document that kept text typed meanwhile differs from its file
+          // now. The notice asks about it at once, without waiting for the
+          // watcher, which does not see every file, such as a link's target.
+          if (outcome === "changed" && store.get().activeTabId === tab.id) await this.deps.compareWithDisk();
         } else if (await files.refreshFromDisk(tab.id)) {
           await this.deps.discardEditors(tab.id);
         }

@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import type { DesktopEventPayloads, HistoryCommand, SaveChangesChoice } from "../src/ipc/bridge";
 import type { DefaultHandler, GitOpenFile } from "../src/ipc/contracts";
 import { copyFileToClipboard } from "./fileClipboard";
-import { absolutePath, ensureAttachmentsDirectory, exists, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
+import { absolutePath, ensureAttachmentsDirectory, exists, fileStamp, imageMime, readImage, readMarkdown, writeAttachment, writeMarkdown } from "./io";
 import { historyItems, macApplicationMenu } from "./menus";
 import { PrintService, validatePrintOptions } from "./printing";
 import { clipboardPermission, developmentEntryUrl, externalUrl, ImageAccess, trustedPage } from "./security";
@@ -211,10 +211,13 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
       const eol = string(args, "eol");
       if (eol !== "lf" && eol !== "crlf") throw new Error("Unsupported line ending.");
       const target = path(args);
-      const meta = await writeMarkdown(target, string(args, "content"), eol);
+      const expected = args.expectedContent;
+      if (expected !== undefined && typeof expected !== "string") throw new Error("The expected file text must be a string.");
+      const meta = await writeMarkdown(target, string(args, "content"), eol, expected);
       return meta;
     }
     case "path_exists": return exists(path(args));
+    case "file_stamp": return fileStamp(path(args));
     case "watch_file": {
       const target = path(args);
       unwatchDocument?.();
@@ -232,7 +235,7 @@ async function invoke(command: unknown, value: unknown): Promise<unknown> {
     case "copy_file_to_clipboard": return copyFileToClipboard(path(args));
     case "load_settings": return config.settings();
     case "save_settings": {
-      const settings = await config.updateSettings(args.changes);
+      const settings = await config.updateSettings(args.changes, args.expected);
       spellchecker?.apply(settings);
       // Deleting an automatic download waits for a running download, which
       // must not hold up the next settings save.

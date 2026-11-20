@@ -18,6 +18,7 @@ export class SettingsDialog {
   private root: Root | null = null;
   private host: HTMLElement | null = null;
   private restoreFocus: (() => void) | null = null;
+  private unsubscribe: (() => void) | null = null;
 
   /** Open Settings with the current preferences and a save handler for the
    *  changes made in it, which resolves with the settings then saved, or null
@@ -45,12 +46,11 @@ export class SettingsDialog {
     const root = createRoot(host);
     this.host = host;
     this.root = root;
-    // Match the legacy synchronous contract: callers can query `.dialog`
-    // immediately after open() returns.
-    flushSync(() => {
+    const render = (): void =>
       root.render(
         createElement(SettingsDialogView, {
           initial,
+          saved: { ...DEFAULT_SETTINGS, ...this.store.get().settings },
           // Only the changes are saved, so a change made meanwhile, such as
           // in settings.toml, stays. The dialog then shows them as saved,
           // such as fewer recent files shown than the file keeps.
@@ -64,6 +64,13 @@ export class SettingsDialog {
           },
         }),
       );
+    // Match the legacy synchronous contract: callers can query `.dialog`
+    // immediately after open() returns.
+    flushSync(render);
+    // The fields the user has not changed follow the app's settings, such as
+    // a hand edit of settings.toml.
+    this.unsubscribe = this.store.select((state) => state.settings, () => {
+      if (this.root === root) render();
     });
   }
 
@@ -76,6 +83,8 @@ export class SettingsDialog {
     // to unmount this root twice.
     this.root = null;
     this.host = null;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     disposeReactRoot(root, host);
     this.restoreFocus?.();
     this.restoreFocus = null;

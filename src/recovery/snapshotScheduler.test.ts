@@ -325,8 +325,9 @@ it.each([
   await vi.advanceTimersByTimeAsync(4_999);
   expect(saving).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
-  expect(saving.mock.calls).toEqual(saves ? [[{ keepTypedMark: true }]] : []);
-  expect(native.writeFile.mock.calls).toEqual(saves ? [["/docs/notes.md", "# Draft\n", "lf"]] : []);
+  expect(saving.mock.calls).toEqual(saves ? [[{ keepTypedMark: true, automatic: expect.any(Function) }]] : []);
+  // Autosave writes only over the text the document last saved.
+  expect(native.writeFile.mock.calls).toEqual(saves ? [["/docs/notes.md", "# Draft\n", "lf", ""]] : []);
 });
 
 it("waits with autosave while a change on disk is unresolved", async () => {
@@ -394,7 +395,7 @@ it("autosaves with a typed closing mark kept waiting, while Save decides it", as
 
   // A pause in typing must not turn "5-" into a formula.
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(native.writeFile).toHaveBeenCalledWith("/docs/notes.md", "Cost $5-$\n", "lf");
+  expect(native.writeFile).toHaveBeenCalledWith("/docs/notes.md", "Cost $5-$\n", "lf", "");
   expect(presenter.flush).toHaveBeenLastCalledWith({ keepTypedMark: true });
   scheduler.stop();
 

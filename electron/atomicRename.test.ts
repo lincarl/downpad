@@ -1,9 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import filesystem, { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { existsSync, renameSync, symlinkSync } from "node:fs";
+import filesystem, { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
-import { writeAtomic, writeMarkdown } from "./io";
+import { FILE_CHANGED_ON_DISK } from "../src/ipc/contracts";
+import { fileStamp, readMarkdown, ReplaceDeclinedError, writeAtomic, writeMarkdown } from "./io";
 
 const nativePlatform = process.platform;
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -62,6 +64,321 @@ it("reports the time of the file it wrote, not of one another program put there 
 
   const { modifiedMs } = await writeMarkdown(destination, "Mine\n", "lf");
   expect(modifiedMs).toBeLessThan(Math.floor((await stat(destination)).mtimeMs) - 30_000);
+});
+
+// On the Windows CI runner, the rename of the replacement over note.md failed with
+// EPERM while the read still held note.md open, so the two tests that replace the
+// file during the read are skipped on Windows.
+it.skipIf(nativePlatform === "win32")("reads a file's text and time from one open file, so a replacement right after the read does not mix them", async () => {
+  const { directory, destination } = await fixture();
+  await utimes(destination, new Date(), new Date(Date.now() - 60_000));
+  const original = Math.floor((await stat(destination)).mtimeMs);
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementationOnce(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      // Another program replaces the file right after the read.
+      const replacement = join(directory, "replacement.md");
+      await writeFile(replacement, "Theirs\n");
+      await rename(replacement, destination);
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  const read = await readMarkdown(destination);
+  expect(read).toMatchObject({ content: "Original text\n", modifiedMs: original });
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
+it("checks again before a Windows rename retry, and leaves a file changed meanwhile", async () => {
+  const { directory, destination } = await fixture();
+  const originalRename = filesystem.rename;
+  const sharing = Object.assign(new Error("The file has a transient sharing lock."), { code: "EBUSY" });
+  vi.spyOn(filesystem, "rename").mockImplementationOnce(async () => {
+    // Another program saves the file while the rename waits to retry.
+    await writeFile(destination, "Theirs\n");
+    throw sharing;
+  }).mockImplementation(originalRename);
+  syncBuiltinESMExports();
+  simulatePlatform("win32");
+  let checks = 0;
+  const beforeReplace = async () => {
+    checks += 1;
+    return (await readFile(destination, "utf8")) === "Original text\n";
+  };
+
+  await expect(writeAtomic(destination, "Replacement text\n", { beforeReplace })).rejects.toBeInstanceOf(ReplaceDeclinedError);
+  expect(checks).toBe(2);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+  expect(await readdir(directory)).toEqual(["note.md"]);
+});
+
+it.skipIf(nativePlatform === "win32")("refuses an automatic write when another program replaces the file while the check reads it", async () => {
+  const { directory, destination } = await fixture();
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    if (args[0] !== destination) return handle;
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      // Another program replaces the file with its own text during the read.
+      const replacement = join(directory, "replacement.md");
+      await writeFile(replacement, "Theirs\n");
+      await rename(replacement, destination);
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
+it("refuses an automatic write when another program replaces the file while the check compares its text", async () => {
+  const { directory, destination } = await fixture();
+  const replacement = join(directory, "replacement.md");
+  // The replacement has the file's size and time, as a copy that keeps times
+  // can give it, so only the file's identity tells it apart.
+  await writeFile(replacement, "Replaced text\n");
+  const time = new Date(2026, 0, 1);
+  await utimes(destination, time, time);
+  await utimes(replacement, time, time);
+  const decode = TextDecoder.prototype.decode;
+  vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: Parameters<TextDecoder["decode"]>) {
+    // Another program replaces the file while the check decodes the text it read.
+    if (existsSync(replacement)) renameSync(replacement, destination);
+    return decode.apply(this, args);
+  });
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Replaced text\n");
+});
+
+// Creating a symbolic link needs a privilege on Windows, as in backend.test.ts.
+it.skipIf(process.platform === "win32")("checks the real file that an automatic write replaces, also when its symbolic link changes meanwhile", async () => {
+  const { directory, destination } = await fixture();
+  const link = join(directory, "link.md");
+  await symlink(destination, link);
+  const decoy = join(directory, "decoy.md");
+  await writeFile(decoy, "Original text\n");
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      // While Downpad writes its replacement, another program edits the file
+      // and points the link at a file that holds the text the write expects.
+      await writeFile(destination, "Theirs\n");
+      await rm(link);
+      await symlink(decoy, link);
+    }
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(link, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+  expect(await readFile(decoy, "utf8")).toBe("Original text\n");
+});
+
+it.skipIf(process.platform === "win32").each([
+  { other: "another file", text: "Other text\n" },
+  { other: "a missing file", text: null },
+])("writes the file the document showed when its symbolic link is pointed at $other meanwhile", async ({ text }) => {
+  const { directory, destination } = await fixture();
+  const link = join(directory, "link.md");
+  await symlink(destination, link);
+  const other = join(directory, "other.md");
+  if (text !== null) await writeFile(other, text);
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      // While Downpad writes its replacement, another program points the
+      // link elsewhere. The write goes on to the file it checked, and never
+      // to one it did not.
+      await rm(link);
+      await symlink(other, link);
+    }
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await writeMarkdown(link, "Mine\n", "lf", "Original text\n");
+  expect(await readFile(destination, "utf8")).toBe("Mine\n");
+  expect(await readlink(link)).toBe(other);
+  expect(existsSync(other) ? await readFile(other, "utf8") : null).toBe(text);
+});
+
+it.skipIf(process.platform === "win32")("refuses an automatic write when another program puts a symbolic link in the file's place during the check", async () => {
+  const { directory, destination } = await fixture();
+  const moved = join(directory, "moved.md");
+  let replaced = false;
+  const decode = TextDecoder.prototype.decode;
+  vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: TextDecoder, ...args: Parameters<TextDecoder["decode"]>) {
+    if (!replaced) {
+      // Another program moves the file away and leaves a link to it in its
+      // place, which a check through the link takes for the same file.
+      replaced = true;
+      renameSync(destination, moved);
+      symlinkSync(moved, destination);
+    }
+    return decode.apply(this, args);
+  });
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+  expect(await readFile(moved, "utf8")).toBe("Original text\n");
+});
+
+it("refuses an automatic write when another program creates the file that the check found gone", async () => {
+  const { directory, destination } = await fixture();
+  await rm(destination);
+  const replacement = join(directory, "replacement.md");
+  await writeFile(replacement, "Theirs\n");
+  const originalLstat = filesystem.lstat;
+  let looks = 0;
+  vi.spyOn(filesystem, "lstat").mockImplementation(async (...args: Parameters<typeof filesystem.lstat>) => {
+    looks += 1;
+    // The first look resolves the missing file for the write, and the
+    // second is the check's last look, just before which another program
+    // creates the file.
+    if (looks === 2) await rename(replacement, destination);
+    return originalLstat(...args);
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+});
+
+it.skipIf(process.platform === "win32")("refuses an automatic write when another program puts a symbolic link to a missing file in the file's place", async () => {
+  const { directory, destination } = await fixture();
+  const missing = join(directory, "missing.md");
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    if (args[1] === "wx") {
+      await rm(destination);
+      await symlink(missing, destination);
+    }
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await expect(writeMarkdown(destination, "Mine\n", "lf", "Original text\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readlink(destination)).toBe(missing);
+});
+
+it.skipIf(process.platform === "win32")("writes a file that is back with the expected text, also through a folder that is a link", async () => {
+  const { directory } = await fixture();
+  const folder = join(directory, "folder");
+  await mkdir(folder);
+  const linkedFolder = join(directory, "linked");
+  await symlink(folder, linkedFolder);
+  const real = join(folder, "note.md");
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    // The file is missing when the write starts, and a sync tool puts it
+    // back with the text the document saved while the write stages its file.
+    if (args[1] === "wx") await writeFile(real, "Original text\n");
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await writeMarkdown(join(linkedFolder, "note.md"), "Mine\n", "lf", "Original text\n");
+  expect(await readFile(real, "utf8")).toBe("Mine\n");
+});
+
+it("writes a file that another program removes during the write again where it was", async () => {
+  const { destination } = await fixture();
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    // A sync tool removes the file while the write stages its file.
+    if (args[1] === "wx") await rm(destination);
+    return originalOpen(...args);
+  });
+  syncBuiltinESMExports();
+
+  await writeMarkdown(destination, "Mine\n", "lf", "Original text\n");
+  expect(await readFile(destination, "utf8")).toBe("Mine\n");
+});
+
+it("retries a Windows sharing lock that the check before the rename meets", async () => {
+  const { destination } = await fixture();
+  simulatePlatform("win32");
+  let checks = 0;
+  const beforeReplace = async () => {
+    checks += 1;
+    if (checks === 1) throw Object.assign(new Error("The file has a transient sharing lock."), { code: "EBUSY" });
+    return true;
+  };
+  await writeAtomic(destination, "Replacement text\n", { beforeReplace });
+  expect(checks).toBe(2);
+  expect(await readFile(destination, "utf8")).toBe("Replacement text\n");
+});
+
+it("fails a read of a file that keeps changing while it is read", async () => {
+  const { destination } = await fixture();
+  const originalOpen = filesystem.open;
+  let rewrites = 0;
+  vi.spyOn(filesystem, "open").mockImplementation(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      rewrites += 1;
+      await writeFile(destination, `Rewrite ${rewrites}, which is longer each time\n`.repeat(rewrites));
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+  await expect(readMarkdown(destination)).rejects.toThrow("The file kept changing while it was read.");
+  expect(rewrites).toBe(3);
+});
+
+it("reads a file again that another program rewrites in place while it is read", async () => {
+  const { destination } = await fixture();
+  const originalOpen = filesystem.open;
+  vi.spyOn(filesystem, "open").mockImplementationOnce(async (...args: Parameters<typeof filesystem.open>) => {
+    const handle = await originalOpen(...args);
+    const readText = handle.readFile.bind(handle);
+    handle.readFile = (async (...options: Parameters<typeof handle.readFile>) => {
+      const bytes = await readText(...options);
+      // Another program rewrites the same file in place right after the read.
+      await writeFile(destination, "Rewritten in place\n");
+      await utimes(destination, new Date(), new Date(Date.now() + 60_000));
+      return bytes;
+    }) as typeof handle.readFile;
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  const read = await readMarkdown(destination);
+  expect(read).toMatchObject({ content: "Rewritten in place\n", modifiedMs: Math.floor((await stat(destination)).mtimeMs) });
+});
+
+it("writes a document only while the file holds the text it expects, and stamps a file with its time and size", async () => {
+  const { destination } = await fixture();
+  expect(await fileStamp(destination)).toEqual({ modifiedMs: Math.floor((await stat(destination)).mtimeMs), sizeBytes: 14 });
+
+  const written = await writeMarkdown(destination, "Mine\n", "lf", "Original text\n");
+  expect(written).toEqual({ modifiedMs: expect.any(Number), sizeBytes: 5 });
+  expect(await readFile(destination, "utf8")).toBe("Mine\n");
+
+  // Another program replaces the file and keeps its time.
+  await writeFile(destination, "Theirs\n");
+  await utimes(destination, new Date(), new Date(written.modifiedMs));
+  await expect(writeMarkdown(destination, "Mine again\n", "lf", "Mine\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination, "utf8")).toBe("Theirs\n");
+
+  // Another program writes bytes that are not valid UTF-8.
+  await writeFile(destination, Buffer.from([0x23, 0x20, 0xff, 0x0a]));
+  await expect(writeMarkdown(destination, "Mine again\n", "lf", "Theirs\n")).rejects.toThrow(FILE_CHANGED_ON_DISK);
+  expect(await readFile(destination)).toEqual(Buffer.from([0x23, 0x20, 0xff, 0x0a]));
 });
 
 it.each(["linux", "darwin"] as const)("fails immediately on %s and keeps the old file and removes staging", async (platform) => {

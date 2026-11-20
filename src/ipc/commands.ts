@@ -7,6 +7,7 @@ import type {
   FileStat,
   FileMeta,
   FilePayload,
+  FileStamp,
   GitFileStatus,
   GitOpenFile,
   GitSyncResult,
@@ -31,12 +32,21 @@ export function readFile(path: string): Promise<FilePayload> {
   return invoke("read_file", { path });
 }
 
-export function writeFile(path: string, content: string, eol: Eol): Promise<FileMeta> {
-  return invoke("write_file", { path, content, eol });
+/** Write a document's file. With `expectedContent`, the write replaces the
+ *  file only while it still holds that text, and otherwise fails with
+ *  FILE_CHANGED_ON_DISK and leaves the file as it is. */
+export function writeFile(path: string, content: string, eol: Eol, expectedContent?: string): Promise<FileMeta> {
+  return invoke("write_file", expectedContent === undefined ? { path, content, eol } : { path, content, eol, expectedContent });
 }
 
 export function pathExists(path: string): Promise<boolean> {
   return invoke("path_exists", { path });
+}
+
+/** The file's modification time and size, which tell whether it changed
+ *  without reading it. */
+export function fileStamp(path: string): Promise<FileStamp> {
+  return invoke("file_stamp", { path });
 }
 
 /** Watch the open file for external changes (emits `file-changed`, §5.1). */
@@ -227,9 +237,10 @@ export function loadSettings(): Promise<Settings> {
 }
 
 /** Put `changes` onto settings.toml as it is when written, and resolve with
- *  the settings it then holds. */
-export function saveSettings(changes: Partial<Settings>): Promise<Settings> {
-  return invoke("save_settings", { changes });
+ *  the settings it then holds. A change listed in `expected` applies only
+ *  while the file still holds the value given there. */
+export function saveSettings(changes: Partial<Settings>, expected?: Partial<Settings>): Promise<Settings> {
+  return invoke("save_settings", expected ? { changes, expected } : { changes });
 }
 
 export function settingsPath(): Promise<string> {

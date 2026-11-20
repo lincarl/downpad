@@ -6,6 +6,7 @@ import type {
   DefaultHandler,
   FileMeta,
   FilePayload,
+  FileStamp,
   FileStat,
   GitFileStatus,
   GitOpenFile,
@@ -27,8 +28,9 @@ import type {
 
 export interface DesktopCommandArgs {
   read_file: { path: string };
-  write_file: { path: string; content: string; eol: Eol };
+  write_file: { path: string; content: string; eol: Eol; expectedContent?: string };
   path_exists: { path: string };
+  file_stamp: { path: string };
   watch_file: { path: string };
   unwatch_file: undefined;
   ensure_attachments_dir: { docPath: string; folderName: string };
@@ -52,7 +54,7 @@ export interface DesktopCommandArgs {
   open_default_apps_settings: undefined;
   get_system_accent_color: undefined;
   load_settings: undefined;
-  save_settings: { changes: Partial<Settings> };
+  save_settings: { changes: Partial<Settings>; expected?: Partial<Settings> };
   settings_path: undefined;
   get_spellcheck_info: undefined;
   list_dictionary_words: undefined;
@@ -77,6 +79,7 @@ export interface DesktopCommandResults {
   read_file: FilePayload;
   write_file: FileMeta;
   path_exists: boolean;
+  file_stamp: FileStamp;
   watch_file: void;
   unwatch_file: void;
   ensure_attachments_dir: string;
