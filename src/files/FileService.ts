@@ -656,11 +656,13 @@ export class FileService {
   }
 
   /** Keep close saves in each tab's ordinary queue, then verify every
-   *  requested tab. Cancellation or failure leaves all tabs open, including
-   *  those saved first. The close waits for every save of the tabs, which
-   *  never ends for a write that does not return. Once `signal` aborts, as
-   *  for a newer close that the user asked for, it stops waiting and keeps
-   *  the tabs ("cancel"), and the saves go on. */
+   *  requested tab. The saves of documents with a file are asked for
+   *  together, then those of untitled documents one after another, since each
+   *  shows a dialog. Cancellation or failure leaves all tabs open, including
+   *  those saved first, and a failed save rejects. The close waits for every
+   *  save of the tabs, which never ends for a write that does not return.
+   *  Once `signal` aborts, as for a newer close that the user asked for, it
+   *  stops waiting and keeps the tabs ("cancel"), and the saves go on. */
   private async prepareClose(tabIds: string[], message: string, signal?: AbortSignal): Promise<CloseDecision> {
     this.present.flush();
     const owners = new Set(tabIds);
@@ -670,11 +672,32 @@ export class FileService {
       if (choice === "cancel" || choice === "discard") return choice;
       // The native prompt can remain open while editor updates are pending.
       this.present.flush();
-      for (const tab of ownTabs().filter(hasUnsavedChanges)) {
-        if (signal?.aborted) return "cancel";
+      const unsaved = ownTabs().filter(hasUnsavedChanges);
+      // The saves of documents with a file start together, so one that does
+      // not return, as to a network drive that went away, holds up no other.
+      let failed = false;
+      const filed = Promise.all(unsaved.filter((tab) => tab.doc.filePath !== null).map((tab) => this.queueSave(tab.id, false).then(
+        (saved) => {
+          if (!saved) failed = true;
+          return saved;
+        },
+        (error: unknown) => {
+          failed = true;
+          throw error;
+        },
+      )));
+      // A failure while a dialog below shows, or after the close stopped
+      // waiting, is handled here as well, so it is never left unhandled.
+      filed.catch(() => {});
+      // Untitled documents ask where to save them, one dialog after another,
+      // until one is cancelled or a save fails.
+      for (const tab of unsaved.filter((tab) => tab.doc.filePath === null)) {
+        if (signal?.aborted || failed) break;
         const saved = await unlessAborted(this.queueSave(tab.id, false), signal);
         if (saved !== true) return "cancel";
       }
+      const saved = await unlessAborted(filed, signal);
+      if (saved === ABORTED || saved.includes(false)) return "cancel";
     }
     // Another queued save may still overwrite the file after our write. Wait
     // for it as well, and reject any newer edits or pending dropped assets.

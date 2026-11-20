@@ -939,10 +939,41 @@ describe("saving before close", () => {
     store.addTab({ ...blankDoc(), filePath: "/docs/last.md", markdown: "Last edits\n", isDirty: true });
 
     expect(await files.confirmCloseAll()).toBe("cancel");
-    expect(native.writeFile).toHaveBeenCalledTimes(1);
+    // The documents with a file were saved before the dialog showed.
+    expect(native.writeFile).toHaveBeenCalledTimes(2);
     expect(store.get().tabs).toHaveLength(4);
     expect(store.get().tabs[1]!.doc.isDirty).toBe(false);
     expect(store.get().tabs[2]!.doc.isDirty).toBe(true);
+    expect(store.get().tabs[3]!.doc.isDirty).toBe(false);
+  });
+
+  it("asks for the saves of all documents with a file at once, so one that does not return holds up no other", async () => {
+    const { store, files } = setup(true);
+    store.addTab({ ...blankDoc(), filePath: "/local/other.md", markdown: "# Other\n", isDirty: true });
+    // The first document is on a network drive that went away.
+    native.writeFile.mockImplementation((path) => path === filePath ? new Promise(() => {}) : Promise.resolve({ modifiedMs: 300 }));
+    void files.confirmCloseAll();
+    await eventually(() => expect(native.writeFile).toHaveBeenCalledWith("/local/other.md", "# Other\n", "lf"));
+    expect(store.get().doc).toMatchObject({ filePath: "/local/other.md", isDirty: false });
+  });
+
+  it("stops asking where to save untitled documents once a save fails, and leaves no failure unhandled", async () => {
+    const { store, files } = setup(true);
+    store.addTab({ ...blankDoc(), markdown: "First untitled\n", isDirty: true });
+    store.addTab({ ...blankDoc(), markdown: "Second untitled\n", isDirty: true });
+    const write = deferred<FileMeta>();
+    native.writeFile.mockReturnValueOnce(write.promise);
+    const dialog = deferred<string | null>();
+    native.saveDialog.mockReturnValueOnce(dialog.promise);
+    const closing = files.confirmCloseAll();
+    await eventually(() => expect(native.saveDialog).toHaveBeenCalledOnce());
+    // The document with a file fails while the first dialog shows.
+    write.reject(new Error("Disk unavailable"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    dialog.resolve("/docs/first.md");
+    await expect(closing).rejects.toThrow("Disk unavailable");
+    expect(native.writeFile).toHaveBeenLastCalledWith("/docs/first.md", "First untitled\n", "lf");
+    expect(native.saveDialog).toHaveBeenCalledOnce();
   });
 
   it("keeps every tab when a close save fails", async () => {
