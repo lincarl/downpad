@@ -359,14 +359,15 @@ describe("FileDropCoordinator", () => {
       return true;
     };
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    await coordinator.handle(["/drop/report.pdf"], point);
+    await coordinator.handle(["/drop/report.pdf", "/drop/photo.png"], point);
     logged.mockRestore();
     expect(log).toEqual(["aim at the drop point", "release dropped-on"]);
-    // The file is neither read nor stored for a document that takes none.
+    // Neither file is read or stored for a document that takes none, also
+    // not the image that follows the file whose save made it one.
     expect(disk.readImageBytes).not.toHaveBeenCalled();
     expect(disk.writeAttachment).not.toHaveBeenCalled();
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
-      "Downpad could not add “report.pdf”. A JSON file takes no dropped files. Drop them on a Markdown document.",
+      "Downpad could not add “report.pdf”, “photo.png”. A JSON file takes no dropped files. Drop them on a Markdown document.",
     );
   });
 

@@ -157,6 +157,9 @@ export class FileDropCoordinator {
    *  with the files left out. */
   private insertFiles(paths: string[], drop: FileDrop): Promise<Failure[]> {
     return this.insertEach(drop, paths, baseName, async (path) => {
+      // An earlier file's save can have made the document a JSON or YAML
+      // file, which takes no file, so this one is not read either.
+      this.refuseDataFile(drop.tabId);
       if (classifyDrop(path) === "image") await this.embedImage(await readImageBytes(path), drop, baseName(path));
       else await this.attachDroppedFile(path, drop);
     });
