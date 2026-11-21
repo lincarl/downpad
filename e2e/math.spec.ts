@@ -6,7 +6,7 @@ let pageErrors: string[] = [];
 
 /** Enter Markdown through the source editor and keep both views visible. */
 async function setSource(page: Page, markdown: string): Promise<void> {
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await page.locator(rawEditor).click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.insertText(markdown);

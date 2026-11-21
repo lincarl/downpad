@@ -54,12 +54,20 @@ export function sourceSpellingChanges(state: EditorState, word: SpellingWord, re
   return changes;
 }
 
-/** Parse the entire Markdown model, preserving word positions across formatting. */
+/** The frontmatter of the text in `state`. Only Markdown, which the editor
+ *  parses, has frontmatter, so a text file has none. */
+function frontmatterOf(state: EditorState): string | null {
+  return state.facet(language) ? splitFrontmatter(state.doc.toString()).frontmatter : null;
+}
+
+/** Parse the entire Markdown model, preserving word positions across
+ *  formatting. A text without a parser, as in a text file, is prose
+ *  throughout. */
 export async function sourceSpellingWords(state: EditorState): Promise<SpellingWord[]> {
   const source = state.doc.toString();
-  const { frontmatter } = splitFrontmatter(source);
   const parser = state.facet(language)?.parser;
   if (!parser) return proseWords(source);
+  const { frontmatter } = splitFrontmatter(source);
   const parse = parser.startParse(source);
   let tree = parse.advance();
   let started = performance.now();
@@ -128,7 +136,7 @@ export function sourceSpelling() {
         paint: (words) => view.dispatch({ effects: marks.of(words) }),
         positionAt: (x, y) => view.posAtCoords({ x, y }),
         replace: (word, replacement) => {
-          const block = splitFrontmatter(view.state.doc.toString()).frontmatter;
+          const block = frontmatterOf(view.state);
           if (block && word.from < block.length) {
             const value = frontmatterSpellingWords(block).find((value) => value.from === word.from && value.to === word.to);
             if (!value || replaceInFrontmatter(block, [value.cell], replacement) === block) {

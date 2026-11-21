@@ -267,10 +267,10 @@ describe("upload", () => {
     expect(await gitStatus(notes(), { fetch: false })).toMatchObject({ changed: false, ahead: 0, behind: 0 });
   });
 
-  it("uploads a YAML or JSON file alone, with no file its text would link to as Markdown", async () => {
+  it("uploads a text, YAML or JSON file alone, with no file its text would link to as Markdown", async () => {
     await mkdir(join(mine, "attachments"));
     await writeFile(join(mine, "attachments", "a.png"), "png");
-    for (const name of ["config.yaml", "data.json"]) {
+    for (const name of ["todo.txt", "config.yaml", "data.json"]) {
       const file = join(mine, name);
       // Read as Markdown, this text holds an image.
       await writeFile(file, 'note: "![](attachments/a.png)"\n');

@@ -294,6 +294,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
       recentFilesVisibleCount: number(recentFilesVisibleCount, applied.recentFilesVisibleCount),
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
+      openDialogAllSupported: input("openDialogAllSupported").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : applied.autoUpdate,
       gitEnabled: gitEnabled ? gitEnabled.checked : applied.gitEnabled,
       gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : applied.gitAutoGetLatest,
@@ -544,6 +545,11 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                       <Checkbox name="recentFilesKeepRemoved" defaultChecked={initial.recentFilesKeepRemoved} />
                     </CheckRow>
                   </SettingsBox>
+                  <SettingsBox title="Open dialog">
+                    <CheckRow label="Show all supported files by default" placement="box">
+                      <Checkbox name="openDialogAllSupported" defaultChecked={initial.openDialogAllSupported} />
+                    </CheckRow>
+                  </SettingsBox>
                   {isElectron() && window.downpadDesktop?.platform === "win32" && (
                     <SettingsBox title="System integration">
                       <ButtonRow
@@ -695,7 +701,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                         options={[
                           ["document", "Document"],
                           ["split", "Split"],
-                          ["markdown", "Markdown"],
+                          ["markdown", "Text"],
                         ]}
                         value={layoutFromDefaultView(initial)}
                       />
@@ -724,7 +730,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                         defaultChecked={initial.showFrontmatterPanel}
                       />
                     </CheckRow>
-                    <CheckRow label="Collapse base64 in Markdown view">
+                    <CheckRow label="Collapse base64 in Text view">
                       <Checkbox
                         name="collapseBase64InRawView"
                         defaultChecked={initial.collapseBase64InRawView}
@@ -1125,6 +1131,7 @@ const CHECK_FIELDS: ReadonlyArray<keyof Settings> = [
   "showFrontmatterPanel",
   "autosaveEnabled",
   "recentFilesKeepRemoved",
+  "openDialogAllSupported",
   "autoUpdate",
   "gitEnabled",
   "gitAutoGetLatest",

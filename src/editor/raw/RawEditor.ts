@@ -1,6 +1,7 @@
 // Raw view: CodeMirror 6 with VS Code's colours for Markdown, or for JSON or
-// YAML when the document is such a file. A *view* over the canonical markdown
-// string; raw edits are written back verbatim (spec §5.16).
+// YAML when the document is such a file, and plain for a text file. A *view*
+// over the canonical markdown string; raw edits are written back verbatim
+// (spec §5.16).
 
 import { EditorView, basicSetup } from "codemirror";
 import { isolateHistory } from "@codemirror/commands";
@@ -22,7 +23,7 @@ import { codeMirrorPresses } from "../codeMirrorPresses";
 import { specialDashHighlight } from "./specialDash";
 import { markdownSource, sourceHighlightStyle, sourceViewStyle } from "./markdownSource";
 import { dataHighlightStyle, dataSource } from "./dataSource";
-import { LANGUAGE_NAMES, type DocumentLanguage } from "../../files/documentLanguage";
+import { isProse, LANGUAGE_NAMES, type DocumentLanguage } from "../../files/documentLanguage";
 import { rawAlignedPane, rowSpacers } from "./rowAlignment";
 import type { AlignedPane } from "../splitAlign";
 import { sourceCodeSpellcheck } from "./spellcheck";
@@ -54,18 +55,22 @@ export interface RawOptions {
 }
 
 /** The parser and syntax colours of `language`, and the name a screen reader
- *  gives the editor. */
+ *  gives the editor. A text file has neither parser nor colours. */
 function languageExtensions(language: DocumentLanguage): Extension {
-  const label = EditorView.contentAttributes.of({ "aria-label": `${LANGUAGE_NAMES[language]} source editor` });
+  const name = language === "text" ? "Text editor" : `${LANGUAGE_NAMES[language]} source editor`;
+  const label = EditorView.contentAttributes.of({ "aria-label": name });
   if (language === "markdown") return [label, markdownSource(), syntaxHighlighting(sourceHighlightStyle)];
+  if (language === "text") return label;
   return [label, dataSource(language), syntaxHighlighting(dataHighlightStyle)];
 }
 
 /** What checks the spelling of a text in `language`. Markdown keeps its code
- *  out of the check and checks its prose with `spelling`. A JSON or YAML file
- *  is data, whose spelling is never checked. */
+ *  out of the check and checks its prose with `spelling`, and a text file is
+ *  prose throughout. A JSON or YAML file is data, whose spelling is never
+ *  checked. */
 function spellingExtensions(language: DocumentLanguage, spelling: Extension): Extension {
-  return language === "markdown" ? [sourceCodeSpellcheck(), spelling] : [];
+  if (language === "markdown") return [sourceCodeSpellcheck(), spelling];
+  return isProse(language) ? spelling : [];
 }
 
 /** Search test that skips the base64 data of data: URIs, so Replace all cannot corrupt an image. */
@@ -378,7 +383,7 @@ export class RawEditor {
   private readonly languageSupport = new Compartment();
   private readonly languageSpelling = new Compartment();
   private language: DocumentLanguage = "markdown";
-  /** Whether the spelling of prose is checked, in a Markdown document. */
+  /** Whether the spelling of prose is checked, in a Markdown or text document. */
   private spellcheckEnabled = false;
   /** Set while `setText` replaces the doc programmatically (split-view mirror
    *  sync, §6.1) so the resulting transaction doesn't echo back through onChange
@@ -475,13 +480,17 @@ export class RawEditor {
       ],
     });
     this.setSpellcheck(this.spellcheckEnabled);
+    // Markdown and a text file share one spelling controller, which stays
+    // enabled across the change, so nothing else tells it that the words of
+    // the same text are now other ones.
+    this.liveSpelling.controller()?.changed();
   }
 
   /** Change prose spelling without rebuilding the editor or enabling code.
-   *  Only a Markdown document has prose to check. */
+   *  A JSON or YAML file has no prose to check. */
   setSpellcheck(enabled: boolean): void {
     this.spellcheckEnabled = enabled;
-    const checked = enabled && this.language === "markdown";
+    const checked = enabled && this.hasProse();
     const managed = this.liveSpelling.controller();
     if (managed) {
       managed.setEnabled(checked);
@@ -493,12 +502,12 @@ export class RawEditor {
 
   /** Whether the text has prose whose spelling can be checked. */
   hasProse(): boolean {
-    return this.language === "markdown";
+    return isProse(this.language);
   }
 
-  /** Recheck every prose word in the Markdown model without editing it. */
+  /** Recheck every prose word in the text without editing it. */
   checkSpelling(): Promise<number> {
-    if (!this.hasProse()) return Promise.reject(new Error("Only a Markdown document has spelling to check."));
+    if (!this.hasProse()) return Promise.reject(new Error("A JSON or YAML file has no spelling to check."));
     return this.liveSpelling.controller()?.scan() ?? Promise.reject(new Error("Spell check needs the installed Downpad app."));
   }
 

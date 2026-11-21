@@ -161,7 +161,7 @@ export function mathEditor() {
           if (destroyed || session !== generation) return;
           close();
           console.error("Could not open the equation editor", error);
-          window.alert("The equation editor could not load. You can still edit LaTeX in the Markdown view.");
+          window.alert("The equation editor could not load. You can still edit LaTeX in the Text view.");
         } finally {
           if (session === generation) opening = false;
         }

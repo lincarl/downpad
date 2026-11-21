@@ -131,13 +131,21 @@ test("a JSON file opens as its source alone with JSON colours, and saves its exa
   await writeFile(file, text);
   await launch(file);
 
-  // No document view reads the JSON as Markdown, and the view control names the source.
+  // No document view reads the JSON as Markdown. The view control shows the
+  // Text view selected, and no other view on offer.
   const source = page.locator(".editor-pane-raw:visible .cm-content");
   await expect(source).toContainText('"name": "Downpad"');
   await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
   const views = page.getByRole("radiogroup", { name: "Editor view" }).getByRole("radio");
-  await expect(views).toHaveText(["Document", "Split", "JSON"]);
-  for (const view of await views.all()) await expect(view).toBeDisabled();
+  await expect(views).toHaveText(["Document", "Split", "Text"]);
+  await expect(views.nth(0)).toBeDisabled();
+  await expect(views.nth(1)).toBeDisabled();
+  await expect(views.nth(2)).toBeEnabled();
+  await expect(views.nth(2)).toHaveAttribute("aria-checked", "true");
+  // Pressing it keeps it.
+  await views.nth(2).click();
+  await expect(views.nth(2)).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
 
   // A property name, a string, a number and a constant each have a colour of their own.
   const colourOf = (token: string): Promise<string> =>
@@ -176,7 +184,15 @@ test("a YAML file opens as its source with YAML colours beside a Markdown tab th
   const source = page.locator(".editor-pane-raw:visible .cm-content");
   await expect(source).toContainText("services:");
   await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
-  await expect(page.getByRole("radio", { name: "YAML", exact: true })).toBeDisabled();
+  const textView = page.getByRole("radio", { name: "Text", exact: true });
+  await expect(textView).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
+  // The selected Text view looks as the selected view of a Markdown file does.
+  const look = (radio: Locator) => radio.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.backgroundColor, style.color, style.borderColor, style.opacity];
+  });
+  const yamlLook = await look(textView);
   const colourOf = (token: string): Promise<string> =>
     source.locator("span", { hasText: new RegExp(`^${token}$`) }).first().evaluate((span) => getComputedStyle(span).color);
   const body = await source.evaluate((content) => getComputedStyle(content).color);
@@ -189,6 +205,10 @@ test("a YAML file opens as its source with YAML colours beside a Markdown tab th
   await page.getByRole("tab", { name: /notes\.md/ }).click();
   await expect(page.locator(heading)).toHaveText("Notes");
   await expect(page.getByRole("radio", { name: "Split", exact: true })).toBeEnabled();
+  const selected = page.getByRole("radio", { name: "Document", exact: true });
+  await expect(selected).toHaveAttribute("aria-checked", "true");
+  await page.mouse.move(0, 0);
+  expect(await look(selected)).toEqual(yamlLook);
 
   // Saved as Markdown, the YAML tab's text becomes a document with its views.
   await page.getByRole("tab", { name: /compose\.yml/ }).click();
@@ -197,7 +217,7 @@ test("a YAML file opens as its source with YAML colours beside a Markdown tab th
   await chooseSave(copy);
   await page.keyboard.press("Control+Shift+S");
   await expect(page.locator(".editor-pane-wysiwyg:visible h1")).toHaveText("Services");
-  await expect(page.getByRole("radio", { name: "Markdown", exact: true })).toBeEnabled();
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeEnabled();
   expect(await readFile(copy, "utf8")).toBe(text);
   expect(await readFile(file, "utf8")).toBe(text);
 });
@@ -215,7 +235,8 @@ test("a JSON file opened into an empty untitled tab, and an untitled document sa
   await expect(source).toHaveText('{"a": 1}');
   await expect(page.getByRole("tab")).toHaveCount(1);
   await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
-  await expect(page.getByRole("radio", { name: "JSON", exact: true })).toBeDisabled();
+  await expect(page.getByRole("radio", { name: "Text", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
   await expect(source).toHaveAttribute("aria-label", "JSON source editor");
   await source.click();
   await page.keyboard.press("Control+End");
@@ -231,7 +252,7 @@ test("a JSON file opened into an empty untitled tab, and an untitled document sa
   const saved = path.join(directory, "list.json");
   await chooseSave(saved);
   await page.keyboard.press("Control+S");
-  await expect(page.getByRole("radio", { name: "JSON", exact: true })).toBeDisabled();
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
   await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
   const text = await readFile(saved, "utf8");
   await expect(source).toHaveText(text.trimEnd());
@@ -242,12 +263,170 @@ test("a JSON file opened into an empty untitled tab, and an untitled document sa
   await expect.poll(() => readFile(saved, "utf8")).toBe(` ${text}`);
 });
 
+test("a narrow window's view menu offers a JSON file the Text view alone", async () => {
+  const file = path.join(directory, "flags.json");
+  await writeFile(file, '{"on": true}\n');
+  await launch(file);
+  await expect(page.locator(".editor-pane-raw:visible .cm-content")).toContainText('"on": true');
+  await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
+  await expect(page.getByRole("radiogroup", { name: "Editor view" })).toBeHidden();
+
+  const button = page.getByRole("button", { name: "Editor view", exact: true });
+  await expect(button).toBeEnabled();
+  await button.click();
+  const menu = page.getByRole("menu", { name: "Editor view" });
+  const rows = menu.getByRole("menuitemradio");
+  await expect(rows).toHaveText(["Document", "Split", "Text"]);
+  await expect(rows.nth(0)).toBeDisabled();
+  await expect(rows.nth(1)).toBeDisabled();
+  await expect(rows.nth(2)).toBeEnabled();
+  await expect(rows.nth(2)).toHaveAttribute("aria-checked", "true");
+  await expect(rows.nth(2)).toBeFocused();
+  await rows.nth(2).click();
+  await expect(menu).toBeHidden();
+  await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
+});
+
+test("a .txt file opens as plain text in the Text view alone, with its word count, and copies and saves its exact text", async () => {
+  const file = path.join(directory, "errands.txt");
+  // Read as Markdown, this would be a heading, a list with emphasis and a rule.
+  const text = "# Errands\n- buy *milk*\n---\n";
+  await writeFile(file, text);
+  await launch(file);
+
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toContainText("# Errands");
+  await expect(source).toHaveAttribute("aria-label", "Text editor");
+  await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
+  const views = page.getByRole("radiogroup", { name: "Editor view" }).getByRole("radio");
+  await expect(views).toHaveText(["Document", "Split", "Text"]);
+  await expect(views.nth(0)).toBeDisabled();
+  await expect(views.nth(1)).toBeDisabled();
+  await expect(views.nth(2)).toHaveAttribute("aria-checked", "true");
+
+  // No Markdown colours or weights: what would be Markdown is plain text.
+  const body = await source.evaluate((content) => getComputedStyle(content).color);
+  const looks = await source.locator(".cm-line").evaluateAll((lines) =>
+    lines.flatMap((line) => [line, ...line.querySelectorAll("span")].map((element) => {
+      const style = getComputedStyle(element);
+      return `${style.color} ${style.fontWeight}`;
+    })));
+  expect(new Set(looks)).toEqual(new Set([`${body} 400`]));
+  // Prose has words to count, markers and all.
+  await expect(page.locator(".status-right")).toHaveText(/^6 words · /);
+
+  // An edit saves as typed, with nothing rewritten around it.
+  await source.getByText("- buy *milk*").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" and *bread*");
+  await page.keyboard.press("Control+S");
+  const edited = "# Errands\n- buy *milk* and *bread*\n---\n";
+  await expect.poll(() => readFile(file, "utf8")).toBe(edited);
+
+  // The copy menu names the text, and offers no formatted copy.
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Copy formatted text" })).toBeDisabled();
+  await page.getByRole("menuitem", { name: "Copy as text", exact: true }).click();
+  await expect.poll(clipboardText).toBe(edited);
+});
+
+test("a Save As to .txt shows a Markdown document as plain text, a bare name keeps it text, and a Save As to .md gives it its views again", async () => {
+  const notes = path.join(directory, "plan.md");
+  const markdown = "# Plan\n\nFirst *step*.\n";
+  await writeFile(notes, markdown);
+  await launch(notes);
+  await expect(page.locator(heading)).toHaveText("Plan");
+
+  const plain = path.join(directory, "plan.txt");
+  await chooseSave(plain);
+  await page.keyboard.press("Control+Shift+S");
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toHaveAttribute("aria-label", "Text editor");
+  await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
+  await expect(page.getByRole("radio", { name: "Text", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => readFile(plain, "utf8")).toBe(markdown);
+
+  // A name chosen without an extension keeps the document a text file.
+  await chooseSave(path.join(directory, "plan copy"));
+  await page.keyboard.press("Control+Shift+S");
+  await expect(page.getByRole("tab", { name: /plan copy\.txt/ })).toBeVisible();
+  await expect.poll(() => readFile(path.join(directory, "plan copy.txt"), "utf8")).toBe(markdown);
+  await expect(source).toHaveAttribute("aria-label", "Text editor");
+
+  const again = path.join(directory, "plan again.md");
+  await chooseSave(again);
+  await page.keyboard.press("Control+Shift+S");
+  await expect(page.locator(".editor-pane-wysiwyg:visible h1")).toHaveText("Plan");
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeEnabled();
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => readFile(again, "utf8")).toBe(markdown);
+});
+
+test("the Open dialog and the Recent view's Locate offer all supported files, first once Settings asks for it", async () => {
+  const notes = path.join(directory, "notes.md");
+  const moved = path.join(directory, "moved.md");
+  const found = path.join(directory, "found.txt");
+  await writeFile(notes, "# Notes\n");
+  await writeFile(moved, "# Moved\n");
+  await writeFile(found, "Found it\n");
+  await launch(notes);
+  await chooseOpen(moved);
+  await expect(page.getByRole("tab", { name: "moved.md", exact: true })).toBeVisible();
+  await unlink(moved);
+
+  // Each open dialog records its filters and chooses `found`.
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    dialog.showOpenDialog = async (...args: unknown[]) => {
+      const options = args.at(-1) as Electron.OpenDialogOptions;
+      Reflect.set(globalThis, "openFilters", options.filters);
+      return { canceled: false, filePaths: [selectedFile] };
+    };
+  }, found);
+  const filters = () => app!.evaluate(() => Reflect.get(globalThis, "openFilters") as Electron.FileFilter[] | undefined);
+  const kinds = [
+    { name: "Markdown", extensions: ["md", "markdown", "mdown", "mkd"] },
+    { name: "Text", extensions: ["txt"] },
+    { name: "JSON", extensions: ["json"] },
+    { name: "YAML", extensions: ["yaml", "yml"] },
+  ];
+  const allSupported = { name: "All supported files", extensions: ["md", "markdown", "mdown", "mkd", "txt", "json", "yaml", "yml"] };
+  const allFiles = { name: "All files", extensions: ["*"] };
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await expect.poll(filters).toEqual([...kinds, allSupported, allFiles]);
+  await expect(page.getByRole("tab", { name: "found.txt", exact: true })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const setting = dialog.getByRole("checkbox", { name: "Show all supported files by default" });
+  await expect(setting).not.toBeChecked();
+  await setting.check();
+  await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect.poll(() => readFile(path.join(directory, "profile", "settings.toml"), "utf8")).toContain("openDialogAllSupported = true");
+
+  // The next dialog has the setting, without a restart.
+  await app!.evaluate(() => Reflect.set(globalThis, "openFilters", undefined));
+  await page.getByRole("tab", { name: "found.txt", exact: true }).click();
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await expect.poll(filters).toEqual([allSupported, ...kinds, allFiles]);
+
+  await app!.evaluate(() => Reflect.set(globalThis, "openFilters", undefined));
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await page.getByRole("button", { name: "Open moved.md", exact: true }).click();
+  await page.getByRole("dialog", { name: "File not found" }).getByRole("button", { name: "Locate", exact: true }).click();
+  await expect.poll(filters).toEqual([allSupported, ...kinds, allFiles]);
+  await expect(page.getByRole("tab", { name: "found.txt", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
 test("the toolbar copies the whole document as Markdown or formatted text to the desktop clipboard", async () => {
   const file = path.join(directory, "copy-formats.md");
   const markdown = "# Copy formats\n\nA **bold** paragraph.\n\nLatest edit with [related](../related%20note.md#section)[^1].\n\n[^1]: A footnote.\n";
   await writeFile(file, "# Copy formats\n\nA **bold** paragraph.\n");
   await launch(file);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.locator(".editor-pane-raw .cm-content");
   await source.click();
   await page.keyboard.press("ControlOrMeta+A");
@@ -294,44 +473,62 @@ test("the document menu's Copy file saves the document and copies its file as th
   if (process.platform === "linux") {
     expect(await copied('electron application/osclipboard;format="x-special/gnome-copied-files"')).toBe(`copy\n${pathToFileURL(file).href}`);
   }
+});
+
+test("Copy file waits for a change on disk, asks again once its notice was dismissed, and copies without asking after a save", async () => {
+  const file = path.join(directory, "attach me #2.md");
+  await writeFile(file, "# Attach me\n\nFirst text.\n");
+  await launch(file);
+  await expect(page.locator(heading)).toHaveText("Attach me");
+  const notice = page.getByText("This file changed on disk.");
   // While the file changed on disk and neither Reload nor Keep mine is
   // chosen, Copy file waits, as its save would replace the other version.
-  await page.locator(".ProseMirror p", { hasText: "Latest edit." }).click();
+  // The file must change before the app has saved it. After a save by the
+  // app, the notice for a change from outside can show a second time. If that
+  // happened after the first dismissal below, Copy file would be unavailable
+  // when the test chooses it next.
+  await page.locator(".ProseMirror p", { hasText: "First text." }).click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Mine.");
   await writeFile(file, "# Attach me\n\nTheirs.\n");
-  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await expect(notice).toBeVisible();
   await page.locator(heading).click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "Copy file", exact: true })).toBeDisabled();
   await page.keyboard.press("Escape");
   // Dismissed, the change is still unresolved, so Copy file asks again and
   // leaves the other version alone.
   await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
-  await expect(page.getByText("This file changed on disk.")).toBeHidden();
+  await expect(notice).toBeHidden();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
-  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await expect(notice).toBeVisible();
   expect(await readFile(file, "utf8")).toBe("# Attach me\n\nTheirs.\n");
   await page.getByRole("button", { name: "Keep mine", exact: true }).click();
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
-  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine.\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Mine.\n");
   // A save after the notice was dismissed replaced the other version, so
-  // Copy file copies without asking again.
+  // Copy file copies without asking again. This change follows the app's own
+  // save, so its notice can come back after the dismissal. The save resolves
+  // the change either way and takes the notice down.
   await page.locator(".ProseMirror p", { hasText: "Mine." }).click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Again.");
   await writeFile(file, "# Attach me\n\nTheirs again.\n");
-  await expect(page.getByText("This file changed on disk.")).toBeVisible();
+  await expect(notice).toBeVisible();
   await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
   await page.locator(".ProseMirror p", { hasText: "Again." }).click();
   await page.keyboard.press("ControlOrMeta+s");
-  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Latest edit. Mine. Again.\n");
+  await expect.poll(() => readFile(file, "utf8")).toBe("# Attach me\n\nFirst text. Mine. Again.\n");
+  await expect(notice).toBeHidden();
   await app!.evaluate(({ clipboard }) => clipboard.clear());
   await page.locator(heading).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy file", exact: true }).click();
-  await expect.poll(async () => (await copied("text/uri-list"))?.trim()).toBe(pathToFileURL(file).href);
-  await expect(page.getByText("This file changed on disk.")).toBeHidden();
+  await expect.poll(() => app!.evaluate(async ({ clipboard }) => {
+    const [item] = await clipboard.read();
+    return item?.types.includes("text/uri-list") ? (await item.getType("text/uri-list")).text() : null;
+  }).then((list) => list?.trim())).toBe(pathToFileURL(file).href);
+  await expect(notice).toBeHidden();
 });
 
 test("a tab's Copy file brings its document to the front, also from Recent, and then saves and copies it", async () => {
@@ -795,7 +992,7 @@ test("a missing inline image shows its path in a chip, which a click locates", a
 
   await expect(page.locator(".milkdown-image-inline.md-image-missing")).toHaveCount(0);
   await expect.poll(() => loaded("Chart")).toBe(true);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText(`The chart ![Chart](${found}) and`);
   expect(await readFile(file, "utf8")).toBe(markdown);
 });
@@ -2208,10 +2405,10 @@ test("frontmatter starts collapsed and keyboard toggles keep their state across 
   const toggle = livePane.locator(".frontmatter-toggle");
   const content = livePane.locator(".frontmatter-content");
   const notDirty = () => expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
-  const showView = (name: "Document" | "Split" | "Markdown") => page.getByRole("radio", { name, exact: true }).click();
-  /** Show the Markdown view and check that it has the YAML exactly as it was. */
+  const showView = (name: "Document" | "Split" | "Text") => page.getByRole("radio", { name, exact: true }).click();
+  /** Show the Text view and check that it has the YAML exactly as it was. */
   const expectUnchangedYaml = async () => {
-    await showView("Markdown");
+    await showView("Text");
     const source = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
     await expect(source).toBeVisible();
     await source.press("ControlOrMeta+Home");
@@ -2418,7 +2615,7 @@ test("the Split view lines the Markdown up with the document row for row", async
   await page.getByRole("radio", { name: "Document", exact: true }).click();
   await expect(documentPane).not.toHaveClass(/md-row-aligned/);
   await expect(documentPane.locator('.ProseMirror [style*="--md-row-gap"]')).toHaveCount(0);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(sourcePane.locator(".cm-row-spacer")).toHaveCount(0);
   // Back in the split, the rows line up again.
   await page.getByRole("radio", { name: "Split", exact: true }).click();
@@ -3186,7 +3383,7 @@ test("a click or Shift+click on the fold gutter in the Markdown view folds a sec
   const file = path.join(directory, "fold-arrows.md");
   await writeFile(file, ["# One", "Text one.", "# Two", "Text two.", "# Three", "Text three."].join("\n\n") + "\n");
   await launch(file);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const markdown = page.locator(".editor-pane-raw .cm-content");
   const placeholders = page.locator(".editor-pane-raw .cm-foldPlaceholder");
   const activeLine = page.locator(".editor-pane-raw .cm-activeLine");
@@ -3232,7 +3429,7 @@ test("a click below the end of the Markdown view on the fold gutter leaves a fol
   const file = path.join(directory, "fold-last.md");
   await writeFile(file, "First line.\n\n# One\n\nText one.");
   await launch(file);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const pane = page.locator(".editor-pane-raw");
   const markdown = pane.locator(".cm-content");
   const placeholders = pane.locator(".cm-foldPlaceholder");
@@ -3298,7 +3495,7 @@ test("a click below the end of the Markdown puts the cursor at its end, in the s
   // In the Markdown view too. The line numbers stopped at the last line, so
   // below them a Shift+click focused CodeMirror's scroll container and did
   // not extend the selection.
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(markdown).toBeVisible();
   let first = await pointInMarkdown("Firstd", 1, 0.25);
   await page.mouse.click(first.x, first.y);
@@ -3328,7 +3525,7 @@ test("a click in the room find adds above the Markdown view keeps focus in the f
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
   await page.getByRole("button", { name: "Editor view", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Text", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   await expect(pane.locator(".cm-line").first()).toBeVisible();
   await page.keyboard.press("ControlOrMeta+f");
@@ -3945,7 +4142,9 @@ test("a change the browser makes inside a link while the caret rests at its end 
   const change = async (text: string, offset: number, count: number, data: string) => {
     await clickOn(text, -1, 0.75);
     await page.locator(".milkdown .ProseMirror a", { hasText: text }).evaluate((link, [offset, count, data]) => {
-      const node = [...link.childNodes].find((child): child is Text => child instanceof Text)!;
+      // The spelling check wraps a word it marks in a span, and "lnk" and
+      // "teh" are such words, so the text is not always the link's own child.
+      const node = document.createTreeWalker(link, NodeFilter.SHOW_TEXT).nextNode() as Text;
       node.replaceData(offset, count, data);
     }, [offset, count, data] as const);
   };
@@ -4383,7 +4582,7 @@ test("native Open, edit, Save, and external file reload use actual files", async
   await launch();
   await chooseOpen(file);
   await expect(page.locator(heading)).toHaveText("Opened from dialog");
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const raw = page.locator(".editor-pane-raw .cm-content");
   await raw.click();
   await page.keyboard.press("ControlOrMeta+a");
@@ -4644,7 +4843,7 @@ test("Save with no edit leaves a file the document view would rewrite byte-ident
   // Save replaces the file, so wait for the new one before reading it.
   await expect.poll(async () => (await stat(file)).ino).not.toBe(original.ino);
   expect(await readFile(file, "utf8")).toBe(markdown);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("=====");
   await expect(page).toHaveTitle("unedited.md — Downpad");
 });
@@ -4688,7 +4887,7 @@ test("launching with a file builds its document editor once", async () => {
   expect(await page.evaluate(() => Reflect.get(window, "editorBuilds"))).toBe(2);
 });
 
-test("a file the document view cannot show opens in the Markdown view with a notice, and Try again shows it once fixed", async () => {
+test("a file the document view cannot show opens in the Text view with a notice, and Try again shows it once fixed", async () => {
   const deep = path.join(directory, "deep.md");
   const normal = path.join(directory, "normal.md");
   // Nesting this deep overflows the Markdown parser's stack.
@@ -4697,12 +4896,12 @@ test("a file the document view cannot show opens in the Markdown view with a not
   await launch(deep);
   const notice = page.getByRole("alert");
   await expect(notice).toHaveText(
-    "Downpad can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.Try again",
+    "Downpad can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Text view.Try again",
   );
   const markdown = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
   await expect(markdown).toContainText("> deep");
   await expect(page.locator(".editor-pane:not([hidden])")).toHaveCount(1);
-  await expect(page.getByRole("radio", { name: "Markdown", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Text", exact: true })).toHaveAttribute("aria-checked", "true");
 
   // Startup finished, so the shortcuts work. Other tabs show no notice.
   await page.keyboard.press("ControlOrMeta+n");
@@ -6342,7 +6541,7 @@ for (const [when, held] of [
     await pasteImageAtEnd(first);
     if (held === "write_attachment") await untilHeld();
     await expect(page.getByRole("tab", { name: /notes\.md/ }).locator(".tab-file-icon.is-dirty")).toBeVisible();
-    await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+    await page.getByRole("radio", { name: "Text", exact: true }).click();
     const source = page.locator(".cm-content");
     await source.click();
     await page.keyboard.press("ControlOrMeta+End");
@@ -6377,7 +6576,7 @@ for (const [start, opening] of [
     await untilHeld();
     // The user switches without a click in the Markdown view, so its caret is
     // still at the start of the text.
-    await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+    await page.getByRole("radio", { name: "Text", exact: true }).click();
     const source = page.locator(".cm-content");
     await expect(source).toBeVisible();
     await releaseHeld();
@@ -6401,7 +6600,7 @@ test("the images of a drop on the document all keep their place after a switch t
   await untilHeld();
   // The user switches without a click in the Markdown view, so its caret is
   // still at the start of the text.
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.locator(".cm-content");
   await expect(source).toBeVisible();
   await releaseHeld();
@@ -6444,7 +6643,7 @@ for (const kind of ["pasted", "dropped"] as const) {
       expect(await passedAnswered()).toBe(0);
       const source = page.locator(".cm-content");
       if (markdownView) {
-        await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+        await page.getByRole("radio", { name: "Text", exact: true }).click();
         await expect(source).toBeVisible();
       }
       await releaseHeld();
@@ -6471,7 +6670,7 @@ test("images pasted into a list item before a switch to the Markdown view both g
   await pasteImageAtEnd(item);
   await untilHeld();
   await pasteImageAtEnd(item, widerPng);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.locator(".cm-content");
   await expect(source).toBeVisible();
   await releaseHeld();
@@ -6497,7 +6696,7 @@ test("images pasted before a switch to the Markdown view that both go in at its 
   await pasteImageAtEnd(second);
   await untilHeld();
   await pasteImageAtEnd(second, widerPng);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.locator(".cm-content");
   await expect(source).toBeVisible();
   // Typing in the Markdown view leaves the document view behind, so both
@@ -6582,7 +6781,7 @@ test("an image chosen in an image block's upload input while it is written goes 
   await holdCommand("write_attachment");
   await upload.setInputFiles(await pngFile("pixel.png"));
   await untilHeld();
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.locator(".cm-content");
   await source.click();
   await page.keyboard.press("ControlOrMeta+End");
@@ -6611,7 +6810,7 @@ test("an image pasted while a Save As of its document is written goes in after a
   await page.keyboard.press("ControlOrMeta+Shift+s");
   await untilHeld();
   await pasteImageAtEnd(first);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await page.locator(".cm-content").click();
   await page.keyboard.press("ControlOrMeta+End");
   await page.keyboard.type("\nThird line.\n");
@@ -6679,7 +6878,7 @@ test("an image pasted into an untitled document whose save the user cancels puts
   // Crepe's upload plugin put in an image without a src, which showed its
   // upload input and was saved as ![]().
   await expect(page.locator(".editor-pane:not([hidden]) .milkdown-image-block")).toHaveCount(0);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".cm-content")).toContainText("First line.");
   await expect(page.locator(".cm-content")).not.toContainText("![");
 });
@@ -6794,7 +6993,7 @@ test("a formula typed last in the document pane is kept by the split's Markdown 
   await expect(page.locator('.editor-pane-wysiwyg [data-type="math_inline"]')).toHaveCount(1);
   await page.getByRole("radio", { name: "Document", exact: true }).click();
   await typeAtEnd(documentLine, " b $y$");
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-line").first()).toHaveText("First line. a $x$ raw b $y$");
   await page.getByRole("radio", { name: "Document", exact: true }).click();
   await expect(page.locator('.milkdown [data-type="math_inline"]')).toHaveCount(2);
@@ -6929,7 +7128,7 @@ test("a file dropped on a collapsed base64 image in the Markdown view goes in af
   const image = `![pic](data:image/png;base64,${data})`;
   await writeFile(file, `First line.\n\n${image}\n\nLast line.\n`);
   await launch(file);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const chip = page.locator(".cm-base64-collapsed");
   // Near the chip's start, where the drop finds the start of the data.
   await dropFiles(chip, [await csvFile("a.csv")], { x: 2, y: 5 });
@@ -7107,7 +7306,7 @@ test("Print keeps a saved Markdown edit as typed", async () => {
   await expect(page.locator(".print-workspace")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".print-workspace")).toBeHidden();
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("* Star bullet");
   await expect(page).toHaveTitle("bullets.md — Downpad");
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
@@ -7183,7 +7382,7 @@ test("the find count follows edits made while the card is open", async () => {
 
   // The Markdown view counts once typing pauses. The caret is on no match, so
   // none is current.
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(count).toHaveText("1 of 3");
   await typeAtEnd(omega, " zeta");
   await expect(count).toHaveText("0 of 4");
@@ -7261,7 +7460,7 @@ test("the frontmatter table's find highlights go with a layout change or a tab s
   await expect(page.getByRole("textbox", { name: "Find in document" })).toBeFocused();
   expect(await tableHighlights()).toEqual({ match: [], current: ["Draft"] });
   // The card stays open and searches the Markdown source, which has no table.
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .md-find-current")).toHaveText("Draft");
   expect(await tableHighlights()).toEqual({ match: [], current: [] });
   await page.getByRole("radio", { name: "Split", exact: true }).click();
@@ -7307,7 +7506,7 @@ test("Escape closes find after Replace all removes the last match", async () => 
   const card = page.locator(".find-bar");
   const find = page.getByRole("textbox", { name: "Find in document" });
   const count = page.locator(".find-count");
-  for (const [view, query, replacement] of [["Document", "zeta", "eta"], ["Markdown", "eta", "nu"]] as const) {
+  for (const [view, query, replacement] of [["Document", "zeta", "eta"], ["Text", "eta", "nu"]] as const) {
     await page.getByRole("radio", { name: view, exact: true }).click();
     await page.keyboard.press("ControlOrMeta+h");
     await find.fill(query);
@@ -7559,7 +7758,7 @@ test("find in the Markdown view gives the first line room below the card and cle
   await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(600, 600));
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(600);
   await page.getByRole("button", { name: "Editor view", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Text", exact: true }).click();
   const pane = page.locator(".editor-pane-raw:not([hidden])");
   const firstLine = pane.locator(".cm-line").filter({ hasText: "needle on the first line." });
   await expect(firstLine).toBeVisible();
@@ -7709,7 +7908,7 @@ test("find moves a match that wraps onto another line below the card", async () 
   await expect(page.locator(".milkdown .ProseMirror p").first()).toHaveText("Paragraph 1 of the notes.");
   const find = page.getByRole("textbox", { name: "Find in document" });
   for (const [layout, scroller, line] of [
-    ["Markdown", ".editor-pane-raw:not([hidden])", ".cm-line"],
+    ["Text", ".editor-pane-raw:not([hidden])", ".cm-line"],
     ["Document", ".editor-area", ".milkdown .ProseMirror p"],
   ] as const) {
     await page.getByRole("radio", { name: layout, exact: true }).click();
@@ -7873,7 +8072,7 @@ test("Undo and Redo in the native menu go through the editors' undo history", as
   await choose(cell("title"), "Redo");
   await expect(cell("title")).toHaveText("Draft notes # keep v2");
 
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const line = page.locator(".cm-line", { hasText: "The draft body." });
   // One key, which one undo takes back however slowly the machine runs.
   await typeAtEnd(line, "!");
@@ -7922,7 +8121,7 @@ test("a file that ends in a list opens as saved, and an edit to one that ends in
   // below it. Neither that line nor a click marks the file unsaved.
   await paragraph.click();
   await expect(page.locator(".milkdown .ProseMirror > p")).toHaveCount(2);
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page).toHaveTitle("code-end.md — Downpad");
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
   await page.getByRole("radio", { name: "Document", exact: true }).click();
@@ -7934,7 +8133,7 @@ test("a file that ends in a list opens as saved, and an edit to one that ends in
   await expect(shownDocument().locator("li")).toHaveText("Last item");
   await expect(shownDocument().locator(":scope > p")).toHaveCount(2);
   // Switching views reports any document change at once.
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw:not([hidden]) .cm-content")).toContainText("- Last item");
   await expect(page).toHaveTitle("list-end.md — Downpad");
   await expect(page.locator(".tab-file-icon.is-dirty")).toHaveCount(0);
@@ -9206,7 +9405,7 @@ test("same-document navigation preserves the unsaved close confirmation", async 
   await writeFile(file, "# Same document\n");
   await launch(file);
   await expect(page.locator(heading)).toHaveText("Same document");
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const raw = page.locator(".editor-pane-raw .cm-content");
   await raw.click();
   await page.keyboard.press("ControlOrMeta+End");

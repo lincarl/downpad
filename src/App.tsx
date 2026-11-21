@@ -60,7 +60,7 @@ import { cn } from "@/lib/utils";
 import { countWords } from "@/document/wordcount";
 import { documentSize, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
-import { documentLanguage, LANGUAGE_NAMES } from "@/files/documentLanguage";
+import { documentLanguage, isProse, LANGUAGE_NAMES } from "@/files/documentLanguage";
 import { showContextMenu } from "@/shell/contextMenu";
 import { MENU_ICONS } from "@/shell/menuIcons";
 import { EditorIsland } from "@/editor/EditorIsland";
@@ -190,11 +190,8 @@ function Toolbar() {
   const { view, activeTabId, settings, find, git, doc } = useAppState((state) => state);
   const editorLayout = useAppState(shownLayout);
   const inEditor = view !== "recent" && activeTabId !== null;
-  // A JSON or YAML file shows as its source alone, so the view control names
-  // that source and offers no other view.
   const language = inEditor ? documentLanguage(doc.filePath) : "markdown";
   const isMarkdown = language === "markdown";
-  const sourceName = LANGUAGE_NAMES[language];
   // Upload's menu offers the kept copies of the discarded changes of the
   // document in front. Git's state names its document, since it is replaced
   // only once Git has answered for the next one after a tab switch.
@@ -203,10 +200,15 @@ function Toolbar() {
     settings.editorTheme === "dark" ||
     (settings.editorTheme === "follow-ui" &&
       document.documentElement.dataset.editorTheme === "dark");
-  const layouts: Array<{ value: EditorLayout; label: string; title: string }> = [
-    { value: "document", label: "Document", title: "Show the document only" },
-    { value: "split", label: "Split", title: "Show the document and Markdown source side by side" },
-    { value: "markdown", label: sourceName, title: `Show the ${sourceName} source only` },
+  const layouts: Array<{ value: EditorLayout; label: string; title: string; disabled: boolean }> = [
+    { value: "document", label: "Document", title: "Show the document only", disabled: !isMarkdown },
+    { value: "split", label: "Split", title: "Show the document and Markdown source side by side", disabled: !isMarkdown },
+    {
+      value: "markdown",
+      label: "Text",
+      title: language === "text" ? "Show the text only" : `Show the ${LANGUAGE_NAMES[language]} source only`,
+      disabled: false,
+    },
   ];
 
   return (
@@ -282,19 +284,20 @@ function Toolbar() {
       <ToggleGroup
         type="single"
         value={inEditor ? editorLayout : ""}
-        disabled={!inEditor || !isMarkdown}
+        disabled={!inEditor}
         className="toolbar-view inline-flex max-[660px]:hidden group-data-[git]/toolbar:max-[710px]:hidden"
         aria-label="Editor view"
         onValueChange={(value) => {
           if (value) runtime?.selectLayout(value as EditorLayout);
         }}
       >
-        {layouts.map(({ value, label, title }) => {
+        {layouts.map(({ value, label, title, disabled }) => {
           const active = inEditor && editorLayout === value;
           return (
             <TooltipLabel key={value} text={title}>
             <ToggleGroupItem
               value={value}
+              disabled={disabled}
               className={cn(
                 "toolbar-seg h-[29px] cursor-pointer border border-l-0 border-line bg-fill px-3.5 text-[12px] font-normal leading-4 text-ink",
                 "first:rounded-l-control first:border-l last:rounded-r-control",
@@ -313,11 +316,12 @@ function Toolbar() {
         className="min-[660px]:hidden group-data-[git]/toolbar:max-[710px]:inline-flex"
         label="Editor view"
         icon={editorLayout === "markdown" ? Code : editorLayout === "split" ? Columns2 : FileText}
-        disabled={!inEditor || !isMarkdown}
-        items={layouts.map(({ value, label }) => ({
+        disabled={!inEditor}
+        items={layouts.map(({ value, label, disabled }) => ({
           label,
           checked: inEditor && editorLayout === value,
           radio: true,
+          disabled,
           run: () => runtime?.selectLayout(value),
         }))}
       />
@@ -349,7 +353,7 @@ function Toolbar() {
         icon={Copy}
         disabled={!inEditor}
         items={[
-          { label: isMarkdown ? "Copy as markdown" : `Copy as ${sourceName}`, icon: FileCode2, run: () => runtime?.copyDocumentMarkdown() },
+          { label: isMarkdown ? "Copy as markdown" : `Copy as ${LANGUAGE_NAMES[language]}`, icon: FileCode2, run: () => runtime?.copyDocumentMarkdown() },
           { label: "Copy formatted text", icon: FileText, disabled: !isMarkdown, run: () => runtime?.copyDocumentFormatted() },
         ]}
       />
@@ -957,11 +961,11 @@ function Banner() {
   );
 }
 
-/** The notice for a tab shown in Markdown because its Document view failed,
- *  with its uncut text for the tooltip. */
+/** The notice for a tab shown in the Text view because its Document view
+ *  failed, with its uncut text for the tooltip. */
 function documentViewNotice(filePath: string | null, error: string): BannerState & { fullMessage: string } {
   const text = (name: string, detail: string): string =>
-    `Downpad can't show ${name} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Markdown view.`;
+    `Downpad can't show ${name} in the Document view${detail ? ` (${detail})` : ""}, so it is open in the Text view.`;
   // The error's first line and the file name, cut short so the notice stays
   // two lines in a window about 800 px wide or wider.
   const name = fileLabel(filePath);
@@ -997,7 +1001,7 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
   }
   const path = doc.filePath ?? "Untitled";
   // Only prose has words to count. A JSON or YAML file shows its size alone.
-  const words = documentLanguage(doc.filePath) === "markdown" ? countWords(doc.markdown) : null;
+  const words = isProse(documentLanguage(doc.filePath)) ? countWords(doc.markdown) : null;
   const gitText = git && activeTab ? gitStatusText(git, hasUnsavedChanges(activeTab)) : null;
   return (
     <footer className={STATUS_BAR_CLASS}>

@@ -5,8 +5,8 @@
 // Markdown-only layout, or the Recent view) the canonical markdown is rendered
 // through a transient, off-screen WYSIWYG editor and cloned from there — so the
 // "Document" version always shows the rendered document, never raw markdown,
-// regardless of which view is on screen. A JSON or YAML file has no rendered
-// document, so only its source prints.
+// regardless of which view is on screen. A document that is not Markdown has no
+// rendered form, so only its text prints.
 //
 // The result is a detached, sanitized clone: the transient editor is torn down
 // immediately, and the workspace re-clones this node every time the user changes

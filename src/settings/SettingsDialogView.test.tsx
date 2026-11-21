@@ -117,10 +117,13 @@ describe("SettingsDialogView pages", () => {
     const { user, onSave, onRequestClose } = renderDialog();
     const search = screen.getByRole("combobox", { name: "Default search:" }) as HTMLSelectElement;
     const keepRemoved = screen.getByRole("checkbox", { name: "Keep removed files in list" }) as HTMLInputElement;
+    const allSupported = screen.getByRole("checkbox", { name: "Show all supported files by default" }) as HTMLInputElement;
     expect(search.value).toBe("names");
     expect(keepRemoved.checked).toBe(false);
+    expect(allSupported.checked).toBe(false);
     await user.selectOptions(search, "all");
     await user.click(keepRemoved);
+    await user.click(allSupported);
     await user.click(screen.getByRole("tab", { name: "Appearance" }));
     await user.click(card("UI theme", "Light"));
     await user.click(card("Document theme", "Follow UI theme"));
@@ -141,6 +144,7 @@ describe("SettingsDialogView pages", () => {
       mdBulletChar: "*",
       recentFilesDefaultSearch: "all",
       recentFilesKeepRemoved: true,
+      openDialogAllSupported: true,
     });
     expect(onRequestClose).toHaveBeenCalled();
   });
@@ -163,6 +167,7 @@ describe("SettingsDialogView pages", () => {
     recentFilesVisibleCount: 20,
     recentFilesDefaultSearch: "contents",
     recentFilesKeepRemoved: true,
+    openDialogAllSupported: true,
     defaultView: "split",
     collapseBase64InRawView: false,
     spellCheckEnabled: false,
@@ -238,6 +243,22 @@ describe("SettingsDialogView pages", () => {
     expect(onSave).toHaveBeenCalledTimes(2);
     expect(onSave.mock.calls[1][0]).toEqual({ recentFilesKeepRemoved: true });
     expect(onRequestClose).toHaveBeenCalledOnce();
+  });
+
+  it("names the views by their toolbar names, Text for the text alone, and keeps the stored values", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, defaultView: "markdown" });
+    await user.click(screen.getByRole("tab", { name: "Editor" }));
+    const view = screen.getByRole("combobox", { name: "Default view:" }) as HTMLSelectElement;
+    expect(Array.from(view.options).map((option) => [option.value, option.text])).toEqual([
+      ["document", "Document"],
+      ["split", "Split"],
+      ["markdown", "Text"],
+    ]);
+    expect(view.value).toBe("markdown");
+    expect(screen.getByRole("checkbox", { name: "Collapse base64 in Text view" })).toBeTruthy();
+    await user.selectOptions(view, "split");
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(onSave).toHaveBeenCalledExactlyOnceWith({ defaultView: "split" });
   });
 
   it("enables Apply for a change kept in the dialog's state, such as the accent colour", async () => {

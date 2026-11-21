@@ -47,12 +47,12 @@ import {
 import { LANGUAGE_NAMES, type DocumentLanguage } from "../files/documentLanguage";
 
 /** What is being printed. `documentNode` is a detached, already-sanitized clone,
- *  or null when Downpad could not render the document, or the document is a
- *  JSON or YAML file, so only its source can print. */
+ *  or null when Downpad could not render the document, or the document is not
+ *  Markdown, so only its text can print. */
 export interface PrintJob {
   markdown: string;
   documentNode: Element | null;
-  /** The language of the source, which names the version that prints it.
+  /** The language of the source, which the hint under the version names.
    *  Markdown without one. */
   language?: DocumentLanguage;
   /** File name shown in the header bar and the running header, e.g. "notes.md". */
@@ -697,7 +697,7 @@ interface PrintWorkspaceSnapshot {
    *  closing would remove the sheets while Electron still prints them. */
   busy: boolean;
   electron: boolean;
-  /** False when the document could not be rendered; the Markdown version prints. */
+  /** False when the document could not be rendered; the Text version prints. */
   documentRendered: boolean;
   /** The language of the document's source. */
   language: DocumentLanguage;
@@ -776,7 +776,7 @@ function PrintWorkspaceView({
               name="print-version"
               options={[
                 ["document", "Document"],
-                ["markdown", LANGUAGE_NAMES[view.language]],
+                ["markdown", "Text"],
               ]}
               value={view.documentRendered ? s.printVersion : "markdown"}
               disabled={view.documentRendered ? [] : ["document"]}
@@ -784,7 +784,7 @@ function PrintWorkspaceView({
             />
             <p className="print-ws-hint m-0 mt-1.5 text-ink-soft">
               {view.language !== "markdown"
-                ? `A ${LANGUAGE_NAMES[view.language]} file prints as its source, in a monospace face.`
+                ? `A ${LANGUAGE_NAMES[view.language]} file prints as ${view.language === "text" ? "it is" : "its source"}, in a monospace face.`
                 : !view.documentRendered
                 ? "Downpad can't show this document in the Document view, so it prints the Markdown source."
                 : s.printVersion === "document"

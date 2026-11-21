@@ -7,7 +7,7 @@ import type { EditorHost } from "../editor/EditorHost";
 import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
-import { documentLanguage, fileFilters, LANGUAGE_NAMES } from "../files/documentLanguage";
+import { documentLanguage, LANGUAGE_NAMES, openFileFilters } from "../files/documentLanguage";
 import { isElectron } from "../ipc/env";
 import type { ImageStoreContext } from "../images/imageStore";
 import { FindBar } from "../editor/wysiwyg/findBar";
@@ -449,7 +449,8 @@ export class AppRuntime {
 
     // A Save As can give the active document a file of another kind, such as
     // a Markdown document saved as JSON. Its editors then show it as that
-    // kind: a JSON or YAML file as its source alone, with its own colours.
+    // kind: a file that is not Markdown as its text alone, a JSON or YAML file
+    // with its own colours.
     this.cleanups.push(this.store.subscribe((state, previous) => {
       if (state.activeTabId === null || state.activeTabId !== previous.activeTabId) return;
       if (documentLanguage(state.doc.filePath) === documentLanguage(previous.doc.filePath)) return;
@@ -516,12 +517,13 @@ export class AppRuntime {
     void this.editorHost.reload();
   }
 
-  /** Switch which editor panes are shown — document only, the split, or Markdown
-   *  only (§6.1). A no-op with no document open or on the Recent view (the toolbar
-   *  disables the control there) and when the tab already shows that layout.
-   *  A tab shown in Markdown because its Document view failed tries that view
-   *  again when the document or the split is chosen. A JSON or YAML file has
-   *  its source view alone, so there the choice does nothing. */
+  /** Switch which editor panes are shown — document only, the split, or the
+   *  text only (§6.1). A no-op with no document open or on the Recent view (the
+   *  toolbar disables the control there) and when the tab already shows that
+   *  layout. A tab shown in the Text view because its Document view failed
+   *  tries that view again when the document or the split is chosen. A
+   *  document that is not Markdown has the Text view alone, so there the
+   *  choice does nothing. */
   private async setLayout(layout: EditorLayout): Promise<void> {
     if (this.switchingView) return;
     if (!this.store.get().activeTabId) return; // nothing to show
@@ -567,7 +569,7 @@ export class AppRuntime {
 
   /** Open the print workspace for the active document (§5.21): Downpad's own
    *  full-window print mode, with a preview of the very sheets that will be
-   *  printed and a Document / Markdown version choice. Replaces both the browser
+   *  printed and a Document / Text version choice. Replaces both the browser
    *  print dialog and the old direct window.print(). */
   private async printActiveDocument(): Promise<void> {
     if (!this.documentShows()) return; // nothing open to print, or Recent hides it
@@ -789,7 +791,7 @@ export class AppRuntime {
   }
 
   /** Flush the source pane too, so every layout copies the latest document.
-   *  A JSON or YAML file has no formatted form, so nothing is copied. */
+   *  Only Markdown has a formatted form, so nothing else is copied. */
   private async copyFormatted(): Promise<void> {
     if (documentLanguage(this.store.get().doc.filePath) !== "markdown") return;
     try {
@@ -809,7 +811,7 @@ export class AppRuntime {
     if (!isElectron()) return null;
     const selected = await openDialog({
       multiple: false,
-      filters: fileFilters(),
+      filters: openFileFilters(this.store.get().settings.openDialogAllSupported),
     }).catch(() => null);
     return typeof selected === "string" ? selected : null;
   }

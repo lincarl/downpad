@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { undo } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
+import type { DocumentLanguage } from "../../files/documentLanguage";
 import { spellingAt } from "../spelling";
 import { RawEditor } from "./RawEditor";
 
@@ -27,12 +28,12 @@ afterEach(() => {
 });
 
 /** Mount an actual CodeMirror editor with a deterministic native dictionary. */
-function open(source: string) {
+function open(source: string, language?: DocumentLanguage) {
   const root = document.createElement("div");
   document.body.append(root);
   const editor = new RawEditor();
   const onChange = vi.fn();
-  editor.mount(root, source, { onChange });
+  editor.mount(root, source, { onChange }, { language });
   editors.push(editor);
   editor.setSpellcheck(true);
   const { view } = editor as unknown as { view: EditorView };
@@ -102,5 +103,52 @@ describe("live Markdown spelling", () => {
     const choice = await spellingAt(view.contentDOM, 0, 0);
     await expect(choice?.replace('spelling"')).rejects.toThrow("metadata format");
     expect(editor.getText()).toBe(markdown);
+  });
+});
+
+describe("live spelling of a text file", () => {
+  const text = "---\nspeling: draft\n---\n\nThe `speling` and *speling* stay as typed.\n";
+
+  it("checks the whole text as prose, with no Markdown code or metadata left out", async () => {
+    const { editor, root } = open(text, "text");
+    expect(await editor.checkSpelling()).toBe(3);
+    expect([...root.querySelectorAll(".md-spelling-error")].map((el) => el.textContent)).toEqual(["speling", "speling", "speling"]);
+  });
+
+  it.each([
+    ["in what Markdown would read as metadata", text.indexOf("speling"), "---\nspelling: draft\n---\n\nThe `speling` and *speling* stay as typed.\n"],
+    ["in what Markdown would read as code", text.indexOf("`speling`") + 3, "---\nspeling: draft\n---\n\nThe `spelling` and *speling* stay as typed.\n"],
+    ["between what Markdown would read as emphasis marks", text.indexOf("*speling*") + 3, "---\nspeling: draft\n---\n\nThe `speling` and *spelling* stay as typed.\n"],
+  ])("corrects a word %s, changing only its letters", async (_where, at, expected) => {
+    const { editor, view } = open(text, "text");
+    await editor.checkSpelling();
+    vi.spyOn(view, "posAtCoords").mockReturnValue(at);
+    const choice = await spellingAt(view.contentDOM, 0, 0);
+    expect(choice?.word).toBe("speling");
+    await choice?.replace("spelling");
+    expect(editor.getText()).toBe(expected);
+  });
+
+  const marked = (root: HTMLElement): string[] => [...root.querySelectorAll(".md-spelling-error")].map((el) => el.textContent ?? "");
+
+  it("marks a word in what was Markdown code once the document is saved as a text file", async () => {
+    const { editor, root } = open("The `speling` stays.\n");
+    expect(await editor.checkSpelling()).toBe(0);
+    editor.setLanguage("text");
+    await vi.waitFor(() => expect(marked(root)).toEqual(["speling"]));
+  });
+
+  it("clears the mark of a word in Markdown code once a text file is saved as Markdown", async () => {
+    const { editor, root } = open("In code: `speling`\nIn prose: speling\n", "text");
+    expect(await editor.checkSpelling()).toBe(2);
+    editor.setLanguage("markdown");
+    await vi.waitFor(() => expect(marked(root)).toEqual(["speling"]));
+    expect(root.querySelector(".md-spelling-error")?.closest(".cm-line")?.textContent).toBe("In prose: speling");
+  });
+
+  it("checks nothing in a JSON file", async () => {
+    const { editor, root } = open('{"title": "speling"}\n', "json");
+    await expect(editor.checkSpelling()).rejects.toThrow("no spelling to check");
+    expect(root.querySelector(".md-spelling-error")).toBeNull();
   });
 });

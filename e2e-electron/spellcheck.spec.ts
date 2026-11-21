@@ -197,7 +197,7 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await excluded(document.locator("p").first(), document.locator("p code"), "inlinezorblax");
   await excluded(document.locator("p").nth(1), document.locator(".cm-content"), "fencedzorblax");
   await page.keyboard.press("Escape");
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.locator(".editor-pane-raw .cm-content");
   await expect(source).toHaveAttribute("spellcheck", "false");
   await excluded(source, source, "inlinezorblax", 1);
@@ -223,7 +223,7 @@ test("spelling checks prose while excluding inline and fenced code in both edito
   await expect((await wordMenu(source, "speling")).getByRole("menuitem", { name: "Add to dictionary" })).toHaveCount(0);
 });
 
-for (const layout of ["Document", "Markdown"] as const) {
+for (const layout of ["Document", "Text"] as const) {
   test(`${layout} checks new and edited words without a trailing space`, async () => {
     await launch("spelling\n");
     await page.getByRole("radio", { name: layout, exact: true }).click();
@@ -285,7 +285,7 @@ test("full checks include metadata text while ignoring YAML keys, comments and t
   await expect(paragraph.locator(".md-spelling-error")).toHaveText("speling");
   await page.keyboard.press("ControlOrMeta+z");
   await expect(value).toHaveText('"speling"');
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   const source = page.getByRole("textbox", { name: "Markdown source editor", exact: true });
   await expect(source.locator(".md-spelling-error")).toHaveText(["speling", "speling"]);
   menu = await wordMenu(source, "speling");

@@ -16,6 +16,7 @@ const native = vi.hoisted(() => ({
   ask: vi.fn<(message: string) => Promise<boolean>>(),
   confirmSaveChanges: vi.fn<(message: string) => Promise<"save" | "discard" | "cancel">>(),
   saveDialog: vi.fn<(options: unknown) => Promise<string | null>>(),
+  openDialog: vi.fn<(options: unknown) => Promise<string | string[] | null>>(),
 }));
 
 vi.mock("../ipc/env", () => ({ isElectron: () => true }));
@@ -26,7 +27,7 @@ vi.mock("../ipc/commands", () => ({
   recordFileOpened: native.recordFileOpened,
   pathExists: native.pathExists,
 }));
-vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog, confirmSaveChanges: native.confirmSaveChanges }));
+vi.mock("../ipc/dialogs", () => ({ ask: native.ask, saveDialog: native.saveDialog, openDialog: native.openDialog, confirmSaveChanges: native.confirmSaveChanges }));
 
 const filePath = "/docs/notes.md";
 const onDisk: FilePayload = {
@@ -541,6 +542,10 @@ describe("saving document snapshots", () => {
     await files.saveAs();
     expect(offered()).toEqual(["JSON", "Markdown", "Text", "YAML", "All files"]);
 
+    store.patchDoc({ filePath: "/docs/todo.txt" });
+    await files.saveAs();
+    expect(offered()).toEqual(["Text", "Markdown", "JSON", "YAML", "All files"]);
+
     // The file's own extension comes first, which a Windows dialog adds to a bare name.
     store.patchDoc({ filePath: "/docs/compose.yml" });
     await files.saveAs();
@@ -552,7 +557,21 @@ describe("saving document snapshots", () => {
     expect(offered()[0]).toBe("Markdown");
   });
 
-  it("gives a name chosen without an extension the extension of a JSON or YAML file, so the file keeps its kind", async () => {
+  it("offers every supported file in the Open dialog, first only while the setting asks for it, without a restart", async () => {
+    const { store, files } = setup();
+    native.openDialog.mockResolvedValue(null);
+    const offered = (): string[] => (native.openDialog.mock.lastCall![0] as { filters: Array<{ name: string }> }).filters.map((filter) => filter.name);
+
+    await files.openViaDialog();
+    expect(offered()).toEqual(["Markdown", "Text", "JSON", "YAML", "All supported files", "All files"]);
+
+    store.set({ settings: { ...store.get().settings, openDialogAllSupported: true } });
+    await files.openViaDialog();
+    expect(offered()).toEqual(["All supported files", "Markdown", "Text", "JSON", "YAML", "All files"]);
+    expect(native.readFile).not.toHaveBeenCalled();
+  });
+
+  it("gives a name chosen without an extension the extension of a text, JSON or YAML file, so the file keeps its kind", async () => {
     const { store, files } = setup();
     store.patchDoc({ filePath: "/docs/settings.json" });
     native.saveDialog.mockResolvedValueOnce("/docs/backup");
@@ -560,6 +579,12 @@ describe("saving document snapshots", () => {
     expect(native.writeFile).toHaveBeenLastCalledWith("/docs/backup.json", "# Original content\n", "lf");
     expect(store.get().doc.filePath).toBe("/docs/backup.json");
     expect(native.ask).not.toHaveBeenCalled();
+
+    // A text file stays one.
+    store.patchDoc({ filePath: "/docs/todo.txt" });
+    native.saveDialog.mockResolvedValueOnce("/docs/later");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/later.txt");
 
     // A YAML file keeps the extension it has, and a dot typed last is not doubled.
     store.patchDoc({ filePath: "/docs/compose.yml" });
@@ -575,7 +600,7 @@ describe("saving document snapshots", () => {
     native.saveDialog.mockResolvedValueOnce("/docs/README");
     expect(await files.saveAs()).toBe(true);
     expect(store.get().doc.filePath).toBe("/docs/README");
-    expect(native.pathExists).toHaveBeenCalledTimes(2);
+    expect(native.pathExists).toHaveBeenCalledTimes(3);
 
     // A dot that starts the name is part of the name, not an extension.
     store.patchDoc({ filePath: "/docs/formatter.json" });
