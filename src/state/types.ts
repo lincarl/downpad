@@ -223,6 +223,9 @@ export interface Settings {
   recentFilesDefaultSearch: "names" | "contents" | "all";
   /** Show missing paths without removing their retained history. */
   recentFilesKeepRemoved: boolean;
+  /** Whether a dialog that opens a document shows every supported file at
+   *  first, instead of Markdown files. */
+  openDialogAllSupported: boolean;
 
   /** Which editor layout new documents open in (spec §6.1): the document view,
    *  the side-by-side split ("both"), or the Markdown source. Legacy values from

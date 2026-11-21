@@ -481,6 +481,17 @@ describe("Existing settings and history compatibility", () => {
     expect(await loadSettingsFile(path)).toMatchObject({ gitEnabled: false, gitAutoGetLatest: false, gitUploadOnSave: true });
   });
 
+  it("reads the all-supported filter of the Open dialog as off from an older settings file, and persists it on", async () => {
+    expect(normalizeSettings({ openDialogAllSupported: "true" })).toMatchObject({ openDialogAllSupported: false });
+    const path = join(await fixtureDirectory(), "settings.toml");
+    await writeFile(path, "hasSeenWelcome = true\nrecentFilesKeepRemoved = true\n");
+    const settings = await loadSettingsFile(path);
+    expect(settings).toMatchObject({ openDialogAllSupported: false, recentFilesKeepRemoved: true });
+    await updateSettingsFile(path, { openDialogAllSupported: true });
+    expect(await readFile(path, "utf8")).toContain("openDialogAllSupported = true");
+    expect(await loadSettingsFile(path)).toMatchObject({ openDialogAllSupported: true, recentFilesKeepRemoved: true });
+  });
+
   it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])("uses the defaults for numeric settings of %s", (value) => {
     expect(normalizeSettings({ editorFontScale: value, editorWidthPx: value, maxEmbedSizeKB: value, printCopies: value })).toMatchObject({
       editorFontScale: DEFAULT_SETTINGS.editorFontScale, editorWidthPx: DEFAULT_SETTINGS.editorWidthPx,

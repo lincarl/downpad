@@ -363,6 +363,64 @@ test("a Save As to .txt shows a Markdown document as plain text, a bare name kee
   await expect.poll(() => readFile(again, "utf8")).toBe(markdown);
 });
 
+test("the Open dialog and the Recent view's Locate offer all supported files, first once Settings asks for it", async () => {
+  const notes = path.join(directory, "notes.md");
+  const moved = path.join(directory, "moved.md");
+  const found = path.join(directory, "found.txt");
+  await writeFile(notes, "# Notes\n");
+  await writeFile(moved, "# Moved\n");
+  await writeFile(found, "Found it\n");
+  await launch(notes);
+  await chooseOpen(moved);
+  await expect(page.getByRole("tab", { name: "moved.md", exact: true })).toBeVisible();
+  await unlink(moved);
+
+  // Each open dialog records its filters and chooses `found`.
+  await app!.evaluate(({ dialog }, selectedFile) => {
+    dialog.showOpenDialog = async (...args: unknown[]) => {
+      const options = args.at(-1) as Electron.OpenDialogOptions;
+      Reflect.set(globalThis, "openFilters", options.filters);
+      return { canceled: false, filePaths: [selectedFile] };
+    };
+  }, found);
+  const filters = () => app!.evaluate(() => Reflect.get(globalThis, "openFilters") as Electron.FileFilter[] | undefined);
+  const kinds = [
+    { name: "Markdown", extensions: ["md", "markdown", "mdown", "mkd"] },
+    { name: "Text", extensions: ["txt"] },
+    { name: "JSON", extensions: ["json"] },
+    { name: "YAML", extensions: ["yaml", "yml"] },
+  ];
+  const allSupported = { name: "All supported files", extensions: ["md", "markdown", "mdown", "mkd", "txt", "json", "yaml", "yml"] };
+  const allFiles = { name: "All files", extensions: ["*"] };
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await expect.poll(filters).toEqual([...kinds, allSupported, allFiles]);
+  await expect(page.getByRole("tab", { name: "found.txt", exact: true })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const setting = dialog.getByRole("checkbox", { name: "Show all supported files by default" });
+  await expect(setting).not.toBeChecked();
+  await setting.check();
+  await dialog.getByRole("checkbox", { name: "Keep removed files in list" }).check();
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+  await expect.poll(() => readFile(path.join(directory, "profile", "settings.toml"), "utf8")).toContain("openDialogAllSupported = true");
+
+  // The next dialog has the setting, without a restart.
+  await app!.evaluate(() => Reflect.set(globalThis, "openFilters", undefined));
+  await page.getByRole("tab", { name: "found.txt", exact: true }).click();
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await expect.poll(filters).toEqual([allSupported, ...kinds, allFiles]);
+
+  await app!.evaluate(() => Reflect.set(globalThis, "openFilters", undefined));
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await page.getByRole("button", { name: "Open moved.md", exact: true }).click();
+  await page.getByRole("dialog", { name: "File not found" }).getByRole("button", { name: "Locate", exact: true }).click();
+  await expect.poll(filters).toEqual([allSupported, ...kinds, allFiles]);
+  await expect(page.getByRole("tab", { name: "found.txt", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
 test("the toolbar copies the whole document as Markdown or formatted text to the desktop clipboard", async () => {
   const file = path.join(directory, "copy-formats.md");
   const markdown = "# Copy formats\n\nA **bold** paragraph.\n\nLatest edit with [related](../related%20note.md#section)[^1].\n\n[^1]: A footnote.\n";

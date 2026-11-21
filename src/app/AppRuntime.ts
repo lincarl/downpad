@@ -7,7 +7,7 @@ import type { EditorHost } from "../editor/EditorHost";
 import { FileService, type EditorPresenter } from "../files/FileService";
 import { SettingsModel } from "../settings/SettingsModel";
 import { SettingsDialog } from "../settings/SettingsDialog";
-import { documentLanguage, fileFilters, LANGUAGE_NAMES } from "../files/documentLanguage";
+import { documentLanguage, LANGUAGE_NAMES, openFileFilters } from "../files/documentLanguage";
 import { isElectron } from "../ipc/env";
 import type { ImageStoreContext } from "../images/imageStore";
 import { FindBar } from "../editor/wysiwyg/findBar";
@@ -811,7 +811,7 @@ export class AppRuntime {
     if (!isElectron()) return null;
     const selected = await openDialog({
       multiple: false,
-      filters: fileFilters(),
+      filters: openFileFilters(this.store.get().settings.openDialogAllSupported),
     }).catch(() => null);
     return typeof selected === "string" ? selected : null;
   }

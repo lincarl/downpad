@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FileDialogFilter } from "../ipc/bridge";
-import { DOCUMENT_EXTENSIONS, documentLanguage, extensionOf, fileFilters, isProse, takesNoFiles } from "./documentLanguage";
+import { DOCUMENT_EXTENSIONS, documentLanguage, extensionOf, isProse, openFileFilters, saveFileFilters, takesNoFiles } from "./documentLanguage";
 
 describe("extensionOf", () => {
   it("gives the extension in lower case, for both slash styles", () => {
@@ -74,26 +74,57 @@ describe("DOCUMENT_EXTENSIONS", () => {
   });
 });
 
-describe("fileFilters", () => {
+describe("openFileFilters", () => {
   const names = (filters: FileDialogFilter[]): string[] => filters.map((filter) => filter.name);
 
-  it("puts the document's own kind first, whose first extension a Windows save dialog adds to a bare name", () => {
-    expect(names(fileFilters())).toEqual(["Markdown", "Text", "JSON", "YAML", "All files"]);
-    expect(names(fileFilters("/notes/README"))).toEqual(["Markdown", "Text", "JSON", "YAML", "All files"]);
-    expect(names(fileFilters("/notes/a.txt"))).toEqual(["Text", "Markdown", "JSON", "YAML", "All files"]);
-    expect(names(fileFilters("/app/package.json"))).toEqual(["JSON", "Markdown", "Text", "YAML", "All files"]);
-    expect(fileFilters("/srv/compose.yaml")[0]).toEqual({ name: "YAML", extensions: ["yaml", "yml"] });
+  it("puts every supported file after the kinds, and before all files, by default", () => {
+    const filters = openFileFilters(false);
+    expect(names(filters)).toEqual(["Markdown", "Text", "JSON", "YAML", "All supported files", "All files"]);
+    expect(filters[4].extensions).toEqual(["md", "markdown", "mdown", "mkd", "txt", "json", "yaml", "yml"]);
+    expect(filters[5].extensions).toEqual(["*"]);
   });
 
-  it("puts the document's own extension first in its kind, so a .yml or .markdown file keeps it", () => {
-    expect(fileFilters("/srv/compose.YML")[0]).toEqual({ name: "YAML", extensions: ["yml", "yaml"] });
-    expect(fileFilters("/notes/a.markdown")[0]).toEqual({ name: "Markdown", extensions: ["markdown", "md", "mdown", "mkd"] });
-    // Another kind's filter keeps its own order.
-    expect(fileFilters("/srv/compose.yml")[3]).toEqual({ name: "JSON", extensions: ["json"] });
+  it("puts every supported file first, which the dialog then selects, when asked", () => {
+    const filters = openFileFilters(true);
+    expect(names(filters)).toEqual(["All supported files", "Markdown", "Text", "JSON", "YAML", "All files"]);
+    expect(filters[0].extensions).toEqual([...DOCUMENT_EXTENSIONS]);
   });
 
   it("gives each call its own lists, so a dialog cannot change the next one's", () => {
-    fileFilters()[0].extensions.push("changed");
-    expect(fileFilters()[0].extensions).toEqual(["md", "markdown", "mdown", "mkd"]);
+    const first = openFileFilters(true);
+    first[0].extensions.push("changed");
+    first[1].extensions.push("changed");
+    expect(openFileFilters(true)[0].extensions).toEqual([...DOCUMENT_EXTENSIONS]);
+    expect(openFileFilters(true)[1].extensions).toEqual(["md", "markdown", "mdown", "mkd"]);
+  });
+});
+
+describe("saveFileFilters", () => {
+  const names = (filters: FileDialogFilter[]): string[] => filters.map((filter) => filter.name);
+
+  it("puts the document's own kind first, whose first extension a Windows save dialog adds to a bare name", () => {
+    expect(names(saveFileFilters())).toEqual(["Markdown", "Text", "JSON", "YAML", "All files"]);
+    expect(names(saveFileFilters("/notes/README"))).toEqual(["Markdown", "Text", "JSON", "YAML", "All files"]);
+    expect(names(saveFileFilters("/notes/a.txt"))).toEqual(["Text", "Markdown", "JSON", "YAML", "All files"]);
+    expect(names(saveFileFilters("/app/package.json"))).toEqual(["JSON", "Markdown", "Text", "YAML", "All files"]);
+    expect(saveFileFilters("/srv/compose.yaml")[0]).toEqual({ name: "YAML", extensions: ["yaml", "yml"] });
+  });
+
+  it("offers no filter of every supported file, whose first extension would make any document Markdown", () => {
+    for (const path of [null, "/notes/a.txt", "/app/package.json"]) {
+      expect(names(saveFileFilters(path))).not.toContain("All supported files");
+    }
+  });
+
+  it("puts the document's own extension first in its kind, so a .yml or .markdown file keeps it", () => {
+    expect(saveFileFilters("/srv/compose.YML")[0]).toEqual({ name: "YAML", extensions: ["yml", "yaml"] });
+    expect(saveFileFilters("/notes/a.markdown")[0]).toEqual({ name: "Markdown", extensions: ["markdown", "md", "mdown", "mkd"] });
+    // Another kind's filter keeps its own order.
+    expect(saveFileFilters("/srv/compose.yml")[3]).toEqual({ name: "JSON", extensions: ["json"] });
+  });
+
+  it("gives each call its own lists, so a dialog cannot change the next one's", () => {
+    saveFileFilters()[0].extensions.push("changed");
+    expect(saveFileFilters()[0].extensions).toEqual(["md", "markdown", "mdown", "mkd"]);
   });
 });

@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   recentFilesVisibleCount: 100,
   recentFilesDefaultSearch: "names",
   recentFilesKeepRemoved: false,
+  openDialogAllSupported: false,
 
   defaultView: "document",
   collapseBase64InRawView: true,

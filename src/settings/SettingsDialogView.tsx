@@ -294,6 +294,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
       recentFilesVisibleCount: number(recentFilesVisibleCount, applied.recentFilesVisibleCount),
       recentFilesDefaultSearch: select("recentFilesDefaultSearch").value as Settings["recentFilesDefaultSearch"],
       recentFilesKeepRemoved: input("recentFilesKeepRemoved").checked,
+      openDialogAllSupported: input("openDialogAllSupported").checked,
       autoUpdate: autoUpdate ? autoUpdate.checked : applied.autoUpdate,
       gitEnabled: gitEnabled ? gitEnabled.checked : applied.gitEnabled,
       gitAutoGetLatest: gitAutoGetLatest ? gitAutoGetLatest.checked : applied.gitAutoGetLatest,
@@ -542,6 +543,11 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                     </FormRow>
                     <CheckRow label="Keep removed files in list">
                       <Checkbox name="recentFilesKeepRemoved" defaultChecked={initial.recentFilesKeepRemoved} />
+                    </CheckRow>
+                  </SettingsBox>
+                  <SettingsBox title="Open dialog">
+                    <CheckRow label="Show all supported files by default" placement="box">
+                      <Checkbox name="openDialogAllSupported" defaultChecked={initial.openDialogAllSupported} />
                     </CheckRow>
                   </SettingsBox>
                   {isElectron() && window.downpadDesktop?.platform === "win32" && (
@@ -1125,6 +1131,7 @@ const CHECK_FIELDS: ReadonlyArray<keyof Settings> = [
   "showFrontmatterPanel",
   "autosaveEnabled",
   "recentFilesKeepRemoved",
+  "openDialogAllSupported",
   "autoUpdate",
   "gitEnabled",
   "gitAutoGetLatest",

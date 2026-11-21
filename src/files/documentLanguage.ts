@@ -67,17 +67,30 @@ function languageFilter(language: DocumentLanguage, first = ""): FileDialogFilte
   return { name: name[0].toUpperCase() + name.slice(1), extensions: [...lead, ...extensions.filter((extension) => !lead.includes(extension))] };
 }
 
-/** The filters of an open or save dialog, for the document at `path`, or for
- *  a Markdown document without one. On Windows a save dialog adds the first
- *  extension of its first filter to a name typed without one. So the filter
- *  of the document's own kind comes first, with the document's own extension
- *  first in it, and `settings.json` is not saved as `name.md`, nor
- *  `compose.yml` as `name.yaml`. Other systems return the name as typed
+const allFiles = (): FileDialogFilter => ({ name: "All files", extensions: ["*"] });
+
+/** The filters of a dialog that opens a document. A dialog selects its first
+ *  filter, so with `allSupportedFirst` the filter of every supported file
+ *  comes first. */
+export function openFileFilters(allSupportedFirst: boolean): FileDialogFilter[] {
+  const allSupported = { name: "All supported files", extensions: [...DOCUMENT_EXTENSIONS] };
+  const kinds = LANGUAGES.map((language) => languageFilter(language));
+  return allSupportedFirst ? [allSupported, ...kinds, allFiles()] : [...kinds, allSupported, allFiles()];
+}
+
+/** The filters of a save dialog, for the document at `path`, or for a
+ *  Markdown document without one. On Windows a save dialog adds the first
+ *  extension of its selected filter, which is its first, to a name typed
+ *  without one. So the filter of the document's own kind comes first, with
+ *  the document's own extension first in it, and `settings.json` is not saved
+ *  as `name.md`, nor `compose.yml` as `name.yaml`. The filter of all
+ *  supported files is left out, as it would give such a name the extension of
+ *  a Markdown file. Other systems return the name as typed
  *  (`FileService.withOwnExtension`). */
-export function fileFilters(path: string | null = null): FileDialogFilter[] {
+export function saveFileFilters(path: string | null = null): FileDialogFilter[] {
   const own = documentLanguage(path);
   const others = LANGUAGES.filter((language) => language !== own).map((language) => languageFilter(language));
-  return [languageFilter(own, path ? extensionOf(path) : ""), ...others, { name: "All files", extensions: ["*"] }];
+  return [languageFilter(own, path ? extensionOf(path) : ""), ...others, allFiles()];
 }
 
 /** The error that says why no dropped or pasted file goes into the document
