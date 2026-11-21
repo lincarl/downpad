@@ -4124,7 +4124,9 @@ test("a change the browser makes inside a link while the caret rests at its end 
   const change = async (text: string, offset: number, count: number, data: string) => {
     await clickOn(text, -1, 0.75);
     await page.locator(".milkdown .ProseMirror a", { hasText: text }).evaluate((link, [offset, count, data]) => {
-      const node = [...link.childNodes].find((child): child is Text => child instanceof Text)!;
+      // The spelling check wraps a word it marks in a span, and "lnk" and
+      // "teh" are such words, so the text is not always the link's own child.
+      const node = document.createTreeWalker(link, NodeFilter.SHOW_TEXT).nextNode() as Text;
       node.replaceData(offset, count, data);
     }, [offset, count, data] as const);
   };
