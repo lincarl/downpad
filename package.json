@@ -11,7 +11,7 @@
     "build": "pnpm build:web && pnpm build:desktop",
     "build:web": "tsc --noEmit && vite build",
     "build:desktop": "tsc -p electron/tsconfig.json && node scripts/build-desktop.mjs",
-    "check": "node scripts/check-agent-files.mjs && tsc --noEmit && tsc -p electron/tsconfig.json && pnpm lint:css",
+    "check": "node scripts/check-agent-files.mjs && tsc --noEmit && tsc -p electron/tsconfig.json && tsc -p tsconfig.e2e.json && pnpm lint:css",
     "lint:css": "stylelint \"src/**/*.css\"",
     "preview": "vite preview",
     "start": "electron .",

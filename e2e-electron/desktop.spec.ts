@@ -287,7 +287,8 @@ test("the document menu's Copy file saves the document and copies its file as th
   // files, CF_HDROP on Windows.
   const copied = (format: string) => app!.evaluate(async ({ clipboard }, type) => {
     const [item] = await clipboard.read();
-    return item?.types.includes(type) ? (await item.getType(type)).text() : null;
+    const data = item?.types.includes(type) ? await item.getType(type) : null;
+    return data instanceof Blob ? data.text() : null;
   }, format);
   await expect.poll(async () => (await copied("text/uri-list"))?.trim()).toBe(pathToFileURL(file).href);
   if (process.platform === "linux") {
