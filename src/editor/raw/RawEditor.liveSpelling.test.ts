@@ -139,11 +139,11 @@ describe("live spelling of a text file", () => {
   });
 
   it("clears the mark of a word in Markdown code once a text file is saved as Markdown", async () => {
-    const { editor, root } = open("The `speling` stays, and speling too.\n", "text");
+    const { editor, root } = open("In code: `speling`\nIn prose: speling\n", "text");
     expect(await editor.checkSpelling()).toBe(2);
     editor.setLanguage("markdown");
     await vi.waitFor(() => expect(marked(root)).toEqual(["speling"]));
-    expect(root.querySelector(".md-spelling-error")?.closest(".cm-line")?.textContent).toBe("The `speling` stays, and speling too.");
+    expect(root.querySelector(".md-spelling-error")?.closest(".cm-line")?.textContent).toBe("In prose: speling");
   });
 
   it("checks nothing in a JSON file", async () => {
