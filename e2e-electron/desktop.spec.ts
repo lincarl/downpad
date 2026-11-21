@@ -485,7 +485,8 @@ test("Copy file waits for a change on disk, asks again once its notice was dismi
   // chosen, Copy file waits, as its save would replace the other version.
   // The file changes before the app has saved it. After a save of its own the
   // app reads the file once more, and a change that lands during that read is
-  // found twice, so its notice would come back after it is dismissed below.
+  // found twice. When the second find ends after the dismissal below, the
+  // notice comes back.
   await page.locator(".ProseMirror p", { hasText: "First text." }).click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Mine.");
