@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { redo, undo } from "@codemirror/commands";
-import { syntaxTree } from "@codemirror/language";
+import { language as languageFacet, syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 import { highlightTree, tags as t } from "@lezer/highlight";
+import type { DocumentLanguage } from "../../files/documentLanguage";
 import { dataHighlightStyle, dataSource } from "./dataSource";
 import { RawEditor } from "./RawEditor";
 
@@ -59,7 +60,7 @@ describe("YAML colours", () => {
 
 describe("RawEditor languages", () => {
   const editors: RawEditor[] = [];
-  const mount = (text: string, language?: "markdown" | "json" | "yaml"): { editor: RawEditor; view: EditorView; onChange: ReturnType<typeof vi.fn> } => {
+  const mount = (text: string, language?: DocumentLanguage): { editor: RawEditor; view: EditorView; onChange: ReturnType<typeof vi.fn> } => {
     const editor = new RawEditor();
     const onChange = vi.fn();
     editor.mount(document.createElement("div"), text, { onChange }, { language });
@@ -83,13 +84,26 @@ describe("RawEditor languages", () => {
     expect(label(markdownView)).toBe("Markdown source editor");
   });
 
-  it("only a Markdown document has prose whose spelling can be checked", async () => {
+  it("reads a text file as plain text, with no parser and no syntax colours", () => {
+    const { view } = mount("# Not a heading\n- not a list\n", "text");
+    expect(view.contentDOM.getAttribute("aria-label")).toBe("Text editor");
+    expect(view.state.facet(languageFacet)).toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-line span")).toHaveLength(0);
+    expect(view.contentDOM.querySelector(".cm-line")?.textContent).toBe("# Not a heading");
+  });
+
+  it("checks the spelling of the prose of a Markdown or text file, and never of a JSON or YAML file", async () => {
     const { editor } = mount('{"speling": "mistaek"}\n', "json");
     expect(editor.hasProse()).toBe(false);
-    await expect(editor.checkSpelling()).rejects.toThrow("Only a Markdown document");
+    await expect(editor.checkSpelling()).rejects.toThrow("A JSON or YAML file has no spelling to check.");
     editor.setSpellcheck(true);
     expect((editor as unknown as { view: EditorView }).view.contentDOM.getAttribute("spellcheck")).toBe("false");
+    expect(mount("a: speling\n", "yaml").editor.hasProse()).toBe(false);
     expect(mount("# Title\n").editor.hasProse()).toBe(true);
+    const text = mount("Plain speling\n", "text");
+    expect(text.editor.hasProse()).toBe(true);
+    text.editor.setSpellcheck(true);
+    expect(text.view.contentDOM.getAttribute("spellcheck")).toBe("true");
   });
 
   it("switches language in place, keeping the text, the caret and the undo history, and reporting no change", () => {
@@ -119,7 +133,7 @@ describe("RawEditor languages", () => {
     expect(editor.getText()).toBe("a: 1\n");
   });
 
-  it("turns native spelling on again for a document that becomes Markdown, and off for one that becomes data", () => {
+  it("turns native spelling on again for a document that becomes Markdown or text, and off for one that becomes data", () => {
     const { editor, view } = mount("# Title\n");
     editor.setSpellcheck(true);
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
@@ -127,5 +141,11 @@ describe("RawEditor languages", () => {
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
     editor.setLanguage("markdown");
     expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    editor.setLanguage("text");
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("true");
+    expect(view.contentDOM.getAttribute("aria-label")).toBe("Text editor");
+    expect(view.state.facet(languageFacet)).toBeNull();
+    editor.setLanguage("yaml");
+    expect(view.contentDOM.getAttribute("spellcheck")).toBe("false");
   });
 });

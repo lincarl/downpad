@@ -13,7 +13,7 @@ import { tags as t } from "@lezer/highlight";
 import type { DocumentLanguage } from "../../files/documentLanguage";
 
 /** The CodeMirror language of a JSON or YAML file. */
-export function dataSource(language: Exclude<DocumentLanguage, "markdown">): LanguageSupport {
+export function dataSource(language: Exclude<DocumentLanguage, "markdown" | "text">): LanguageSupport {
   return language === "json" ? json() : yaml();
 }
 

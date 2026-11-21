@@ -478,7 +478,7 @@ export class FileService {
   private async choosePath(request: SaveRequest, originalPath: string | null): Promise<string | null> {
     const { tabId, choice } = request;
     const picked = await this.inDialogTurn(() => saveDialog({ filters: fileFilters(originalPath), defaultPath: choice.defaultPath ?? originalPath ?? "Untitled.md" }));
-    // A JSON or YAML file keeps its kind under a name chosen without an
+    // A file that is not Markdown keeps its kind under a name chosen without an
     // extension, which can ask about replacing a file of the full name.
     const path = picked ? await this.withOwnExtension(picked, originalPath) : null;
     // Nothing waits from here to the claim, so two tabs never both claim one
@@ -595,9 +595,9 @@ export class FileService {
   }
 
   /** The path to save a document under, from the path `chosen` in a save
-   *  dialog. A JSON or YAML file is told by its extension, so a name chosen
-   *  without one would make the document Markdown, and its Document view
-   *  would rewrite the data. Such a name gets the extension of the file the
+   *  dialog. A text, JSON or YAML file is told by its extension, so a name
+   *  chosen without one would make the document Markdown, and its Document
+   *  view would rewrite the text. Such a name gets the extension of the file the
    *  document has now, `originalPath`. Windows adds it in the dialog, and
    *  other systems return the name as typed. The dialog asked about replacing
    *  the name as typed, so this asks about a file that has the full name.

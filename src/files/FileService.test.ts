@@ -541,6 +541,10 @@ describe("saving document snapshots", () => {
     await files.saveAs();
     expect(offered()).toEqual(["JSON", "Markdown", "Text", "YAML", "All files"]);
 
+    store.patchDoc({ filePath: "/docs/todo.txt" });
+    await files.saveAs();
+    expect(offered()).toEqual(["Text", "Markdown", "JSON", "YAML", "All files"]);
+
     // The file's own extension comes first, which a Windows dialog adds to a bare name.
     store.patchDoc({ filePath: "/docs/compose.yml" });
     await files.saveAs();
@@ -552,7 +556,7 @@ describe("saving document snapshots", () => {
     expect(offered()[0]).toBe("Markdown");
   });
 
-  it("gives a name chosen without an extension the extension of a JSON or YAML file, so the file keeps its kind", async () => {
+  it("gives a name chosen without an extension the extension of a text, JSON or YAML file, so the file keeps its kind", async () => {
     const { store, files } = setup();
     store.patchDoc({ filePath: "/docs/settings.json" });
     native.saveDialog.mockResolvedValueOnce("/docs/backup");
@@ -560,6 +564,12 @@ describe("saving document snapshots", () => {
     expect(native.writeFile).toHaveBeenLastCalledWith("/docs/backup.json", "# Original content\n", "lf");
     expect(store.get().doc.filePath).toBe("/docs/backup.json");
     expect(native.ask).not.toHaveBeenCalled();
+
+    // A text file stays one.
+    store.patchDoc({ filePath: "/docs/todo.txt" });
+    native.saveDialog.mockResolvedValueOnce("/docs/later");
+    expect(await files.saveAs()).toBe(true);
+    expect(store.get().doc.filePath).toBe("/docs/later.txt");
 
     // A YAML file keeps the extension it has, and a dot typed last is not doubled.
     store.patchDoc({ filePath: "/docs/compose.yml" });
@@ -575,7 +585,7 @@ describe("saving document snapshots", () => {
     native.saveDialog.mockResolvedValueOnce("/docs/README");
     expect(await files.saveAs()).toBe(true);
     expect(store.get().doc.filePath).toBe("/docs/README");
-    expect(native.pathExists).toHaveBeenCalledTimes(2);
+    expect(native.pathExists).toHaveBeenCalledTimes(3);
 
     // A dot that starts the name is part of the name, not an extension.
     store.patchDoc({ filePath: "/docs/formatter.json" });

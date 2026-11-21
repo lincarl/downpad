@@ -8,8 +8,8 @@
 // back while its document is behind another tab. A file that cannot be read
 // or stored is left out, and the drop's other files still go in. Only a
 // Markdown document takes files, since a file goes in as a Markdown image or
-// link (`takesNoFiles`). A Save As can make the document a JSON or YAML file
-// while a file is on its way, so the editor refuses the file as it goes in
+// link (`takesNoFiles`). A Save As can make the document a file of another
+// kind while a file is on its way, so the editor refuses the file as it goes in
 // (`EditorHost.insertDropped`), and no copy is stored beside such a document.
 
 import type { DropPoint, EditorHost, FileDrop } from "../editor/EditorHost";
@@ -157,8 +157,8 @@ export class FileDropCoordinator {
    *  with the files left out. */
   private insertFiles(paths: string[], drop: FileDrop): Promise<Failure[]> {
     return this.insertEach(drop, paths, baseName, async (path) => {
-      // An earlier file's save can have made the document a JSON or YAML
-      // file, which takes no file, so this one is not read either.
+      // An earlier file's save can have made the document a file that is not
+      // Markdown, which takes no file, so this one is not read either.
       this.refuseDataFile(drop.tabId);
       if (classifyDrop(path) === "image") await this.embedImage(await readImageBytes(path), drop, baseName(path));
       else await this.attachDroppedFile(path, drop);
@@ -242,7 +242,7 @@ export class FileDropCoordinator {
   }
 
   /** Throw the error that says why no file goes into a tab's document, if it
-   *  is a JSON or YAML file (`takesNoFiles`). */
+   *  is not Markdown (`takesNoFiles`). */
   private refuseDataFile(tabId: string): void {
     const refusal = takesNoFiles(this.tabFilePath(tabId));
     if (refusal) throw refusal;
@@ -284,7 +284,7 @@ export class FileDropCoordinator {
    *  the document is behind another tab, where it cannot be saved. Either
    *  way a link from its path still holds when the file goes in. The path is
    *  read right before each write of a copy beside the document, so a
-   *  document that is a JSON or YAML file by then, as after the save that
+   *  document that is not Markdown by then, as after the save that
    *  the drop itself asked for, gets no copy, and the file counts as left
    *  out. */
   private dropDocument(drop: FileDrop): Pick<ImageStoreContext, "getFilePath" | "untilPathSettled"> {
@@ -331,8 +331,8 @@ export class FileDropCoordinator {
       if (!this.hasTab(drop.tabId)) this.warnNotInserted(name);
       return;
     }
-    // The save can have made the document a JSON or YAML file, which takes
-    // no file, so there is no need to read this one.
+    // The save can have made the document a file that is not Markdown, which
+    // takes no file, so there is no need to read this one.
     this.refuseDataFile(drop.tabId);
     const { bytes } = await readImageBytes(path);
     const link = await storeBesideDocument(this.dropDocument(drop), async (getFilePath) => {
@@ -347,8 +347,8 @@ export class FileDropCoordinator {
   /** Insert a dropped or pasted file's Markdown into its document, once that
    *  document is in front. If the document is closed first, it gets nothing
    *  and no other document gets it instead. A copy in the attachments folder
-   *  stays there. A document that was saved as a JSON or YAML file while the
-   *  file was on its way takes nothing: the editor throws then, and the file
+   *  stays there. A document that was saved as a file that is not Markdown
+   *  while the file was on its way takes nothing: the editor throws then, and the file
    *  counts as left out. */
   private async insertDropped(drop: FileDrop, markdown: string, name: string): Promise<void> {
     if (!(await this.dependencies.editorHost.insertDropped(drop, markdown))) this.warnNotInserted(name);

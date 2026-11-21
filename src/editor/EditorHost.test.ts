@@ -256,7 +256,7 @@ vi.mock("./raw/RawEditor", () => ({
     }
 
     hasProse(): boolean {
-      return fakeEditors.rawLanguage === "markdown";
+      return fakeEditors.rawLanguage === "markdown" || fakeEditors.rawLanguage === "text";
     }
 
     alignedPane() {
@@ -688,7 +688,7 @@ describe("EditorHost document view failure", () => {
   });
 });
 
-describe("EditorHost JSON and YAML files", () => {
+describe("EditorHost text, JSON and YAML files", () => {
   /** The classes of the split's two panes, in the order of their names. */
   const BOTH_PANES = ["editor-pane editor-pane-raw", "editor-pane editor-pane-wysiwyg"];
   /** A store whose one tab holds the file at `path`. */
@@ -711,6 +711,25 @@ describe("EditorHost JSON and YAML files", () => {
       expect(fakeEditors.rawLanguage).toBe("json");
       // Find and typing go to the source.
       expect(host.counts()).toEqual(MARKDOWN_COUNTS);
+      await host.dispose();
+    }
+    expect(fakeEditors.mountCalls).toBe(0);
+  });
+
+  it("shows a text file as its text alone in every layout, builds no document pane for it, and refuses files dropped on it", async () => {
+    for (const layout of ["document", "split", "markdown"] as const) {
+      const root = document.createElement("div");
+      const host = new EditorHost(root, storeWithFile("/notes/todo.txt"));
+      host.initLayout(layout);
+
+      await host.reloadActiveDoc();
+
+      expect(shown(root)).toEqual(["editor-pane editor-pane-raw"]);
+      expect(fakeEditors.rawLanguage).toBe("text");
+      const drop = host.aimDrop()!;
+      await expect(host.insertDropped(drop, "![](a.png)")).rejects.toThrow("A text file takes no dropped files.");
+      host.releaseDrop(drop);
+      expect(fakeEditors.rawInsertedAt).toBeNull();
       await host.dispose();
     }
     expect(fakeEditors.mountCalls).toBe(0);
@@ -832,7 +851,7 @@ describe("EditorHost JSON and YAML files", () => {
     await host.dispose();
   });
 
-  it("offers no spelling check for a JSON file", async () => {
+  it("offers no spelling check for a JSON file, and one for a Markdown or text file", async () => {
     const managed = vi.spyOn(await import("./spelling"), "managedSpellingAvailable").mockReturnValue(true);
     const store = storeWithFile("/data/settings.json");
     store.set({ settings: { ...DEFAULT_SETTINGS, spellCheckEnabled: true } });
@@ -842,6 +861,11 @@ describe("EditorHost JSON and YAML files", () => {
 
     store.patchDocById("tab-1", { filePath: "/data/settings.md" });
     await host.showActiveDoc();
+    expect(host.canCheckSpelling()).toBe(true);
+
+    store.patchDocById("tab-1", { filePath: "/data/settings.txt" });
+    await host.showActiveDoc();
+    expect(fakeEditors.rawLanguage).toBe("text");
     expect(host.canCheckSpelling()).toBe(true);
     await host.dispose();
     managed.mockRestore();

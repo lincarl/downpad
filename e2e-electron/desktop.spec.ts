@@ -287,6 +287,82 @@ test("a narrow window's view menu offers a JSON file the Text view alone", async
   await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
 });
 
+test("a .txt file opens as plain text in the Text view alone, with its word count, and copies and saves its exact text", async () => {
+  const file = path.join(directory, "errands.txt");
+  // Read as Markdown, this would be a heading, a list with emphasis and a rule.
+  const text = "# Errands\n- buy *milk*\n---\n";
+  await writeFile(file, text);
+  await launch(file);
+
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toContainText("# Errands");
+  await expect(source).toHaveAttribute("aria-label", "Text editor");
+  await expect(page.locator(".editor-pane-wysiwyg")).toHaveCount(0);
+  const views = page.getByRole("radiogroup", { name: "Editor view" }).getByRole("radio");
+  await expect(views).toHaveText(["Document", "Split", "Text"]);
+  await expect(views.nth(0)).toBeDisabled();
+  await expect(views.nth(1)).toBeDisabled();
+  await expect(views.nth(2)).toHaveAttribute("aria-checked", "true");
+
+  // No Markdown colours or weights: what would be Markdown is plain text.
+  const body = await source.evaluate((content) => getComputedStyle(content).color);
+  const looks = await source.locator(".cm-line").evaluateAll((lines) =>
+    lines.flatMap((line) => [line, ...line.querySelectorAll("span")].map((element) => {
+      const style = getComputedStyle(element);
+      return `${style.color} ${style.fontWeight}`;
+    })));
+  expect(new Set(looks)).toEqual(new Set([`${body} 400`]));
+  // Prose has words to count, markers and all.
+  await expect(page.locator(".status-right")).toHaveText(/^6 words · /);
+
+  // An edit saves as typed, with nothing rewritten around it.
+  await source.getByText("- buy *milk*").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" and *bread*");
+  await page.keyboard.press("Control+S");
+  const edited = "# Errands\n- buy *milk* and *bread*\n---\n";
+  await expect.poll(() => readFile(file, "utf8")).toBe(edited);
+
+  // The copy menu names the text, and offers no formatted copy.
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Copy formatted text" })).toBeDisabled();
+  await page.getByRole("menuitem", { name: "Copy as text", exact: true }).click();
+  await expect.poll(clipboardText).toBe(edited);
+});
+
+test("a Save As to .txt shows a Markdown document as plain text, a bare name keeps it text, and a Save As to .md gives it its views again", async () => {
+  const notes = path.join(directory, "plan.md");
+  const markdown = "# Plan\n\nFirst *step*.\n";
+  await writeFile(notes, markdown);
+  await launch(notes);
+  await expect(page.locator(heading)).toHaveText("Plan");
+
+  const plain = path.join(directory, "plan.txt");
+  await chooseSave(plain);
+  await page.keyboard.press("Control+Shift+S");
+  const source = page.locator(".editor-pane-raw:visible .cm-content");
+  await expect(source).toHaveAttribute("aria-label", "Text editor");
+  await expect(page.locator(".editor-pane-wysiwyg:visible")).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeDisabled();
+  await expect(page.getByRole("radio", { name: "Text", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => readFile(plain, "utf8")).toBe(markdown);
+
+  // A name chosen without an extension keeps the document a text file.
+  await chooseSave(path.join(directory, "plan copy"));
+  await page.keyboard.press("Control+Shift+S");
+  await expect(page.getByRole("tab", { name: /plan copy\.txt/ })).toBeVisible();
+  await expect.poll(() => readFile(path.join(directory, "plan copy.txt"), "utf8")).toBe(markdown);
+  await expect(source).toHaveAttribute("aria-label", "Text editor");
+
+  const again = path.join(directory, "plan again.md");
+  await chooseSave(again);
+  await page.keyboard.press("Control+Shift+S");
+  await expect(page.locator(".editor-pane-wysiwyg:visible h1")).toHaveText("Plan");
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toBeEnabled();
+  await expect(page.getByRole("radio", { name: "Document", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => readFile(again, "utf8")).toBe(markdown);
+});
+
 test("the toolbar copies the whole document as Markdown or formatted text to the desktop clipboard", async () => {
   const file = path.join(directory, "copy-formats.md");
   const markdown = "# Copy formats\n\nA **bold** paragraph.\n\nLatest edit with [related](../related%20note.md#section)[^1].\n\n[^1]: A footnote.\n";

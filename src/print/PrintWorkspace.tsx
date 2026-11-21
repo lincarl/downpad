@@ -47,8 +47,8 @@ import {
 import { LANGUAGE_NAMES, type DocumentLanguage } from "../files/documentLanguage";
 
 /** What is being printed. `documentNode` is a detached, already-sanitized clone,
- *  or null when Downpad could not render the document, or the document is a
- *  JSON or YAML file, so only its source can print. */
+ *  or null when Downpad could not render the document, or the document is not
+ *  Markdown, so only its text can print. */
 export interface PrintJob {
   markdown: string;
   documentNode: Element | null;
@@ -784,7 +784,7 @@ function PrintWorkspaceView({
             />
             <p className="print-ws-hint m-0 mt-1.5 text-ink-soft">
               {view.language !== "markdown"
-                ? `A ${LANGUAGE_NAMES[view.language]} file prints as its source, in a monospace face.`
+                ? `A ${LANGUAGE_NAMES[view.language]} file prints as ${view.language === "text" ? "it is" : "its source"}, in a monospace face.`
                 : !view.documentRendered
                 ? "Downpad can't show this document in the Document view, so it prints the Markdown source."
                 : s.printVersion === "document"

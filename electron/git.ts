@@ -652,8 +652,8 @@ function htmlLinks(html: string): string[] {
  *  images in its attachments folder, so Upload sends them along. Only the
  *  files themselves count, so a link to a folder sends nothing in it. */
 async function linkedChanges(context: GitContext): Promise<string[]> {
-  // Only Markdown has links. A JSON or YAML file read as Markdown could name
-  // files by chance.
+  // Only Markdown has links. Any other file read as Markdown could name files
+  // by chance.
   if (documentLanguage(context.file) !== "markdown") return [];
   const folder = dirname(context.file);
   const linked = linkedPaths((await readMarkdown(context.file)).content, folder);

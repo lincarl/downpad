@@ -60,7 +60,7 @@ import { cn } from "@/lib/utils";
 import { countWords } from "@/document/wordcount";
 import { documentSize, formatSize } from "@/document/docSize";
 import { dirName } from "@/home/recentFormat";
-import { documentLanguage, LANGUAGE_NAMES } from "@/files/documentLanguage";
+import { documentLanguage, isProse, LANGUAGE_NAMES } from "@/files/documentLanguage";
 import { showContextMenu } from "@/shell/contextMenu";
 import { MENU_ICONS } from "@/shell/menuIcons";
 import { EditorIsland } from "@/editor/EditorIsland";
@@ -206,7 +206,7 @@ function Toolbar() {
     {
       value: "markdown",
       label: "Text",
-      title: `Show the ${LANGUAGE_NAMES[language]} source only`,
+      title: language === "text" ? "Show the text only" : `Show the ${LANGUAGE_NAMES[language]} source only`,
       disabled: false,
     },
   ];
@@ -1001,7 +1001,7 @@ function StatusBar({ recentSummary }: { recentSummary: string }) {
   }
   const path = doc.filePath ?? "Untitled";
   // Only prose has words to count. A JSON or YAML file shows its size alone.
-  const words = documentLanguage(doc.filePath) === "markdown" ? countWords(doc.markdown) : null;
+  const words = isProse(documentLanguage(doc.filePath)) ? countWords(doc.markdown) : null;
   const gitText = git && activeTab ? gitStatusText(git, hasUnsavedChanges(activeTab)) : null;
   return (
     <footer className={STATUS_BAR_CLASS}>

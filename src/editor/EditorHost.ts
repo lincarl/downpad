@@ -7,8 +7,9 @@
 // side in a split with a draggable divider between them. In the split both panes
 // are live editors over the same canonical string; an edit in one is mirrored
 // into the other (debounced) so the split stays in sync without ever letting the
-// two views diverge. A JSON or YAML file shows as its source alone, whatever
-// the layout, since the document view would read and rewrite it as Markdown.
+// two views diverge. A text, JSON or YAML file shows as its text alone,
+// whatever the layout, since the document view would read and rewrite it as
+// Markdown.
 //
 // To preserve undo history across tab switches and while the split opens/closes
 // (spec §5.19), a live editor instance is kept per `(tab, view)` and hidden/shown
@@ -410,12 +411,12 @@ export class EditorHost implements FindController {
    * document pane would write the block the file joins in its own form under
    * the user's caret.
    *
-   * Throws for a document that is a JSON or YAML file (`takesNoFiles`), at
-   * once and again after each wait, and puts nothing in.
+   * Throws for a document that is not Markdown (`takesNoFiles`), at once and
+   * again after each wait, and puts nothing in.
    */
   async insertDropped(drop: FileDrop, markdown: string): Promise<boolean> {
-    // A JSON or YAML file, which a Markdown image or link would break, takes
-    // nothing. It is refused at once, without a wait for its turn or for its
+    // A file that is not Markdown, which a Markdown image or link would
+    // break, takes nothing. It is refused at once, without a wait for its turn or for its
     // tab to come to the front, which would keep the document unsaved
     // meanwhile.
     this.refuseDataFile(drop.tabId);
@@ -1106,9 +1107,9 @@ export class EditorHost implements FindController {
    *  Markdown source, or both side by side (§6.1). Rebuilds stale panes, hides
    *  every other tab's pane, and lays out the divider.
    *
-   *  A JSON or YAML file shows as its source alone, and no document pane is
-   *  built for it. A document pane the tab has from before a Save As made it
-   *  such a file is hidden.
+   *  A document that is not Markdown shows as its text alone, and no document
+   *  pane is built for it. A document pane the tab has from before a Save As
+   *  made it such a file is hidden.
    *
    *  When the document pane cannot be built, the tab shows its Markdown alone
    *  and the failure is recorded on the tab for the notice bar. Later reveals
@@ -1124,8 +1125,8 @@ export class EditorHost implements FindController {
     if (!id) return;
     const rebuild = opts.rebuild ?? false;
     const sourceOnly = this.languageOf(id) !== "markdown";
-    // A document view that failed before the document became a JSON or YAML
-    // file is not missed any more.
+    // A document view that failed before the document became a file of
+    // another kind is not missed any more.
     if (sourceOnly) this.store.setDocumentViewFailure(id, null);
     const failed = this.hasFailed(id);
     const replaced = this.replacedTabs.delete(id);
@@ -1606,7 +1607,7 @@ export class EditorHost implements FindController {
   }
 
   /** Throw the error that says why no file goes into a tab's document, if it
-   *  is a JSON or YAML file (`takesNoFiles`). */
+   *  is not Markdown (`takesNoFiles`). */
   private refuseDataFile(tabId: string): void {
     const refusal = takesNoFiles(this.store.get().tabs.find((tab) => tab.id === tabId)?.doc.filePath ?? null);
     if (refusal) throw refusal;

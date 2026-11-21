@@ -224,6 +224,7 @@ describe("PrintWorkspace React view", () => {
   it.each([
     ["json", "A JSON file prints as its source, in a monospace face."],
     ["yaml", "A YAML file prints as its source, in a monospace face."],
+    ["text", "A text file prints as it is, in a monospace face."],
   ] as const)("prints a %s file in the Text version alone, and says so", (language, hint) => {
     act(() => workspace!.open({ ...JOB, documentNode: null, language }));
     expect(radio("Text").checked).toBe(true);

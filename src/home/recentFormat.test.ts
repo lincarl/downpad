@@ -97,13 +97,15 @@ describe("snippetText", () => {
     expect(snippetText("| --- |", "-", "/notes/todo.md")).toBe("| --- |");
   });
 
-  it("leaves a JSON or YAML file's snippet as written, so the whole match shows", () => {
+  it("leaves a text, JSON or YAML file's snippet as written, so the whole match shows", () => {
     expect(snippetText("  - deploy", "- deploy", "/ci/steps.yml")).toBe("- deploy");
     expect(snippetText("# build_number: 3", "build_number", "/ci/steps.yaml")).toBe("# build_number: 3");
     expect(snippetText('  "glob": "*.md",', "glob", "/app/package.json")).toBe('"glob": "*.md",');
-    // The same lines read as Markdown lose their markers.
+    expect(snippetText("# build number: 3", "number", "/ci/steps.txt")).toBe("# build number: 3");
+    expect(snippetText("  - deploy the **site**", "site", "/ci/steps.txt")).toBe("- deploy the **site**");
+    // The same lines read as Markdown lose their markers, also in a file without an extension.
     expect(snippetText("  - deploy", "deploy", "/ci/steps.md")).toBe("deploy");
-    expect(snippetText("# build number: 3", "number", "/ci/steps.txt")).toBe("build number: 3");
+    expect(snippetText("# build number: 3", "number", "/ci/STEPS")).toBe("build number: 3");
   });
 });
 

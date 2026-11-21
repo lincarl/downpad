@@ -303,6 +303,22 @@ describe("App shell", () => {
     expect(document.querySelector(".status-right")?.textContent).not.toContain("word");
   });
 
+  it("offers a text file the Text view alone, with its word count and a copy of its text", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/notes/readme.txt", markdown: "Plain *notes* here" });
+    render(<App store={store} />);
+    const user = userEvent.setup();
+    const views = within(screen.getByRole("radiogroup", { name: "Editor view" })).getAllByRole("radio");
+    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "Text"]);
+    expect(views.map((view) => view.hasAttribute("disabled"))).toEqual([true, true, false]);
+    expect(views[2].getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector(".status-right")?.textContent).toMatch(/^3 words · /);
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as text", "Copy formatted text"]);
+    expect(screen.getByRole("menuitem", { name: "Copy formatted text" }).hasAttribute("disabled")).toBe(true);
+  });
+
   it("keeps every view on offer for a Markdown file, also one without an extension", () => {
     const store = makeStore();
     store.patchDoc({ filePath: "/notes/README" });

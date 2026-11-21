@@ -38,8 +38,8 @@ export interface DocumentMenuActions {
   print: () => void;
   /** Copy the whole document's markdown to the clipboard (§5.10). */
   copyMarkdown: () => void;
-  /** What the document's source is called, "Markdown" unless it is a JSON or
-   *  YAML file. Markdown without it. */
+  /** What the document's source is called, such as "Markdown", "JSON" or
+   *  "text". Markdown without it. */
   sourceName?: () => string;
   /** Whether the active document's file can go on the clipboard, which takes
    *  the installed app. */
