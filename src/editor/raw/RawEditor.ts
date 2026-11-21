@@ -480,6 +480,10 @@ export class RawEditor {
       ],
     });
     this.setSpellcheck(this.spellcheckEnabled);
+    // Markdown and a text file share one spelling controller, which stays
+    // enabled across the change, so nothing else tells it that the words of
+    // the same text are now other ones.
+    this.liveSpelling.controller()?.changed();
   }
 
   /** Change prose spelling without rebuilding the editor or enabling code.

@@ -129,6 +129,23 @@ describe("live spelling of a text file", () => {
     expect(editor.getText()).toBe(expected);
   });
 
+  const marked = (root: HTMLElement): string[] => [...root.querySelectorAll(".md-spelling-error")].map((el) => el.textContent ?? "");
+
+  it("marks a word in what was Markdown code once the document is saved as a text file", async () => {
+    const { editor, root } = open("The `speling` stays.\n");
+    expect(await editor.checkSpelling()).toBe(0);
+    editor.setLanguage("text");
+    await vi.waitFor(() => expect(marked(root)).toEqual(["speling"]));
+  });
+
+  it("clears the mark of a word in Markdown code once a text file is saved as Markdown", async () => {
+    const { editor, root } = open("The `speling` stays, and speling too.\n", "text");
+    expect(await editor.checkSpelling()).toBe(2);
+    editor.setLanguage("markdown");
+    await vi.waitFor(() => expect(marked(root)).toEqual(["speling"]));
+    expect(root.querySelector(".md-spelling-error")?.closest(".cm-line")?.textContent).toBe("The `speling` stays, and speling too.");
+  });
+
   it("checks nothing in a JSON file", async () => {
     const { editor, root } = open('{"title": "speling"}\n', "json");
     await expect(editor.checkSpelling()).rejects.toThrow("no spelling to check");
