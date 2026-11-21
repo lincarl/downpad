@@ -140,7 +140,7 @@ describe("App shell", () => {
     expect(screen.getByRole("alert").textContent).toContain("Save failed");
   });
 
-  it("shows a tab whose Document view failed in Markdown, with its notice, only while that tab is active", async () => {
+  it("shows a tab whose Document view failed in the Text view, with its notice, only while that tab is active", async () => {
     const store = makeStore();
     store.patchDoc({ filePath: "/notes/deep.md" });
     store.set({ editorLayout: "split" });
@@ -153,9 +153,11 @@ describe("App shell", () => {
     const notice = () => screen.queryByRole("alert")?.querySelector(".banner-message")?.textContent;
 
     expect(notice()).toBe(
-      "Downpad can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Markdown view.",
+      "Downpad can't show deep.md in the Document view (Maximum call stack size exceeded), so it is open in the Text view.",
     );
-    expect(screen.getByRole("radio", { name: "Markdown" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Text" }).getAttribute("aria-checked")).toBe("true");
+    // Every view stays on offer, so the user can try the Document view again.
+    for (const view of screen.getAllByRole("radio")) expect(view.hasAttribute("disabled")).toBe(false);
     expect(area.classList.contains("markdown-only")).toBe(true);
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(runtime.handleBannerAction).toHaveBeenCalledWith("retry-document-view");
@@ -176,12 +178,12 @@ describe("App shell", () => {
       store.setDocumentViewFailure("tab-1", { message: `${"x".repeat(300)}\nat parse`, dismissed: false });
     });
     expect(notice()).toBe(
-      `Downpad can't show ${"n".repeat(20)}…${"n".repeat(13)}-v2.md in the Document view (${"x".repeat(59)}…), so it is open in the Markdown view.`,
+      `Downpad can't show ${"n".repeat(20)}…${"n".repeat(13)}-v2.md in the Document view (${"x".repeat(59)}…), so it is open in the Text view.`,
     );
     const message = screen.getByRole("alert").querySelector(".banner-message")!;
     expect(message.classList.contains("line-clamp-2")).toBe(true);
     expect(message.getAttribute("title")).toBe(
-      `Downpad can't show ${name} in the Document view (${"x".repeat(300)}), so it is open in the Markdown view.`,
+      `Downpad can't show ${name} in the Document view (${"x".repeat(300)}), so it is open in the Text view.`,
     );
 
     // Other tabs show the window's layout and no notice.
@@ -243,17 +245,24 @@ describe("App shell", () => {
     await waitFor(() => expect(runtime.copyDocumentMarkdown).toHaveBeenCalledOnce());
   });
 
-  it("offers a JSON file its source view alone, a copy of its source and no formatted copy", async () => {
+  it("offers a JSON file the Text view alone, selected as for a Markdown file, a copy of its source and no formatted copy", async () => {
     const store = makeStore();
     store.patchDoc({ filePath: "/data/settings.json" });
+    store.set({ editorLayout: "split" });
     render(<App store={store} />);
     const user = userEvent.setup();
 
-    // The view control names the source and offers no other view.
-    const views = within(screen.getByRole("radiogroup", { name: "Editor view" })).getAllByRole("radio");
-    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "JSON"]);
-    for (const view of views) expect(view.hasAttribute("disabled")).toBe(true);
+    const group = screen.getByRole("radiogroup", { name: "Editor view" });
+    const views = within(group).getAllByRole("radio");
+    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "Text"]);
+    expect(views.map((view) => view.hasAttribute("disabled"))).toEqual([true, true, false]);
+    expect(views.map((view) => view.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
+    expect(views[2].classList.contains("active")).toBe(true);
+    expect(group.hasAttribute("data-disabled")).toBe(false);
+    // Pressing the selected view keeps it, and changes no layout.
+    await user.click(views[2]);
     expect(views[2].getAttribute("aria-checked")).toBe("true");
+    expect(runtime.selectLayout).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as JSON", "Copy formatted text"]);
@@ -263,29 +272,60 @@ describe("App shell", () => {
     expect(runtime.copyDocumentFormatted).not.toHaveBeenCalled();
   });
 
-  it("names the source of a YAML file, and keeps every view for a Markdown or text file", () => {
+  it("offers the Text view alone in the compact view menu of a narrow window for a JSON file", async () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/data/settings.json" });
+    render(<App store={store} />);
+    const user = userEvent.setup();
+
+    const menuButton = screen.getByRole("button", { name: "Editor view" });
+    expect(menuButton.hasAttribute("disabled")).toBe(false);
+    await user.click(menuButton);
+    const menu = screen.getByRole("menu", { name: "Editor view" });
+    const rows = within(menu).getAllByRole("menuitemradio");
+    expect(rows.map((row) => row.textContent)).toEqual(["Document", "Split", "Text"]);
+    expect(rows.map((row) => row.hasAttribute("disabled"))).toEqual([true, true, false]);
+    expect(rows.map((row) => row.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
+    expect(document.activeElement).toBe(rows[2]);
+    await user.click(rows[0]);
+    expect(screen.getByRole("menu", { name: "Editor view" })).toBeTruthy();
+    expect(runtime.selectLayout).not.toHaveBeenCalled();
+  });
+
+  it("offers a YAML file the Text view alone, with no word count", () => {
     const store = makeStore();
     store.patchDoc({ filePath: "/data/compose.yml" });
-    const { unmount } = render(<App store={store} />);
-    expect(screen.getByRole("radio", { name: "YAML" }).hasAttribute("disabled")).toBe(true);
-    // Data has no words to count, so the status bar shows its size alone.
-    expect(document.querySelector(".status-right")?.textContent).not.toContain("word");
-    unmount();
-
-    store.patchDoc({ filePath: "/notes/readme.txt" });
     render(<App store={store} />);
     const views = within(screen.getByRole("radiogroup", { name: "Editor view" })).getAllByRole("radio");
-    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "Markdown"]);
+    expect(views.map((view) => view.hasAttribute("disabled"))).toEqual([true, true, false]);
+    expect(screen.getByRole("radio", { name: "Text" }).getAttribute("aria-checked")).toBe("true");
+    // Data has no words to count, so the status bar shows its size alone.
+    expect(document.querySelector(".status-right")?.textContent).not.toContain("word");
+  });
+
+  it("keeps every view on offer for a Markdown file, also one without an extension", () => {
+    const store = makeStore();
+    store.patchDoc({ filePath: "/notes/README" });
+    render(<App store={store} />);
+    const views = within(screen.getByRole("radiogroup", { name: "Editor view" })).getAllByRole("radio");
+    expect(views.map((view) => view.textContent)).toEqual(["Document", "Split", "Text"]);
     for (const view of views) expect(view.hasAttribute("disabled")).toBe(false);
+    expect(views[0].getAttribute("aria-checked")).toBe("true");
     expect(document.querySelector(".status-right")?.textContent).toMatch(/^\d+ words? · /);
   });
 
-  it("keeps Settings available on Recent while disabling document copy", async () => {
+  it("keeps Settings available on Recent while disabling document copy and every view", async () => {
     const store = makeStore();
+    store.patchDoc({ filePath: "/data/settings.json" });
     store.set({ view: "recent" });
     render(<App store={store} />);
     const user = userEvent.setup();
     expect(screen.getByRole("button", { name: "Copy" }).hasAttribute("disabled")).toBe(true);
+    for (const view of screen.getAllByRole("radio")) {
+      expect(view.hasAttribute("disabled")).toBe(true);
+      expect(view.getAttribute("aria-checked")).toBe("false");
+    }
+    expect(screen.getByRole("button", { name: "Editor view" }).hasAttribute("disabled")).toBe(true);
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(runtime.openSettings).toHaveBeenCalledOnce();
   });

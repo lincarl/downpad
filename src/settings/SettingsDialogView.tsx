@@ -695,7 +695,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                         options={[
                           ["document", "Document"],
                           ["split", "Split"],
-                          ["markdown", "Markdown"],
+                          ["markdown", "Text"],
                         ]}
                         value={layoutFromDefaultView(initial)}
                       />
@@ -724,7 +724,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
                         defaultChecked={initial.showFrontmatterPanel}
                       />
                     </CheckRow>
-                    <CheckRow label="Collapse base64 in Markdown view">
+                    <CheckRow label="Collapse base64 in Text view">
                       <Checkbox
                         name="collapseBase64InRawView"
                         defaultChecked={initial.collapseBase64InRawView}

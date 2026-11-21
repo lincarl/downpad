@@ -299,7 +299,7 @@ test("printing from the Markdown view still prints the formatted document", asyn
   // With no document view on screen, Print renders the file in a temporary
   // editor off screen and prints from that.
   await launch("# Shopping list\n\n- Apples\n- Pears\n\n```ts\nconst total = 2;\n```\n");
-  await page.getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.getByRole("radio", { name: "Text", exact: true }).click();
   await expect(page.locator(".editor-pane-raw .cm-content")).toContainText("# Shopping list");
   await expect(page.locator(".editor-pane-wysiwyg")).toBeHidden();
   // Record the temporary editor, so the test fails if Print takes another path.

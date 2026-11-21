@@ -52,7 +52,7 @@ import { LANGUAGE_NAMES, type DocumentLanguage } from "../files/documentLanguage
 export interface PrintJob {
   markdown: string;
   documentNode: Element | null;
-  /** The language of the source, which names the version that prints it.
+  /** The language of the source, which the hint under the version names.
    *  Markdown without one. */
   language?: DocumentLanguage;
   /** File name shown in the header bar and the running header, e.g. "notes.md". */
@@ -697,7 +697,7 @@ interface PrintWorkspaceSnapshot {
    *  closing would remove the sheets while Electron still prints them. */
   busy: boolean;
   electron: boolean;
-  /** False when the document could not be rendered; the Markdown version prints. */
+  /** False when the document could not be rendered; the Text version prints. */
   documentRendered: boolean;
   /** The language of the document's source. */
   language: DocumentLanguage;
@@ -776,7 +776,7 @@ function PrintWorkspaceView({
               name="print-version"
               options={[
                 ["document", "Document"],
-                ["markdown", LANGUAGE_NAMES[view.language]],
+                ["markdown", "Text"],
               ]}
               value={view.documentRendered ? s.printVersion : "markdown"}
               disabled={view.documentRendered ? [] : ["document"]}

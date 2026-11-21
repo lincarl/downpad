@@ -122,7 +122,7 @@ test("the version chooser switches between the document and the Markdown source"
   );
   await expect(page.locator(".print-source")).toHaveCount(0);
 
-  await page.locator(".print-workspace").getByRole("radio", { name: "Markdown", exact: true }).check();
+  await page.locator(".print-workspace").getByRole("radio", { name: "Text", exact: true }).check();
   // Markdown version: the raw source, one block per line, nothing rendered. The
   // source is the canonical markdown, so the YAML frontmatter prints too. It is
   // part of the file, and only the Document version hides it (§5.17).

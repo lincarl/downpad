@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /** Enter source through the Markdown pane, then show its document rendering. */
 async function setSource(page: Page, markdown: string): Promise<void> {
-  await page.locator(".toolbar-view").getByRole("radio", { name: "Markdown", exact: true }).click();
+  await page.locator(".toolbar-view").getByRole("radio", { name: "Text", exact: true }).click();
   await page.locator(".editor-pane-raw .cm-content").click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.insertText(markdown);

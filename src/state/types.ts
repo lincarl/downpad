@@ -13,10 +13,10 @@ export type ViewMode = "recent" | "wysiwyg" | "raw";
 
 /**
  * Which editor panes are shown (spec §6.1), chosen via the toolbar's three-segment
- * Document | Split | Markdown control:
+ * Document | Split | Text control:
  * - `"document"` — only the document (WYSIWYG) view.
  * - `"split"` — the document and the raw Markdown source side by side ("Split").
- * - `"markdown"` — only the raw Markdown source.
+ * - `"markdown"` — only the raw text, which the app calls the Text view.
  * Persists across tab switches.
  */
 export type EditorLayout = "document" | "split" | "markdown";
@@ -325,9 +325,9 @@ export function layoutFromDefaultView(s: Pick<Settings, "defaultView">): EditorL
   }
 }
 
-/** The layout the active tab is shown in: the window's layout, or the source
- *  alone for a JSON or YAML file, and for a Markdown document while its
- *  Document view cannot be built. */
+/** The layout the active tab is shown in: the window's layout, or the text
+ *  alone for a document that is not Markdown, and for a Markdown document
+ *  while its Document view cannot be built. */
 export function shownLayout(state: Pick<AppState, "tabs" | "activeTabId" | "editorLayout">): EditorLayout {
   const active = state.tabs.find((tab) => tab.id === state.activeTabId);
   if (!active) return state.editorLayout;

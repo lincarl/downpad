@@ -190,8 +190,8 @@ describe("PrintWorkspace React view", () => {
 
     expect(radio("Document").checked).toBe(true);
     expect(within(dialog).getByText("The formatted document, as the editor renders it.")).toBeTruthy();
-    act(() => radio("Markdown").click());
-    expect(radio("Markdown").checked).toBe(true);
+    act(() => radio("Text").click());
+    expect(radio("Text").checked).toBe(true);
 
     expect(printRenderMocks.renderPrintPages).toHaveBeenCalledTimes(2);
     expect(printRenderMocks.renderPrintPages.mock.calls[1]?.[0]).toMatchObject({
@@ -205,10 +205,10 @@ describe("PrintWorkspace React view", () => {
     expect(dialog.querySelector(".print-ws-scaler > .print-root")).not.toBeNull();
   });
 
-  it("prints the Markdown version of a document Downpad could not render, keeping the saved choice", () => {
+  it("prints the Text version of a document Downpad could not render, keeping the saved choice", () => {
     act(() => workspace!.open({ ...JOB, documentNode: null }));
 
-    expect(radio("Markdown").checked).toBe(true);
+    expect(radio("Text").checked).toBe(true);
     expect(radio("Document").disabled).toBe(true);
     expect(printRenderMocks.renderPrintPages.mock.calls[0]?.[0]).toMatchObject({ version: "markdown" });
     expect(
@@ -219,6 +219,16 @@ describe("PrintWorkspace React view", () => {
     act(() => workspace!.close());
     // The saved Document choice is left as it is.
     expect(saveSettings).toHaveBeenCalledExactlyOnceWith({ printScalePercent: 120 });
+  });
+
+  it.each([
+    ["json", "A JSON file prints as its source, in a monospace face."],
+    ["yaml", "A YAML file prints as its source, in a monospace face."],
+  ] as const)("prints a %s file in the Text version alone, and says so", (language, hint) => {
+    act(() => workspace!.open({ ...JOB, documentNode: null, language }));
+    expect(radio("Text").checked).toBe(true);
+    expect(radio("Document").disabled).toBe(true);
+    expect(screen.getByText(hint)).toBeTruthy();
   });
 
   it("switches orientation with radios and describes the paper under the preview", () => {
@@ -251,8 +261,8 @@ describe("PrintWorkspace React view", () => {
     // The first stop is the checked Version radio, not every radio in DOM order.
     expect(document.activeElement).toBe(radio("Document"));
 
-    act(() => radio("Markdown").click());
-    act(() => radio("Markdown").focus());
+    act(() => radio("Text").click());
+    act(() => radio("Text").focus());
     pressTab(true);
     expect(document.activeElement).toBe(print);
   });
@@ -529,7 +539,7 @@ describe("PrintWorkspace React view", () => {
     expect(workspace!.isOpen()).toBe(true);
     expect(document.querySelector(".print-ws-scaler > .print-root")).toBe(preview);
     expect(document.documentElement.classList.contains("printing")).toBe(false);
-    act(() => radio("Markdown").click());
+    act(() => radio("Text").click());
     expect(printRenderMocks.renderPrintPages).toHaveBeenLastCalledWith(
       expect.objectContaining({ version: "markdown" }),
     );

@@ -79,7 +79,7 @@ export function SpellingSettings({ active, initialEnabled, languages, onLanguage
         <CheckRow label="Spell check" placement="box">
           <Checkbox name="spellCheckEnabled" defaultChecked={initialEnabled} />
         </CheckRow>
-        <Hint placement="box">Check prose in Document and Markdown views after word edits. Code is excluded.</Hint>
+        <Hint placement="box">Check prose in Document and Text views after word edits. Code is excluded.</Hint>
       </SettingsBox>
 
       {!native ? (

@@ -240,6 +240,22 @@ describe("SettingsDialogView pages", () => {
     expect(onRequestClose).toHaveBeenCalledOnce();
   });
 
+  it("names the views by their toolbar names, Text for the text alone, and keeps the stored values", async () => {
+    const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, defaultView: "markdown" });
+    await user.click(screen.getByRole("tab", { name: "Editor" }));
+    const view = screen.getByRole("combobox", { name: "Default view:" }) as HTMLSelectElement;
+    expect(Array.from(view.options).map((option) => [option.value, option.text])).toEqual([
+      ["document", "Document"],
+      ["split", "Split"],
+      ["markdown", "Text"],
+    ]);
+    expect(view.value).toBe("markdown");
+    expect(screen.getByRole("checkbox", { name: "Collapse base64 in Text view" })).toBeTruthy();
+    await user.selectOptions(view, "split");
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(onSave).toHaveBeenCalledExactlyOnceWith({ defaultView: "split" });
+  });
+
   it("enables Apply for a change kept in the dialog's state, such as the accent colour", async () => {
     const { user } = renderDialog();
     await user.click(screen.getByRole("tab", { name: "Appearance" }));
