@@ -125,6 +125,15 @@ async function clipboardText(): Promise<string> {
   return text.replace(/\r\n/g, "\n");
 }
 
+/** Wait until the app has checked the document's file after its own save.
+ *  The watcher reports the save 75 ms later, and the app then reads the file.
+ *  A write from outside that lands during that read is found twice, by that
+ *  read and after its own report, so the notice for it comes back after a
+ *  test dismissed it. */
+async function untilOwnSaveIsChecked(): Promise<void> {
+  await page.waitForTimeout(500);
+}
+
 test("a JSON file opens as its source alone with JSON colours, and saves its exact text", async () => {
   const file = path.join(directory, "settings.json");
   const text = '{\n  "name": "Downpad",\n  "count": 12,\n  "on": true\n}\n';
@@ -478,6 +487,7 @@ test("the document menu's Copy file saves the document and copies its file as th
   await page.locator(".ProseMirror p", { hasText: "Latest edit." }).click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Mine.");
+  await untilOwnSaveIsChecked();
   await writeFile(file, "# Attach me\n\nTheirs.\n");
   await expect(page.getByText("This file changed on disk.")).toBeVisible();
   await page.locator(heading).click({ button: "right" });
@@ -500,6 +510,7 @@ test("the document menu's Copy file saves the document and copies its file as th
   await page.locator(".ProseMirror p", { hasText: "Mine." }).click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Again.");
+  await untilOwnSaveIsChecked();
   await writeFile(file, "# Attach me\n\nTheirs again.\n");
   await expect(page.getByText("This file changed on disk.")).toBeVisible();
   await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
