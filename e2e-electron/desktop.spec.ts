@@ -483,10 +483,12 @@ test("Copy file waits for a change on disk, asks again once its notice was dismi
   const notice = page.getByText("This file changed on disk.");
   // While the file changed on disk and neither Reload nor Keep mine is
   // chosen, Copy file waits, as its save would replace the other version.
-  // The file changes before the app has saved it. After a save of its own the
-  // app reads the file once more, and a change that lands during that read is
-  // found twice. When the second find ends after the dismissal below, the
-  // notice comes back.
+  // The file changes before the app has saved it, so the app finds the change
+  // once. After a save of its own the app reads the file once more, and a
+  // change from outside that this read sees too is found twice, by this read
+  // and by the one for the change itself. If the second find ended after the
+  // dismissal below, the notice would come back and Copy file would stay
+  // unavailable.
   await page.locator(".ProseMirror p", { hasText: "First text." }).click();
   await page.keyboard.press("End");
   await page.keyboard.type(" Mine.");
