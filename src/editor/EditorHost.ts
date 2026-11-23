@@ -149,6 +149,11 @@ export class EditorHost implements FindController {
     return this.activeTabId;
   }
 
+  get showsDocumentOnly(): boolean {
+    const pane = this.active();
+    return this.layout === "document" && !!pane?.wysiwyg && !pane.el.hidden;
+  }
+
   /** The change of panes in progress (`runPaneChange`), such as a tab shown or
    *  a layout switched, or null. Only one runs at a time. */
   private changing: Promise<void> | null = null;

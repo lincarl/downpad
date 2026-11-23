@@ -43,6 +43,7 @@ import { AppRuntimeProvider, useAppRuntime } from "@/app/AppRuntimeContext";
 import { useOwnedAppRuntime } from "@/app/useAppRuntime";
 import { useDocumentTitle } from "@/app/useDocumentTitle";
 import { captureFocus } from "@/app/restoreFocus";
+import { installDocumentWheelZoom } from "@/app/documentWheelZoom";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
@@ -80,6 +81,7 @@ const SMALL_ICON = { size: 16, absoluteStrokeWidth: true, strokeWidth: 1 } as co
 
 /** Text-size presets offered by the toolbar's size control. */
 const TEXT_SIZES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
+const TEXT_SIZE_STEP = 0.1;
 
 export function App({ store }: AppProps) {
   return (
@@ -116,6 +118,18 @@ function AppContent({ store }: { store: Store }) {
 
   const editorVisible = state.view !== "recent";
   const editorLayout = editorVisible ? shownLayout(state) : "document";
+  const documentTab = editorVisible && editorLayout === "document" ? state.activeTabId : null;
+
+  useEffect(() => {
+    const panel = editorAreaRef.current;
+    if (!panel || !runtime || !documentTab || !editorHost) return;
+
+    return installDocumentWheelZoom(
+      panel,
+      () => editorHost.showsDocumentOnly,
+      (steps) => runtime.zoomDocument(Math.sign(steps) * TEXT_SIZE_STEP, Math.abs(steps)),
+    );
+  }, [runtime, editorHost, documentTab]);
 
   return (
     <AppRuntimeProvider runtime={runtime}>
@@ -330,7 +344,7 @@ function Toolbar() {
         className="max-[859px]:hidden group-data-[git]/toolbar:max-[909px]:hidden"
         label="Decrease text size"
         disabled={!inEditor}
-        onClick={() => runtime?.zoomDocument(-0.1)}
+        onClick={() => runtime?.zoomDocument(-TEXT_SIZE_STEP)}
       >
         <Minus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
@@ -343,7 +357,7 @@ function Toolbar() {
         className="max-[859px]:hidden group-data-[git]/toolbar:max-[909px]:hidden"
         label="Increase text size"
         disabled={!inEditor}
-        onClick={() => runtime?.zoomDocument(0.1)}
+        onClick={() => runtime?.zoomDocument(TEXT_SIZE_STEP)}
       >
         <Plus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>

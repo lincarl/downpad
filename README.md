@@ -28,7 +28,7 @@ pnpm dev
 
 `pnpm dev` compiles the Electron main process and sandboxed preload, starts Vite, and opens the desktop app. Closing Electron also stops Vite. Frontend changes use Vite's hot reload. Restart the command after changing files in `electron/`.
 
-Use `pnpm dev:web` for the browser development environment. Native file access and printing require the Electron app.
+Use `pnpm dev:web` for the browser development environment. Native file access and printing require the Electron app. On macOS the browser preview uses scroll distance for Ctrl+wheel zoom. The desktop app can also read the mouse’s notch count and distinguish a trackpad pinch.
 
 ## Build and test
 

@@ -5231,6 +5231,50 @@ test("General Recent preferences persist and hide missing files without deleting
   expect(history.map((entry) => entry.path)).toContain(missing);
 });
 
+test("Mac pinches keep their distance with Ctrl held and wheel turns keep their notch count", async () => {
+  const file = path.join(directory, "zoom.md");
+  await writeFile(file, "# Wheel zoom\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setNavigatorOverrides", { platform: "MacIntel" });
+  await page.reload();
+  await untilStarted();
+  const title = page.getByRole("heading", { name: "Wheel zoom" });
+  await title.hover();
+  const box = await title.boundingBox();
+  if (!box) throw new Error("The heading has no visible bounds.");
+  const point = { x: Math.round(box.x + 8), y: Math.round(box.y + 6) };
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await page.keyboard.down("Control");
+  await session.send("Input.synthesizePinchGesture", {
+    ...point, scaleFactor: 1.8, relativeSpeed: 900, gestureSourceType: "mouse",
+  });
+  await page.keyboard.up("Control");
+  await expect(readout).toHaveText("110%");
+  await app!.evaluate(({ BrowserWindow }, point) => {
+    BrowserWindow.getAllWindows()[0].webContents.sendInputEvent({
+      type: "mouseWheel", ...point, deltaX: 0, deltaY: -200, wheelTicksY: -1, modifiers: ["control"],
+    });
+  }, point);
+  await expect(readout).toHaveText("100%");
+});
+
+test("increasing a size above the toolbar limit never shrinks the text", async () => {
+  const file = path.join(directory, "large-text.md");
+  await writeFile(file, "# Large text\n");
+  await writeFile(path.join(directory, "profile", "settings.toml"),
+    "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\neditorFontScale = 3\n");
+  await launch(file);
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await expect(readout).toHaveText("300%");
+  await page.getByRole("button", { name: "Increase text size" }).click();
+  await expect(readout).toHaveText("300%");
+  await page.getByRole("heading", { name: "Large text" }).dispatchEvent("wheel", {
+    ctrlKey: true, deltaY: 240, wheelDeltaY: -240,
+  });
+  await expect(readout).toHaveText("240%");
+});
+
 test("an open Settings dialog shows a hand edit of settings.toml in the fields the user did not change", async () => {
   const settingsFile = path.join(directory, "profile", "settings.toml");
   await launch();
@@ -5960,6 +6004,24 @@ test("switching tabs while a reload from disk builds shows the other tab, then t
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => readFile(file, "utf8")).toBe("New text from disk. Typed after.\n\n![pixel](pixel.png)\n");
   await expect(readFile(other, "utf8")).resolves.toBe("Other file.\n");
+});
+
+test("Ctrl+wheel starts zooming once Document replaces the visible Text pane", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"),
+    'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ndefaultView = "markdown"\n');
+  const file = path.join(directory, "switch-view.md");
+  await writeFile(file, "# Switching views\n\n![Photo](photo.png)\n");
+  await launch(file);
+  await holdImageAnswers();
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  const text = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
+  await text.dispatchEvent("wheel", { ctrlKey: true, deltaY: -120 });
+  await expect(readout).toHaveText("100%");
+  const title = page.getByRole("heading", { name: "Switching views" });
+  await expect(title).toBeVisible();
+  await title.dispatchEvent("wheel", { ctrlKey: true, deltaY: -120 });
+  await expect(readout).toHaveText("110%");
 });
 
 test("a Reload clicked while a layout switch builds the document view shows the file's new text", async () => {

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 // This file checks the view control (§6.1) in a real browser, where real undo
 // must survive a trip through the split. The layouts, the split mirror, the
@@ -12,10 +12,89 @@ const rawContent = ".editor-pane-raw .cm-content";
 const documentSeg = ".toolbar-view button:has-text('Document')";
 const splitSeg = ".toolbar-view button:has-text('Split')";
 
+async function useWheelPlatform(page: Page, platform: string) {
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setNavigatorOverrides", { platform });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   // WYSIWYG mounts asynchronously; wait for the seeded heading to render.
   await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
+});
+
+test("Ctrl+wheel changes the toolbar text size in Document view", async ({ page }) => {
+  const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+  const fontSize = () => heading.evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await page.getByRole("button", { name: "Increase text size" }).click();
+  await expect(readout).toHaveText("110%");
+  const initialSize = await fontSize();
+
+  const notch = await page.evaluate(() => /Mac/.test(navigator.platform) ? 40 : 120);
+  await heading.hover();
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -notch);
+  await expect(readout).toHaveText("120%");
+  await expect.poll(fontSize).toBeGreaterThan(initialSize);
+  await page.mouse.wheel(0, notch);
+  await expect(readout).toHaveText("110%");
+  await expect.poll(fontSize).toBe(initialSize);
+  await page.keyboard.up("Control");
+
+  const panel = page.getByRole("tabpanel");
+  const scrollTop = () => panel.evaluate((element) => element.scrollTop);
+  const beforeScroll = await scrollTop();
+  await page.mouse.wheel(0, 120);
+  await expect.poll(scrollTop).toBeGreaterThan(beforeScroll);
+  await expect(readout).toHaveText("110%");
+
+  await page.locator(splitSeg).click();
+  await expect(page.locator(rawContent)).toBeVisible();
+  await heading.hover();
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -notch);
+  await page.keyboard.up("Control");
+  await page.locator(documentSeg).click();
+  await expect(readout).toHaveText("110%");
+});
+
+for (const sample of [
+  { name: "fractional touchpad scrolling", platform: "Linux x86_64", count: 16, deltaY: -7.5, wheelDeltaY: 7 },
+  { name: "a pinch with combined updates", platform: "Win32", count: 3, deltaY: -40, wheelDeltaY: 120 },
+]) {
+  test(`${sample.name} adds up to the same zoom as a full notch`, async ({ page }) => {
+    await useWheelPlatform(page, sample.platform);
+    const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+    const readout = page.getByRole("button", { name: /^Document text size,/ });
+    await heading.evaluate((element, { count, deltaY, wheelDeltaY }) => {
+      const movement = { ctrlKey: true, deltaY, wheelDeltaY, bubbles: true, cancelable: true };
+      for (let i = 0; i < count; i++) element.dispatchEvent(new WheelEvent("wheel", movement));
+    }, sample);
+    await expect(readout).toHaveText("110%");
+    await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 240 });
+    await expect(readout).toHaveText("90%");
+  });
+}
+
+test("one wheel notch zooms one step with different system scrolling speeds", async ({ page }) => {
+  await useWheelPlatform(page, "Win32");
+  const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: -100 / 3, wheelDeltaY: 120 });
+  await expect(readout).toHaveText("110%");
+  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 300, wheelDeltaY: -120 });
+  await expect(readout).toHaveText("100%");
+});
+
+test.describe("at 200% display scaling", () => {
+  test.use({ deviceScaleFactor: 2 });
+
+  test("a page-scroll wheel notch zooms one step", async ({ page }) => {
+    const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+    await heading.dispatchEvent("wheel", { ctrlKey: true, deltaMode: 2, deltaY: -0.5, wheelDeltaY: 60 });
+    await expect(page.getByRole("button", { name: /^Document text size,/ })).toHaveText("110%");
+  });
 });
 
 test("opening then closing the split preserves the document's undo history", async ({ page }) => {
