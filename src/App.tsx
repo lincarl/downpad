@@ -81,6 +81,8 @@ const SMALL_ICON = { size: 16, absoluteStrokeWidth: true, strokeWidth: 1 } as co
 /** Text-size presets offered by the toolbar's size control. */
 const TEXT_SIZES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
 const TEXT_SIZE_STEP = 0.1;
+// Chromium's default wheel notch is 100 CSS pixels on Windows and 120 on Linux.
+const WHEEL_PIXELS_PER_STEP = /Win/.test(navigator.platform) ? 100 : 120;
 
 export function App({ store }: AppProps) {
   return (
@@ -117,20 +119,32 @@ function AppContent({ store }: { store: Store }) {
 
   const editorVisible = state.view !== "recent";
   const editorLayout = editorVisible ? shownLayout(state) : "document";
-  const documentVisible = editorVisible && state.activeTabId !== null && editorLayout === "document";
+  const documentTab = editorVisible && editorLayout === "document" ? state.activeTabId : null;
 
   useEffect(() => {
     const panel = editorAreaRef.current;
-    if (!panel || !runtime || !documentVisible) return;
+    if (!panel || !runtime || !documentTab || !editorHost) return;
 
+    let pendingPixels = 0;
+    let previousTime = 0;
     const onWheel = (event: WheelEvent): void => {
-      if (!event.ctrlKey || event.deltaY === 0) return;
+      if (!event.ctrlKey || !editorHost.showsDocumentOnly || event.deltaY === 0) {
+        pendingPixels = 0;
+        return;
+      }
       event.preventDefault();
-      runtime.zoomDocument(event.deltaY < 0 ? TEXT_SIZE_STEP : -TEXT_SIZE_STEP);
+      if (event.timeStamp - previousTime > 250 || Math.sign(event.deltaY) !== Math.sign(pendingPixels)) pendingPixels = 0;
+      previousTime = event.timeStamp;
+      const pixelsPerUnit = event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? WHEEL_PIXELS_PER_STEP
+        : event.deltaMode === WheelEvent.DOM_DELTA_LINE ? WHEEL_PIXELS_PER_STEP / 3 : 1;
+      pendingPixels += event.deltaY * pixelsPerUnit;
+      const steps = Math.trunc(pendingPixels / WHEEL_PIXELS_PER_STEP);
+      pendingPixels -= steps * WHEEL_PIXELS_PER_STEP;
+      if (steps !== 0) runtime.zoomDocument(-steps * TEXT_SIZE_STEP);
     };
     panel.addEventListener("wheel", onWheel, { passive: false });
     return () => panel.removeEventListener("wheel", onWheel);
-  }, [runtime, documentVisible]);
+  }, [runtime, editorHost, documentTab]);
 
   return (
     <AppRuntimeProvider runtime={runtime}>

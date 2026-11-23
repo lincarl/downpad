@@ -5976,6 +5976,24 @@ test("switching tabs while a reload from disk builds shows the other tab, then t
   await expect(readFile(other, "utf8")).resolves.toBe("Other file.\n");
 });
 
+test("Ctrl+wheel starts zooming once Document replaces the visible Text pane", async () => {
+  await writeFile(path.join(directory, "profile", "settings.toml"),
+    'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ndefaultView = "markdown"\n');
+  const file = path.join(directory, "switch-view.md");
+  await writeFile(file, "# Switching views\n\n![Photo](photo.png)\n");
+  await launch(file);
+  await holdImageAnswers();
+  await page.getByRole("radio", { name: "Document", exact: true }).click();
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  const text = page.locator(".editor-pane-raw:not([hidden]) .cm-content");
+  await text.dispatchEvent("wheel", { ctrlKey: true, deltaY: -120 });
+  await expect(readout).toHaveText("100%");
+  const title = page.getByRole("heading", { name: "Switching views" });
+  await expect(title).toBeVisible();
+  await title.dispatchEvent("wheel", { ctrlKey: true, deltaY: -120 });
+  await expect(readout).toHaveText("110%");
+});
+
 test("a Reload clicked while a layout switch builds the document view shows the file's new text", async () => {
   await writeFile(path.join(directory, "profile", "settings.toml"), 'hasSeenWelcome = true\nhasCheckedDefaultHandler = true\ndefaultView = "markdown"\n');
   await writeFile(path.join(directory, "pixel.png"), onePixelPng);

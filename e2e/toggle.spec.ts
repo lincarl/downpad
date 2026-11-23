@@ -53,6 +53,19 @@ test("Ctrl+wheel changes the toolbar text size in Document view", async ({ page 
   await expect(readout).toHaveText("110%");
 });
 
+test("small Ctrl+wheel movements add up to the same zoom as a full notch", async ({ page }) => {
+  const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await heading.evaluate((element) => {
+    for (let i = 0; i < 12; i++) {
+      element.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -10, bubbles: true, cancelable: true }));
+    }
+  });
+  await expect(readout).toHaveText("110%");
+  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 240 });
+  await expect(readout).toHaveText("90%");
+});
+
 test("opening then closing the split preserves the document's undo history", async ({ page }) => {
   const doc = page.locator(wysiwyg);
   // The text of every block but code blocks, whose fold markers CodeMirror
