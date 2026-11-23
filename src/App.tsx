@@ -43,7 +43,7 @@ import { AppRuntimeProvider, useAppRuntime } from "@/app/AppRuntimeContext";
 import { useOwnedAppRuntime } from "@/app/useAppRuntime";
 import { useDocumentTitle } from "@/app/useDocumentTitle";
 import { captureFocus } from "@/app/restoreFocus";
-import { installDocumentWheelZoom } from "@/app/documentWheelZoom";
+import { installDocumentWheelZoom, useMacWheelControlKey } from "@/app/documentWheelZoom";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
@@ -119,6 +119,7 @@ function AppContent({ store }: { store: Store }) {
   const editorVisible = state.view !== "recent";
   const editorLayout = editorVisible ? shownLayout(state) : "document";
   const documentTab = editorVisible && editorLayout === "document" ? state.activeTabId : null;
+  const macControlKey = useMacWheelControlKey();
 
   useEffect(() => {
     const panel = editorAreaRef.current;
@@ -127,9 +128,10 @@ function AppContent({ store }: { store: Store }) {
     return installDocumentWheelZoom(
       panel,
       () => editorHost.showsDocumentOnly,
+      macControlKey,
       (steps) => runtime.zoomDocument(Math.sign(steps) * TEXT_SIZE_STEP, Math.abs(steps)),
     );
-  }, [runtime, editorHost, documentTab]);
+  }, [runtime, editorHost, documentTab, macControlKey]);
 
   return (
     <AppRuntimeProvider runtime={runtime}>
