@@ -1,4 +1,5 @@
 const UNITS_PER_NOTCH = 120;
+const WINDOWS_PIXELS_PER_LINE = 100 / 3;
 
 function verticalWheelUnits(event: WheelEvent): number {
   const mode = event.deltaMode;
@@ -6,16 +7,22 @@ function verticalWheelUnits(event: WheelEvent): number {
   const reported = "wheelDeltaY" in event && typeof event.wheelDeltaY === "number" ? event.wheelDeltaY : 0;
   const units = Math.abs(reported);
 
-  // Chromium reports wheel ticks independently of the system scroll distance.
-  // A pinch also reports a full tick for each tiny movement. Windows' lowest
-  // nonzero wheel setting scrolls about 33 pixels per notch.
-  const pinchLike = mode === WheelEvent.DOM_DELTA_PIXEL && delta !== 0
-    && units >= UNITS_PER_NOTCH && Math.abs(delta) < 30 * units / UNITS_PER_NOTCH;
-  if (units && !pinchLike && (mode === WheelEvent.DOM_DELTA_PIXEL || units >= UNITS_PER_NOTCH)) {
-    return (Math.sign(delta) || -Math.sign(reported)) * units;
+  if (mode === WheelEvent.DOM_DELTA_PAGE) {
+    // Chromium divides the native page count by the display scale when producing a DOM wheel event.
+    const scale = /Chrome\//.test(navigator.userAgent) ? window.devicePixelRatio : 1;
+    return Math.round(delta * scale * UNITS_PER_NOTCH);
   }
-  if (mode === WheelEvent.DOM_DELTA_PAGE) return delta * UNITS_PER_NOTCH;
-  if (mode === WheelEvent.DOM_DELTA_LINE) return delta * UNITS_PER_NOTCH / 3;
+  if (mode === WheelEvent.DOM_DELTA_LINE) {
+    return units >= UNITS_PER_NOTCH ? (Math.sign(delta) || -Math.sign(reported)) * units : delta * UNITS_PER_NOTCH / 3;
+  }
+  if (!units || !/Win/.test(navigator.platform)) return delta;
+  if (!delta) return -reported;
+
+  // Windows applies a whole number of scroll lines per notch. Other pixel
+  // input, including a pinch with a synthetic tick count, keeps its distance.
+  const linesPerNotch = Math.abs(delta) * UNITS_PER_NOTCH / (WINDOWS_PIXELS_PER_LINE * units);
+  const lines = Math.round(linesPerNotch);
+  if (lines > 0 && Math.abs(linesPerNotch - lines) <= lines * 1e-6) return Math.sign(delta) * units;
   return delta;
 }
 
