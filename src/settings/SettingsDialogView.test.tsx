@@ -113,6 +113,18 @@ describe("SettingsDialogView pages", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("offers each theme's automatic choice first, then Light and Dark", async () => {
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("tab", { name: "Appearance" }));
+    for (const [group, automatic] of [
+      ["UI theme", "Follow system"],
+      ["Document theme", "Follow UI theme"],
+    ]) {
+      const radios = within(screen.getByRole("radiogroup", { name: group })).getAllByRole("radio");
+      expect(radios, group).toEqual([card(group, automatic), card(group, "Light"), card(group, "Dark")]);
+    }
+  });
+
   it("saves fields from every page, including hidden ones", async () => {
     const { user, onSave, onRequestClose } = renderDialog();
     const search = screen.getByRole("combobox", { name: "Default search:" }) as HTMLSelectElement;
@@ -585,7 +597,7 @@ describe("SettingsDialogView updates", () => {
   it("saves the automatic update switch of a copy that installs updates itself", async () => {
     desktop(installed);
     const { user, onSave } = renderDialog();
-    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await user.click(screen.getByRole("tab", { name: "Update" }));
     expect(await screen.findByText("Current version: 1.2.0")).toBeTruthy();
     const automatic = await screen.findByRole("checkbox", { name: "Update automatically" });
     expect((automatic as HTMLInputElement).checked).toBe(true);
@@ -597,7 +609,7 @@ describe("SettingsDialogView updates", () => {
   it("follows a check through its download to Restart now", async () => {
     const bridge = desktop(installed);
     const { user } = renderDialog();
-    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await user.click(screen.getByRole("tab", { name: "Update" }));
     const check = await screen.findByRole("button", { name: "Check for updates" });
     await waitFor(() => expect((check as HTMLButtonElement).disabled).toBe(false));
     await user.click(check);
@@ -621,7 +633,7 @@ describe("SettingsDialogView updates", () => {
   it("offers the download page to a copy that cannot install updates, and keeps its saved switch", async () => {
     const bridge = desktop({ ...installed, selfUpdate: false });
     const { user, onSave } = renderDialog({ ...DEFAULT_SETTINGS, autoUpdate: false });
-    await user.click(screen.getByRole("tab", { name: "Updates" }));
+    await user.click(screen.getByRole("tab", { name: "Update" }));
     await screen.findByText("Current version: 1.2.0");
     expect(screen.queryByRole("checkbox", { name: "Update automatically" })).toBeNull();
 

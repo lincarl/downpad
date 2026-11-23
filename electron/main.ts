@@ -609,7 +609,7 @@ async function promptForUpdate(): Promise<void> {
         type: "warning",
         title: "Downpad update",
         message: "Downpad could not restart to install the update.",
-        detail: `${error instanceof Error ? error.message : String(error)}\nYou can try again from Settings > Updates.`,
+        detail: `${error instanceof Error ? error.message : String(error)}\nYou can try again from Settings > Update.`,
       });
     }
   } catch (error) {

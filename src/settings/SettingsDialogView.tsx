@@ -93,23 +93,23 @@ interface PageEntry {
 }
 
 const UI_THEMES = [
-  { value: "dark", label: "Dark", description: "Dark window, toolbars and dialogs" },
-  { value: "light", label: "Light", description: "Light window, toolbars and dialogs" },
   {
     value: "system",
     label: "Follow system",
     description: "Switches between light and dark with the operating system",
   },
+  { value: "light", label: "Light", description: "Light window, toolbars and dialogs" },
+  { value: "dark", label: "Dark", description: "Dark window, toolbars and dialogs" },
 ] as const satisfies ReadonlyArray<{ value: Settings["theme"]; label: string; description: string }>;
 
 const DOCUMENT_THEMES = [
-  { value: "light", label: "Light", description: "White page with dark text" },
-  { value: "dark", label: "Dark", description: "Dark grey page with light text" },
   {
     value: "follow-ui",
     label: "Follow UI theme",
     description: "Light or dark with the UI theme",
   },
+  { value: "light", label: "Light", description: "White page with dark text" },
+  { value: "dark", label: "Dark", description: "Dark grey page with light text" },
 ] as const satisfies ReadonlyArray<{ value: Settings["editorTheme"]; label: string; description: string }>;
 
 /** A saved value outside the choices shows the follow choice, as applyTheme
@@ -201,7 +201,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
     { id: "markdown", title: "Markdown", icon: Hash },
     ...(isElectron() ? [{ id: "git", title: "Git", icon: GitBranch } as const] : []),
     { id: "shortcuts", title: "Keyboard shortcuts", icon: Keyboard, divider: true },
-    ...(isElectron() ? [{ id: "updates", title: "Updates", icon: RotateCw } as const] : []),
+    ...(isElectron() ? [{ id: "updates", title: "Update", icon: RotateCw } as const] : []),
     { id: "about", title: "About", icon: Info },
   ];
 
@@ -858,7 +858,7 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
 
                 {isElectron() && (
                   <SettingsPage {...pageProps("updates")}>
-                    <UpdatesBox autoUpdate={initial.autoUpdate} />
+                    <UpdateBox autoUpdate={initial.autoUpdate} />
                   </SettingsPage>
                 )}
 
@@ -918,7 +918,6 @@ export function SettingsDialogView({ initial, saved, onSave, onRequestClose }: S
   );
 }
 
-/** What the Updates page says about the state of a check or download. */
 function updateStatusText({ version, state }: UpdateInfo): string {
   switch (state.status) {
     case "idle":
@@ -939,13 +938,10 @@ function updateStatusText({ version, state }: UpdateInfo): string {
 }
 
 /**
- * Settings > Updates: this copy's version, the automatic update switch for
- * copies that install updates themselves, and Check for updates, which
- * follows the main process's check and download as they progress. The main
- * process offers Later or Now when the download is ready. Restart now remains
+ * The main process offers Later or Now when the download is ready. Restart now remains
  * available here after the user defers the update.
  */
-function UpdatesBox({ autoUpdate }: { autoUpdate: boolean }) {
+function UpdateBox({ autoUpdate }: { autoUpdate: boolean }) {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState("");
 
@@ -977,7 +973,7 @@ function UpdatesBox({ autoUpdate }: { autoUpdate: boolean }) {
   };
 
   return (
-    <SettingsBox title="Updates">
+    <SettingsBox title="Update">
       <p className="settings-status col-span-full m-0">
         Current version: {info?.version ?? __APP_VERSION__}
       </p>

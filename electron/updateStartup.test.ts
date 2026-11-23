@@ -402,7 +402,7 @@ it.each(["missing package", "approval write failure"])("reports a %s when Now ca
   expect(startup.steps).toEqual([readyPrompt, ["approve"], ["showMessageBox", expect.objectContaining({
     type: "warning",
     message: "Downpad could not restart to install the update.",
-    detail: `${message}\nYou can try again from Settings > Updates.`,
+    detail: `${message}\nYou can try again from Settings > Update.`,
   })]]);
   expect(startup.updateInfo.state).toEqual({ status: "ready", version: "1.3.0" });
 });

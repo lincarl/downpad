@@ -218,7 +218,6 @@ export function openExternalUrl(url: string): Promise<void> {
   }
 }
 
-/** This copy's version and where its update check stands (Settings > Updates). */
 export function updateInfo(): Promise<UpdateInfo> {
   return invoke("update_info");
 }
