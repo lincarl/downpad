@@ -726,6 +726,7 @@ export class AppRuntime {
   /** Adjust the document text size (spec §5.20), persisting via settings. */
   private async adjustFontScale(delta: number): Promise<void> {
     const s = this.store.get().settings;
+    if ((delta > 0 && s.editorFontScale >= FONT_SCALE_MAX) || (delta < 0 && s.editorFontScale <= FONT_SCALE_MIN)) return;
     const next = clampFontScale(round2(s.editorFontScale + delta));
     if (next === s.editorFontScale) return;
     await this.settingsModel.save({ editorFontScale: next });

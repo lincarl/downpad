@@ -5231,6 +5231,20 @@ test("General Recent preferences persist and hide missing files without deleting
   expect(history.map((entry) => entry.path)).toContain(missing);
 });
 
+test("increasing a size above the toolbar limit never shrinks the text", async () => {
+  const file = path.join(directory, "large-text.md");
+  await writeFile(file, "# Large text\n");
+  await writeFile(path.join(directory, "profile", "settings.toml"),
+    "hasSeenWelcome = true\nhasCheckedDefaultHandler = true\neditorFontScale = 3\n");
+  await launch(file);
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await expect(readout).toHaveText("300%");
+  await page.getByRole("button", { name: "Increase text size" }).click();
+  await expect(readout).toHaveText("300%");
+  await page.getByRole("button", { name: "Decrease text size" }).click();
+  await expect(readout).toHaveText("250%");
+});
+
 test("an open Settings dialog shows a hand edit of settings.toml in the fields the user did not change", async () => {
   const settingsFile = path.join(directory, "profile", "settings.toml");
   await launch();
