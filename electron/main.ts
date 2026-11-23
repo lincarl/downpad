@@ -45,6 +45,7 @@ const config = new ConfigStore(app.getPath("userData"));
 const imageAccess = new ImageAccess();
 const searches = new RecentSearch();
 let mainWindow: BrowserWindow | null = null;
+let trackpadPinching = false;
 let printing: PrintService | null = null;
 let spellchecker: Spellchecker | null = null;
 let spellingContext: { id: number; params: Electron.ContextMenuParams } | null = null;
@@ -383,6 +384,12 @@ function dialogOptions(value: unknown): Pick<OpenDialogOptions & SaveDialogOptio
 }
 
 function registerIpc(): void {
+  ipcMain.on("downpad:is-trackpad-pinching", (event) => {
+    try {
+      trustedSender(event);
+      event.returnValue = trackpadPinching;
+    } catch { event.returnValue = false; }
+  });
   ipcMain.handle("downpad:invoke", (event, command: unknown, args: unknown) => { trustedSender(event); return invoke(command, args); });
   ipcMain.handle("downpad:check-spelling", (event, words: unknown) => { trustedSender(event); return spelling().check(words); });
   ipcMain.handle("downpad:spelling-suggestions", (event, word: unknown) => { trustedSender(event); return spelling().suggestions(word); });
@@ -502,6 +509,11 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = window;
+  trackpadPinching = false;
+  window.webContents.on("input-event", (_event, input) => {
+    if (input.type === "gesturePinchBegin" || input.type === "gesturePinchUpdate") trackpadPinching = true;
+    if (input.type === "gesturePinchEnd") trackpadPinching = false;
+  });
   spelling().apply(await config.settings());
   printing = new PrintService(window, (result) => emit("print-completed", result));
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -540,6 +552,7 @@ async function createWindow(): Promise<void> {
   // or crash. Keep new file requests queued until the replacement subscribes.
   const resetRendererListeners = (): void => {
     spellingContext = null;
+    trackpadPinching = false;
     closeListenerAttached = false;
     openListenerAttached = false;
   };

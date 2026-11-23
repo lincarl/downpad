@@ -173,6 +173,7 @@ export type SaveChangesChoice = "save" | "discard" | "cancel";
 
 export interface ElectronBridge {
   readonly platform: string;
+  isTrackpadPinching?(): boolean;
   /** Return misspelled input words from the selected native dictionaries. */
   checkSpelling(words: string[]): Promise<string[]>;
   /** Return up to six native corrections for one word. */

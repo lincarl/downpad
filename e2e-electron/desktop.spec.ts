@@ -5231,6 +5231,34 @@ test("General Recent preferences persist and hide missing files without deleting
   expect(history.map((entry) => entry.path)).toContain(missing);
 });
 
+test("Mac pinches keep their distance with Ctrl held and wheel turns keep their notch count", async () => {
+  const file = path.join(directory, "zoom.md");
+  await writeFile(file, "# Wheel zoom\n");
+  await launch(file);
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setNavigatorOverrides", { platform: "MacIntel" });
+  await page.reload();
+  await untilStarted();
+  const title = page.getByRole("heading", { name: "Wheel zoom" });
+  await title.hover();
+  const box = await title.boundingBox();
+  if (!box) throw new Error("The heading has no visible bounds.");
+  const point = { x: Math.round(box.x + 8), y: Math.round(box.y + 6) };
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await page.keyboard.down("Control");
+  await session.send("Input.synthesizePinchGesture", {
+    ...point, scaleFactor: 1.8, relativeSpeed: 900, gestureSourceType: "mouse",
+  });
+  await page.keyboard.up("Control");
+  await expect(readout).toHaveText("110%");
+  await app!.evaluate(({ BrowserWindow }, point) => {
+    BrowserWindow.getAllWindows()[0].webContents.sendInputEvent({
+      type: "mouseWheel", ...point, deltaX: 0, deltaY: -200, wheelTicksY: -1, modifiers: ["control"],
+    });
+  }, point);
+  await expect(readout).toHaveText("100%");
+});
+
 test("increasing a size above the toolbar limit never shrinks the text", async () => {
   const file = path.join(directory, "large-text.md");
   await writeFile(file, "# Large text\n");

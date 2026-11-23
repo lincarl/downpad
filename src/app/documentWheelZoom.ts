@@ -1,28 +1,8 @@
-import { useEffect, useRef, type RefObject } from "react";
-
 const UNITS_PER_NOTCH = 120;
 const WINDOWS_PIXELS_PER_LINE = 100 / 3;
 const MAC_PIXELS_PER_NOTCH = 40;
 
-export function useMacWheelControlKey() {
-  const held = useRef(false);
-  useEffect(() => {
-    if (!/Mac/.test(navigator.platform)) return;
-    const listeners = new AbortController();
-    const capture = { capture: true, signal: listeners.signal };
-    const observe = (event: KeyboardEvent | PointerEvent) => { held.current = event.ctrlKey; };
-    window.addEventListener("keydown", observe, capture);
-    window.addEventListener("keyup", observe, capture);
-    window.addEventListener("pointerover", observe, capture);
-    window.addEventListener("pointermove", observe, capture);
-    window.addEventListener("pointerdown", observe, capture);
-    window.addEventListener("blur", () => { held.current = false; }, { signal: listeners.signal });
-    return () => listeners.abort();
-  }, []);
-  return held;
-}
-
-function verticalWheelUnits(event: WheelEvent, controlHeld: boolean): number {
+function verticalWheelUnits(event: WheelEvent): number {
   const mode = event.deltaMode;
   const delta = event.deltaY;
   const reported = "wheelDeltaY" in event && typeof event.wheelDeltaY === "number" ? event.wheelDeltaY : 0;
@@ -37,10 +17,13 @@ function verticalWheelUnits(event: WheelEvent, controlHeld: boolean): number {
     return units >= UNITS_PER_NOTCH ? (Math.sign(delta) || -Math.sign(reported)) * units : delta * UNITS_PER_NOTCH / 3;
   }
   if (/Mac/.test(navigator.platform)) {
-    // A macOS mouse reports unaccelerated ticks. Chromium also supplies a
-    // full tick for each trackpad pinch update, without a Control keypress.
-    if (controlHeld && units) return (Math.sign(delta) || -Math.sign(reported)) * units;
-    return delta * UNITS_PER_NOTCH / MAC_PIXELS_PER_NOTCH;
+    // Chromium gives a pinch update a full tick regardless of its distance.
+    // Electron can identify the gesture even when Control is physically held.
+    const distance = delta * UNITS_PER_NOTCH / MAC_PIXELS_PER_NOTCH;
+    if (units && units !== Math.abs(distance) && window.downpadDesktop?.isTrackpadPinching?.() === false) {
+      return (Math.sign(delta) || -Math.sign(reported)) * units;
+    }
+    return distance;
   }
   if (!units || !/Win/.test(navigator.platform)) return delta;
   if (!delta) return -reported;
@@ -56,7 +39,6 @@ function verticalWheelUnits(event: WheelEvent, controlHeld: boolean): number {
 export function installDocumentWheelZoom(
   panel: HTMLElement,
   documentVisible: () => boolean,
-  macControlKey: RefObject<boolean>,
   zoom: (steps: number) => void,
 ) {
   let pending = 0;
@@ -66,7 +48,7 @@ export function installDocumentWheelZoom(
       pending = 0;
       return;
     }
-    const distance = verticalWheelUnits(event, macControlKey.current);
+    const distance = verticalWheelUnits(event);
     if (!distance) return;
     event.preventDefault();
     if (event.timeStamp - previousTime > 250 || Math.sign(distance) !== Math.sign(pending)) pending = 0;

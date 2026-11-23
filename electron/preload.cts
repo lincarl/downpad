@@ -23,6 +23,7 @@ let openListeners = 0;
 
 const bridge: ElectronBridge = {
   platform: process.platform,
+  isTrackpadPinching: () => ipcRenderer.sendSync("downpad:is-trackpad-pinching") === true,
   async checkSpelling(input) {
     const words = spellingWords(input);
     const result: NativeSpellingResult = await ipcRenderer.invoke("downpad:check-spelling", words);

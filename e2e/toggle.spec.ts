@@ -31,12 +31,13 @@ test("Ctrl+wheel changes the toolbar text size in Document view", async ({ page 
   await expect(readout).toHaveText("110%");
   const initialSize = await fontSize();
 
+  const notch = await page.evaluate(() => /Mac/.test(navigator.platform) ? 40 : 120);
   await heading.hover();
   await page.keyboard.down("Control");
-  await page.mouse.wheel(0, -120);
+  await page.mouse.wheel(0, -notch);
   await expect(readout).toHaveText("120%");
   await expect.poll(fontSize).toBeGreaterThan(initialSize);
-  await page.mouse.wheel(0, 120);
+  await page.mouse.wheel(0, notch);
   await expect(readout).toHaveText("110%");
   await expect.poll(fontSize).toBe(initialSize);
   await page.keyboard.up("Control");
@@ -52,7 +53,7 @@ test("Ctrl+wheel changes the toolbar text size in Document view", async ({ page 
   await expect(page.locator(rawContent)).toBeVisible();
   await heading.hover();
   await page.keyboard.down("Control");
-  await page.mouse.wheel(0, -120);
+  await page.mouse.wheel(0, -notch);
   await page.keyboard.up("Control");
   await page.locator(documentSeg).click();
   await expect(readout).toHaveText("110%");
@@ -84,25 +85,6 @@ test("one wheel notch zooms one step with different system scrolling speeds", as
   await expect(readout).toHaveText("110%");
   await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 300, wheelDeltaY: -120 });
   await expect(readout).toHaveText("100%");
-});
-
-test("Mac wheel notches and fine pinch movements zoom at their own pace", async ({ page }) => {
-  await useWheelPlatform(page, "MacIntel");
-  await page.reload();
-  const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
-  const readout = page.getByRole("button", { name: /^Document text size,/ });
-  await heading.hover();
-  await page.keyboard.down("Control");
-  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: -40, wheelDeltaY: 120 });
-  await expect(readout).toHaveText("110%");
-  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 200, wheelDeltaY: -120 });
-  await expect(readout).toHaveText("100%");
-  await page.keyboard.up("Control");
-  await heading.evaluate((element) => {
-    const pinch = { ctrlKey: true, deltaY: -5, wheelDeltaY: 120, bubbles: true, cancelable: true };
-    for (let i = 0; i < 8; i++) element.dispatchEvent(new WheelEvent("wheel", pinch));
-  });
-  await expect(readout).toHaveText("110%");
 });
 
 test.describe("at 200% display scaling", () => {
