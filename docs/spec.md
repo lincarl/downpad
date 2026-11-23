@@ -92,6 +92,8 @@ Manage dictionary lists words added to Downpad's native dictionary and allows ad
 
 The interface shares the look of Mervin PDF. Users can choose light, dark, or system themes; adjust the accent color, document width, font, and text size; select the default editor view and the Open dialog's first filter; and configure image storage, Markdown serialization, spell checking, recovery, autosave, and Git behavior.
 
+In Document view, hold Ctrl and scroll the mouse wheel up over the document to enlarge the text, or down to shrink it. Each step changes the saved text size by 10 percentage points, like the toolbar buttons, between 60% and 250%.
+
 The document's side margins narrow in a narrow window or Split pane, and with a fixed document width below 688px in any window, so its text keeps a readable width.
 
 Settings are stored locally in `settings.toml` and can be changed from the app or by editing the settings file.

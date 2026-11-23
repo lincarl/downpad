@@ -80,6 +80,7 @@ const SMALL_ICON = { size: 16, absoluteStrokeWidth: true, strokeWidth: 1 } as co
 
 /** Text-size presets offered by the toolbar's size control. */
 const TEXT_SIZES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
+const TEXT_SIZE_STEP = 0.1;
 
 export function App({ store }: AppProps) {
   return (
@@ -116,6 +117,20 @@ function AppContent({ store }: { store: Store }) {
 
   const editorVisible = state.view !== "recent";
   const editorLayout = editorVisible ? shownLayout(state) : "document";
+  const documentVisible = editorVisible && state.activeTabId !== null && editorLayout === "document";
+
+  useEffect(() => {
+    const panel = editorAreaRef.current;
+    if (!panel || !runtime || !documentVisible) return;
+
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey || event.deltaY === 0) return;
+      event.preventDefault();
+      runtime.zoomDocument(event.deltaY < 0 ? TEXT_SIZE_STEP : -TEXT_SIZE_STEP);
+    };
+    panel.addEventListener("wheel", onWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", onWheel);
+  }, [runtime, documentVisible]);
 
   return (
     <AppRuntimeProvider runtime={runtime}>
@@ -330,7 +345,7 @@ function Toolbar() {
         className="max-[859px]:hidden group-data-[git]/toolbar:max-[909px]:hidden"
         label="Decrease text size"
         disabled={!inEditor}
-        onClick={() => runtime?.zoomDocument(-0.1)}
+        onClick={() => runtime?.zoomDocument(-TEXT_SIZE_STEP)}
       >
         <Minus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>
@@ -343,7 +358,7 @@ function Toolbar() {
         className="max-[859px]:hidden group-data-[git]/toolbar:max-[909px]:hidden"
         label="Increase text size"
         disabled={!inEditor}
-        onClick={() => runtime?.zoomDocument(0.1)}
+        onClick={() => runtime?.zoomDocument(TEXT_SIZE_STEP)}
       >
         <Plus aria-hidden="true" {...TOOL_ICON} />
       </ToolButton>

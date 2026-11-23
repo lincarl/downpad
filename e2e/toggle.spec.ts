@@ -18,6 +18,41 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(`${wysiwyg} h1`)).toContainText("Welcome to Downpad");
 });
 
+test("Ctrl+wheel changes the toolbar text size in Document view", async ({ page }) => {
+  const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+  const fontSize = () => heading.evaluate((element) => parseFloat(getComputedStyle(element).fontSize));
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await page.getByRole("button", { name: "Increase text size" }).click();
+  await expect(readout).toHaveText("110%");
+  const initialSize = await fontSize();
+
+  await heading.hover();
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -120);
+  await expect(readout).toHaveText("120%");
+  await expect.poll(fontSize).toBeGreaterThan(initialSize);
+  await page.mouse.wheel(0, 120);
+  await expect(readout).toHaveText("110%");
+  await expect.poll(fontSize).toBe(initialSize);
+  await page.keyboard.up("Control");
+
+  const panel = page.getByRole("tabpanel");
+  const scrollTop = () => panel.evaluate((element) => element.scrollTop);
+  const beforeScroll = await scrollTop();
+  await page.mouse.wheel(0, 120);
+  await expect.poll(scrollTop).toBeGreaterThan(beforeScroll);
+  await expect(readout).toHaveText("110%");
+
+  await page.locator(splitSeg).click();
+  await expect(page.locator(rawContent)).toBeVisible();
+  await heading.hover();
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up("Control");
+  await page.locator(documentSeg).click();
+  await expect(readout).toHaveText("110%");
+});
+
 test("opening then closing the split preserves the document's undo history", async ({ page }) => {
   const doc = page.locator(wysiwyg);
   // The text of every block but code blocks, whose fold markers CodeMirror
