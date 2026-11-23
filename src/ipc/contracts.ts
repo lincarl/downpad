@@ -146,7 +146,6 @@ export interface AppError {
   message: string;
 }
 
-/** Where an update check or download stands, as Settings > Updates shows it. */
 export type UpdateState =
   | { status: "idle" }
   | { status: "checking" }
