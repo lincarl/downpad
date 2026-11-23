@@ -512,6 +512,8 @@ async function createWindow(): Promise<void> {
   trackpadPinching = false;
   window.webContents.on("input-event", (_event, input) => {
     if (input.type === "gesturePinchBegin" || input.type === "gesturePinchUpdate") trackpadPinching = true;
+    // Chromium's TouchpadPinchEventQueue waits for the renderer to acknowledge
+    // the last blocking wheel update before it dispatches the pinch end.
     if (input.type === "gesturePinchEnd") trackpadPinching = false;
   });
   spelling().apply(await config.settings());
