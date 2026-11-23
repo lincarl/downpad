@@ -5241,8 +5241,10 @@ test("increasing a size above the toolbar limit never shrinks the text", async (
   await expect(readout).toHaveText("300%");
   await page.getByRole("button", { name: "Increase text size" }).click();
   await expect(readout).toHaveText("300%");
-  await page.getByRole("button", { name: "Decrease text size" }).click();
-  await expect(readout).toHaveText("250%");
+  await page.getByRole("heading", { name: "Large text" }).dispatchEvent("wheel", {
+    ctrlKey: true, deltaY: 240, wheelDeltaY: -240,
+  });
+  await expect(readout).toHaveText("240%");
 });
 
 test("an open Settings dialog shows a hand edit of settings.toml in the fields the user did not change", async () => {

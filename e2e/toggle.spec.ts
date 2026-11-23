@@ -57,13 +57,23 @@ test("small Ctrl+wheel movements add up to the same zoom as a full notch", async
   const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
   const readout = page.getByRole("button", { name: /^Document text size,/ });
   await heading.evaluate((element) => {
+    const fineMovement = { ctrlKey: true, deltaY: -10, wheelDeltaY: 120, bubbles: true, cancelable: true };
     for (let i = 0; i < 12; i++) {
-      element.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -10, bubbles: true, cancelable: true }));
+      element.dispatchEvent(new WheelEvent("wheel", fineMovement));
     }
   });
   await expect(readout).toHaveText("110%");
   await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 240 });
   await expect(readout).toHaveText("90%");
+});
+
+test("one wheel notch zooms one step with different system scrolling speeds", async ({ page }) => {
+  const heading = page.getByRole("heading", { name: "Welcome to Downpad" });
+  const readout = page.getByRole("button", { name: /^Document text size,/ });
+  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: -100 / 3, wheelDeltaY: 120 });
+  await expect(readout).toHaveText("110%");
+  await heading.dispatchEvent("wheel", { ctrlKey: true, deltaY: 300, wheelDeltaY: -120 });
+  await expect(readout).toHaveText("100%");
 });
 
 test("opening then closing the split preserves the document's undo history", async ({ page }) => {

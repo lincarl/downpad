@@ -329,8 +329,12 @@ export class AppRuntime {
     void this.settingsModel.save({ editorTheme });
   }
 
-  zoomDocument(delta: number): void {
-    void this.adjustFontScale(delta);
+  zoomDocument(delta: number, steps = 1): void {
+    const current = this.store.get().settings.editorFontScale;
+    if ((delta > 0 && current >= FONT_SCALE_MAX) || (delta < 0 && current <= FONT_SCALE_MIN)) return;
+    const first = clampFontScale(round2(current + delta));
+    const next = clampFontScale(round2(first + (steps - 1) * delta));
+    if (next !== current) void this.settingsModel.save({ editorFontScale: next });
   }
 
   showRecentView(): void {
@@ -721,15 +725,6 @@ export class AppRuntime {
   private afterActiveDocChanged(): void {
     this.files.watchActive();
     this.desktopEvents.activeDocChanged();
-  }
-
-  /** Adjust the document text size (spec §5.20), persisting via settings. */
-  private async adjustFontScale(delta: number): Promise<void> {
-    const s = this.store.get().settings;
-    if ((delta > 0 && s.editorFontScale >= FONT_SCALE_MAX) || (delta < 0 && s.editorFontScale <= FONT_SCALE_MIN)) return;
-    const next = clampFontScale(round2(s.editorFontScale + delta));
-    if (next === s.editorFontScale) return;
-    await this.settingsModel.save({ editorFontScale: next });
   }
 
   /** Copy the active document's Markdown, including its latest edits. */
